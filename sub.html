@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>代課領取系統</title>
+  <style>
+    body { font-family: sans-serif; background: #f4f7f6; padding: 15px; }
+    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
+    .course-item { border: 1px solid #eee; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
+    .ask-info { color: #d35400; font-weight: bold; background: #fff3e0; padding: 5px; border-radius: 5px; display: inline-block; margin: 10px 0; }
+    .btn { width: 100%; background: #27ae60; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🙋 代課領取清單</h2>
+    <div id="list">載入中...</div>
+  </div>
+
+  <script>
+    const API = "妳的GAS網址"; // 記得換成妳部署後的網址
+
+    window.onload = () => {
+      fetch(`${API}?action=getCourse&isAdmin=true`)
+        .then(r => r.json())
+        .then(data => {
+          // 只顯示「確認中」且「代課老師(G欄)為空」的資料
+          const list = data.filter(c => c['狀態'] === '確認中' && (!c['代課老師'] || c['代課老師'] === ""));
+          const container = document.getElementById('list');
+          
+          if(list.length === 0) {
+            container.innerHTML = "目前沒有待代課的課程。";
+            return;
+          }
+
+          container.innerHTML = list.map(item => `
+            <div class="course-item">
+              <strong>${item['指導者']} 老師</strong><br>
+              課程：${item['課程']}<br>
+              時間：${item['日期']} (${item['時間']})<br>
+              <div class="ask-info">📢 目前優先詢問：${item['最後詢問對象'] || '等待安排中'}</div>
+              <button class="btn" onclick="take('${item.rowId}', '${item['課程']}')">我已確認代課</button>
+            </div>
+          `).join('');
+        });
+    };
+
+    function take(id, title) {
+      const name = prompt("請輸入您的名字以確認領取：");
+      if(!name) return;
+      fetch(`${API}?action=takeCourse&rowId=${id}&subName=${encodeURIComponent(name)}`)
+        .then(r => r.text())
+        .then(res => {
+          alert(res);
+          location.reload();
+        });
+    }
+  </script>
+</body>
+</html>

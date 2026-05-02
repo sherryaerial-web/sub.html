@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sherry Aerial | 領課系統</title>
+  <title>Sherry Aerial | 系統管理</title>
   <style>
     :root {
       --primary: #1D1D1F;
@@ -12,7 +12,6 @@
       --text-main: #1D1D1F;
       --text-sub: #86868B;
       --border: #E5E5E7;
-      --accent: #0066CC;
     }
     
     body {
@@ -24,6 +23,7 @@
       display: flex;
       justify-content: center;
       min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
     }
 
     .app-container {
@@ -31,7 +31,7 @@
       width: 100%;
       max-width: 480px;
       border-radius: 28px;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.04);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04);
       padding: 40px 24px;
       margin-top: 2vh;
     }
@@ -39,7 +39,6 @@
     h1 { text-align: center; font-size: 24px; font-weight: 600; margin-bottom: 40px; letter-spacing: -0.5px; }
     h2 { font-size: 19px; font-weight: 600; margin-bottom: 24px; color: var(--text-main); }
 
-    /* 極簡膠囊按鈕 */
     .btn {
       width: 100%;
       padding: 18px;
@@ -48,17 +47,16 @@
       font-size: 16px;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: all 0.2s ease;
       background-color: var(--card-bg);
       color: var(--text-main);
       margin-bottom: 14px;
     }
-    .btn:hover { background-color: #F9F9FB; border-color: #AEAEB2; }
+    .btn:hover { background-color: #FAFAFB; border-color: #AEAEB2; }
 
     .btn-primary { background-color: var(--primary); color: white; border: none; margin-top: 24px; font-weight: 600; }
-    .btn-primary:hover { background-color: #323234; transform: scale(0.98); }
+    .btn-primary:hover { background-color: #323234; transform: scale(0.99); }
 
-    /* 修復後的回首頁按鈕：更細緻的膠囊感 */
     .btn-back {
       background: #F2F2F7;
       color: #3A3A3C;
@@ -77,7 +75,7 @@
     .btn-back:hover { background-color: #E5E5EA; }
 
     .form-group { margin-bottom: 28px; }
-    .form-group label { display: block; font-size: 13px; color: var(--text-sub); margin-bottom: 10px; font-weight: 500; padding-left: 4px; }
+    .form-group label { display: block; font-size: 13px; color: var(--text-sub); margin-bottom: 10px; font-weight: 500; }
 
     select {
       width: 100%;
@@ -129,12 +127,14 @@
 <div class="app-container">
   <h1>Sherry Aerial Studio</h1>
 
+  <!-- 首頁 -->
   <div id="view-home" class="view-section active-view">
     <button class="btn" onclick="switchView('view-leave')">請假登記</button>
     <button class="btn" onclick="switchView('view-claim')">尋找與領取代課</button>
     <button class="btn" onclick="switchView('view-mysubs')">查看我的代課紀錄</button>
   </div>
 
+  <!-- 1. 請假登記 -->
   <div id="view-leave" class="view-section">
     <div class="btn-back" onclick="switchView('view-home')">← 返回</div>
     <h2>填寫請假單</h2>
@@ -143,9 +143,10 @@
       <select id="leave-teacher-select" onchange="renderTeacherCourses()"><option value="">載入中...</option></select>
     </div>
     <div id="leave-course-list"><div class="empty-state">請先選擇老師</div></div>
-    <button class="btn btn-primary" onclick="submitLeave()">確認送出</button>
+    <button class="btn btn-primary" onclick="submitLeave()">送出請假申請</button>
   </div>
 
+  <!-- 2. 領取代課 -->
   <div id="view-claim" class="view-section">
     <div class="btn-back" onclick="switchView('view-home')">← 返回</div>
     <h2>領取代課</h2>
@@ -157,6 +158,7 @@
     <button class="btn btn-primary" onclick="submitClaim()">確認領取勾選課程</button>
   </div>
 
+  <!-- 3. 我的紀錄 -->
   <div id="view-mysubs" class="view-section">
     <div class="btn-back" onclick="switchView('view-home')">← 返回</div>
     <h2>我的代課紀錄</h2>
@@ -169,7 +171,9 @@
 </div>
 
 <script>
-  const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec"; // 🔴 請換成妳的網址
+  // 🔴🔴🔴 請在這裡換上妳最新部署的 GAS 網址 🔴🔴🔴
+  const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
+
   let globalCourseList = [];
 
   function switchView(viewId) {
@@ -202,14 +206,39 @@
     const listDiv = document.getElementById('leave-course-list');
     if (!selected) return;
     const myCourses = globalCourseList.filter(item => item["指導者"] === selected);
-    if (myCourses.length === 0) { listDiv.innerHTML = "<div class='empty-state'>目前無課程</div>"; return; }
+    if (myCourses.length === 0) { listDiv.innerHTML = "<div class='empty-state'>目前無課程紀錄</div>"; return; }
     
     let html = "";
     myCourses.forEach(item => {
       let rawData = JSON.stringify(item).replace(/'/g, "&#39;");
-      html += `<label class="list-item"><input type="checkbox" class="chk-leave" data-raw='${rawData}'><div class="item-details"><div class="item-date">${item["日期"]} ${item["時間"]}</div><div class="item-course">${item["課程"]}</div></div></label>`;
+      html += `<label class="list-item">
+        <input type="checkbox" class="chk-leave" data-raw='${rawData}'>
+        <div class="item-details">
+          <div class="item-date">${item["日期"]} ${item["時間"]}</div>
+          <div class="item-course">${item["課程"]}</div>
+        </div>
+      </label>`;
     });
     listDiv.innerHTML = html;
+  }
+
+  function submitLeave() {
+    const teacher = document.getElementById('leave-teacher-select').value;
+    const chks = document.querySelectorAll('.chk-leave:checked');
+    if (!teacher) return alert("請選擇名字！");
+    if (chks.length === 0) return alert("請勾選要請假的課程！");
+
+    const btn = document.querySelector('#view-leave .btn-primary');
+    btn.innerText = "處理中..."; btn.disabled = true;
+
+    const items = Array.from(chks).map(el => JSON.parse(el.getAttribute('data-raw')));
+    const url = `${APP_URL}?action=submitLeave&instructor=${encodeURIComponent(teacher)}&items=${encodeURIComponent(JSON.stringify(items))}`;
+
+    fetch(url, { mode: 'no-cors' }).then(() => {
+      alert("✅ 請假登記成功！");
+      btn.innerText = "送出請假申請"; btn.disabled = false;
+      switchView('view-home');
+    });
   }
 
   function fetchPendingLeaves() {
@@ -228,16 +257,61 @@
       let html = "";
       data.forEach(item => {
         let rawData = JSON.stringify(item).replace(/'/g, "&#39;");
-        html += `<label class="list-item"><input type="checkbox" class="chk-claim" data-raw='${rawData}'><div class="item-details"><div class="item-date">${item["日期"]} ${item["時段"]}</div><div class="item-course">${item["課程"]}</div><div class="item-teacher">原指導者：${item["原老師"]}</div></div></label>`;
+        html += `<label class="list-item">
+          <input type="checkbox" class="chk-claim" data-raw='${rawData}'>
+          <div class="item-details">
+            <div class="item-date">${item["日期"]} ${item["時段"]}</div>
+            <div class="item-course">${item["課程"]}</div>
+            <div class="item-teacher">原指導者：${item["原老師"]}</div>
+          </div>
+        </label>`;
       });
       listDiv.innerHTML = html;
     });
   }
 
-  // 提交與查詢邏輯維持不變...
-  function submitLeave() { /* 同前版本 */ }
-  function submitClaim() { /* 同前版本 */ }
-  function fetchMySubs() { /* 同前版本 */ }
+  function submitClaim() {
+    const subTeacher = document.getElementById('claim-teacher-select').value;
+    const chks = document.querySelectorAll('.chk-claim:checked');
+    if (!subTeacher) return alert("請選擇代課老師（您自己）！");
+    if (chks.length === 0) return alert("請勾選要領取的課程！");
+
+    const btn = document.querySelector('#view-claim .btn-primary');
+    btn.innerText = "處理中..."; btn.disabled = true;
+
+    const items = Array.from(chks).map(el => JSON.parse(el.getAttribute('data-raw')));
+    const url = `${APP_URL}?action=submitClaim&subTeacher=${encodeURIComponent(subTeacher)}&items=${encodeURIComponent(JSON.stringify(items))}`;
+
+    fetch(url, { mode: 'no-cors' }).then(() => {
+      alert("✅ 成功領取！感謝您的支援！");
+      btn.innerText = "確認領取勾選課程"; btn.disabled = false;
+      fetchPendingLeaves();
+    });
+  }
+
+  function fetchMySubs() {
+    const teacher = document.getElementById('mysub-teacher-select').value;
+    const listDiv = document.getElementById('my-subs-list');
+    if (!teacher) { listDiv.innerHTML = "<div class='empty-state'>請先選擇名字</div>"; return; }
+
+    listDiv.innerHTML = "<div class='empty-state'>查詢中...</div>";
+    fetch(`${APP_URL}?action=getMySubs&name=${encodeURIComponent(teacher)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.length === 0) { listDiv.innerHTML = "<div class='empty-state'>您目前沒有代課紀錄</div>"; return; }
+        let html = "";
+        data.forEach(item => {
+          html += `<div class="list-item" style="cursor: default; border-color: transparent; background: #FAFAFB;">
+              <div class="item-details">
+                <div class="item-date">${item["日期"]} ${item["時段"]}</div>
+                <div class="item-course">${item["課程"]}</div>
+                <div class="item-teacher">原指導者：${item["原老師"]}</div>
+              </div>
+            </div>`;
+        });
+        listDiv.innerHTML = html;
+      });
+  }
 </script>
 </body>
 </html>

@@ -1,61 +1,221 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-TW">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>代課領取系統</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sherry 空中工作室系統</title>
   <style>
-    body { font-family: sans-serif; background: #f4f7f6; padding: 15px; }
-    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
-    .course-item { border: 1px solid #eee; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
-    .ask-info { color: #d35400; font-weight: bold; background: #fff3e0; padding: 5px; border-radius: 5px; display: inline-block; margin: 10px 0; }
-    .btn { width: 100%; background: #27ae60; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9f0f5; color: #333; margin: 0; padding: 20px; }
+    .container { max-width: 500px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+    h1 { text-align: center; color: #d66c98; font-size: 24px; margin-bottom: 20px; }
+    h2 { font-size: 18px; color: #555; border-bottom: 2px solid #f1d4e5; padding-bottom: 5px; }
+    
+    /* 首頁按鈕樣式 */
+    .menu-btn { display: block; width: 100%; padding: 15px; margin: 15px 0; font-size: 18px; font-weight: bold; color: white; background-color: #d66c98; border: none; border-radius: 8px; cursor: pointer; transition: 0.3s; }
+    .menu-btn:hover { background-color: #c05883; }
+    .menu-btn.alt { background-color: #6c98d6; }
+    .menu-btn.alt:hover { background-color: #5883c0; }
+    
+    .view-section { display: none; } /* 隱藏非當前頁面 */
+    .active-view { display: block; }
+    
+    .form-group { margin-bottom: 15px; }
+    select, button.action-btn { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; margin-top: 5px; }
+    button.action-btn { background-color: #d66c98; color: white; font-weight: bold; border: none; cursor: pointer; margin-top: 20px; }
+    button.back-btn { background-color: #aaa; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; margin-bottom: 15px; }
+    
+    .list-item { background: #fdfdfd; border: 1px solid #eee; padding: 10px; margin-bottom: 8px; border-radius: 6px; display: flex; align-items: center; }
+    .list-item input[type="checkbox"] { margin-right: 15px; transform: scale(1.3); }
+    .empty-msg { text-align: center; color: #888; font-style: italic; padding: 20px 0; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>🙋 代課領取清單</h2>
-    <div id="list">載入中...</div>
+
+<div class="container">
+  <h1>Sherry Aerial Studio 🎀</h1>
+
+  <!-- 首頁分流選單 -->
+  <div id="view-home" class="view-section active-view">
+    <button class="menu-btn" onclick="switchView('view-leave')">📝 我要請假登記</button>
+    <button class="menu-btn" onclick="switchView('view-claim')">🙋‍♀️ 查詢與領取代課</button>
+    <button class="menu-btn alt" onclick="switchView('view-mysubs')">🔍 查看我的代課紀錄</button>
   </div>
 
-  <script>
-    const API = "妳的GAS網址"; // 記得換成妳部署後的網址
+  <!-- 1. 請假登記畫面 -->
+  <div id="view-leave" class="view-section">
+    <button class="back-btn" onclick="switchView('view-home')">🔙 回首頁</button>
+    <h2>📝 請假登記</h2>
+    <div class="form-group">
+      <label>請選擇您的名字：</label>
+      <select id="leave-teacher-select"><option value="">載入中...</option></select>
+    </div>
+    <div id="leave-course-list">載入課表中...</div>
+    <button class="action-btn" onclick="submitLeave()">送出請假單</button>
+  </div>
 
-    window.onload = () => {
-      fetch(`${API}?action=getCourse&isAdmin=true`)
-        .then(r => r.json())
-        .then(data => {
-          // 只顯示「確認中」且「代課老師(G欄)為空」的資料
-          const list = data.filter(c => c['狀態'] === '確認中' && (!c['代課老師'] || c['代課老師'] === ""));
-          const container = document.getElementById('list');
-          
-          if(list.length === 0) {
-            container.innerHTML = "目前沒有待代課的課程。";
-            return;
-          }
+  <!-- 2. 領取代課畫面 -->
+  <div id="view-claim" class="view-section">
+    <button class="back-btn" onclick="switchView('view-home')">🔙 回首頁</button>
+    <h2>🙋‍♀️ 領取代課</h2>
+    <div class="form-group">
+      <label>代課老師（您自己）：</label>
+      <select id="claim-teacher-select"><option value="">載入中...</option></select>
+    </div>
+    <div id="pending-leaves-list">尋找待領取課程中...</div>
+    <button class="action-btn" onclick="submitClaim()">確認領取勾選課程</button>
+  </div>
 
-          container.innerHTML = list.map(item => `
-            <div class="course-item">
-              <strong>${item['指導者']} 老師</strong><br>
-              課程：${item['課程']}<br>
-              時間：${item['日期']} (${item['時間']})<br>
-              <div class="ask-info">📢 目前優先詢問：${item['最後詢問對象'] || '等待安排中'}</div>
-              <button class="btn" onclick="take('${item.rowId}', '${item['課程']}')">我已確認代課</button>
-            </div>
-          `).join('');
+  <!-- 3. 我的代課查詢畫面 -->
+  <div id="view-mysubs" class="view-section">
+    <button class="back-btn" onclick="switchView('view-home')">🔙 回首頁</button>
+    <h2>🔍 我的代課紀錄</h2>
+    <div class="form-group">
+      <label>查詢老師：</label>
+      <select id="mysub-teacher-select" onchange="fetchMySubs()"><option value="">載入中...</option></select>
+    </div>
+    <div id="my-subs-list" class="empty-msg">請先選擇名字以查詢紀錄。</div>
+  </div>
+
+</div>
+
+<script>
+  // 🔴🔴🔴 請在這裡換上妳最新部署的 GAS 網址 🔴🔴🔴
+  const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
+
+  let allTeachers = [];
+
+  // 畫面切換邏輯
+  function switchView(viewId) {
+    document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active-view'));
+    document.getElementById(viewId).classList.add('active-view');
+    
+    // 切換畫面時載入對應資料
+    if (viewId === 'view-leave') fetchCourseList();
+    if (viewId === 'view-claim') fetchPendingLeaves();
+  }
+
+  // 網頁載入時先抓取老師名單 (給三個下拉選單用)
+  window.onload = function() {
+    fetch(`${APP_URL}?action=getTeachers`)
+      .then(res => res.json())
+      .then(data => {
+        allTeachers = data;
+        let optionsHtml = '<option value="">請選擇...</option>';
+        data.forEach(t => {
+          if(t["姓名"]) optionsHtml += `<option value="${t["姓名"]}">${t["姓名"]}</option>`;
         });
-    };
+        document.getElementById('leave-teacher-select').innerHTML = optionsHtml;
+        document.getElementById('claim-teacher-select').innerHTML = optionsHtml;
+        document.getElementById('mysub-teacher-select').innerHTML = optionsHtml;
+      })
+      .catch(err => console.error("無法載入老師名單"));
+  };
 
-    function take(id, title) {
-      const name = prompt("請輸入您的名字以確認領取：");
-      if(!name) return;
-      fetch(`${API}?action=takeCourse&rowId=${id}&subName=${encodeURIComponent(name)}`)
-        .then(r => r.text())
-        .then(res => {
-          alert(res);
-          location.reload();
+  // --- 功能 1：請假登記 ---
+  function fetchCourseList() {
+    document.getElementById('leave-course-list').innerHTML = "載入中...";
+    fetch(`${APP_URL}?action=getCourseList`)
+      .then(res => res.json())
+      .then(data => {
+        let html = "";
+        data.forEach((item, idx) => {
+          if (!item["日期"]) return;
+          let rawData = JSON.stringify(item);
+          html += `
+            <label class="list-item">
+              <input type="checkbox" class="chk-leave" data-raw='${rawData}'>
+              <span>${item["日期"]} | ${item["時間"]} | ${item["課程"]}</span>
+            </label>
+          `;
         });
+        document.getElementById('leave-course-list').innerHTML = html;
+      });
+  }
+
+  function submitLeave() {
+    const teacher = document.getElementById('leave-teacher-select').value;
+    const chks = document.querySelectorAll('.chk-leave:checked');
+    if (!teacher) return alert("請選擇名字！");
+    if (chks.length === 0) return alert("請勾選要請假的課程！");
+
+    const items = Array.from(chks).map(el => JSON.parse(el.getAttribute('data-raw')));
+    const url = `${APP_URL}?action=submitLeave&instructor=${encodeURIComponent(teacher)}&items=${encodeURIComponent(JSON.stringify(items))}`;
+
+    fetch(url, { mode: 'no-cors' }).then(() => {
+      alert("✅ 請假登記成功！");
+      switchView('view-home');
+    }).catch(() => alert("傳送失敗"));
+  }
+
+  // --- 功能 2：領取代課 ---
+  function fetchPendingLeaves() {
+    document.getElementById('pending-leaves-list').innerHTML = "載入中...";
+    fetch(`${APP_URL}?action=getPendingLeaves`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.length === 0) {
+          document.getElementById('pending-leaves-list').innerHTML = "<div class='empty-msg'>目前沒有待領取的代課喔！🎉</div>";
+          return;
+        }
+        let html = "";
+        data.forEach((item) => {
+          let rawData = JSON.stringify(item);
+          html += `
+            <label class="list-item">
+              <input type="checkbox" class="chk-claim" data-raw='${rawData}'>
+              <span><b>${item["原老師"]}</b> 的課<br>${item["日期"]} ${item["時段"]} ${item["課程"]}</span>
+            </label>
+          `;
+        });
+        document.getElementById('pending-leaves-list').innerHTML = html;
+      });
+  }
+
+  function submitClaim() {
+    const subTeacher = document.getElementById('claim-teacher-select').value;
+    const chks = document.querySelectorAll('.chk-claim:checked');
+    if (!subTeacher) return alert("請選擇代課老師（您自己）！");
+    if (chks.length === 0) return alert("請勾選要領取的課程！");
+
+    const items = Array.from(chks).map(el => JSON.parse(el.getAttribute('data-raw')));
+    const url = `${APP_URL}?action=submitClaim&subTeacher=${encodeURIComponent(subTeacher)}&items=${encodeURIComponent(JSON.stringify(items))}`;
+
+    fetch(url, { mode: 'no-cors' }).then(() => {
+      alert("✅ 成功領取！感謝您的支援！");
+      fetchPendingLeaves(); // 重新整理清單
+    }).catch(() => alert("領取失敗"));
+  }
+
+  // --- 功能 3：查詢我的代課 ---
+  function fetchMySubs() {
+    const teacher = document.getElementById('mysub-teacher-select').value;
+    const listDiv = document.getElementById('my-subs-list');
+    
+    if (!teacher) {
+      listDiv.innerHTML = "<div class='empty-msg'>請先選擇名字。</div>";
+      return;
     }
-  </script>
+
+    listDiv.innerHTML = "查詢中...";
+    fetch(`${APP_URL}?action=getMySubs&name=${encodeURIComponent(teacher)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.length === 0) {
+          listDiv.innerHTML = "<div class='empty-msg'>您目前沒有代課紀錄喔。</div>";
+          return;
+        }
+        let html = "";
+        data.forEach(item => {
+          html += `
+            <div class="list-item">
+              <span>📅 ${item["日期"]} ${item["時段"]}<br>🧘‍♀️ ${item["課程"]} (原: ${item["原老師"]})</span>
+            </div>
+          `;
+        });
+        listDiv.innerHTML = html;
+      });
+  }
+</script>
+
 </body>
 </html>

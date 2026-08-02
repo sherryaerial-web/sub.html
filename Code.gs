@@ -8,6 +8,38 @@ var CONFIG = {
   LOCK_TIMEOUT_MS: 30000
 };
 
+function doGet(e) {
+  if (!e || !e.parameter || Object.keys(e.parameter).length === 0) {
+    return ContentService
+      .createTextOutput('Sherry Aerial Studio - 系統連線正常')
+      .setMimeType(ContentService.MimeType.TEXT);
+  }
+
+  try {
+    var action = cleanText_(e.parameter.action);
+    var handlers = {
+      getTeachers: function() { return getTeachers_(); },
+      getCourseList: function() { return getCourseList_(); },
+      getPendingLeaves: function() { return getPendingLeaves_(); },
+      getMySubs: function() { return getMySubs_(e.parameter.name); },
+      submitLeave: function() {
+        return submitLeave_(e.parameter.instructor, parseJsonArray_(e.parameter.items, '請假課程'));
+      },
+      submitClaim: function() {
+        return submitClaim_(e.parameter.subTeacher, parseJsonArray_(e.parameter.items, '代課課程'));
+      }
+    };
+    if (!handlers[action]) throw new Error('不支援的操作：' + action);
+    return createJsonResponse_({ status: 'success', data: handlers[action]() });
+  } catch (error) {
+    console.error(error && error.stack ? error.stack : error);
+    return createJsonResponse_({
+      status: 'error',
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}
+
 function getCourseCategory_(courseName) {
   var name = String(courseName || '').replace(/\s+/g, '');
   if (/空中?瑜伽|空瑜/.test(name)) return '空瑜';
@@ -162,6 +194,328 @@ function installHourlySyncTrigger() {
   });
   ScriptApp.newTrigger('syncCourseListFromApi').timeBased().everyHours(1).create();
   return { status: 'success', message: '已建立每小時課程同步。' };
+}
+
+function getTeachers_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.TEACHER_SHEET);
+  var values = sheet.getDataRange().getValues();
+  if (!values.length || cleanText_(values[0][0]) !== '指導者') {
+    throw new Error('老師名單 A1 標題應為「指導者」。');
+  }
+  return values.slice(1).map(function(row) {
+    return { '指導者': cleanText_(row[0]) };
+  }).filter(function(item) {
+    return item['指導者'];
+  });
+}
+
+function getCourseList_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(sheet, ['日期', '時間', '課程', '指導者']);
+  var values = sheet.getDataRange().getValues();
+  return values.slice(1).map(function(r) {
+    return {
+      '日期': formatMyDate(r[0]),
+      '時間': formatMyTime(r[1]),
+      '課程': cleanText_(r[2]),
+      '指導者': cleanText_(r[3]),
+      '課程大類': getCourseCategory_(r[2])
+    };
+  }).filter(function(item) {
+    return item['日期'] && item['時間'] && item['課程'] && item['指導者'];
+  });
+}
+
+function getPendingLeaves_() {
+  ensurePendingLeaveIds_();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  ensureLeaveSheetHeaders_(sheet);
+  var values = sheet.getDataRange().getValues();
+  return values.slice(1).filter(function(r) {
+    return cleanText_(r[5]) === '確認中';
+  }).map(function(r) {
+    return {
+      '代課編號': cleanText_(r[9]),
+      '原老師': cleanText_(r[1]),
+      '日期': formatMyDate(r[2]),
+      '時段': formatMyTime(r[3]),
+      '課程': cleanText_(r[4]),
+      '課程大類': getCourseCategory_(r[4])
+    };
+  });
+}
+
+function getMySubs_(teacherName) {
+  var name = cleanText_(teacherName);
+  if (!name) throw new Error('請選擇查詢老師。');
+  assertTeacherExists_(name);
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  ensureLeaveSheetHeaders_(sheet);
+  return sheet.getDataRange().getValues().slice(1).filter(function(r) {
+    return cleanText_(r[6]) === name && cleanText_(r[5]) === '已領取';
+  }).map(function(r) {
+    return {
+      '代課編號': cleanText_(r[9]),
+      '日期': formatMyDate(r[2]),
+      '時段': formatMyTime(r[3]),
+      '課程': cleanText_(r[4]),
+      '課程大類': getCourseCategory_(r[4]),
+      '原老師': cleanText_(r[1]),
+      '備註': cleanText_(r[7])
+    };
+  });
+}
+
+function submitLeave_(instructor, items) {
+  var teacher = cleanText_(instructor);
+  if (!teacher) throw new Error('請選擇請假老師。');
+  if (!items.length) throw new Error('請至少選擇一堂請假課程。');
+  assertTeacherExists_(teacher);
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    assertHeaders_(courseSheet, ['日期', '時間', '課程', '指導者']);
+    ensureLeaveSheetHeaders_(leaveSheet);
+
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var leaveRows = leaveSheet.getDataRange().getValues().slice(1);
+    var seen = {};
+    var validated = items.map(function(rawItem) {
+      var item = normalizeLeaveItem_(rawItem);
+      var requestKey = [item['日期'], item['時間'], item['課程']].join('|');
+      if (seen[requestKey]) throw new Error('送出的請假課程有重複項目。');
+      seen[requestKey] = true;
+
+      var belongsToTeacher = courseRows.some(function(r) {
+        return cleanText_(r[3]) === teacher &&
+          formatMyDate(r[0]) === item['日期'] &&
+          formatMyTime(r[1]) === item['時間'] &&
+          cleanText_(r[2]) === item['課程'];
+      });
+      if (!belongsToTeacher) {
+        throw new Error('找不到 ' + item['日期'] + ' ' + item['時間'] + ' 的有效課程。');
+      }
+      if (isDuplicateLeave_(leaveRows, teacher, item)) {
+        throw new Error(item['日期'] + ' ' + item['時間'] + ' 已經登記過請假。');
+      }
+      return item;
+    });
+
+    var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    var rowsToAppend = validated.map(function(item) {
+      return [
+        now,
+        teacher,
+        item['日期'],
+        item['時間'],
+        item['課程'],
+        '確認中',
+        '',
+        '',
+        '',
+        Utilities.getUuid()
+      ];
+    });
+    leaveSheet
+      .getRange(leaveSheet.getLastRow() + 1, 1, rowsToAppend.length, 10)
+      .setValues(rowsToAppend);
+
+    return { count: rowsToAppend.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function submitClaim_(subTeacher, items) {
+  var teacher = cleanText_(subTeacher);
+  if (!teacher) throw new Error('請選擇代課老師。');
+  if (!items.length) throw new Error('請至少選擇一堂代課課程。');
+  assertTeacherExists_(teacher);
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    ensureLeaveSheetHeaders_(leaveSheet);
+    var values = leaveSheet.getDataRange().getValues();
+    var teacherCourses = getTeacherCourseNames_(teacher);
+    var rowById = {};
+    for (var rowIndex = 1; rowIndex < values.length; rowIndex++) {
+      var substituteId = cleanText_(values[rowIndex][9]);
+      if (substituteId) rowById[substituteId] = rowIndex;
+    }
+
+    var seen = {};
+    var updates = items.map(function(item) {
+      var id = cleanText_(item.substituteId || item['代課編號']);
+      if (!id || seen[id]) throw new Error('代課資料編號無效或重複。');
+      seen[id] = true;
+      if (rowById[id] == null) throw new Error('找不到指定的代課課程，請重新整理。');
+
+      var dataIndex = rowById[id];
+      var row = values[dataIndex];
+      if (cleanText_(row[5]) !== '確認中') {
+        throw new Error('此代課已被其他老師領取，請重新整理。');
+      }
+      if (cleanText_(row[1]) === teacher) {
+        throw new Error('不能領取自己原本的課程。');
+      }
+
+      var noteRequired = requiresChangeNote_(teacherCourses, cleanText_(row[4]));
+      var changeNote = validateChangeNote_(noteRequired, item.changeNote);
+      return {
+        sheetRow: dataIndex + 1,
+        values: ['已領取', teacher, changeNote]
+      };
+    });
+
+    updates.forEach(function(update) {
+      leaveSheet.getRange(update.sheetRow, 6, 1, 3).setValues([update.values]);
+    });
+    return { count: updates.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function requiresChangeNote_(teacherCourseNames, targetCourseName) {
+  var targetName = normalizeCourseName_(targetCourseName);
+  var targetCategory = getCourseCategory_(targetName);
+  var courses = (teacherCourseNames || []).map(normalizeCourseName_).filter(Boolean);
+
+  if (targetCategory === '其他') {
+    return courses.indexOf(targetName) === -1;
+  }
+  return !courses.some(function(courseName) {
+    return getCourseCategory_(courseName) === targetCategory;
+  });
+}
+
+function validateChangeNote_(required, value) {
+  var note = cleanText_(value);
+  if (required && !note) throw new Error('跨課程種類代課時，請填寫要改成什麼課。');
+  return note;
+}
+
+function isDuplicateLeave_(rows, instructor, item) {
+  return (rows || []).some(function(r) {
+    return cleanText_(r[1]) === cleanText_(instructor) &&
+      formatMyDate(r[2]) === formatMyDate(item['日期']) &&
+      formatMyTime(r[3]) === formatMyTime(item['時間']) &&
+      cleanText_(r[4]) === cleanText_(item['課程']) &&
+      ['確認中', '已領取'].indexOf(cleanText_(r[5])) !== -1;
+  });
+}
+
+function ensurePendingLeaveIds_() {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    ensureLeaveSheetHeaders_(sheet);
+    var values = sheet.getDataRange().getValues();
+    for (var i = 1; i < values.length; i++) {
+      if (cleanText_(values[i][5]) === '確認中' && !cleanText_(values[i][9])) {
+        sheet.getRange(i + 1, 10).setValue(Utilities.getUuid());
+      }
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ensureLeaveSheetHeaders_(sheet) {
+  assertHeaders_(sheet, [
+    '登記時間', '原老師', '日期', '時段', '課程',
+    '狀態', '代課老師', '備註', '入系統'
+  ]);
+  var idHeader = cleanText_(sheet.getRange(1, 10).getValue());
+  if (!idHeader) {
+    sheet.getRange(1, 10).setValue('代課編號');
+  } else if (idHeader !== '代課編號') {
+    throw new Error('工作表1 第 10 欄標題應為「代課編號」。');
+  }
+}
+
+function assertTeacherExists_(teacherName) {
+  var teachers = getTeachers_().map(function(item) {
+    return item['指導者'];
+  });
+  if (teachers.indexOf(cleanText_(teacherName)) === -1) {
+    throw new Error('老師姓名不在老師名單中。');
+  }
+}
+
+function getTeacherCourseNames_(teacherName) {
+  return getCourseList_().filter(function(item) {
+    return item['指導者'] === teacherName;
+  }).map(function(item) {
+    return item['課程'];
+  });
+}
+
+function normalizeLeaveItem_(item) {
+  var normalized = {
+    '日期': formatMyDate(item && (item['日期'] || item.date)),
+    '時間': formatMyTime(item && (item['時間'] || item['時段'] || item.time)),
+    '課程': cleanText_(item && (item['課程'] || item.course))
+  };
+  if (!normalized['日期'] || !normalized['時間'] || !normalized['課程']) {
+    throw new Error('請假課程資料不完整。');
+  }
+  return normalized;
+}
+
+function normalizeCourseName_(value) {
+  return cleanText_(value).replace(/\s+/g, '').toLowerCase();
+}
+
+function parseJsonArray_(value, fieldName) {
+  var parsed;
+  try {
+    parsed = JSON.parse(value || '[]');
+  } catch (error) {
+    throw new Error(fieldName + '資料格式錯誤。');
+  }
+  if (!Array.isArray(parsed)) throw new Error(fieldName + '必須是陣列。');
+  return parsed;
+}
+
+function createJsonResponse_(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function formatMyDate(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, getTimeZone_(), 'yyyy/MM/dd');
+  }
+  var str = cleanText_(val);
+  if (str.indexOf('T') > -1) str = str.split('T')[0];
+  return str.replace(/-/g, '/');
+}
+
+function formatMyTime(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, getTimeZone_(), 'HH:mm');
+  }
+  var str = cleanText_(val);
+  if (str.indexOf('T') > -1) return str.split('T')[1].substring(0, 5);
+  return str.substring(0, 5);
 }
 
 function getTimeZone_() {

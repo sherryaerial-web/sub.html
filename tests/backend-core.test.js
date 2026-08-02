@@ -135,3 +135,67 @@ test('stops API sync input processing on non-2xx responses', () => {
     /API 連線失敗.*401/
   );
 });
+
+test('allows substitute teachers to claim a course in their usual category', () => {
+  const backend = loadBackend();
+  assert.equal(typeof backend.requiresChangeNote_, 'function');
+  assert.equal(
+    backend.requiresChangeNote_(['B－空環 Lv.1'], 'C－空環 Lv.2'),
+    false
+  );
+});
+
+test('requires a change note for a different course category', () => {
+  const backend = loadBackend();
+  assert.equal(
+    backend.requiresChangeNote_(['B－空環 Lv.1'], 'C－舞綢 Lv.2'),
+    true
+  );
+});
+
+test('unknown courses only match the same complete normalized name', () => {
+  const backend = loadBackend();
+  assert.equal(
+    backend.requiresChangeNote_(['卡拉特別課'], '卡拉特別課'),
+    false
+  );
+  assert.equal(
+    backend.requiresChangeNote_(['卡拉特別課'], '另一堂特別課'),
+    true
+  );
+});
+
+test('validates required change notes', () => {
+  const backend = loadBackend();
+  assert.equal(typeof backend.validateChangeNote_, 'function');
+  assert.throws(
+    () => backend.validateChangeNote_(true, '   '),
+    /請填寫要改成什麼課/
+  );
+  assert.equal(backend.validateChangeNote_(true, '空環 Lv.1'), '空環 Lv.1');
+  assert.equal(backend.validateChangeNote_(false, ''), '');
+});
+
+test('detects duplicate active leave requests using fixed indexes', () => {
+  const backend = loadBackend();
+  const rows = [
+    ['時間', 'Ariel Lu', '2026/08/10', '18:30', 'B－空環 Lv.2', '確認中', '', '', '', 'id-1'],
+    ['時間', 'Ariel Lu', '2026/08/11', '18:30', 'B－空環 Lv.2', '已取消', '', '', '', 'id-2'],
+  ];
+  assert.equal(
+    backend.isDuplicateLeave_(rows, 'Ariel Lu', {
+      日期: '2026/08/10',
+      時間: '18:30',
+      課程: 'B－空環 Lv.2',
+    }),
+    true
+  );
+  assert.equal(
+    backend.isDuplicateLeave_(rows, 'Ariel Lu', {
+      日期: '2026/08/11',
+      時間: '18:30',
+      課程: 'B－空環 Lv.2',
+    }),
+    false
+  );
+});

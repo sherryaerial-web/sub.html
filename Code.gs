@@ -1,12 +1,112 @@
+var SHEETS = {
+  COURSE_LIST: 'CourseList',
+  LEAVES: '請假代課紀錄',
+  LEGACY_LEAVES: '工作表1',
+  INVITATIONS: '代課邀請',
+  AUDIT: '操作紀錄',
+  SETTINGS: '系統設定',
+  ACCOUNTS: '登入帳號'
+};
+
+var SHEET_HEADERS = {
+  COURSE_LIST: [
+    '日期', '時間', '課程', '指導者',
+    'OB Calendar ID', 'OB Class ID', 'OB 老師 ID', '是否代課', '最後同步時間'
+  ],
+  LEAVES: [
+    '登記時間', '原老師', '日期', '時段', '課程',
+    '狀態', '代課老師', '備註', '入系統', '代課編號',
+    'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
+    '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態'
+  ],
+  INVITATIONS: ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
+  AUDIT: ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'],
+  SETTINGS: ['設定名稱', '設定值', '更新時間', '備註'],
+  ACCOUNTS: ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至']
+};
+
 var CONFIG = {
-  COURSE_SHEET: 'CourseList',
-  LEAVE_SHEET: '工作表1',
+  COURSE_SHEET: SHEETS.COURSE_LIST,
+  LEAVE_SHEET: SHEETS.LEAVES,
   TEACHER_SHEET: '老師名單',
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
   PAGE_SIZE: 100,
   LOCK_TIMEOUT_MS: 30000
 };
+
+function ensureSystemStructure_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var leaveSheet = migrateLeaveSheet_(ss);
+
+  ensureSheetHeaders_(requireSheet_(ss, SHEETS.COURSE_LIST), SHEET_HEADERS.COURSE_LIST);
+  ensureSheetHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+  ensureSupportingSheet_(ss, SHEETS.INVITATIONS, SHEET_HEADERS.INVITATIONS);
+  ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
+  ensureSupportingSheet_(ss, SHEETS.SETTINGS, SHEET_HEADERS.SETTINGS);
+  ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
+
+  return { leaveSheetName: SHEETS.LEAVES };
+}
+
+function migrateLeaveSheet_(ss) {
+  var leaveSheet = ss.getSheetByName(SHEETS.LEAVES);
+  var legacySheet = ss.getSheetByName(SHEETS.LEGACY_LEAVES);
+
+  if (leaveSheet && legacySheet) {
+    throw new Error('同時找到「' + SHEETS.LEAVES + '」與舊工作表「' + SHEETS.LEGACY_LEAVES + '」，請先人工確認資料。');
+  }
+  if (!leaveSheet && legacySheet) {
+    legacySheet.setName(SHEETS.LEAVES);
+    leaveSheet = legacySheet;
+  }
+  if (!leaveSheet) leaveSheet = ss.insertSheet(SHEETS.LEAVES);
+  return leaveSheet;
+}
+
+function ensureSupportingSheet_(ss, sheetName, headers) {
+  var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  ensureSheetHeaders_(sheet, headers);
+  return sheet;
+}
+
+function ensureSheetHeaders_(sheet, expectedHeaders) {
+  var actualHeaders = sheet.getRange(1, 1, 1, expectedHeaders.length).getValues()[0];
+  expectedHeaders.forEach(function(header, index) {
+    var actual = cleanText_(actualHeaders[index]);
+    if (!actual) {
+      sheet.getRange(1, index + 1).setValue(header);
+    } else if (actual !== header) {
+      throw new Error(sheet.getName() + ' 第 ' + (index + 1) + ' 欄標題應為「' + header + '」。');
+    }
+  });
+}
+
+function getHeaderMap_(sheet) {
+  var headers = sheet.getDataRange().getValues()[0] || [];
+  var map = {};
+  headers.forEach(function(header, index) {
+    var name = cleanText_(header);
+    if (name && !map[name]) map[name] = index + 1;
+  });
+  return map;
+}
+
+function appendAudit_(event) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
+  var item = event || {};
+  var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.AUDIT.length).setValues([[
+    now,
+    cleanText_(item.actor),
+    cleanText_(item.action),
+    cleanText_(item.targetId),
+    cleanText_(item.before),
+    cleanText_(item.after),
+    cleanText_(item.reason)
+  ]]);
+}
 
 function doGet(e) {
   if (!e || !e.parameter || Object.keys(e.parameter).length === 0) {
@@ -436,16 +536,7 @@ function ensurePendingLeaveIds_() {
 }
 
 function ensureLeaveSheetHeaders_(sheet) {
-  assertHeaders_(sheet, [
-    '登記時間', '原老師', '日期', '時段', '課程',
-    '狀態', '代課老師', '備註', '入系統'
-  ]);
-  var idHeader = cleanText_(sheet.getRange(1, 10).getValue());
-  if (!idHeader) {
-    sheet.getRange(1, 10).setValue('代課編號');
-  } else if (idHeader !== '代課編號') {
-    throw new Error('工作表1 第 10 欄標題應為「代課編號」。');
-  }
+  ensureSheetHeaders_(sheet, SHEET_HEADERS.LEAVES);
 }
 
 function assertTeacherExists_(teacherName) {

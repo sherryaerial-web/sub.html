@@ -49,6 +49,150 @@ function loadBackend(overrides = {}) {
   return context;
 }
 
+const EXPECTED_LEAVE_HEADERS = [
+  '登記時間', '原老師', '日期', '時段', '課程',
+  '狀態', '代課老師', '備註', '入系統', '代課編號',
+];
+
+const EXPECTED_LEAVE_EXTENSION_HEADERS = [
+  'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
+  '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
+];
+
+const EXPECTED_COURSE_HEADERS = [
+  '日期', '時間', '課程', '指導者',
+  'OB Calendar ID', 'OB Class ID', 'OB 老師 ID', '是否代課', '最後同步時間',
+];
+
+function createSheetFixture(name, values) {
+  return {
+    name,
+    values: values.map((row) => row.slice()),
+    getName() { return this.name; },
+    setName(nextName) { this.name = nextName; return this; },
+    getLastRow() { return this.values.length; },
+    getDataRange() {
+      const width = Math.max(1, ...this.values.map((row) => row.length));
+      return this.getRange(1, 1, Math.max(1, this.values.length), width);
+    },
+    getRange(row, column, numRows = 1, numColumns = 1) {
+      const sheet = this;
+      return {
+        getValues() {
+          return Array.from({ length: numRows }, (_, rowOffset) =>
+            Array.from({ length: numColumns }, (_, columnOffset) =>
+              (sheet.values[row - 1 + rowOffset] || [])[column - 1 + columnOffset] || ''
+            )
+          );
+        },
+        getValue() { return this.getValues()[0][0]; },
+        setValue(value) { return this.setValues([[value]]); },
+        setValues(nextValues) {
+          nextValues.forEach((nextRow, rowOffset) => {
+            const targetRow = row - 1 + rowOffset;
+            while (sheet.values.length <= targetRow) sheet.values.push([]);
+            nextRow.forEach((value, columnOffset) => {
+              sheet.values[targetRow][column - 1 + columnOffset] = value;
+            });
+          });
+          return this;
+        },
+      };
+    },
+  };
+}
+
+function createSpreadsheetFixture(sheets) {
+  return {
+    sheets,
+    getSheetByName(name) { return this.sheets.find((sheet) => sheet.name === name) || null; },
+    insertSheet(name) {
+      const sheet = createSheetFixture(name, [[]]);
+      this.sheets.push(sheet);
+      return sheet;
+    },
+  };
+}
+
+function loadBackendWithSpreadsheet(spreadsheet) {
+  return loadBackend({
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+}
+
+test('renames the legacy leave sheet and preserves fixed headers', () => {
+  const legacyLeaveSheet = createSheetFixture('工作表1', [
+    EXPECTED_LEAVE_HEADERS,
+    ['2026-08-03 12:00:00', 'Ariel', '2026/08/10', '18:30', '空環', '確認中', '', '', '', 'id-1'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([
+    createSheetFixture('CourseList', [['日期', '時間', '課程', '指導者']]),
+    legacyLeaveSheet,
+  ]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  const result = backend.ensureSystemStructure_();
+
+  assert.equal(result.leaveSheetName, '請假代課紀錄');
+  assert.equal(legacyLeaveSheet.getName(), '請假代課紀錄');
+  assert.deepEqual(legacyLeaveSheet.values[0].slice(0, 10), EXPECTED_LEAVE_HEADERS);
+  assert.deepEqual(legacyLeaveSheet.values[1].slice(0, 10), [
+    '2026-08-03 12:00:00', 'Ariel', '2026/08/10', '18:30', '空環', '確認中', '', '', '', 'id-1',
+  ]);
+});
+
+test('appends the substitute and API headers without moving fixed columns', () => {
+  const leaveSheet = createSheetFixture('請假代課紀錄', [EXPECTED_LEAVE_HEADERS]);
+  const courseSheet = createSheetFixture('CourseList', [['日期', '時間', '課程', '指導者']]);
+  const backend = loadBackendWithSpreadsheet(createSpreadsheetFixture([courseSheet, leaveSheet]));
+
+  backend.ensureSystemStructure_();
+
+  assert.deepEqual(courseSheet.values[0], EXPECTED_COURSE_HEADERS);
+  assert.deepEqual(leaveSheet.values[0].slice(0, 10), EXPECTED_LEAVE_HEADERS);
+  assert.deepEqual(leaveSheet.values[0].slice(10), EXPECTED_LEAVE_EXTENSION_HEADERS);
+});
+
+test('creates supporting sheets and does not change the structure when rerun', () => {
+  const spreadsheet = createSpreadsheetFixture([
+    createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS]),
+    createSheetFixture('請假代課紀錄', [EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS)]),
+  ]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensureSystemStructure_();
+  const firstPass = spreadsheet.sheets.map((sheet) => ({ name: sheet.name, header: sheet.values[0].slice() }));
+  const secondResult = backend.ensureSystemStructure_();
+
+  assert.equal(secondResult.leaveSheetName, '請假代課紀錄');
+  assert.deepEqual(
+    spreadsheet.sheets.map((sheet) => ({ name: sheet.name, header: sheet.values[0].slice() })),
+    firstPass
+  );
+  assert.deepEqual(
+    spreadsheet.sheets.map((sheet) => sheet.name).sort(),
+    ['CourseList', '代課邀請', '操作紀錄', '登入帳號', '系統設定', '請假代課紀錄'].sort()
+  );
+});
+
+test('maps headers by their 1-based Sheet column and appends audit events', () => {
+  const spreadsheet = createSpreadsheetFixture([
+    createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS]),
+    createSheetFixture('請假代課紀錄', [EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS)]),
+  ]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  backend.ensureSystemStructure_();
+  const auditSheet = spreadsheet.getSheetByName('操作紀錄');
+
+  assert.equal(backend.getHeaderMap_(auditSheet)['操作類型'], 3);
+  backend.appendAudit_({
+    actor: 'Ivy', action: '開放代課', targetId: 'sub-1',
+    before: '確認中', after: '已開放', reason: '測試',
+  });
+
+  assert.deepEqual(auditSheet.values[1].slice(1), ['Ivy', '開放代課', 'sub-1', '確認中', '已開放', '測試']);
+});
+
 test('classifies supported course categories', () => {
   const backend = loadBackend();
   assert.equal(typeof backend.getCourseCategory_, 'function');

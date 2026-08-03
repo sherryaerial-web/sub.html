@@ -257,13 +257,14 @@ function storeSession_(token, session) {
   var key = getSessionKey_(sessionToken);
   var cache = getScriptCache_();
   var properties = getScriptProperties_();
+  if (!properties && !cache) throw new Error('無法建立登入狀態。');
+  if (properties) {
+    cleanupExpiredPropertySessions_(properties);
+    properties.setProperty(key, payload);
+  }
   if (cache) {
     cache.put(key, payload, CONFIG.AUTH_SESSION_DURATION_SECONDS);
-    return;
   }
-  if (!properties) throw new Error('無法建立登入狀態。');
-  cleanupExpiredPropertySessions_(properties);
-  properties.setProperty(key, payload);
 }
 
 function readSession_(token) {
@@ -271,6 +272,7 @@ function readSession_(token) {
   var cache = getScriptCache_();
   var properties = getScriptProperties_();
   var raw = cache ? cache.get(key) : (properties ? properties.getProperty(key) : '');
+  if (!raw && cache && properties) raw = properties.getProperty(key);
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -413,6 +415,7 @@ function doGet(e) {
   try {
     var action = cleanText_(e.parameter.action);
     var authenticatedActions = {
+      getPendingLeaves: true,
       getMySubs: true,
       submitLeave: true,
       submitClaim: true

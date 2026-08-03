@@ -295,16 +295,41 @@ test('requireSession rejects and removes sessions with malformed expiry values',
   assert.equal(services.__cache.has(key), false);
 });
 
-test('cache-backed sessions do not accumulate persistent Script Properties records', () => {
+test('cache-backed login cleans expired fallback sessions under the authentication lock', () => {
   const bootstrap = loadBackend(createAuthServices());
   const services = createAuthServices();
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const expiredKey = backend.getSessionKey_('expired-fallback-token');
+  services.__properties.set(expiredKey, JSON.stringify({
+    teacherName: '老師甲', role: '老師', expiresAt: Date.now() - 1,
+  }));
 
   backend.authenticate_('老師甲', '1234');
-  backend.authenticate_('老師甲', '1234');
 
-  assert.equal(services.__properties.size, 0);
-  assert.equal(services.__cache.size, 2);
+  assert.equal(services.__properties.has(expiredKey), false);
+  assert.equal(services.__properties.size, 1);
+  assert.deepEqual(services.__lockState, { depth: 0, waits: 1, releases: 1 });
+});
+
+test('valid fallback session survives early cache eviction but expires on schedule', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const response = backend.authenticate_('老師甲', '1234');
+  const key = backend.getSessionKey_(response.sessionToken);
+
+  assert.equal(services.__properties.has(key), true);
+  services.__cache.delete(key);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
+    { teacherName: '老師甲', role: '老師' }
+  );
+
+  services.__properties.set(key, JSON.stringify({
+    teacherName: '老師甲', role: '老師', expiresAt: Date.now() - 1,
+  }));
+  assert.throws(() => backend.requireSession_(response.sessionToken), /登入狀態已逾期/);
+  assert.equal(services.__properties.has(key), false);
 });
 
 test('property fallback removes expired unused sessions before creating another session', () => {
@@ -389,6 +414,20 @@ test('personal and write routes require a session and ignore forged teacher para
   ]);
 });
 
+test('pending leaves route rejects requests without a session', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  backend.console = { error() {} };
+  backend.ensureSystemStructure_ = () => {};
+  backend.getPendingLeaves_ = () => [{ '原老師': '老師乙' }];
+
+  const response = JSON.parse(backend.doGet({ parameter: { action: 'getPendingLeaves' } }).text);
+
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /請先登入/);
+});
+
 test('renames the legacy leave sheet and preserves fixed headers', () => {
   const legacyLeaveSheet = createSheetFixture('工作表1', [
     EXPECTED_LEAVE_HEADERS,
@@ -433,6 +472,7 @@ test('bootstraps legacy-only leave sheets before the pending-leave handler runs'
       },
     },
   });
+  backend.requireSession_ = () => ({ teacherName: '測試老師', role: '老師' });
 
   const response = backend.doGet({ parameter: { action: 'getPendingLeaves' } });
 

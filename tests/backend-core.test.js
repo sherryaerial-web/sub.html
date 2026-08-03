@@ -141,6 +141,36 @@ test('renames the legacy leave sheet and preserves fixed headers', () => {
   ]);
 });
 
+test('bootstraps legacy-only leave sheets before the pending-leave handler runs', () => {
+  const legacyLeaveSheet = createSheetFixture('工作表1', [EXPECTED_LEAVE_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([
+    createSheetFixture('CourseList', [['日期', '時間', '課程', '指導者']]),
+    legacyLeaveSheet,
+  ]);
+  const backend = loadBackend({
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+    LockService: {
+      getScriptLock() {
+        return { waitLock() {}, releaseLock() {} };
+      },
+    },
+    ContentService: {
+      MimeType: { JSON: 'application/json', TEXT: 'text/plain' },
+      createTextOutput(text) {
+        return {
+          text,
+          setMimeType() { return this; },
+        };
+      },
+    },
+  });
+
+  const response = backend.doGet({ parameter: { action: 'getPendingLeaves' } });
+
+  assert.equal(legacyLeaveSheet.getName(), '請假代課紀錄');
+  assert.deepEqual(JSON.parse(response.text), { status: 'success', data: [] });
+});
+
 test('appends the substitute and API headers without moving fixed columns', () => {
   const leaveSheet = createSheetFixture('請假代課紀錄', [EXPECTED_LEAVE_HEADERS]);
   const courseSheet = createSheetFixture('CourseList', [['日期', '時間', '課程', '指導者']]);

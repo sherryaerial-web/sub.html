@@ -117,6 +117,14 @@ function doGet(e) {
 
   try {
     var action = cleanText_(e.parameter.action);
+    if ({
+      getPendingLeaves: true,
+      getMySubs: true,
+      submitLeave: true,
+      submitClaim: true
+    }[action]) {
+      ensureSystemStructure_();
+    }
     var handlers = {
       getTeachers: function() { return getTeachers_(); },
       getCourseList: function() { return getCourseList_(); },

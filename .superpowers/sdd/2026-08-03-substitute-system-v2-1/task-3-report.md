@@ -37,3 +37,18 @@ Implemented on `feature/substitute-v2`.
 ## Follow-on Scope
 
 Task 4 must add the authenticated management UI that supplies the administrator Session to `syncCourseListFromApi(sessionToken)`. This task intentionally does not expose the sync operation through the current public frontend.
+
+## Review Round 1 Remediation
+
+- A Calendar payload now aborts as a whole when any non-cancelled item is malformed or lacks a Calendar ID, Class ID, instructor ID, date/time, course, or instructor name. No `CourseList` header or data write begins before that validation succeeds.
+- Calendar instructor precedence is now deterministic: retain the first `isSubstitute: true` instructor when present; otherwise retain the first listed instructor.
+- `CourseList` headers are read and validated before acquiring the write lock, then validated again inside the lock. Header completion and snapshot replacement both happen only inside that lock.
+- Added regression coverage for substitute precedence, deterministic non-substitute fallback, missing Class/teacher IDs, mixed valid-invalid payloads preserving an A:D-only snapshot, and a partial conflicting header row preserving the complete original snapshot.
+
+### Review Round 1 Verification
+
+- TDD red: `node --test tests/backend-core.test.js --test-name-pattern="substitute instructor|mixed valid|all headers"` failed against commit `137401e` for each reported issue.
+- TDD green: the same focused command passed after the fix.
+- Final suite: `node --test tests/*.test.js` passed 46/46 tests.
+- Syntax: `node --check < Code.gs` passed.
+- Diff: `git diff --check` passed.

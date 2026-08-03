@@ -516,9 +516,9 @@ function normalizeCalendarItem_(item) {
   if (!item || item.cancelled === true) return null;
 
   var classInfo = item['class'] || item.course || {};
-  var instructors = item.instructors || [];
+  var instructors = Array.isArray(item.instructors) ? item.instructors.filter(Boolean) : [];
   var instructor = instructors.filter(function(person) {
-    return person && person.isSubstitute !== true;
+    return person.isSubstitute === true;
   })[0] || instructors[0] || item.instructor || {};
 
   var courseName = cleanText_(classInfo.nameZhHant || classInfo.nameEn || classInfo.name || '');
@@ -526,10 +526,13 @@ function normalizeCalendarItem_(item) {
     instructor.name ||
     [instructor.firstName, instructor.lastName].filter(Boolean).join(' ')
   );
+  var classId = cleanText_(classInfo.id || classInfo.classId || '');
+  var instructorId = cleanText_(instructor.id || instructor.instructorId || '');
   var classTime = item.classTime || item.startAt || item.startTime || '';
   var parsedTime = new Date(classTime);
 
-  if (!item.id || !courseName || !instructorName || !classTime || isNaN(parsedTime.getTime())) {
+  if (!item.id || !courseName || !instructorName || !classId || !instructorId ||
+      !classTime || isNaN(parsedTime.getTime())) {
     return null;
   }
 
@@ -541,8 +544,8 @@ function normalizeCalendarItem_(item) {
     time: Utilities.formatDate(parsedTime, timezone, 'HH:mm'),
     course: courseName,
     instructor: instructorName,
-    classId: cleanText_(classInfo.id || classInfo.classId || ''),
-    instructorId: cleanText_(instructor.id || instructor.instructorId || ''),
+    classId: classId,
+    instructorId: instructorId,
     isSubstitute: instructor.isSubstitute === true ? '是' : '否'
   };
 }
@@ -598,12 +601,18 @@ function syncCourseListFromApi(sessionToken) {
   var range = getSyncDateRange_(new Date());
   var rawItems = fetchCalendarPages_(token, range.dateFrom, range.dateTo);
   var dedupe = {};
-  var normalized = rawItems.map(normalizeCalendarItem_).filter(function(item) {
-    if (!item) return false;
+  var normalized = [];
+  rawItems.forEach(function(rawItem, index) {
+    if (rawItem && rawItem.cancelled === true) return;
+
+    var item = normalizeCalendarItem_(rawItem);
+    if (!item) {
+      throw new Error('Omcean API 第 ' + (index + 1) + ' 筆包含無效課程資料，為保護舊資料已停止同步。');
+    }
     var key = item.apiId || [item.date, item.time, item.course, item.instructor].join('|');
-    if (dedupe[key]) return false;
+    if (dedupe[key]) return;
     dedupe[key] = true;
-    return true;
+    normalized.push(item);
   });
   if (!normalized.length) {
     throw new Error('API 本次沒有取得有效課程，為保護舊資料已停止同步。');
@@ -616,7 +625,7 @@ function syncCourseListFromApi(sessionToken) {
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
-  ensureSheetHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
+  validateAppendOnlyHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
   var syncedAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
   var rows = normalized.map(function(item) {
     return [
@@ -635,6 +644,7 @@ function syncCourseListFromApi(sessionToken) {
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
+    var headers = validateAppendOnlyHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
     var existingRows = Math.max(0, sheet.getLastRow() - 1);
     var replacementRows = rows.slice();
     while (replacementRows.length < existingRows) {
@@ -642,6 +652,7 @@ function syncCourseListFromApi(sessionToken) {
     }
     sheet.getRange(2, 1, replacementRows.length, SHEET_HEADERS.COURSE_LIST.length)
       .setValues(replacementRows);
+    sheet.getRange(1, 1, 1, SHEET_HEADERS.COURSE_LIST.length).setValues([headers]);
   } finally {
     lock.releaseLock();
   }
@@ -652,6 +663,18 @@ function syncCourseListFromApi(sessionToken) {
     dateFrom: range.dateFrom,
     dateTo: range.dateTo
   };
+}
+
+function validateAppendOnlyHeaders_(sheet, expectedHeaders) {
+  var actualHeaders = sheet.getRange(1, 1, 1, expectedHeaders.length).getValues()[0];
+  return expectedHeaders.map(function(header, index) {
+    var actual = cleanText_(actualHeaders[index]);
+    if (!actual) return header;
+    if (actual !== header) {
+      throw new Error(sheet.getName() + ' 第 ' + (index + 1) + ' 欄標題應為「' + header + '」。');
+    }
+    return actual;
+  });
 }
 
 function getTeachers_() {

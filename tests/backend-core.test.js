@@ -690,6 +690,52 @@ test('normalizes a calendar item to the fixed CourseList contract', () => {
 test('rejects calendar items missing required values', () => {
   const backend = loadBackend();
   assert.equal(backend.normalizeCalendarItem_({ id: 1 }), null);
+  assert.equal(backend.normalizeCalendarItem_({
+    id: 2,
+    classTime: '2026-08-10T10:30:00Z',
+    class: { nameZhHant: '缺少課程 ID' },
+    instructors: [{ id: 42, firstName: '老師', lastName: '甲' }],
+  }), null);
+  assert.equal(backend.normalizeCalendarItem_({
+    id: 3,
+    classTime: '2026-08-10T10:30:00Z',
+    class: { id: 86, nameZhHant: '缺少老師 ID' },
+    instructors: [{ firstName: '老師', lastName: '乙' }],
+  }), null);
+});
+
+test('prefers the current substitute instructor over the original instructor', () => {
+  const backend = loadBackend();
+  const result = backend.normalizeCalendarItem_({
+    id: 7790,
+    classTime: '2026-08-10T10:30:00Z',
+    class: { id: 88, nameZhHant: 'B－空環 Lv.2' },
+    instructors: [
+      { id: 41, firstName: '原', lastName: '老師', isSubstitute: false },
+      { id: 42, firstName: '代', lastName: '課老師', isSubstitute: true },
+    ],
+  });
+
+  assert.equal(result.instructor, '代 課老師');
+  assert.equal(result.instructorId, '42');
+  assert.equal(result.isSubstitute, '是');
+});
+
+test('uses the first listed instructor when Calendar has no substitute instructor', () => {
+  const backend = loadBackend();
+  const result = backend.normalizeCalendarItem_({
+    id: 7791,
+    classTime: '2026-08-10T10:30:00Z',
+    class: { id: 89, nameZhHant: 'B－空環 Lv.2' },
+    instructors: [
+      { id: 51, firstName: '第一位', lastName: '老師', isSubstitute: false },
+      { id: 52, firstName: '第二位', lastName: '老師', isSubstitute: false },
+    ],
+  });
+
+  assert.equal(result.instructor, '第一位 老師');
+  assert.equal(result.instructorId, '51');
+  assert.equal(result.isSubstitute, '否');
 });
 
 test('fetches calendar pages in blocks of 100 with bearer auth', () => {
@@ -772,6 +818,52 @@ test('manual sync preserves the old snapshot when Calendar returns an HTTP error
   const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
 
   assert.throws(() => backend.syncCourseListFromApi(adminToken), /API 連線失敗.*503/);
+  assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync rejects a mixed valid and missing-ID payload without touching the old snapshot', () => {
+  const { backend, courseSheet, adminToken } = createSyncBackend({
+    courseValues: [
+      ['日期', '時間', '課程', '指導者'],
+      ['2026/08/05', '10:00', '舊課程', '舊老師'],
+    ],
+    pages: [[
+      {
+        id: 1001,
+        classTime: '2026-08-10T10:30:00Z',
+        class: { id: 101, nameZhHant: '有效課程' },
+        instructors: [{ id: 201, firstName: '有效', lastName: '老師' }],
+      },
+      {
+        id: 1002,
+        classTime: '2026-08-10T12:30:00Z',
+        class: { nameZhHant: '缺少課程 ID' },
+        instructors: [{ id: 202, firstName: '無效', lastName: '老師' }],
+      },
+    ]],
+  });
+  const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
+
+  assert.throws(() => backend.syncCourseListFromApi(adminToken), /第 2 筆.*無效課程資料/);
+  assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync validates all headers before any header or data mutation', () => {
+  const { backend, courseSheet, adminToken } = createSyncBackend({
+    courseValues: [
+      ['日期', '時間', '課程', '指導者', '', '錯誤欄位', '', '', ''],
+      ['2026/08/05', '10:00', '舊課程', '舊老師', '', '', '', '', ''],
+    ],
+    pages: [[{
+      id: 1003,
+      classTime: '2026-08-10T10:30:00Z',
+      class: { id: 103, nameZhHant: '有效課程' },
+      instructors: [{ id: 203, firstName: '有效', lastName: '老師' }],
+    }]],
+  });
+  const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
+
+  assert.throws(() => backend.syncCourseListFromApi(adminToken), /第 6 欄標題/);
   assert.deepEqual(courseSheet.values, oldValues);
 });
 

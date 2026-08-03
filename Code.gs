@@ -60,32 +60,34 @@ function authenticate_(teacherName, pin) {
   var pinText = cleanText_(pin);
   if (!teacher || !pinText) throw new Error('請輸入姓名與身分證末碼。');
 
-  var account = findAccount_(teacher);
-  if (!account) throw new Error('姓名或身分證末碼不正確。');
-  if (!isAccountActive_(account.active)) throw new Error('帳號目前未啟用。');
-  if (isAccountLocked_(account.lockedUntil)) throw new Error('帳號暫時鎖定，請稍後再試。');
+  return withScriptLock_(function() {
+    var account = findAccount_(teacher);
+    if (!account) throw new Error('姓名或身分證末碼不正確。');
+    if (!isAccountActive_(account.active)) throw new Error('帳號目前未啟用。');
+    if (isAccountLocked_(account.lockedUntil)) throw new Error('帳號暫時鎖定，請稍後再試。');
 
-  var expectedHash = cleanText_(account.pinHash);
-  var actualHash = hashPin_(pinText, account.salt);
-  if (!expectedHash || !constantTimeEquals_(expectedHash, actualHash)) {
-    recordFailedLogin_(account);
-    throw new Error('姓名或身分證末碼不正確。');
-  }
+    var expectedHash = cleanText_(account.pinHash);
+    var actualHash = hashPin_(pinText, account.salt);
+    if (!expectedHash || !constantTimeEquals_(expectedHash, actualHash)) {
+      recordFailedLogin_(account);
+      throw new Error('姓名或身分證末碼不正確。');
+    }
 
-  resetFailedLogin_(account);
-  var role = normalizeAccountRole_(account.role);
-  var sessionToken = createSessionToken_();
-  storeSession_(sessionToken, {
-    teacherName: account.teacherName,
-    role: role,
-    expiresAt: currentTimeMs_() + CONFIG.AUTH_SESSION_DURATION_SECONDS * 1000
+    resetFailedLogin_(account);
+    var role = normalizeAccountRole_(account.role);
+    var sessionToken = createSessionToken_();
+    storeSession_(sessionToken, {
+      teacherName: account.teacherName,
+      role: role,
+      expiresAt: currentTimeMs_() + CONFIG.AUTH_SESSION_DURATION_SECONDS * 1000
+    });
+
+    return {
+      sessionToken: sessionToken,
+      teacherName: account.teacherName,
+      role: role
+    };
   });
-
-  return {
-    sessionToken: sessionToken,
-    teacherName: account.teacherName,
-    role: role
-  };
 }
 
 function requireSession_(token) {
@@ -96,7 +98,12 @@ function requireSession_(token) {
   if (!session || !cleanText_(session.teacherName) || !cleanText_(session.role)) {
     throw new Error('登入狀態無效，請重新登入。');
   }
-  if (Number(session.expiresAt) <= currentTimeMs_()) {
+  var expiresAt = Number(session.expiresAt);
+  if (!isFinite(expiresAt)) {
+    removeSession_(sessionToken);
+    throw new Error('登入狀態無效，請重新登入。');
+  }
+  if (expiresAt <= currentTimeMs_()) {
     removeSession_(sessionToken);
     throw new Error('登入狀態已逾期，請重新登入。');
   }
@@ -240,25 +247,30 @@ function createRandomToken_() {
 function storeSession_(token, session) {
   var sessionToken = cleanText_(token);
   if (!sessionToken) throw new Error('登入狀態無效。');
+  var expiresAt = Number(session.expiresAt);
+  if (!isFinite(expiresAt)) throw new Error('登入狀態期限無效。');
   var payload = JSON.stringify({
     teacherName: cleanText_(session.teacherName),
     role: normalizeAccountRole_(session.role),
-    expiresAt: Number(session.expiresAt)
+    expiresAt: expiresAt
   });
   var key = getSessionKey_(sessionToken);
   var cache = getScriptCache_();
   var properties = getScriptProperties_();
-  if (cache) cache.put(key, payload, CONFIG.AUTH_SESSION_DURATION_SECONDS);
-  if (properties) properties.setProperty(key, payload);
-  if (!cache && !properties) throw new Error('無法建立登入狀態。');
+  if (cache) {
+    cache.put(key, payload, CONFIG.AUTH_SESSION_DURATION_SECONDS);
+    return;
+  }
+  if (!properties) throw new Error('無法建立登入狀態。');
+  cleanupExpiredPropertySessions_(properties);
+  properties.setProperty(key, payload);
 }
 
 function readSession_(token) {
   var key = getSessionKey_(token);
   var cache = getScriptCache_();
   var properties = getScriptProperties_();
-  var raw = cache ? cache.get(key) : '';
-  if (!raw && properties) raw = properties.getProperty(key);
+  var raw = cache ? cache.get(key) : (properties ? properties.getProperty(key) : '');
   if (!raw) return null;
   try {
     return JSON.parse(raw);
@@ -286,6 +298,32 @@ function getScriptCache_() {
 
 function getScriptProperties_() {
   return typeof PropertiesService === 'undefined' ? null : PropertiesService.getScriptProperties();
+}
+
+function cleanupExpiredPropertySessions_(properties) {
+  if (!properties || typeof properties.getProperties !== 'function') return;
+  var now = currentTimeMs_();
+  var allProperties = properties.getProperties();
+  Object.keys(allProperties).forEach(function(key) {
+    if (key.indexOf(CONFIG.AUTH_SESSION_KEY_PREFIX) !== 0) return;
+    try {
+      var session = JSON.parse(allProperties[key]);
+      var expiresAt = Number(session.expiresAt);
+      if (!isFinite(expiresAt) || expiresAt <= now) properties.deleteProperty(key);
+    } catch (error) {
+      properties.deleteProperty(key);
+    }
+  });
+}
+
+function withScriptLock_(callback) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  try {
+    return callback();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function currentTimeMs_() {
@@ -374,6 +412,14 @@ function doGet(e) {
 
   try {
     var action = cleanText_(e.parameter.action);
+    var authenticatedActions = {
+      getMySubs: true,
+      submitLeave: true,
+      submitClaim: true
+    };
+    var session = authenticatedActions[action]
+      ? requireSession_(e.parameter.sessionToken)
+      : null;
     if ({
       getPendingLeaves: true,
       getMySubs: true,
@@ -386,12 +432,12 @@ function doGet(e) {
       getTeachers: function() { return getTeachers_(); },
       getCourseList: function() { return getCourseList_(); },
       getPendingLeaves: function() { return getPendingLeaves_(); },
-      getMySubs: function() { return getMySubs_(e.parameter.name); },
+      getMySubs: function() { return getMySubs_(session.teacherName); },
       submitLeave: function() {
-        return submitLeave_(e.parameter.instructor, parseJsonArray_(e.parameter.items, '請假課程'));
+        return submitLeave_(session.teacherName, parseJsonArray_(e.parameter.items, '請假課程'));
       },
       submitClaim: function() {
-        return submitClaim_(e.parameter.subTeacher, parseJsonArray_(e.parameter.items, '代課課程'));
+        return submitClaim_(session.teacherName, parseJsonArray_(e.parameter.items, '代課課程'));
       }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);

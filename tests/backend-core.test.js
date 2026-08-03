@@ -123,8 +123,9 @@ function loadBackendWithSpreadsheet(spreadsheet) {
 function createAuthServices() {
   const cache = new Map();
   const properties = new Map();
+  const lockState = { depth: 0, waits: 0, releases: 0 };
   const digest = require('node:crypto');
-  return {
+  const services = {
     Utilities: {
       DigestAlgorithm: { SHA_256: 'SHA_256' },
       Charset: { UTF_8: 'UTF_8' },
@@ -154,24 +155,45 @@ function createAuthServices() {
           getProperty(key) { return properties.get(key) || null; },
           setProperty(key, value) { properties.set(key, value); },
           deleteProperty(key) { properties.delete(key); },
+          getProperties() { return Object.fromEntries(properties); },
+        };
+      },
+    },
+    LockService: {
+      getScriptLock() {
+        return {
+          waitLock() { lockState.depth += 1; lockState.waits += 1; },
+          releaseLock() { lockState.depth -= 1; lockState.releases += 1; },
+        };
+      },
+    },
+    ContentService: {
+      MimeType: { JSON: 'application/json', TEXT: 'text/plain' },
+      createTextOutput(text) {
+        return {
+          text,
+          setMimeType() { return this; },
         };
       },
     },
   };
+  services.__cache = cache;
+  services.__properties = properties;
+  services.__lockState = lockState;
+  return services;
 }
 
-function createAuthBackend(accounts) {
+function createAuthBackend(accounts, services = createAuthServices()) {
   const accountSheet = createSheetFixture('登入帳號', [
     ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
     ...accounts,
   ]);
   const spreadsheet = createSpreadsheetFixture([accountSheet]);
-  const services = createAuthServices();
   const backend = loadBackend({
     ...services,
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
-  return { backend, accountSheet };
+  return { backend, accountSheet, services };
 }
 
 function createAccount(backend, teacherName, pin, options = {}) {
@@ -208,6 +230,26 @@ test('login rejects an invalid PIN and records a failed attempt', () => {
   assert.equal(accountSheet.values[1][5], 1);
 });
 
+test('authentication locks account reads and failed-attempt writes together', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const findAccount = backend.findAccount_;
+  const recordFailedLogin = backend.recordFailedLogin_;
+
+  backend.findAccount_ = (teacherName) => {
+    assert.equal(services.__lockState.depth, 1);
+    return findAccount(teacherName);
+  };
+  backend.recordFailedLogin_ = (account) => {
+    assert.equal(services.__lockState.depth, 1);
+    return recordFailedLogin(account);
+  };
+
+  assert.throws(() => backend.authenticate_('老師甲', '0000'), /姓名或身分證末碼不正確/);
+  assert.deepEqual(services.__lockState, { depth: 0, waits: 1, releases: 1 });
+});
+
 test('login rejects inactive accounts without creating a session', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([
@@ -241,6 +283,46 @@ test('requireSession rejects expired sessions and removes the stored token', () 
   assert.throws(() => backend.requireSession_(response.sessionToken), /登入狀態無效/);
 });
 
+test('requireSession rejects and removes sessions with malformed expiry values', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const token = 'malformed-expiry';
+  const key = backend.getSessionKey_(token);
+  services.__cache.set(key, JSON.stringify({ teacherName: '老師甲', role: '老師', expiresAt: 'not-a-date' }));
+
+  assert.throws(() => backend.requireSession_(token), /登入狀態無效/);
+  assert.equal(services.__cache.has(key), false);
+});
+
+test('cache-backed sessions do not accumulate persistent Script Properties records', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+
+  backend.authenticate_('老師甲', '1234');
+  backend.authenticate_('老師甲', '1234');
+
+  assert.equal(services.__properties.size, 0);
+  assert.equal(services.__cache.size, 2);
+});
+
+test('property fallback removes expired unused sessions before creating another session', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  delete services.CacheService;
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const expiredKey = backend.getSessionKey_('unused-expired-token');
+  services.__properties.set(expiredKey, JSON.stringify({
+    teacherName: '老師甲', role: '老師', expiresAt: Date.now() - 1,
+  }));
+
+  backend.authenticate_('老師甲', '1234');
+
+  assert.equal(services.__properties.has(expiredKey), false);
+  assert.equal(services.__properties.size, 1);
+});
+
 test('teacher session cannot access administrator-only helpers', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
@@ -270,6 +352,41 @@ test('administrator account setup stores only salt and hash for the new teacher'
   assert.notEqual(accountSheet.values[2][1], '');
   assert.notEqual(accountSheet.values[2][2], '5678');
   assert.equal(JSON.stringify(accountSheet.values[2]).includes('5678'), false);
+});
+
+test('personal and write routes require a session and ignore forged teacher parameters', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const sessionToken = backend.authenticate_('老師甲', '1234').sessionToken;
+  const calls = [];
+  backend.console = { error() {} };
+  backend.ensureSystemStructure_ = () => {};
+  backend.getMySubs_ = (teacherName) => { calls.push(['mySubs', teacherName]); return []; };
+  backend.submitLeave_ = (teacherName, items) => { calls.push(['leave', teacherName, items.length]); return { count: items.length }; };
+  backend.submitClaim_ = (teacherName, items) => { calls.push(['claim', teacherName, items.length]); return { count: items.length }; };
+
+  const missingSession = JSON.parse(backend.doGet({ parameter: {
+    action: 'getMySubs', name: '被偽造的老師',
+  } }).text);
+  assert.equal(missingSession.status, 'error');
+  assert.match(missingSession.message, /請先登入/);
+
+  backend.doGet({ parameter: {
+    action: 'getMySubs', sessionToken, name: '被偽造的老師',
+  } });
+  backend.doGet({ parameter: {
+    action: 'submitLeave', sessionToken, instructor: '被偽造的老師', items: JSON.stringify([{ 日期: '2026/08/10', 時間: '18:30', 課程: '空環' }]),
+  } });
+  backend.doGet({ parameter: {
+    action: 'submitClaim', sessionToken, subTeacher: '被偽造的老師', items: JSON.stringify([{ substituteId: 'sub-1' }]),
+  } });
+
+  assert.deepEqual(calls, [
+    ['mySubs', '老師甲'],
+    ['leave', '老師甲', 1],
+    ['claim', '老師甲', 1],
+  ]);
 });
 
 test('renames the legacy leave sheet and preserves fixed headers', () => {

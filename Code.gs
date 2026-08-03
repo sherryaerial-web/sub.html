@@ -645,14 +645,28 @@ function syncCourseListFromApi(sessionToken) {
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
     var headers = validateAppendOnlyHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
+    var snapshot = captureSheetSnapshot_(sheet);
     var existingRows = Math.max(0, sheet.getLastRow() - 1);
     var replacementRows = rows.slice();
     while (replacementRows.length < existingRows) {
       replacementRows.push(['', '', '', '', '', '', '', '', '']);
     }
-    sheet.getRange(2, 1, replacementRows.length, SHEET_HEADERS.COURSE_LIST.length)
-      .setValues(replacementRows);
-    sheet.getRange(1, 1, 1, SHEET_HEADERS.COURSE_LIST.length).setValues([headers]);
+    var writtenRows = replacementRows.length + 1;
+    var writtenColumns = SHEET_HEADERS.COURSE_LIST.length;
+    try {
+      sheet.getRange(2, 1, replacementRows.length, writtenColumns).setValues(replacementRows);
+      sheet.getRange(1, 1, 1, writtenColumns).setValues([headers]);
+    } catch (writeError) {
+      try {
+        restoreSheetSnapshot_(sheet, snapshot, writtenRows, writtenColumns);
+      } catch (restoreError) {
+        throw new Error(
+          '同步寫入失敗且無法回復舊課表：' +
+          (restoreError && restoreError.message ? restoreError.message : String(restoreError))
+        );
+      }
+      throw writeError;
+    }
   } finally {
     lock.releaseLock();
   }
@@ -675,6 +689,23 @@ function validateAppendOnlyHeaders_(sheet, expectedHeaders) {
     }
     return actual;
   });
+}
+
+function captureSheetSnapshot_(sheet) {
+  var rows = Math.max(1, sheet.getLastRow());
+  var columns = Math.max(1, sheet.getLastColumn());
+  return {
+    rows: rows,
+    columns: columns,
+    values: sheet.getRange(1, 1, rows, columns).getValues()
+  };
+}
+
+function restoreSheetSnapshot_(sheet, snapshot, writtenRows, writtenColumns) {
+  var rows = Math.max(snapshot.rows, writtenRows, sheet.getLastRow());
+  var columns = Math.max(snapshot.columns, writtenColumns, sheet.getLastColumn());
+  sheet.getRange(1, 1, rows, columns).clearContent();
+  sheet.getRange(1, 1, snapshot.rows, snapshot.columns).setValues(snapshot.values);
 }
 
 function getTeachers_() {

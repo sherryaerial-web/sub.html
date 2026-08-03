@@ -10,7 +10,7 @@ Implemented on `feature/substitute-v2`.
 - Kept `OMCEAN_API_TOKEN` exclusively in Script Properties.
 - Fetches all Calendar pages, filters cancelled classes, normalizes every row before the write lock, and rejects zero valid rows, invalid JSON, and HTTP errors without changing `CourseList`.
 - Appends and writes the stable OB metadata: Calendar ID, Class ID, instructor ID, substitute flag, and last-sync time.
-- Replaces the current `CourseList` snapshot through one locked range write, including blank values for surplus old rows. It never writes to `請假代課紀錄`.
+- Replaces the current `CourseList` snapshot under a write lock and never writes to `請假代課紀錄`.
 - Removed `installHourlySyncTrigger`; the README now requires removal of any legacy time trigger and documents manual-only synchronization.
 - Added a one-time first-admin initializer that reads temporary Script Properties, stores only the salted PIN hash, and deletes the temporary PIN even when initialization fails.
 
@@ -50,5 +50,19 @@ Task 4 must add the authenticated management UI that supplies the administrator 
 - TDD red: `node --test tests/backend-core.test.js --test-name-pattern="substitute instructor|mixed valid|all headers"` failed against commit `137401e` for each reported issue.
 - TDD green: the same focused command passed after the fix.
 - Final suite: `node --test tests/*.test.js` passed 46/46 tests.
+- Syntax: `node --check < Code.gs` passed.
+- Diff: `git diff --check` passed.
+
+## Review Round 2 Remediation
+
+- The locked sync path now captures the complete existing `CourseList` content footprint before it writes any replacement data or headers.
+- If either replacement write fails, the backend clears the affected range and restores the saved snapshot before rethrowing the original write failure. If restoration itself fails, it reports that the old snapshot could not be restored.
+- Added failure injection for the second/header write. The regression verifies that an A:D-only header and its old row are restored exactly after the injected failure.
+
+### Review Round 2 Verification
+
+- TDD red: `node --test tests/backend-core.test.js --test-name-pattern="second Sheet write fails"` reproduced a replaced old row after the injected second-write error.
+- TDD green: the same focused command passed after rollback support was added.
+- Final suite: `node --test tests/*.test.js` passed 47/47 tests.
 - Syntax: `node --check < Code.gs` passed.
 - Diff: `git diff --check` passed.

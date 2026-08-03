@@ -71,6 +71,13 @@ function createSheetFixture(name, values) {
     getName() { return this.name; },
     setName(nextName) { this.name = nextName; return this; },
     getLastRow() { return this.values.length; },
+    getLastColumn() {
+      let lastColumn = 0;
+      this.values.forEach((row) => row.forEach((value, index) => {
+        if (value !== '') lastColumn = Math.max(lastColumn, index + 1);
+      }));
+      return Math.max(1, lastColumn);
+    },
     getDataRange() {
       const width = Math.max(1, ...this.values.map((row) => row.length));
       return this.getRange(1, 1, Math.max(1, this.values.length), width);
@@ -95,6 +102,22 @@ function createSheetFixture(name, values) {
               sheet.values[targetRow][column - 1 + columnOffset] = value;
             });
           });
+          return this;
+        },
+        clearContent() {
+          for (let rowOffset = 0; rowOffset < numRows; rowOffset++) {
+            const targetRow = row - 1 + rowOffset;
+            if (!sheet.values[targetRow]) continue;
+            for (let columnOffset = 0; columnOffset < numColumns; columnOffset++) {
+              sheet.values[targetRow][column - 1 + columnOffset] = '';
+            }
+          }
+          sheet.values.forEach((targetRow) => {
+            while (targetRow.length && targetRow[targetRow.length - 1] === '') targetRow.pop();
+          });
+          while (sheet.values.length > 1 && sheet.values[sheet.values.length - 1].every((value) => value === '')) {
+            sheet.values.pop();
+          }
           return this;
         },
       };
@@ -864,6 +887,37 @@ test('manual sync validates all headers before any header or data mutation', () 
   const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
 
   assert.throws(() => backend.syncCourseListFromApi(adminToken), /第 6 欄標題/);
+  assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync restores the exact old snapshot when its second Sheet write fails', () => {
+  const { backend, courseSheet, adminToken } = createSyncBackend({
+    courseValues: [
+      ['日期', '時間', '課程', '指導者'],
+      ['2026/08/05', '10:00', '舊課程', '舊老師'],
+    ],
+    pages: [[{
+      id: 1004,
+      classTime: '2026-08-10T10:30:00Z',
+      class: { id: 104, nameZhHant: '新課程' },
+      instructors: [{ id: 204, firstName: '新', lastName: '老師' }],
+    }]],
+  });
+  const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
+  const originalGetRange = courseSheet.getRange.bind(courseSheet);
+  let setValuesCalls = 0;
+  courseSheet.getRange = function(...args) {
+    const range = originalGetRange(...args);
+    const originalSetValues = range.setValues.bind(range);
+    range.setValues = function(values) {
+      setValuesCalls += 1;
+      if (setValuesCalls === 2) throw new Error('injected header write failure');
+      return originalSetValues(values);
+    };
+    return range;
+  };
+
+  assert.throws(() => backend.syncCourseListFromApi(adminToken), /injected header write failure/);
   assert.deepEqual(courseSheet.values, oldValues);
 });
 

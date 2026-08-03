@@ -120,6 +120,158 @@ function loadBackendWithSpreadsheet(spreadsheet) {
   });
 }
 
+function createAuthServices() {
+  const cache = new Map();
+  const properties = new Map();
+  const digest = require('node:crypto');
+  return {
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'SHA_256' },
+      Charset: { UTF_8: 'UTF_8' },
+      computeDigest(_algorithm, value) {
+        return Array.from(digest.createHash('sha256').update(value, 'utf8').digest())
+          .map((byte) => byte > 127 ? byte - 256 : byte);
+      },
+      getUuid() { return `session-${cache.size + properties.size + 1}`; },
+      formatDate(value, _timezone, pattern) {
+        const date = new Date(value);
+        if (pattern === 'yyyy-MM-dd HH:mm:ss') return date.toISOString().replace('T', ' ').slice(0, 19);
+        return '';
+      },
+    },
+    CacheService: {
+      getScriptCache() {
+        return {
+          get(key) { return cache.get(key) || null; },
+          put(key, value) { cache.set(key, value); },
+          remove(key) { cache.delete(key); },
+        };
+      },
+    },
+    PropertiesService: {
+      getScriptProperties() {
+        return {
+          getProperty(key) { return properties.get(key) || null; },
+          setProperty(key, value) { properties.set(key, value); },
+          deleteProperty(key) { properties.delete(key); },
+        };
+      },
+    },
+  };
+}
+
+function createAuthBackend(accounts) {
+  const accountSheet = createSheetFixture('登入帳號', [
+    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    ...accounts,
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet]);
+  const services = createAuthServices();
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  return { backend, accountSheet };
+}
+
+function createAccount(backend, teacherName, pin, options = {}) {
+  const salt = options.salt || 'fixed-salt';
+  return [
+    teacherName,
+    salt,
+    backend.hashPin_(pin, salt),
+    options.active == null ? '是' : options.active,
+    options.role || '老師',
+    options.failedAttempts || 0,
+    options.lockedUntil || '',
+  ];
+}
+
+test('login returns an opaque session without exposing credentials', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
+
+  const response = backend.authenticate_('老師甲', '1234');
+
+  assert.ok(response.sessionToken);
+  assert.deepEqual(Object.keys(response).sort(), ['role', 'sessionToken', 'teacherName']);
+  assert.equal('pinHash' in response, false);
+  assert.equal('salt' in response, false);
+  assert.equal('expiresAt' in response, false);
+});
+
+test('login rejects an invalid PIN and records a failed attempt', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend, accountSheet } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
+
+  assert.throws(() => backend.authenticate_('老師甲', '0000'), /姓名或身分證末碼不正確/);
+  assert.equal(accountSheet.values[1][5], 1);
+});
+
+test('login rejects inactive accounts without creating a session', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '已停用老師', '1234', { active: '否' }),
+  ]);
+
+  assert.throws(() => backend.authenticate_('已停用老師', '1234'), /帳號目前未啟用/);
+});
+
+test('login rejects temporarily locked accounts before checking the PIN', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '老師甲', '1234', {
+      failedAttempts: 5,
+      lockedUntil: new Date(Date.now() + 60 * 1000).toISOString(),
+    }),
+  ]);
+
+  assert.throws(() => backend.authenticate_('老師甲', '1234'), /帳號暫時鎖定/);
+});
+
+test('requireSession rejects expired sessions and removes the stored token', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
+  const response = backend.authenticate_('老師甲', '1234');
+  backend.storeSession_(response.sessionToken, {
+    teacherName: '老師甲', role: '老師', expiresAt: Date.now() - 1,
+  });
+
+  assert.throws(() => backend.requireSession_(response.sessionToken), /登入狀態已逾期/);
+  assert.throws(() => backend.requireSession_(response.sessionToken), /登入狀態無效/);
+});
+
+test('teacher session cannot access administrator-only helpers', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
+  const response = backend.authenticate_('老師甲', '1234');
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
+    { teacherName: '老師甲', role: '老師' }
+  );
+  assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
+});
+
+test('administrator account setup stores only salt and hash for the new teacher', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend, accountSheet } = createAuthBackend([
+    createAccount(bootstrap, '管理員', '9999', { role: '管理員' }),
+  ]);
+  const adminSession = backend.authenticate_('管理員', '9999').sessionToken;
+
+  const response = backend.setupAccount_(adminSession, '老師乙', '5678', { active: true, role: '老師' });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(response)),
+    { teacherName: '老師乙', role: '老師', active: true }
+  );
+  assert.equal(accountSheet.values[2][0], '老師乙');
+  assert.notEqual(accountSheet.values[2][1], '');
+  assert.notEqual(accountSheet.values[2][2], '5678');
+  assert.equal(JSON.stringify(accountSheet.values[2]).includes('5678'), false);
+});
+
 test('renames the legacy leave sheet and preserves fixed headers', () => {
   const legacyLeaveSheet = createSheetFixture('工作表1', [
     EXPECTED_LEAVE_HEADERS,

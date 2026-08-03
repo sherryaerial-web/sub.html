@@ -32,8 +32,265 @@ var CONFIG = {
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
   PAGE_SIZE: 100,
-  LOCK_TIMEOUT_MS: 30000
+  LOCK_TIMEOUT_MS: 30000,
+  AUTH_SESSION_DURATION_SECONDS: 21600,
+  AUTH_MAX_FAILED_ATTEMPTS: 5,
+  AUTH_LOCK_DURATION_MS: 15 * 60 * 1000,
+  AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_'
 };
+
+function hashPin_(pin, salt) {
+  var pinText = cleanText_(pin);
+  var saltText = cleanText_(salt);
+  if (!pinText || !saltText) throw new Error('身分證末碼或 Salt 不可空白。');
+
+  var bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    pinText + ':' + saltText,
+    Utilities.Charset.UTF_8
+  );
+  return bytes.map(function(byte) {
+    var value = byte < 0 ? byte + 256 : byte;
+    return ('0' + value.toString(16)).slice(-2);
+  }).join('');
+}
+
+function authenticate_(teacherName, pin) {
+  var teacher = cleanText_(teacherName);
+  var pinText = cleanText_(pin);
+  if (!teacher || !pinText) throw new Error('請輸入姓名與身分證末碼。');
+
+  var account = findAccount_(teacher);
+  if (!account) throw new Error('姓名或身分證末碼不正確。');
+  if (!isAccountActive_(account.active)) throw new Error('帳號目前未啟用。');
+  if (isAccountLocked_(account.lockedUntil)) throw new Error('帳號暫時鎖定，請稍後再試。');
+
+  var expectedHash = cleanText_(account.pinHash);
+  var actualHash = hashPin_(pinText, account.salt);
+  if (!expectedHash || !constantTimeEquals_(expectedHash, actualHash)) {
+    recordFailedLogin_(account);
+    throw new Error('姓名或身分證末碼不正確。');
+  }
+
+  resetFailedLogin_(account);
+  var role = normalizeAccountRole_(account.role);
+  var sessionToken = createSessionToken_();
+  storeSession_(sessionToken, {
+    teacherName: account.teacherName,
+    role: role,
+    expiresAt: currentTimeMs_() + CONFIG.AUTH_SESSION_DURATION_SECONDS * 1000
+  });
+
+  return {
+    sessionToken: sessionToken,
+    teacherName: account.teacherName,
+    role: role
+  };
+}
+
+function requireSession_(token) {
+  var sessionToken = cleanText_(token);
+  if (!sessionToken) throw new Error('請先登入。');
+
+  var session = readSession_(sessionToken);
+  if (!session || !cleanText_(session.teacherName) || !cleanText_(session.role)) {
+    throw new Error('登入狀態無效，請重新登入。');
+  }
+  if (Number(session.expiresAt) <= currentTimeMs_()) {
+    removeSession_(sessionToken);
+    throw new Error('登入狀態已逾期，請重新登入。');
+  }
+  return {
+    teacherName: cleanText_(session.teacherName),
+    role: normalizeAccountRole_(session.role)
+  };
+}
+
+function requireAdmin_(token) {
+  var session = requireSession_(token);
+  if (!isAdminRole_(session.role)) throw new Error('需要管理權限。');
+  return session;
+}
+
+function setupAccount_(adminToken, teacherName, pin, options) {
+  requireAdmin_(adminToken);
+
+  var teacher = cleanText_(teacherName);
+  var pinText = cleanText_(pin);
+  if (!teacher || !pinText) throw new Error('請輸入老師姓名與身分證末碼。');
+
+  var settings = options || {};
+  var active = settings.active !== false;
+  var role = normalizeAccountRole_(settings.role);
+  var salt = createRandomToken_();
+  var pinHash = hashPin_(pinText, salt);
+  var sheet = getAccountsSheet_();
+  var headers = getHeaderMap_(sheet);
+  var values = sheet.getDataRange().getValues();
+  var existingRow = 0;
+
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][headers['指導者'] - 1]) === teacher) {
+      existingRow = index + 1;
+      break;
+    }
+  }
+
+  var accountValues = [teacher, salt, pinHash, active ? '是' : '否', role, 0, ''];
+  if (existingRow) {
+    sheet.getRange(existingRow, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([accountValues]);
+  } else {
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([accountValues]);
+  }
+
+  return { teacherName: teacher, role: role, active: active };
+}
+
+function findAccount_(teacherName) {
+  var sheet = getAccountsSheet_();
+  var headers = getHeaderMap_(sheet);
+  var values = sheet.getDataRange().getValues();
+  var teacher = cleanText_(teacherName);
+
+  for (var index = 1; index < values.length; index++) {
+    var row = values[index];
+    if (cleanText_(row[headers['指導者'] - 1]) === teacher) {
+      return {
+        sheet: sheet,
+        rowNumber: index + 1,
+        headers: headers,
+        teacherName: teacher,
+        salt: cleanText_(row[headers['Salt'] - 1]),
+        pinHash: cleanText_(row[headers['PIN 雜湊'] - 1]),
+        active: row[headers['是否在職'] - 1],
+        role: row[headers['角色'] - 1],
+        failedAttempts: parseFailedAttempts_(row[headers['登入失敗次數'] - 1]),
+        lockedUntil: row[headers['鎖定至'] - 1]
+      };
+    }
+  }
+  return null;
+}
+
+function getAccountsSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, SHEETS.ACCOUNTS);
+  ensureSheetHeaders_(sheet, SHEET_HEADERS.ACCOUNTS);
+  return sheet;
+}
+
+function recordFailedLogin_(account) {
+  var attempts = account.failedAttempts + 1;
+  account.sheet.getRange(account.rowNumber, account.headers['登入失敗次數']).setValue(attempts);
+  if (attempts >= CONFIG.AUTH_MAX_FAILED_ATTEMPTS) {
+    account.sheet.getRange(account.rowNumber, account.headers['鎖定至'])
+      .setValue(new Date(currentTimeMs_() + CONFIG.AUTH_LOCK_DURATION_MS));
+  }
+}
+
+function resetFailedLogin_(account) {
+  if (account.failedAttempts || cleanText_(account.lockedUntil)) {
+    account.sheet.getRange(account.rowNumber, account.headers['登入失敗次數']).setValue(0);
+    account.sheet.getRange(account.rowNumber, account.headers['鎖定至']).setValue('');
+  }
+}
+
+function isAccountActive_(value) {
+  return [true, 1, '1', 'true', 'TRUE', '是', '啟用'].indexOf(value) !== -1;
+}
+
+function isAccountLocked_(value) {
+  if (!value) return false;
+  var lockTime = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return !isNaN(lockTime) && lockTime > currentTimeMs_();
+}
+
+function normalizeAccountRole_(value) {
+  return isAdminRole_(value) ? '管理員' : '老師';
+}
+
+function isAdminRole_(value) {
+  return ['管理員', 'admin', 'ADMIN'].indexOf(cleanText_(value)) !== -1;
+}
+
+function parseFailedAttempts_(value) {
+  var attempts = Number(value);
+  return isFinite(attempts) && attempts > 0 ? Math.floor(attempts) : 0;
+}
+
+function constantTimeEquals_(left, right) {
+  var a = String(left || '');
+  var b = String(right || '');
+  var difference = a.length ^ b.length;
+  var maxLength = Math.max(a.length, b.length);
+  for (var index = 0; index < maxLength; index++) {
+    difference |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
+  }
+  return difference === 0;
+}
+
+function createSessionToken_() {
+  return createRandomToken_();
+}
+
+function createRandomToken_() {
+  return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+}
+
+function storeSession_(token, session) {
+  var sessionToken = cleanText_(token);
+  if (!sessionToken) throw new Error('登入狀態無效。');
+  var payload = JSON.stringify({
+    teacherName: cleanText_(session.teacherName),
+    role: normalizeAccountRole_(session.role),
+    expiresAt: Number(session.expiresAt)
+  });
+  var key = getSessionKey_(sessionToken);
+  var cache = getScriptCache_();
+  var properties = getScriptProperties_();
+  if (cache) cache.put(key, payload, CONFIG.AUTH_SESSION_DURATION_SECONDS);
+  if (properties) properties.setProperty(key, payload);
+  if (!cache && !properties) throw new Error('無法建立登入狀態。');
+}
+
+function readSession_(token) {
+  var key = getSessionKey_(token);
+  var cache = getScriptCache_();
+  var properties = getScriptProperties_();
+  var raw = cache ? cache.get(key) : '';
+  if (!raw && properties) raw = properties.getProperty(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    removeSession_(token);
+    return null;
+  }
+}
+
+function removeSession_(token) {
+  var key = getSessionKey_(token);
+  var cache = getScriptCache_();
+  var properties = getScriptProperties_();
+  if (cache) cache.remove(key);
+  if (properties) properties.deleteProperty(key);
+}
+
+function getSessionKey_(token) {
+  return CONFIG.AUTH_SESSION_KEY_PREFIX + cleanText_(token);
+}
+
+function getScriptCache_() {
+  return typeof CacheService === 'undefined' ? null : CacheService.getScriptCache();
+}
+
+function getScriptProperties_() {
+  return typeof PropertiesService === 'undefined' ? null : PropertiesService.getScriptProperties();
+}
+
+function currentTimeMs_() {
+  return new Date().getTime();
+}
 
 function ensureSystemStructure_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();

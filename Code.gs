@@ -153,6 +153,41 @@ function setupAccount_(adminToken, teacherName, pin, options) {
   return { teacherName: teacher, role: role, active: active };
 }
 
+function initializeFirstAdmin_(teacherName, pin) {
+  var teacher = cleanText_(teacherName);
+  var pinText = cleanText_(pin);
+  if (!teacher || !pinText) throw new Error('請輸入管理員姓名與身分證末碼。');
+
+  return withScriptLock_(function() {
+    var sheet = getAccountsSheet_();
+    var headers = getHeaderMap_(sheet);
+    var values = sheet.getDataRange().getValues();
+    var hasAccount = values.slice(1).some(function(row) {
+      return cleanText_(row[headers['指導者'] - 1]);
+    });
+    if (hasAccount) throw new Error('已有帳號，請使用管理員帳號新增其他帳號。');
+
+    var salt = createRandomToken_();
+    var pinHash = hashPin_(pinText, salt);
+    sheet.getRange(2, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([[
+      teacher, salt, pinHash, '是', '管理員', 0, ''
+    ]]);
+    return { teacherName: teacher, role: '管理員', active: true };
+  });
+}
+
+function initializeFirstAdminFromProperties() {
+  var properties = PropertiesService.getScriptProperties();
+  var teacherName = properties.getProperty('INITIAL_ADMIN_NAME');
+  var pin = properties.getProperty('INITIAL_ADMIN_PIN');
+  try {
+    return initializeFirstAdmin_(teacherName, pin);
+  } finally {
+    properties.deleteProperty('INITIAL_ADMIN_NAME');
+    properties.deleteProperty('INITIAL_ADMIN_PIN');
+  }
+}
+
 function findAccount_(teacherName) {
   var sheet = getAccountsSheet_();
   var headers = getHeaderMap_(sheet);
@@ -501,10 +536,14 @@ function normalizeCalendarItem_(item) {
   var timezone = getTimeZone_();
   return {
     apiId: String(item.id),
+    calendarId: String(item.id),
     date: Utilities.formatDate(parsedTime, timezone, 'yyyy/MM/dd'),
     time: Utilities.formatDate(parsedTime, timezone, 'HH:mm'),
     course: courseName,
-    instructor: instructorName
+    instructor: instructorName,
+    classId: cleanText_(classInfo.id || classInfo.classId || ''),
+    instructorId: cleanText_(instructor.id || instructor.instructorId || ''),
+    isSubstitute: instructor.isSubstitute === true ? '是' : '否'
   };
 }
 
@@ -548,7 +587,9 @@ function fetchCalendarPages_(token, dateFrom, dateTo) {
   return allItems;
 }
 
-function syncCourseListFromApi() {
+function syncCourseListFromApi(sessionToken) {
+  requireAdmin_(sessionToken);
+
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) {
     throw new Error('請先在指令碼屬性設定 OMCEAN_API_TOKEN。');
@@ -575,19 +616,32 @@ function syncCourseListFromApi() {
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
-  assertHeaders_(sheet, ['日期', '時間', '課程', '指導者']);
+  ensureSheetHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
+  var syncedAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  var rows = normalized.map(function(item) {
+    return [
+      item.date,
+      item.time,
+      item.course,
+      item.instructor,
+      item.calendarId,
+      item.classId,
+      item.instructorId,
+      item.isSubstitute,
+      syncedAt
+    ];
+  });
 
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
-    var lastRow = sheet.getLastRow();
-    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, 4).clearContent();
-    var rows = normalized.map(function(item) {
-      return [item.date, item.time, item.course, item.instructor];
-    });
-    sheet.getRange(2, 1, rows.length, 4).setValues(rows);
-    sheet.getRange(2, 1, rows.length, 1).setNumberFormat('yyyy/mm/dd');
-    sheet.getRange(2, 2, rows.length, 1).setNumberFormat('hh:mm');
+    var existingRows = Math.max(0, sheet.getLastRow() - 1);
+    var replacementRows = rows.slice();
+    while (replacementRows.length < existingRows) {
+      replacementRows.push(['', '', '', '', '', '', '', '', '']);
+    }
+    sheet.getRange(2, 1, replacementRows.length, SHEET_HEADERS.COURSE_LIST.length)
+      .setValues(replacementRows);
   } finally {
     lock.releaseLock();
   }
@@ -598,16 +652,6 @@ function syncCourseListFromApi() {
     dateFrom: range.dateFrom,
     dateTo: range.dateTo
   };
-}
-
-function installHourlySyncTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function(trigger) {
-    if (trigger.getHandlerFunction() === 'syncCourseListFromApi') {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-  ScriptApp.newTrigger('syncCourseListFromApi').timeBased().everyHours(1).create();
-  return { status: 'success', message: '已建立每小時課程同步。' };
 }
 
 function getTeachers_() {

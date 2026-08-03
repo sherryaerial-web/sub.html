@@ -209,6 +209,78 @@ function createAccount(backend, teacherName, pin, options = {}) {
   ];
 }
 
+function formatTaipeiDate(value, _timezone, pattern) {
+  const timestamp = value && typeof value.getTime === 'function' ? value.getTime() : new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`invalid test date: ${String(value)} (${typeof value})`);
+  }
+  const date = new Date(timestamp);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  if (pattern === 'yyyy-MM-dd') return `${parts.year}-${parts.month}-${parts.day}`;
+  if (pattern === 'yyyy/MM/dd') return `${parts.year}/${parts.month}/${parts.day}`;
+  if (pattern === 'HH:mm') return `${parts.hour}:${parts.minute}`;
+  if (pattern === 'yyyy-MM-dd HH:mm:ss') {
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:00`;
+  }
+  return '';
+}
+
+function createSyncBackend(options = {}) {
+  const services = createAuthServices();
+  services.Utilities.formatDate = formatTaipeiDate;
+  const bootstrap = loadBackend(services);
+  const accountSheet = createSheetFixture('登入帳號', [
+    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }),
+    createAccount(bootstrap, '老師甲', '1234'),
+  ]);
+  const courseSheet = createSheetFixture('CourseList', options.courseValues || [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/08/05', '10:00', '舊課程', '舊老師', 'old-calendar', 'old-class', 'old-teacher', '否', '2026-08-03 10:00:00'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet]);
+  const pages = (options.pages || []).slice();
+  const calls = [];
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+    UrlFetchApp: {
+      fetch(url, request) {
+        calls.push({ url, request });
+        const next = pages.shift();
+        if (next instanceof Error) throw next;
+        if (next && next.invalidJson) {
+          return { getResponseCode: () => 200, getContentText: () => '{invalid-json' };
+        }
+        if (next && next.statusCode) {
+          return { getResponseCode: () => next.statusCode, getContentText: () => next.body || '' };
+        }
+        return { getResponseCode: () => 200, getContentText: () => JSON.stringify(next || []) };
+      },
+    },
+  });
+  backend.getSyncDateRange_ = () => ({ dateFrom: '2026-08-03', dateTo: '2026-09-30' });
+  return {
+    backend,
+    courseSheet,
+    calls,
+    adminToken: backend.authenticate_('管理員甲', '9999').sessionToken,
+    teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
+  };
+}
+
 test('login returns an opaque session without exposing credentials', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
@@ -377,6 +449,47 @@ test('administrator account setup stores only salt and hash for the new teacher'
   assert.notEqual(accountSheet.values[2][1], '');
   assert.notEqual(accountSheet.values[2][2], '5678');
   assert.equal(JSON.stringify(accountSheet.values[2]).includes('5678'), false);
+});
+
+test('initializes the first administrator once without storing the plaintext PIN', () => {
+  const services = createAuthServices();
+  const accountSheet = createSheetFixture('登入帳號', [
+    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+
+  const result = backend.initializeFirstAdmin_('Ivy', '1234');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { teacherName: 'Ivy', role: '管理員', active: true });
+  assert.equal(accountSheet.values[1][0], 'Ivy');
+  assert.notEqual(accountSheet.values[1][2], '1234');
+  assert.equal(backend.authenticate_('Ivy', '1234').role, '管理員');
+  assert.throws(() => backend.initializeFirstAdmin_('另一位', '5678'), /已有帳號/);
+});
+
+test('initializes the first administrator from temporary Script Properties and removes the PIN', () => {
+  const services = createAuthServices();
+  services.__properties.set('INITIAL_ADMIN_NAME', 'Ivy');
+  services.__properties.set('INITIAL_ADMIN_PIN', '1234');
+  const accountSheet = createSheetFixture('登入帳號', [
+    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+
+  const result = backend.initializeFirstAdminFromProperties();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { teacherName: 'Ivy', role: '管理員', active: true });
+  assert.equal(services.__properties.has('INITIAL_ADMIN_NAME'), false);
+  assert.equal(services.__properties.has('INITIAL_ADMIN_PIN'), false);
+  assert.equal(JSON.stringify(accountSheet.values[1]).includes('1234'), false);
 });
 
 test('personal and write routes require a session and ignore forged teacher parameters', () => {
@@ -558,15 +671,19 @@ test('normalizes a calendar item to the fixed CourseList contract', () => {
   const result = backend.normalizeCalendarItem_({
     id: 7788,
     classTime: '2026-08-10T10:30:00Z',
-    class: { nameZhHant: 'B－空環 Lv.2' },
-    instructors: [{ firstName: 'Ariel', lastName: 'Lu', isSubstitute: false }],
+    class: { id: 86, nameZhHant: 'B－空環 Lv.2' },
+    instructors: [{ id: 42, firstName: 'Ariel', lastName: 'Lu', isSubstitute: false }],
   });
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
     apiId: '7788',
+    calendarId: '7788',
     date: '2026/08/10',
     time: '18:30',
     course: 'B－空環 Lv.2',
     instructor: 'Ariel Lu',
+    classId: '86',
+    instructorId: '42',
+    isSubstitute: '否',
   });
 });
 
@@ -617,6 +734,86 @@ test('stops API sync input processing on non-2xx responses', () => {
     () => backend.fetchCalendarPages_('bad-token', '2026-08-03', '2026-09-30'),
     /API 連線失敗.*401/
   );
+});
+
+test('manual sync requires an administrator and preserves the old snapshot on invalid Calendar data', () => {
+  const { backend, courseSheet, adminToken, teacherToken } = createSyncBackend({
+    pages: [{ invalidJson: true }],
+  });
+  const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
+
+  assert.throws(() => backend.syncCourseListFromApi(teacherToken), /管理權限/);
+  assert.deepEqual(courseSheet.values, oldValues);
+
+  assert.throws(() => backend.syncCourseListFromApi(adminToken), /JSON 無法解析/);
+  assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync preserves the old snapshot when Calendar returns no valid active classes', () => {
+  const { backend, courseSheet, adminToken } = createSyncBackend({
+    pages: [[{
+      id: 900,
+      cancelled: true,
+      classTime: '2026-08-10T10:30:00Z',
+      class: { id: 1, nameZhHant: '已取消課程' },
+      instructors: [{ id: 2, firstName: '取消', lastName: '老師' }],
+    }]],
+  });
+  const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
+
+  assert.throws(() => backend.syncCourseListFromApi(adminToken), /沒有取得有效課程/);
+  assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync preserves the old snapshot when Calendar returns an HTTP error', () => {
+  const { backend, courseSheet, adminToken } = createSyncBackend({
+    pages: [{ statusCode: 503, body: '{"message":"unavailable"}' }],
+  });
+  const oldValues = JSON.parse(JSON.stringify(courseSheet.values));
+
+  assert.throws(() => backend.syncCourseListFromApi(adminToken), /API 連線失敗.*503/);
+  assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync fetches every page and replaces CourseList with appended OB metadata', () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    classTime: `2026-08-10T${String(index % 20).padStart(2, '0')}:30:00Z`,
+    class: { id: 1000 + index, nameZhHant: `空環 ${index + 1}` },
+    instructors: [{ id: 2000 + index, firstName: '老師', lastName: String(index + 1) }],
+  }));
+  firstPage[0].cancelled = true;
+  const { backend, courseSheet, calls, adminToken } = createSyncBackend({
+    courseValues: [
+      ['日期', '時間', '課程', '指導者'],
+      ['2026/08/05', '10:00', '舊課程', '舊老師'],
+    ],
+    pages: [firstPage, [{
+      id: 101,
+      classTime: '2026-08-11T10:30:00Z',
+      class: { id: 1101, nameZhHant: '舞綢 101' },
+      instructors: [{ id: 2101, firstName: '新', lastName: '老師' }],
+    }]],
+  });
+
+  const result = backend.syncCourseListFromApi(adminToken);
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.count, 100);
+  assert.match(calls[0].url, /start=0/);
+  assert.match(calls[1].url, /start=100/);
+  assert.deepEqual(courseSheet.values[0], EXPECTED_COURSE_HEADERS);
+  assert.deepEqual(courseSheet.values[1].slice(0, 8), [
+    '2026/08/10', '08:30', '空環 21', '老師 21', '21', '1020', '2020', '否',
+  ]);
+  assert.equal(courseSheet.values.length, 101);
+  assert.equal(courseSheet.values.some((row) => row[2] === '舊課程'), false);
+  assert.equal(courseSheet.values.some((row) => row[2] === '空環 1'), false);
+});
+
+test('manual sync no longer exposes an hourly trigger installation command', () => {
+  const backend = loadBackend();
+  assert.equal(typeof backend.installHourlySyncTrigger, 'undefined');
 });
 
 test('allows substitute teachers to claim a course in their usual category', () => {

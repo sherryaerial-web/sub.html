@@ -304,6 +304,51 @@ function createSyncBackend(options = {}) {
   };
 }
 
+function createLeaveBackend(options = {}) {
+  const services = createAuthServices();
+  let uuid = 0;
+  services.Utilities.getUuid = () => `uuid-${++uuid}`;
+  const bootstrap = loadBackend(services);
+  const accountSheet = createSheetFixture('登入帳號', [
+    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    createAccount(bootstrap, '老師甲', '1234'),
+    createAccount(bootstrap, '老師乙', '5678'),
+  ]);
+  const teacherSheet = createSheetFixture('老師名單', [
+    ['指導者'],
+    ['老師甲'],
+    ['老師乙'],
+  ]);
+  const courseRows = options.courseRows || Array.from({ length: 25 }, (_, index) => [
+    `2026/08/${String(10 + Math.floor(index / 5)).padStart(2, '0')}`,
+    `${String(9 + (index % 5)).padStart(2, '0')}:00`,
+    `空環 Lv.${index + 1}`,
+    '老師甲',
+    `calendar-${index + 1}`,
+    `class-${index + 1}`,
+    'teacher-1',
+    '否',
+    '2026-08-03 12:00:00',
+  ]);
+  const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, ...courseRows]);
+  const leaveSheet = createSheetFixture('請假代課紀錄', [
+    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS),
+    ...(options.leaveRows || []),
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, teacherSheet, courseSheet, leaveSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  return {
+    backend,
+    courseSheet,
+    leaveSheet,
+    spreadsheet,
+    sessionToken: backend.authenticate_('老師甲', '1234').sessionToken,
+  };
+}
+
 test('login returns an opaque session without exposing credentials', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
@@ -515,7 +560,7 @@ test('initializes the first administrator from temporary Script Properties and r
   assert.equal(JSON.stringify(accountSheet.values[1]).includes('1234'), false);
 });
 
-test('personal and write routes require a session and ignore forged teacher parameters', () => {
+test('personal GET and POST write routes require a session and ignore forged teacher parameters', () => {
   const bootstrap = loadBackend(createAuthServices());
   const services = createAuthServices();
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
@@ -524,7 +569,7 @@ test('personal and write routes require a session and ignore forged teacher para
   backend.console = { error() {} };
   backend.ensureSystemStructure_ = () => {};
   backend.getMySubs_ = (teacherName) => { calls.push(['mySubs', teacherName]); return []; };
-  backend.submitLeave_ = (teacherName, items) => { calls.push(['leave', teacherName, items.length]); return { count: items.length }; };
+  backend.submitLeave_ = (session, items) => { calls.push(['leave', session.teacherName, items.length]); return { count: items.length }; };
   backend.submitClaim_ = (teacherName, items) => { calls.push(['claim', teacherName, items.length]); return { count: items.length }; };
 
   const missingSession = JSON.parse(backend.doGet({ parameter: {
@@ -536,17 +581,19 @@ test('personal and write routes require a session and ignore forged teacher para
   backend.doGet({ parameter: {
     action: 'getMySubs', sessionToken, name: '被偽造的老師',
   } });
-  backend.doGet({ parameter: {
+  const getWrite = JSON.parse(backend.doGet({ parameter: {
     action: 'submitLeave', sessionToken, instructor: '被偽造的老師', items: JSON.stringify([{ 日期: '2026/08/10', 時間: '18:30', 課程: '空環' }]),
-  } });
-  backend.doGet({ parameter: {
-    action: 'submitClaim', sessionToken, subTeacher: '被偽造的老師', items: JSON.stringify([{ substituteId: 'sub-1' }]),
+  } }).text);
+  assert.equal(getWrite.status, 'error');
+  assert.match(getWrite.message, /不支援的操作/);
+
+  backend.doPost({ parameter: {
+    action: 'submitLeave', sessionToken, instructor: '被偽造的老師', items: JSON.stringify([{ 日期: '2026/08/10', 時間: '18:30', 課程: '空環', 'OB Calendar ID': 'calendar-1' }]),
   } });
 
   assert.deepEqual(calls, [
     ['mySubs', '老師甲'],
     ['leave', '老師甲', 1],
-    ['claim', '老師甲', 1],
   ]);
 });
 
@@ -562,6 +609,187 @@ test('pending leaves route rejects requests without a session', () => {
 
   assert.equal(response.status, 'error');
   assert.match(response.message, /請先登入/);
+});
+
+test('getMyCourses returns only the logged-in teacher courses with stable OB IDs', () => {
+  const { backend } = createLeaveBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-a', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '19:30', '舞綢 Lv.1', '老師乙', 'calendar-b', 'class-b', 'teacher-b', '否', ''],
+    ],
+  });
+
+  const result = backend.getMyCourses_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [{
+    '日期': '2026/08/10',
+    '時間': '18:30',
+    '課程': '空環 Lv.1',
+    '課程大類': '空環',
+    'OB Calendar ID': 'calendar-a',
+  }]);
+});
+
+test('getMyCourses hides active leave IDs but keeps cancelled leave courses available', () => {
+  const { backend } = createLeaveBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-active', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/11', '19:30', '空環 Lv.2', '老師甲', 'calendar-cancelled', 'class-b', 'teacher-a', '否', ''],
+    ],
+    leaveRows: [
+      ['時間', '老師甲', '2026/08/10', '18:30', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-active'],
+      ['時間', '老師甲', '2026/08/11', '19:30', '空環 Lv.2', '已取消', '', '', '', 'leave-b', 'calendar-cancelled'],
+    ],
+  });
+
+  const result = backend.getMyCourses_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(result.map((item) => item['OB Calendar ID']), ['calendar-cancelled']);
+});
+
+test('getMyLeaves returns personal status, substitute, intended course, verification, and cancellation state', () => {
+  const { backend } = createLeaveBackend({
+    courseRows: [],
+    leaveRows: [
+      ['2026-08-03 12:00:00', '老師甲', '2026/08/10', '18:30', '空環 Lv.1', '已領取', '老師乙', '調整程度', '已完成', 'leave-a', 'calendar-a', 'class-new', '空環 Lv.2', 'Lv.2', '改用既有 OB 課程', '已核對', '2026-08-04 10:00:00', '', '申請取消中'],
+      ['2026-08-03 13:00:00', '老師乙', '2026/08/11', '19:30', '舞綢 Lv.1', '確認中', '', '', '', 'leave-b', 'calendar-b'],
+    ],
+  });
+
+  const result = backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' });
+
+  assert.equal(result.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result[0])), {
+    '登記時間': '2026-08-03 12:00:00',
+    '代課編號': 'leave-a',
+    '日期': '2026/08/10',
+    '時段': '18:30',
+    '課程': '空環 Lv.1',
+    '狀態': '已領取',
+    '代課老師': '老師乙',
+    '備註': '調整程度',
+    '實際課程名稱': '空環 Lv.2',
+    '預計難度': 'Lv.2',
+    '處理類型': '改用既有 OB 課程',
+    'OB 核對狀態': '已核對',
+    'OB 核對時間': '2026-08-04 10:00:00',
+    '差異原因': '',
+    '異動狀態': '申請取消中',
+  });
+});
+
+test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact counts', () => {
+  const { backend, courseSheet, leaveSheet } = createLeaveBackend();
+  const items = courseSheet.values.slice(1).map((row) => ({
+    日期: row[0],
+    時間: row[1],
+    課程: row[2],
+    'OB Calendar ID': row[4],
+    instructor: '老師乙',
+  }));
+
+  const result = backend.submitLeave_({ teacherName: '老師甲', role: '老師' }, items);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    requested: 25,
+    created: 25,
+    duplicates: 0,
+    failed: 0,
+  });
+  assert.equal(leaveSheet.values.length, 26);
+  assert.equal(leaveSheet.values[1][1], '老師甲');
+  assert.equal(leaveSheet.values[25][1], '老師甲');
+  assert.equal(leaveSheet.values[1][10], 'calendar-1');
+  assert.equal(leaveSheet.values[25][10], 'calendar-25');
+});
+
+test('retrying a successful leave batch reports duplicates without appending rows again', () => {
+  const { backend, courseSheet, leaveSheet } = createLeaveBackend();
+  const items = courseSheet.values.slice(1).map((row) => ({
+    日期: row[0], 時間: row[1], 課程: row[2], 'OB Calendar ID': row[4],
+  }));
+
+  backend.submitLeave_({ teacherName: '老師甲', role: '老師' }, items);
+  const retry = backend.submitLeave_({ teacherName: '老師甲', role: '老師' }, items);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(retry)), {
+    requested: 25,
+    created: 0,
+    duplicates: 25,
+    failed: 0,
+  });
+  assert.equal(leaveSheet.values.length, 26);
+});
+
+test('submitLeave reports per-item failures while preserving valid rows', () => {
+  const { backend, leaveSheet } = createLeaveBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-a', 'class-a', 'teacher-a', '否', ''],
+    ],
+  });
+
+  const result = backend.submitLeave_({ teacherName: '老師甲', role: '老師' }, [
+    { 日期: '2026/08/10', 時間: '18:30', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a' },
+    { 日期: '2026/08/11', 時間: '19:30', 課程: '不存在', 'OB Calendar ID': 'calendar-missing' },
+  ]);
+
+  assert.equal(result.requested, 2);
+  assert.equal(result.created, 1);
+  assert.equal(result.duplicates, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].calendarId, 'calendar-missing');
+  assert.match(result.errors[0].message, /找不到.*有效課程/);
+  assert.equal(leaveSheet.values.length, 2);
+});
+
+test('doPost parses a form-encoded leave batch and binds it to the authenticated session', () => {
+  const { backend, courseSheet, sessionToken } = createLeaveBackend();
+  const items = courseSheet.values.slice(1).map((row) => ({
+    日期: row[0], 時間: row[1], 課程: row[2], 'OB Calendar ID': row[4], instructor: '老師乙',
+  }));
+  const body = new URLSearchParams({
+    action: 'submitLeave',
+    sessionToken,
+    instructor: '老師乙',
+    items: JSON.stringify(items),
+  }).toString();
+
+  const response = JSON.parse(backend.doPost({
+    parameter: {},
+    postData: { type: 'application/x-www-form-urlencoded', contents: body },
+  }).text);
+
+  assert.equal(response.status, 'success');
+  assert.deepEqual(response.data, {
+    requested: 25,
+    created: 25,
+    duplicates: 0,
+    failed: 0,
+  });
+});
+
+test('personal GET routes use the authenticated identity and ignore forged names', () => {
+  const { backend, sessionToken } = createLeaveBackend({ courseRows: [] });
+  const calls = [];
+  backend.ensureSystemStructure_ = () => {};
+  backend.getMyCourses_ = (session) => { calls.push(['courses', session.teacherName]); return []; };
+  backend.getMyLeaves_ = (session) => { calls.push(['leaves', session.teacherName]); return []; };
+
+  backend.doGet({ parameter: { action: 'getMyCourses', sessionToken, name: '老師乙' } });
+  backend.doGet({ parameter: { action: 'getMyLeaves', sessionToken, name: '老師乙' } });
+
+  assert.deepEqual(calls, [['courses', '老師甲'], ['leaves', '老師甲']]);
+});
+
+test('public routes no longer expose the complete classroom course list', () => {
+  const { backend } = createLeaveBackend();
+  backend.console = { error() {} };
+
+  const response = JSON.parse(backend.doGet({ parameter: { action: 'getCourseList' } }).text);
+
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /不支援的操作/);
 });
 
 test('renames the legacy leave sheet and preserves fixed headers', () => {

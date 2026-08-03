@@ -36,7 +36,8 @@ var CONFIG = {
   AUTH_SESSION_DURATION_SECONDS: 21600,
   AUTH_MAX_FAILED_ATTEMPTS: 5,
   AUTH_LOCK_DURATION_MS: 15 * 60 * 1000,
-  AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_'
+  AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_',
+  LEAVE_BATCH_MAX: 50
 };
 
 function hashPin_(pin, salt) {
@@ -452,8 +453,8 @@ function doGet(e) {
     var authenticatedActions = {
       getPendingLeaves: true,
       getMySubs: true,
-      submitLeave: true,
-      submitClaim: true
+      getMyCourses: true,
+      getMyLeaves: true
     };
     var session = authenticatedActions[action]
       ? requireSession_(e.parameter.sessionToken)
@@ -461,21 +462,55 @@ function doGet(e) {
     if ({
       getPendingLeaves: true,
       getMySubs: true,
-      submitLeave: true,
-      submitClaim: true
+      getMyCourses: true,
+      getMyLeaves: true
     }[action]) {
       ensureSystemStructure_();
     }
     var handlers = {
       getTeachers: function() { return getTeachers_(); },
-      getCourseList: function() { return getCourseList_(); },
       getPendingLeaves: function() { return getPendingLeaves_(); },
       getMySubs: function() { return getMySubs_(session.teacherName); },
+      getMyCourses: function() { return getMyCourses_(session); },
+      getMyLeaves: function() { return getMyLeaves_(session); }
+    };
+    if (!handlers[action]) throw new Error('不支援的操作：' + action);
+    return createJsonResponse_({ status: 'success', data: handlers[action]() });
+  } catch (error) {
+    console.error(error && error.stack ? error.stack : error);
+    return createJsonResponse_({
+      status: 'error',
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}
+
+function doPost(e) {
+  try {
+    var parameters = getPostParameters_(e);
+    var action = cleanText_(parameters.action);
+    if (!action) throw new Error('缺少操作名稱。');
+
+    if (action === 'login') {
+      return createJsonResponse_({
+        status: 'success',
+        data: authenticate_(parameters.teacherName, parameters.pin)
+      });
+    }
+
+    var session = requireSession_(parameters.sessionToken);
+    if (action === 'logout') {
+      removeSession_(parameters.sessionToken);
+      return createJsonResponse_({ status: 'success', data: { loggedOut: true } });
+    }
+
+    ensureSystemStructure_();
+    var handlers = {
       submitLeave: function() {
-        return submitLeave_(session.teacherName, parseJsonArray_(e.parameter.items, '請假課程'));
+        return submitLeave_(session, parseJsonArray_(parameters.items, '請假課程'));
       },
       submitClaim: function() {
-        return submitClaim_(session.teacherName, parseJsonArray_(e.parameter.items, '代課課程'));
+        return submitClaim_(session.teacherName, parseJsonArray_(parameters.items, '代課課程'));
       }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
@@ -487,6 +522,30 @@ function doGet(e) {
       message: error && error.message ? error.message : String(error)
     });
   }
+}
+
+function getPostParameters_(e) {
+  var parameters = {};
+  var eventParameters = e && e.parameter ? e.parameter : {};
+  Object.keys(eventParameters).forEach(function(key) {
+    parameters[key] = eventParameters[key];
+  });
+
+  var postData = e && e.postData ? e.postData : null;
+  var body = postData ? cleanText_(postData.contents) : '';
+  var contentType = postData ? cleanText_(postData.type).toLowerCase() : '';
+  if (body && (!contentType || contentType.indexOf('application/x-www-form-urlencoded') === 0)) {
+    body.split('&').forEach(function(pair) {
+      if (!pair) return;
+      var separator = pair.indexOf('=');
+      var rawKey = separator === -1 ? pair : pair.substring(0, separator);
+      var rawValue = separator === -1 ? '' : pair.substring(separator + 1);
+      var key = decodeURIComponent(rawKey.replace(/\+/g, ' '));
+      if (!key) return;
+      parameters[key] = decodeURIComponent(rawValue.replace(/\+/g, ' '));
+    });
+  }
+  return parameters;
 }
 
 function getCourseCategory_(courseName) {
@@ -740,6 +799,79 @@ function getCourseList_() {
   });
 }
 
+function getMyCourses_(session) {
+  var teacher = getSessionTeacherName_(session);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  assertHeaders_(sheet, ['日期', '時間', '課程', '指導者', 'OB Calendar ID']);
+  ensureLeaveSheetHeaders_(leaveSheet);
+  var activeLeaveIds = {};
+  leaveSheet.getDataRange().getValues().slice(1).forEach(function(r) {
+    if (cleanText_(r[1]) === teacher &&
+        ['確認中', '已領取'].indexOf(cleanText_(r[5])) !== -1 && cleanText_(r[10])) {
+      activeLeaveIds[cleanText_(r[10])] = true;
+    }
+  });
+
+  return sheet.getDataRange().getValues().slice(1).filter(function(r) {
+    var calendarId = cleanText_(r[4]);
+    return cleanText_(r[3]) === teacher && calendarId && !activeLeaveIds[calendarId];
+  }).map(function(r) {
+    return {
+      '日期': formatMyDate(r[0]),
+      '時間': formatMyTime(r[1]),
+      '課程': cleanText_(r[2]),
+      '課程大類': getCourseCategory_(r[2]),
+      'OB Calendar ID': cleanText_(r[4])
+    };
+  }).filter(function(item) {
+    return item['日期'] && item['時間'] && item['課程'];
+  }).sort(function(a, b) {
+    return [a['日期'], a['時間'], a['課程']].join('|')
+      .localeCompare([b['日期'], b['時間'], b['課程']].join('|'));
+  });
+}
+
+function getMyLeaves_(session) {
+  var teacher = getSessionTeacherName_(session);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  ensureLeaveSheetHeaders_(sheet);
+
+  return sheet.getDataRange().getValues().slice(1).filter(function(r) {
+    return cleanText_(r[1]) === teacher;
+  }).map(function(r) {
+    return {
+      '登記時間': cleanText_(r[0]),
+      '代課編號': cleanText_(r[9]),
+      '日期': formatMyDate(r[2]),
+      '時段': formatMyTime(r[3]),
+      '課程': cleanText_(r[4]),
+      '狀態': cleanText_(r[5]),
+      '代課老師': cleanText_(r[6]),
+      '備註': cleanText_(r[7]),
+      '實際課程名稱': cleanText_(r[12]),
+      '預計難度': cleanText_(r[13]),
+      '處理類型': cleanText_(r[14]),
+      'OB 核對狀態': cleanText_(r[15]),
+      'OB 核對時間': cleanText_(r[16]),
+      '差異原因': cleanText_(r[17]),
+      '異動狀態': cleanText_(r[18])
+    };
+  }).sort(function(a, b) {
+    return [b['日期'], b['時段'], b['登記時間']].join('|')
+      .localeCompare([a['日期'], a['時段'], a['登記時間']].join('|'));
+  });
+}
+
+function getSessionTeacherName_(session) {
+  if (!session || typeof session !== 'object') throw new Error('登入狀態無效，請重新登入。');
+  var teacher = cleanText_(session.teacherName);
+  if (!teacher) throw new Error('登入狀態無效，請重新登入。');
+  return teacher;
+}
+
 function getPendingLeaves_() {
   ensurePendingLeaveIds_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -783,10 +915,12 @@ function getMySubs_(teacherName) {
   });
 }
 
-function submitLeave_(instructor, items) {
-  var teacher = cleanText_(instructor);
-  if (!teacher) throw new Error('請選擇請假老師。');
-  if (!items.length) throw new Error('請至少選擇一堂請假課程。');
+function submitLeave_(session, items) {
+  var teacher = getSessionTeacherName_(session);
+  if (!Array.isArray(items) || !items.length) throw new Error('請至少選擇一堂請假課程。');
+  if (items.length > CONFIG.LEAVE_BATCH_MAX) {
+    throw new Error('單次最多可送出 ' + CONFIG.LEAVE_BATCH_MAX + ' 堂請假課程。');
+  }
   assertTeacherExists_(teacher);
 
   var lock = LockService.getScriptLock();
@@ -800,26 +934,42 @@ function submitLeave_(instructor, items) {
 
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
     var leaveRows = leaveSheet.getDataRange().getValues().slice(1);
+    var courseByCalendarId = {};
+    courseRows.forEach(function(r) {
+      var calendarId = cleanText_(r[4]);
+      if (calendarId && cleanText_(r[3]) === teacher) courseByCalendarId[calendarId] = r;
+    });
     var seen = {};
-    var validated = items.map(function(rawItem) {
-      var item = normalizeLeaveItem_(rawItem);
-      var requestKey = [item['日期'], item['時間'], item['課程']].join('|');
-      if (seen[requestKey]) throw new Error('送出的請假課程有重複項目。');
-      seen[requestKey] = true;
+    var duplicates = 0;
+    var errors = [];
+    var validated = [];
+    items.forEach(function(rawItem, index) {
+      var calendarId = cleanText_(rawItem && (rawItem['OB Calendar ID'] || rawItem.calendarId));
+      try {
+        var item = normalizeLeaveItem_(rawItem);
+        if (seen[item['OB Calendar ID']]) {
+          duplicates += 1;
+          return;
+        }
+        seen[item['OB Calendar ID']] = true;
 
-      var belongsToTeacher = courseRows.some(function(r) {
-        return cleanText_(r[3]) === teacher &&
-          formatMyDate(r[0]) === item['日期'] &&
-          formatMyTime(r[1]) === item['時間'] &&
-          cleanText_(r[2]) === item['課程'];
-      });
-      if (!belongsToTeacher) {
-        throw new Error('找不到 ' + item['日期'] + ' ' + item['時間'] + ' 的有效課程。');
+        var courseRow = courseByCalendarId[item['OB Calendar ID']];
+        if (!courseRow || formatMyDate(courseRow[0]) !== item['日期'] ||
+            formatMyTime(courseRow[1]) !== item['時間'] || cleanText_(courseRow[2]) !== item['課程']) {
+          throw new Error('找不到 ' + item['日期'] + ' ' + item['時間'] + ' 的有效課程，請重新整理。');
+        }
+        if (isDuplicateLeave_(leaveRows, teacher, item)) {
+          duplicates += 1;
+          return;
+        }
+        validated.push(item);
+      } catch (error) {
+        errors.push({
+          index: index,
+          calendarId: calendarId,
+          message: error && error.message ? error.message : String(error)
+        });
       }
-      if (isDuplicateLeave_(leaveRows, teacher, item)) {
-        throw new Error(item['日期'] + ' ' + item['時間'] + ' 已經登記過請假。');
-      }
-      return item;
     });
 
     var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
@@ -834,14 +984,32 @@ function submitLeave_(instructor, items) {
         '',
         '',
         '',
-        Utilities.getUuid()
+        Utilities.getUuid(),
+        item['OB Calendar ID'],
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        ''
       ];
     });
-    leaveSheet
-      .getRange(leaveSheet.getLastRow() + 1, 1, rowsToAppend.length, 10)
-      .setValues(rowsToAppend);
+    if (rowsToAppend.length) {
+      leaveSheet
+        .getRange(leaveSheet.getLastRow() + 1, 1, rowsToAppend.length, SHEET_HEADERS.LEAVES.length)
+        .setValues(rowsToAppend);
+    }
 
-    return { count: rowsToAppend.length };
+    var result = {
+      requested: items.length,
+      created: rowsToAppend.length,
+      duplicates: duplicates,
+      failed: errors.length
+    };
+    if (errors.length) result.errors = errors;
+    return result;
   } finally {
     lock.releaseLock();
   }
@@ -921,11 +1089,16 @@ function validateChangeNote_(required, value) {
 
 function isDuplicateLeave_(rows, instructor, item) {
   return (rows || []).some(function(r) {
-    return cleanText_(r[1]) === cleanText_(instructor) &&
-      formatMyDate(r[2]) === formatMyDate(item['日期']) &&
+    if (cleanText_(r[1]) !== cleanText_(instructor) ||
+        ['確認中', '已領取'].indexOf(cleanText_(r[5])) === -1) {
+      return false;
+    }
+    var itemCalendarId = cleanText_(item && (item['OB Calendar ID'] || item.calendarId));
+    var rowCalendarId = cleanText_(r[10]);
+    if (itemCalendarId && rowCalendarId) return itemCalendarId === rowCalendarId;
+    return formatMyDate(r[2]) === formatMyDate(item['日期']) &&
       formatMyTime(r[3]) === formatMyTime(item['時間']) &&
-      cleanText_(r[4]) === cleanText_(item['課程']) &&
-      ['確認中', '已領取'].indexOf(cleanText_(r[5])) !== -1;
+      cleanText_(r[4]) === cleanText_(item['課程']);
   });
 }
 
@@ -972,9 +1145,11 @@ function normalizeLeaveItem_(item) {
   var normalized = {
     '日期': formatMyDate(item && (item['日期'] || item.date)),
     '時間': formatMyTime(item && (item['時間'] || item['時段'] || item.time)),
-    '課程': cleanText_(item && (item['課程'] || item.course))
+    '課程': cleanText_(item && (item['課程'] || item.course)),
+    'OB Calendar ID': cleanText_(item && (item['OB Calendar ID'] || item.calendarId))
   };
-  if (!normalized['日期'] || !normalized['時間'] || !normalized['課程']) {
+  if (!normalized['日期'] || !normalized['時間'] || !normalized['課程'] ||
+      !normalized['OB Calendar ID']) {
     throw new Error('請假課程資料不完整。');
   }
   return normalized;

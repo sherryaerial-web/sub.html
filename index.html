@@ -279,6 +279,31 @@
       min-height: 76px;
     }
 
+    .claim-date-group + .claim-date-group { margin-top: 26px; }
+
+    .claim-date-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 10px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    .claim-date-heading h3 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.4;
+    }
+
+    .claim-date-count {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
     .list-item {
       display: grid;
       grid-template-columns: 24px minmax(0, 1fr);
@@ -788,7 +813,7 @@
 
       if (viewId === "view-leave") loadMyCourses();
       if (viewId === "view-myleaves") fetchMyLeaves();
-      if (viewId === "view-claim") fetchPendingLeaves();
+      if (viewId === "view-claim") fetchAvailableSubstitutes();
       if (viewId === "view-mysubs") fetchMySubs();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -1012,55 +1037,85 @@
       }
     }
 
-    async function fetchPendingLeaves() {
+    async function fetchAvailableSubstitutes() {
       const list = byId("pending-leaves-list");
       list.innerHTML = '<div class="state">載入中...</div>';
       try {
-        pendingLeaves = await callApi("getPendingLeaves");
+        const [availableSubstitutes, teacherCourses] = await Promise.all([
+          callApi("getAvailableSubstitutes"),
+          globalCourseList.length ? Promise.resolve(globalCourseList) : callApi("getMyCourses")
+        ]);
+        pendingLeaves = availableSubstitutes;
+        globalCourseList = teacherCourses;
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
-        renderPendingLeaves();
+        renderAvailableSubstitutes();
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
     }
 
-    function renderPendingLeaves() {
+    function groupAvailableSubstitutesByDate(items) {
+      return items.reduce((groups, item) => {
+        const date = item["日期"] || "日期未設定";
+        if (!groups.has(date)) groups.set(date, []);
+        groups.get(date).push(item);
+        return groups;
+      }, new Map());
+    }
+
+    function renderAvailableSubstitutes() {
       const list = byId("pending-leaves-list");
-      const available = pendingLeaves.filter((item) => item["原老師"] !== authState.teacherName);
+      const button = byId("claim-submit");
+      const available = pendingLeaves;
       if (!available.length) {
         list.innerHTML = '<div class="state">目前沒有可領取的代課</div>';
+        button.disabled = true;
         return;
       }
+      button.disabled = false;
 
-      list.innerHTML = available.map((item) => {
-        const substituteId = item["代課編號"];
-        const noteRequired = requiresChangeNote(item["課程"]);
-        return `
-          <div class="list-item">
-            <input type="checkbox" class="claim-checkbox" data-substitute-id="${escapeHtml(substituteId)}">
-            <div>
-              <div class="item-date">${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
-              <div class="item-course">${escapeHtml(item["課程"])}</div>
-              <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
-              <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
-            </div>
-            <div class="change-note">
-              <label for="note-${escapeHtml(substituteId)}">${noteRequired ? "改成什麼課（必填）" : "難度或其他備註（選填）"}</label>
-              <input
-                id="note-${escapeHtml(substituteId)}"
-                class="change-note-input"
-                type="text"
-                maxlength="120"
-                data-note-for="${escapeHtml(substituteId)}"
-                data-required="${noteRequired ? "true" : "false"}"
-                placeholder="例如：改空環 Lv.1／難度調整"
-              >
-              ${noteRequired ? '<div class="hint">這堂課不屬於您目前的授課大類。</div>' : ""}
-            </div>
+      const groups = groupAvailableSubstitutesByDate(available);
+      list.innerHTML = [...groups.entries()].map(([date, items]) => `
+        <section class="claim-date-group" data-claim-date="${escapeHtml(date)}">
+          <div class="claim-date-heading">
+            <h3>${escapeHtml(date)}</h3>
+            <span class="claim-date-count">${items.length} 堂待領</span>
           </div>
-        `;
-      }).join("");
+          <div class="list">
+            ${items.map(renderAvailableSubstituteItem).join("")}
+          </div>
+        </section>
+      `).join("");
+    }
+
+    function renderAvailableSubstituteItem(item) {
+      const substituteId = item["代課編號"];
+      const noteRequired = requiresChangeNote(item["課程"]);
+      return `
+        <div class="list-item">
+          <input type="checkbox" class="claim-checkbox" data-substitute-id="${escapeHtml(substituteId)}">
+          <div>
+            <div class="item-date">${escapeHtml(item["時段"])}</div>
+            <div class="item-course">${escapeHtml(item["課程"])}</div>
+            <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
+            <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
+          </div>
+          <div class="change-note">
+            <label for="note-${escapeHtml(substituteId)}">${noteRequired ? "改成什麼課（必填）" : "難度或其他備註（選填）"}</label>
+            <input
+              id="note-${escapeHtml(substituteId)}"
+              class="change-note-input"
+              type="text"
+              maxlength="120"
+              data-note-for="${escapeHtml(substituteId)}"
+              data-required="${noteRequired ? "true" : "false"}"
+              placeholder="例如：改空環 Lv.1／難度調整"
+            >
+            ${noteRequired ? '<div class="hint">這堂課不屬於您目前的授課大類。</div>' : ""}
+          </div>
+        </div>
+      `;
     }
 
     async function submitClaim() {
@@ -1083,14 +1138,21 @@
       clearNotice();
       setButtonBusy(button, true, "正在領取...");
       try {
-        await callPostApi("submitClaim", { items });
+        const result = await callPostApi("claimSubstitute", { items });
+        if (!result || result.count !== items.length) {
+          throw new Error("領取結果與勾選堂數不一致，請重新整理確認。");
+        }
+        const claimedIds = new Set(items.map((item) => item.substituteId));
+        pendingLeaves = pendingLeaves.filter((item) => !claimedIds.has(item["代課編號"]));
+        renderAvailableSubstitutes();
         setNotice("代課領取成功。");
-        await fetchPendingLeaves();
+        await fetchAvailableSubstitutes();
       } catch (error) {
         setNotice(error.message, "error");
-        if (/已被其他老師領取|重新整理/.test(error.message)) await fetchPendingLeaves();
+        if (/剛被其他老師領取|重新整理/.test(error.message)) await fetchAvailableSubstitutes();
       } finally {
         setButtonBusy(button, false, "");
+        button.disabled = pendingLeaves.length === 0;
       }
     }
 

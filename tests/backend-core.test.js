@@ -349,6 +349,84 @@ function createLeaveBackend(options = {}) {
   };
 }
 
+function createInvitationBackend(options = {}) {
+  const services = createAuthServices();
+  let uuid = 0;
+  services.Utilities.getUuid = () => `invitation-uuid-${++uuid}`;
+  const bootstrap = loadBackend(services);
+  const accountSheet = createSheetFixture('登入帳號', [
+    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }),
+    createAccount(bootstrap, '老師甲', '1234'),
+    createAccount(bootstrap, '老師乙', '5678'),
+    createAccount(bootstrap, '老師丙', '2468'),
+  ]);
+  const teacherSheet = createSheetFixture('老師名單', [
+    ['指導者'],
+    ['管理員甲'],
+    ['老師甲'],
+    ['老師乙'],
+    ['老師丙'],
+  ]);
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/08/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-teacher-a', 'class-a', 'teacher-a', '否', ''],
+    ['2026/08/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-teacher-b', 'class-b', 'teacher-b', '否', ''],
+    ['2026/08/01', '11:00', '空環 Lv.1', '老師丙', 'calendar-teacher-c', 'class-c', 'teacher-c', '否', ''],
+  ]);
+  const leaveSheet = createSheetFixture('請假代課紀錄', [
+    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS),
+    ...(options.leaveRows || [
+      ['2026-08-03 09:00:00', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-a'],
+      ['2026-08-03 09:05:00', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-b', 'calendar-b'],
+      ['2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '空環 Lv.1', '確認中', '', '', '', 'leave-c', 'calendar-c'],
+      ['2026-08-03 09:15:00', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '已領取', '老師乙', '', '', 'leave-claimed', 'calendar-claimed'],
+    ]),
+  ]);
+  const invitationSheet = createSheetFixture('代課邀請', [
+    ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
+    ...(options.invitationRows || []),
+  ]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const settingsSheet = createSheetFixture('系統設定', [[
+    '設定名稱', '設定值', '更新時間', '備註',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([
+    accountSheet,
+    teacherSheet,
+    courseSheet,
+    leaveSheet,
+    invitationSheet,
+    auditSheet,
+    settingsSheet,
+  ]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  const adminToken = backend.authenticate_('管理員甲', '9999').sessionToken;
+  const teacherAToken = backend.authenticate_('老師甲', '1234').sessionToken;
+  const teacherBToken = backend.authenticate_('老師乙', '5678').sessionToken;
+
+  return {
+    backend,
+    services,
+    spreadsheet,
+    leaveSheet,
+    invitationSheet,
+    auditSheet,
+    settingsSheet,
+    adminToken,
+    teacherAToken,
+    teacherBToken,
+    adminSession: { teacherName: '管理員甲', role: '管理員' },
+    teacherASession: { teacherName: '老師甲', role: '老師' },
+    teacherBSession: { teacherName: '老師乙', role: '老師' },
+  };
+}
+
 test('login returns an opaque session without exposing credentials', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
@@ -570,7 +648,7 @@ test('personal GET and POST write routes require a session and ignore forged tea
   backend.ensureSystemStructure_ = () => {};
   backend.getMySubs_ = (teacherName) => { calls.push(['mySubs', teacherName]); return []; };
   backend.submitLeave_ = (session, items) => { calls.push(['leave', session.teacherName, items.length]); return { count: items.length }; };
-  backend.submitClaim_ = (teacherName, items) => { calls.push(['claim', teacherName, items.length]); return { count: items.length }; };
+  backend.claimSubstitute_ = (session, items) => { calls.push(['claim', session.teacherName, items.length]); return { count: items.length }; };
 
   const missingSession = JSON.parse(backend.doGet({ parameter: {
     action: 'getMySubs', name: '被偽造的老師',
@@ -590,22 +668,26 @@ test('personal GET and POST write routes require a session and ignore forged tea
   backend.doPost({ parameter: {
     action: 'submitLeave', sessionToken, instructor: '被偽造的老師', items: JSON.stringify([{ 日期: '2026/08/10', 時間: '18:30', 課程: '空環', 'OB Calendar ID': 'calendar-1' }]),
   } });
+  backend.doPost({ parameter: {
+    action: 'claimSubstitute', sessionToken, subTeacher: '被偽造的老師', items: JSON.stringify([{ substituteId: 'leave-1' }]),
+  } });
 
   assert.deepEqual(calls, [
     ['mySubs', '老師甲'],
     ['leave', '老師甲', 1],
+    ['claim', '老師甲', 1],
   ]);
 });
 
-test('pending leaves route rejects requests without a session', () => {
+test('available substitutes route rejects requests without a session', () => {
   const bootstrap = loadBackend(createAuthServices());
   const services = createAuthServices();
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
   backend.console = { error() {} };
   backend.ensureSystemStructure_ = () => {};
-  backend.getPendingLeaves_ = () => [{ '原老師': '老師乙' }];
+  backend.getAvailableSubstitutes_ = () => [{ '原老師': '老師乙' }];
 
-  const response = JSON.parse(backend.doGet({ parameter: { action: 'getPendingLeaves' } }).text);
+  const response = JSON.parse(backend.doGet({ parameter: { action: 'getAvailableSubstitutes' } }).text);
 
   assert.equal(response.status, 'error');
   assert.match(response.message, /請先登入/);
@@ -813,10 +895,11 @@ test('renames the legacy leave sheet and preserves fixed headers', () => {
   ]);
 });
 
-test('bootstraps legacy-only leave sheets before the pending-leave handler runs', () => {
+test('bootstraps legacy-only leave sheets before the available-substitute handler runs', () => {
   const legacyLeaveSheet = createSheetFixture('工作表1', [EXPECTED_LEAVE_HEADERS]);
   const spreadsheet = createSpreadsheetFixture([
     createSheetFixture('CourseList', [['日期', '時間', '課程', '指導者']]),
+    createSheetFixture('老師名單', [['指導者'], ['測試老師']]),
     legacyLeaveSheet,
   ]);
   const backend = loadBackend({
@@ -838,7 +921,7 @@ test('bootstraps legacy-only leave sheets before the pending-leave handler runs'
   });
   backend.requireSession_ = () => ({ teacherName: '測試老師', role: '老師' });
 
-  const response = backend.doGet({ parameter: { action: 'getPendingLeaves' } });
+  const response = backend.doGet({ parameter: { action: 'getAvailableSubstitutes' } });
 
   assert.equal(legacyLeaveSheet.getName(), '請假代課紀錄');
   assert.deepEqual(JSON.parse(response.text), { status: 'success', data: [] });
@@ -1252,4 +1335,171 @@ test('detects duplicate active leave requests using fixed indexes', () => {
     }),
     false
   );
+});
+
+test('admin can manually invite one or many teachers without duplicate active invitations', () => {
+  const { backend, invitationSheet, auditSheet, adminSession } = createInvitationBackend();
+
+  const first = backend.openInvitations_(adminSession, ['老師甲']);
+  const second = backend.openInvitations_(adminSession, ['老師甲', '老師乙', '老師乙']);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(first)), {
+    requested: 1,
+    opened: 1,
+    alreadyOpen: 0,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(second)), {
+    requested: 2,
+    opened: 1,
+    alreadyOpen: 1,
+  });
+  assert.equal(invitationSheet.values.length, 3);
+  assert.deepEqual(invitationSheet.values.slice(1).map((row) => row[1]), ['老師甲', '老師乙']);
+  assert.ok(invitationSheet.values.slice(1).every((row) => row[0] && row[2] && row[4] === '開放中'));
+  assert.equal(auditSheet.values.filter((row) => row[2] === '開放代課').length, 2);
+  assert.ok(auditSheet.values.slice(1).every((row) => row[0]));
+});
+
+test('uninvited teacher cannot list pending substitutes', () => {
+  const { backend, teacherASession } = createInvitationBackend();
+
+  const rows = backend.getAvailableSubstitutes_(teacherASession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(rows)), []);
+});
+
+test('invited teacher sees all pending substitutes except their own leave without invitation metadata', () => {
+  const { backend, invitationSheet, adminSession, teacherASession } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const firstRows = backend.getAvailableSubstitutes_(teacherASession);
+  const firstViewedAt = invitationSheet.values[1][3];
+  const secondRows = backend.getAvailableSubstitutes_(teacherASession);
+
+  assert.deepEqual(firstRows.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
+  assert.ok(firstRows.every((row) => row['原老師'] !== '老師甲'));
+  assert.ok(firstRows.every((row) => row['狀態'] === undefined));
+  assert.ok(firstRows.every((row) => row['邀請編號'] === undefined));
+  assert.ok(firstRows.every((row) => row['其他受邀老師'] === undefined));
+  assert.ok(firstViewedAt);
+  assert.equal(invitationSheet.values[1][3], firstViewedAt);
+  assert.deepEqual(JSON.parse(JSON.stringify(secondRows)), JSON.parse(JSON.stringify(firstRows)));
+});
+
+test('global pause hides substitutes and blocks claims until admin resumes manually', () => {
+  const {
+    backend,
+    adminSession,
+    teacherASession,
+    settingsSheet,
+  } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.pauseClaims_(adminSession, true))), { paused: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getAvailableSubstitutes_(teacherASession))), []);
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-c', changeNote: '' }]),
+    /暫停/
+  );
+  assert.equal(settingsSheet.values[1][0], '暫停全部領取');
+  assert.equal(settingsSheet.values[1][1], '是');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.pauseClaims_(adminSession, false))), { paused: false });
+  assert.deepEqual(
+    backend.getAvailableSubstitutes_(teacherASession).map((row) => row['代課編號']),
+    ['leave-b', 'leave-c']
+  );
+});
+
+test('admin manually closes an invitation and records the close timestamp', () => {
+  const { backend, invitationSheet, auditSheet, adminSession, teacherASession } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.closeInvitations_(adminSession, ['老師甲']);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    requested: 1,
+    closed: 1,
+    notOpen: 0,
+  });
+  assert.equal(invitationSheet.values[1][4], '已關閉');
+  assert.ok(invitationSheet.values[1][5]);
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getAvailableSubstitutes_(teacherASession))), []);
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-c', changeNote: '' }]),
+    /尚未開放/
+  );
+  assert.equal(auditSheet.values.filter((row) => row[2] === '關閉代課').length, 1);
+});
+
+test('two invited teachers with stale lists produce exactly one claim winner', () => {
+  const {
+    backend,
+    leaveSheet,
+    auditSheet,
+    adminSession,
+    teacherASession,
+    teacherBSession,
+  } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲', '老師乙']);
+  const teacherAList = backend.getAvailableSubstitutes_(teacherASession);
+  const teacherBList = backend.getAvailableSubstitutes_(teacherBSession);
+  assert.ok(teacherAList.some((row) => row['代課編號'] === 'leave-c'));
+  assert.ok(teacherBList.some((row) => row['代課編號'] === 'leave-c'));
+
+  const winner = backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-c', changeNote: '' }]);
+  assert.throws(
+    () => backend.claimSubstitute_(teacherBSession, [{ substituteId: 'leave-c', changeNote: '' }]),
+    /剛被其他老師領取/
+  );
+
+  const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-c');
+  assert.deepEqual(JSON.parse(JSON.stringify(winner)), { count: 1 });
+  assert.equal(claimedRow[5], '已領取');
+  assert.equal(claimedRow[6], '老師甲');
+  assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-c').length, 1);
+});
+
+test('invitation POST actions require admin while list and claim bind to the logged-in teacher', () => {
+  const {
+    backend,
+    invitationSheet,
+    leaveSheet,
+    adminToken,
+    teacherAToken,
+  } = createInvitationBackend();
+  backend.console = { error() {} };
+
+  const forbidden = JSON.parse(backend.doPost({ parameter: {
+    action: 'openInvitations',
+    sessionToken: teacherAToken,
+    teacherNames: JSON.stringify(['老師甲']),
+  } }).text);
+  assert.equal(forbidden.status, 'error');
+  assert.match(forbidden.message, /管理權限/);
+
+  const opened = JSON.parse(backend.doPost({ parameter: {
+    action: 'openInvitations',
+    sessionToken: adminToken,
+    teacherNames: JSON.stringify(['老師甲', '老師乙']),
+  } }).text);
+  assert.equal(opened.status, 'success');
+  assert.equal(opened.data.opened, 2);
+  assert.equal(invitationSheet.values.length, 3);
+
+  const listed = JSON.parse(backend.doGet({ parameter: {
+    action: 'getAvailableSubstitutes',
+    sessionToken: teacherAToken,
+    teacherName: '老師乙',
+  } }).text);
+  assert.deepEqual(listed.data.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
+
+  const claimed = JSON.parse(backend.doPost({ parameter: {
+    action: 'claimSubstitute',
+    sessionToken: teacherAToken,
+    subTeacher: '老師乙',
+    items: JSON.stringify([{ substituteId: 'leave-c', changeNote: '' }]),
+  } }).text);
+  assert.equal(claimed.status, 'success');
+  assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-c')[6], '老師甲');
 });

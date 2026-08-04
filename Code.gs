@@ -37,7 +37,10 @@ var CONFIG = {
   AUTH_MAX_FAILED_ATTEMPTS: 5,
   AUTH_LOCK_DURATION_MS: 15 * 60 * 1000,
   AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_',
-  LEAVE_BATCH_MAX: 50
+  LEAVE_BATCH_MAX: 50,
+  INVITATION_OPEN_STATUS: '開放中',
+  INVITATION_CLOSED_STATUS: '已關閉',
+  CLAIMS_PAUSED_SETTING: '暫停全部領取'
 };
 
 function hashPin_(pin, salt) {
@@ -451,7 +454,7 @@ function doGet(e) {
   try {
     var action = cleanText_(e.parameter.action);
     var authenticatedActions = {
-      getPendingLeaves: true,
+      getAvailableSubstitutes: true,
       getMySubs: true,
       getMyCourses: true,
       getMyLeaves: true
@@ -460,7 +463,7 @@ function doGet(e) {
       ? requireSession_(e.parameter.sessionToken)
       : null;
     if ({
-      getPendingLeaves: true,
+      getAvailableSubstitutes: true,
       getMySubs: true,
       getMyCourses: true,
       getMyLeaves: true
@@ -469,7 +472,7 @@ function doGet(e) {
     }
     var handlers = {
       getTeachers: function() { return getTeachers_(); },
-      getPendingLeaves: function() { return getPendingLeaves_(); },
+      getAvailableSubstitutes: function() { return getAvailableSubstitutes_(session); },
       getMySubs: function() { return getMySubs_(session.teacherName); },
       getMyCourses: function() { return getMyCourses_(session); },
       getMyLeaves: function() { return getMyLeaves_(session); }
@@ -509,8 +512,17 @@ function doPost(e) {
       submitLeave: function() {
         return submitLeave_(session, parseJsonArray_(parameters.items, '請假課程'));
       },
-      submitClaim: function() {
-        return submitClaim_(session.teacherName, parseJsonArray_(parameters.items, '代課課程'));
+      claimSubstitute: function() {
+        return claimSubstitute_(session, parseJsonArray_(parameters.items, '代課課程'));
+      },
+      openInvitations: function() {
+        return openInvitations_(session, parseTeacherNames_(parameters));
+      },
+      closeInvitations: function() {
+        return closeInvitations_(session, parseTeacherNames_(parameters));
+      },
+      pauseClaims: function() {
+        return pauseClaims_(session, parseBoolean_(parameters.paused, '暫停設定'));
       }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
@@ -872,6 +884,231 @@ function getSessionTeacherName_(session) {
   return teacher;
 }
 
+function assertAdminSession_(session) {
+  var teacher = getSessionTeacherName_(session);
+  if (!isAdminRole_(session.role)) throw new Error('需要管理權限。');
+  return teacher;
+}
+
+function openInvitations_(session, teacherNames) {
+  var actor = assertAdminSession_(session);
+  var teachers = normalizeTeacherNames_(teacherNames);
+  teachers.forEach(assertTeacherExists_);
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
+    ensureSheetHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+    var values = sheet.getDataRange().getValues();
+    var activeTeachers = {};
+    values.slice(1).forEach(function(row) {
+      if (cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS) {
+        activeTeachers[cleanText_(row[1])] = true;
+      }
+    });
+
+    var now = getTimestamp_();
+    var rowsToAppend = [];
+    teachers.forEach(function(teacher) {
+      if (activeTeachers[teacher]) return;
+      rowsToAppend.push([
+        Utilities.getUuid(),
+        teacher,
+        now,
+        '',
+        CONFIG.INVITATION_OPEN_STATUS,
+        ''
+      ]);
+      activeTeachers[teacher] = true;
+    });
+    if (rowsToAppend.length) {
+      sheet.getRange(
+        sheet.getLastRow() + 1,
+        1,
+        rowsToAppend.length,
+        SHEET_HEADERS.INVITATIONS.length
+      ).setValues(rowsToAppend);
+    }
+    rowsToAppend.forEach(function(row) {
+      appendAudit_({
+        actor: actor,
+        action: '開放代課',
+        targetId: row[0],
+        before: '',
+        after: CONFIG.INVITATION_OPEN_STATUS,
+        reason: row[1]
+      });
+    });
+
+    return {
+      requested: teachers.length,
+      opened: rowsToAppend.length,
+      alreadyOpen: teachers.length - rowsToAppend.length
+    };
+  });
+}
+
+function closeInvitations_(session, teacherNames) {
+  var actor = assertAdminSession_(session);
+  var teachers = normalizeTeacherNames_(teacherNames);
+  teachers.forEach(assertTeacherExists_);
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
+    ensureSheetHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+    var values = sheet.getDataRange().getValues();
+    var requestedTeachers = {};
+    teachers.forEach(function(teacher) { requestedTeachers[teacher] = true; });
+    var closedTeachers = {};
+    var auditTargets = {};
+    var now = getTimestamp_();
+
+    for (var index = 1; index < values.length; index++) {
+      var row = values[index];
+      var teacher = cleanText_(row[1]);
+      if (!requestedTeachers[teacher] || cleanText_(row[4]) !== CONFIG.INVITATION_OPEN_STATUS) continue;
+      sheet.getRange(index + 1, 5, 1, 2).setValues([[
+        CONFIG.INVITATION_CLOSED_STATUS,
+        now
+      ]]);
+      closedTeachers[teacher] = true;
+      if (!auditTargets[teacher]) auditTargets[teacher] = cleanText_(row[0]);
+    }
+    Object.keys(closedTeachers).forEach(function(teacher) {
+      appendAudit_({
+        actor: actor,
+        action: '關閉代課',
+        targetId: auditTargets[teacher],
+        before: CONFIG.INVITATION_OPEN_STATUS,
+        after: CONFIG.INVITATION_CLOSED_STATUS,
+        reason: teacher
+      });
+    });
+
+    var closed = Object.keys(closedTeachers).length;
+    return {
+      requested: teachers.length,
+      closed: closed,
+      notOpen: teachers.length - closed
+    };
+  });
+}
+
+function pauseClaims_(session, paused) {
+  var actor = assertAdminSession_(session);
+  var shouldPause = paused === true;
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.SETTINGS);
+    ensureSheetHeaders_(sheet, SHEET_HEADERS.SETTINGS);
+    var values = sheet.getDataRange().getValues();
+    var rowNumber = 0;
+    var previous = false;
+    for (var index = 1; index < values.length; index++) {
+      if (cleanText_(values[index][0]) === CONFIG.CLAIMS_PAUSED_SETTING) {
+        rowNumber = index + 1;
+        previous = isTruthySheetValue_(values[index][1]);
+        break;
+      }
+    }
+
+    var now = getTimestamp_();
+    var nextValues = [[
+      CONFIG.CLAIMS_PAUSED_SETTING,
+      shouldPause ? '是' : '否',
+      now,
+      '由管理員手動控制'
+    ]];
+    if (rowNumber) {
+      sheet.getRange(rowNumber, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
+    } else {
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
+    }
+    appendAudit_({
+      actor: actor,
+      action: shouldPause ? '暫停全部領取' : '恢復全部領取',
+      targetId: CONFIG.CLAIMS_PAUSED_SETTING,
+      before: previous ? '是' : '否',
+      after: shouldPause ? '是' : '否',
+      reason: ''
+    });
+    return { paused: shouldPause };
+  });
+}
+
+function getAvailableSubstitutes_(session) {
+  var teacher = getSessionTeacherName_(session);
+  assertTeacherExists_(teacher);
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
+    ensureSheetHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
+    var invitationValues = invitationSheet.getDataRange().getValues();
+    var activeRows = [];
+    for (var invitationIndex = 1; invitationIndex < invitationValues.length; invitationIndex++) {
+      var invitationRow = invitationValues[invitationIndex];
+      if (cleanText_(invitationRow[1]) === teacher &&
+          cleanText_(invitationRow[4]) === CONFIG.INVITATION_OPEN_STATUS) {
+        activeRows.push(invitationIndex + 1);
+      }
+    }
+    if (!activeRows.length || areClaimsPaused_()) return [];
+
+    var viewedAt = getTimestamp_();
+    activeRows.forEach(function(rowNumber) {
+      if (!cleanText_(invitationValues[rowNumber - 1][3])) {
+        invitationSheet.getRange(rowNumber, 4).setValue(viewedAt);
+      }
+    });
+
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    ensureLeaveSheetHeaders_(leaveSheet);
+    var leaveValues = ensurePendingLeaveIdsUnlocked_(leaveSheet);
+    return leaveValues.slice(1).filter(function(row) {
+      return cleanText_(row[5]) === '確認中' && cleanText_(row[1]) !== teacher;
+    }).map(function(row) {
+      return {
+        '代課編號': cleanText_(row[9]),
+        '原老師': cleanText_(row[1]),
+        '日期': formatMyDate(row[2]),
+        '時段': formatMyTime(row[3]),
+        '課程': cleanText_(row[4]),
+        '課程大類': getCourseCategory_(row[4])
+      };
+    }).sort(function(a, b) {
+      return [a['日期'], a['時段'], a['原老師'], a['代課編號']].join('|')
+        .localeCompare([b['日期'], b['時段'], b['原老師'], b['代課編號']].join('|'));
+    });
+  });
+}
+
+function areClaimsPaused_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, SHEETS.SETTINGS);
+  ensureSheetHeaders_(sheet, SHEET_HEADERS.SETTINGS);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][0]) === CONFIG.CLAIMS_PAUSED_SETTING) {
+      return isTruthySheetValue_(values[index][1]);
+    }
+  }
+  return false;
+}
+
+function hasActiveInvitation_(teacherName) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
+  ensureSheetHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+  var values = sheet.getDataRange().getValues();
+  return values.slice(1).some(function(row) {
+    return cleanText_(row[1]) === cleanText_(teacherName) &&
+      cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
+  });
+}
+
 function getPendingLeaves_() {
   ensurePendingLeaveIds_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1015,15 +1252,17 @@ function submitLeave_(session, items) {
   }
 }
 
-function submitClaim_(subTeacher, items) {
-  var teacher = cleanText_(subTeacher);
-  if (!teacher) throw new Error('請選擇代課老師。');
-  if (!items.length) throw new Error('請至少選擇一堂代課課程。');
+function claimSubstitute_(session, items) {
+  var teacher = getSessionTeacherName_(session);
+  if (!Array.isArray(items) || !items.length) throw new Error('請至少選擇一堂代課課程。');
   assertTeacherExists_(teacher);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
+    if (areClaimsPaused_()) throw new Error('目前暫停全部代課領取。');
+    if (!hasActiveInvitation_(teacher)) throw new Error('目前尚未開放代課領取。');
+
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     ensureLeaveSheetHeaders_(leaveSheet);
@@ -1045,7 +1284,7 @@ function submitClaim_(subTeacher, items) {
       var dataIndex = rowById[id];
       var row = values[dataIndex];
       if (cleanText_(row[5]) !== '確認中') {
-        throw new Error('此代課已被其他老師領取，請重新整理。');
+        throw new Error('此課程剛被其他老師領取，請重新整理。');
       }
       if (cleanText_(row[1]) === teacher) {
         throw new Error('不能領取自己原本的課程。');
@@ -1061,6 +1300,14 @@ function submitClaim_(subTeacher, items) {
 
     updates.forEach(function(update) {
       leaveSheet.getRange(update.sheetRow, 6, 1, 3).setValues([update.values]);
+      appendAudit_({
+        actor: teacher,
+        action: '領取代課',
+        targetId: cleanText_(values[update.sheetRow - 1][9]),
+        before: '確認中',
+        after: '已領取',
+        reason: update.values[2]
+      });
     });
     return { count: updates.length };
   } finally {
@@ -1109,15 +1356,22 @@ function ensurePendingLeaveIds_() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     ensureLeaveSheetHeaders_(sheet);
-    var values = sheet.getDataRange().getValues();
-    for (var i = 1; i < values.length; i++) {
-      if (cleanText_(values[i][5]) === '確認中' && !cleanText_(values[i][9])) {
-        sheet.getRange(i + 1, 10).setValue(Utilities.getUuid());
-      }
-    }
+    ensurePendingLeaveIdsUnlocked_(sheet);
   } finally {
     lock.releaseLock();
   }
+}
+
+function ensurePendingLeaveIdsUnlocked_(sheet) {
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][5]) === '確認中' && !cleanText_(values[index][9])) {
+      var substituteId = Utilities.getUuid();
+      sheet.getRange(index + 1, 10).setValue(substituteId);
+      values[index][9] = substituteId;
+    }
+  }
+  return values;
 }
 
 function ensureLeaveSheetHeaders_(sheet) {
@@ -1168,6 +1422,43 @@ function parseJsonArray_(value, fieldName) {
   }
   if (!Array.isArray(parsed)) throw new Error(fieldName + '必須是陣列。');
   return parsed;
+}
+
+function parseTeacherNames_(parameters) {
+  var source = parameters || {};
+  if (cleanText_(source.teacherNames)) {
+    return parseJsonArray_(source.teacherNames, '老師名單');
+  }
+  var teacherName = cleanText_(source.teacherName);
+  return teacherName ? [teacherName] : [];
+}
+
+function normalizeTeacherNames_(teacherNames) {
+  if (!Array.isArray(teacherNames)) throw new Error('老師名單必須是陣列。');
+  var seen = {};
+  var normalized = [];
+  teacherNames.forEach(function(value) {
+    var teacher = cleanText_(value);
+    if (!teacher || seen[teacher]) return;
+    seen[teacher] = true;
+    normalized.push(teacher);
+  });
+  if (!normalized.length) throw new Error('請至少選擇一位老師。');
+  return normalized;
+}
+
+function parseBoolean_(value, fieldName) {
+  if (value === true || ['true', '1', '是'].indexOf(cleanText_(value).toLowerCase()) !== -1) return true;
+  if (value === false || ['false', '0', '否'].indexOf(cleanText_(value).toLowerCase()) !== -1) return false;
+  throw new Error((fieldName || '布林欄位') + '格式錯誤。');
+}
+
+function isTruthySheetValue_(value) {
+  return value === true || ['true', '1', '是', '啟用'].indexOf(cleanText_(value).toLowerCase()) !== -1;
+}
+
+function getTimestamp_() {
+  return Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
 }
 
 function createJsonResponse_(data) {

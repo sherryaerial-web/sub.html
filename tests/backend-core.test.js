@@ -57,6 +57,12 @@ const EXPECTED_LEAVE_HEADERS = [
 const EXPECTED_LEAVE_EXTENSION_HEADERS = [
   'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
   '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
+  '實際課程類別',
+];
+
+const EXPECTED_ACCOUNT_HEADERS = [
+  '指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至',
+  '可教授類別',
 ];
 
 const EXPECTED_COURSE_HEADERS = [
@@ -355,11 +361,11 @@ function createInvitationBackend(options = {}) {
   services.Utilities.getUuid = () => `invitation-uuid-${++uuid}`;
   const bootstrap = loadBackend(services);
   const accountSheet = createSheetFixture('登入帳號', [
-    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
-    createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }),
-    createAccount(bootstrap, '老師甲', '1234'),
-    createAccount(bootstrap, '老師乙', '5678'),
-    createAccount(bootstrap, '老師丙', '2468'),
+    EXPECTED_ACCOUNT_HEADERS,
+    createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }).concat('空環'),
+    createAccount(bootstrap, '老師甲', '1234').concat(options.teacherACapabilities || '空環'),
+    createAccount(bootstrap, '老師乙', '5678').concat(options.teacherBCapabilities || '空環'),
+    createAccount(bootstrap, '老師丙', '2468').concat(options.teacherCCapabilities || '空環'),
   ]);
   const teacherSheet = createSheetFixture('老師名單', [
     ['指導者'],
@@ -370,9 +376,12 @@ function createInvitationBackend(options = {}) {
   ]);
   const courseSheet = createSheetFixture('CourseList', [
     EXPECTED_COURSE_HEADERS,
-    ['2026/08/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-teacher-a', 'class-a', 'teacher-a', '否', ''],
-    ['2026/08/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-teacher-b', 'class-b', 'teacher-b', '否', ''],
-    ['2026/08/01', '11:00', '空環 Lv.1', '老師丙', 'calendar-teacher-c', 'class-c', 'teacher-c', '否', ''],
+    ...(options.courseRows || [
+      ['2026/08/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-a', 'class-ring-1', 'teacher-a', '否', ''],
+      ['2026/08/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-b', 'class-ring-1', 'teacher-b', '否', ''],
+      ['2026/08/01', '11:00', '空環 Lv.1', '老師丙', 'calendar-c', 'class-ring-1', 'teacher-c', '否', ''],
+      ['2026/08/02', '12:00', '舞綢 Lv.1', '老師丙', 'calendar-silk', 'class-silk-1', 'teacher-c', '否', ''],
+    ]),
   ]);
   const leaveSheet = createSheetFixture('請假代課紀錄', [
     EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS),
@@ -414,6 +423,8 @@ function createInvitationBackend(options = {}) {
     backend,
     services,
     spreadsheet,
+    accountSheet,
+    courseSheet,
     leaveSheet,
     invitationSheet,
     auditSheet,
@@ -1502,4 +1513,151 @@ test('invitation POST actions require admin while list and claim bind to the log
   } }).text);
   assert.equal(claimed.status, 'success');
   assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-c')[6], '老師甲');
+});
+
+test('category capability validation reads only the protected account record', () => {
+  const { backend } = createInvitationBackend({ teacherACapabilities: '空環、瑜伽 / 舞綢' });
+
+  assert.equal(backend.teacherCanTeachCategory_('老師甲', '空環'), true);
+  assert.equal(backend.teacherCanTeachCategory_('老師甲', '瑜伽'), true);
+  assert.equal(backend.teacherCanTeachCategory_('老師甲', '舞綢'), true);
+  assert.equal(backend.teacherCanTeachCategory_('老師甲', '綢吊'), false);
+  assert.equal(backend.teacherCanTeachCategory_('不存在老師', '空環'), false);
+});
+
+test('original-course claim persists difficulty and structured values without requiring a note', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-b',
+    handlingType: 'original',
+    actualClassId: '',
+    actualCourseName: '',
+    category: '',
+    difficulty: 'Lv.2',
+    note: '',
+  }]);
+
+  const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-b');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1 });
+  assert.equal(claimedRow[5], '已領取');
+  assert.equal(claimedRow[6], '老師甲');
+  assert.equal(claimedRow[7], '沿用原課程；難度：Lv.2');
+  assert.deepEqual(claimedRow.slice(11, 15), ['class-ring-1', '空環 Lv.1', 'Lv.2', '沿用原課程']);
+  assert.equal(claimedRow[19], '空環');
+});
+
+test('existing-course change uses the server OB class and requires a cross-apparatus note', () => {
+  const crossLeave = [
+    '2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '舞綢 Lv.1',
+    '確認中', '', '', '', 'leave-cross', 'calendar-silk',
+  ];
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    leaveRows: [crossLeave],
+    teacherACapabilities: '空環',
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-cross',
+    handlingType: 'existing',
+    actualClassId: 'class-ring-1',
+    actualCourseName: '偽造課名',
+    category: '舞綢',
+    difficulty: 'Lv.1',
+    note: '',
+  }]), /跨道具.*備註/);
+
+  backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-cross',
+    handlingType: 'existing',
+    actualClassId: 'class-ring-1',
+    actualCourseName: '偽造課名',
+    category: '舞綢',
+    difficulty: 'Lv.1',
+    note: '原課程不是我的授課道具，請改成空環。',
+  }]);
+
+  const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-cross');
+  assert.equal(claimedRow[11], 'class-ring-1');
+  assert.equal(claimedRow[12], '空環 Lv.1');
+  assert.equal(claimedRow[13], 'Lv.1');
+  assert.equal(claimedRow[14], '改用既有 OB 課程');
+  assert.equal(claimedRow[19], '空環');
+  assert.match(claimedRow[7], /請改成空環/);
+  assert.doesNotMatch(claimedRow[7], /偽造課名/);
+});
+
+test('new-course change requires a teachable category, course, difficulty, and cross-apparatus note', () => {
+  const crossLeave = [
+    '2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '舞綢 Lv.1',
+    '確認中', '', '', '', 'leave-new', 'calendar-silk',
+  ];
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    leaveRows: [crossLeave],
+    teacherACapabilities: '空環',
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-new', handlingType: 'new', actualCourseName: '',
+    category: '空環', difficulty: 'Lv.1', note: '需要新增',
+  }]), /課程名稱/);
+  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-new', handlingType: 'new', actualCourseName: '空環入門',
+    category: '綢吊', difficulty: 'Lv.1', note: '需要新增',
+  }]), /不在可教授類別/);
+  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-new', handlingType: 'new', actualCourseName: '空環入門',
+    category: '空環', difficulty: '', note: '需要新增',
+  }]), /難度/);
+
+  backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-new',
+    handlingType: 'new',
+    actualClassId: '',
+    actualCourseName: '空環入門',
+    category: '空環',
+    difficulty: 'Lv.1',
+    note: 'OB 需要新增這個課程。',
+  }]);
+
+  const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-new');
+  assert.deepEqual(claimedRow.slice(11, 15), ['', '空環入門', 'Lv.1', '需要新增課程']);
+  assert.equal(claimedRow[19], '空環');
+  assert.match(claimedRow[7], /OB 需要新增這個課程/);
+});
+
+test('same-apparatus change keeps difficulty and note optional', () => {
+  const { backend } = createInvitationBackend();
+
+  const normalized = backend.validateClaimChange_({
+    teacher: '老師甲',
+    targetCourseName: '空環 Lv.1',
+    targetCalendarId: 'calendar-b',
+    handlingType: 'original',
+    difficulty: '',
+    note: '',
+  });
+
+  assert.equal(normalized.handlingType, '沿用原課程');
+  assert.equal(normalized.actualCourseName, '空環 Lv.1');
+  assert.equal(normalized.category, '空環');
+  assert.equal(normalized.difficulty, '');
+  assert.equal(normalized.note, '');
+});
+
+test('claim options return capabilities and searchable OB classes without account secrets', () => {
+  const { backend, teacherASession } = createInvitationBackend({ teacherACapabilities: '空環、瑜伽' });
+
+  const options = backend.getClaimOptions_(teacherASession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空環', '瑜伽']);
+  assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
+    { classId: 'class-ring-1', courseName: '空環 Lv.1', category: '空環' },
+    { classId: 'class-silk-1', courseName: '舞綢 Lv.1', category: '舞綢' },
+  ]);
+  assert.equal(options.pinHash, undefined);
+  assert.equal(options.role, undefined);
 });

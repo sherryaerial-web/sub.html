@@ -8,6 +8,7 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 function createFrontendRuntime(fixtures = {}) {
   const elements = new Map();
+  let claimSubmitted = false;
   const getElement = (id) => {
     if (!elements.has(id)) {
       elements.set(id, {
@@ -26,8 +27,28 @@ function createFrontendRuntime(fixtures = {}) {
     }
     return elements.get(id);
   };
-  const checkedClaim = { dataset: { substituteId: 'leave-c' }, checked: true };
-  const noteInput = { value: '', dataset: { required: 'false' }, focus() {} };
+  const claimControls = {
+    '.claim-checkbox': { checked: true },
+    'input[type="radio"]:checked': { value: 'original' },
+    '.claim-editor': { hidden: false },
+    '.existing-class-panel': { hidden: true },
+    '.existing-class-search': { value: '' },
+    '.new-course-name': { value: '' },
+    '.new-course-category': { value: '' },
+    '.claim-difficulty': { value: '' },
+    '.claim-note': { value: '' },
+    '.new-difficulty-required': { hidden: true },
+  };
+  const claimCard = {
+    querySelector(selector) { return claimControls[selector] || null; },
+    querySelectorAll() { return []; },
+    scrollIntoView() {},
+  };
+  const checkedClaim = {
+    dataset: { substituteId: 'leave-c' },
+    checked: true,
+    closest() { return claimCard; },
+  };
   const document = {
     getElementById: getElement,
     querySelectorAll(selector) {
@@ -35,7 +56,6 @@ function createFrontendRuntime(fixtures = {}) {
       return [];
     },
     querySelector(selector) {
-      if (selector.startsWith('[data-note-for=')) return noteInput;
       return null;
     },
   };
@@ -44,6 +64,15 @@ function createFrontendRuntime(fixtures = {}) {
     const action = isPost
       ? new URLSearchParams(request.body || '').get('action')
       : new URL(url).searchParams.get('action');
+    if (isPost && action === 'claimSubstitute') claimSubmitted = true;
+    if (!isPost && action === 'getAvailableSubstitutes' && claimSubmitted) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: 'success', data: [] }),
+        url,
+      });
+    }
     const data = isPost ? { count: 1 } : (fixtures[action] || []);
     const payload = { status: 'success', data };
     return Promise.resolve({ ok: true, status: 200, json: async () => payload, url });
@@ -77,12 +106,15 @@ test('does not use no-cors blind success writes', () => {
   assert.match(html, /status\s*!==\s*['"]success['"]/);
 });
 
-test('submits claims by UUID with per-course change notes', () => {
+test('submits structured claim adjustments by UUID', () => {
   assert.match(html, /代課編號/);
   assert.match(html, /substituteId/);
-  assert.match(html, /changeNote/);
-  assert.match(html, /改成什麼課/);
-  assert.match(html, /change-note-input/);
+  assert.match(html, /handlingType/);
+  assert.match(html, /actualClassId/);
+  assert.match(html, /actualCourseName/);
+  assert.match(html, /category/);
+  assert.match(html, /difficulty/);
+  assert.match(html, /note/);
 });
 
 test('keeps the three required workflows and mobile viewport', () => {
@@ -163,23 +195,35 @@ test('removes claimed courses immediately and refreshes after a concurrent confl
 });
 
 test('keeps the claim button disabled after the final available course is claimed', async () => {
-  const { context, getElement } = createFrontendRuntime();
+  const { context, getElement } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [{ classId: 'class-ring', courseName: '空環 Lv.1', category: '空環' }],
+    },
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-c',
+      '原老師': '老師丙',
+      '日期': '2026/08/11',
+      '時段': '11:00',
+      '課程': '空環 Lv.1',
+      '課程大類': '空環',
+      '可沿用原課程': true,
+    }],
+  });
   await Promise.resolve();
+  await context.fetchAvailableSubstitutes();
 
   await context.submitClaim();
 
   assert.equal(getElement('claim-submit').disabled, true);
 });
 
-test('loads the teacher courses before deciding whether a substitute note is required', async () => {
+test('uses the protected capability result before deciding whether a course change is required', async () => {
   const { context, getElement } = createFrontendRuntime({
-    getMyCourses: [{
-      '日期': '2026/08/01',
-      '時間': '09:00',
-      '課程': '空環 Lv.1',
-      '課程大類': '空環',
-      'OB Calendar ID': 'calendar-a',
-    }],
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [{ classId: 'class-ring', courseName: '空環 Lv.1', category: '空環' }],
+    },
     getAvailableSubstitutes: [{
       '代課編號': 'leave-b',
       '原老師': '老師乙',
@@ -187,12 +231,91 @@ test('loads the teacher courses before deciding whether a substitute note is req
       '時段': '18:30',
       '課程': '空環 Lv.2',
       '課程大類': '空環',
+      '可沿用原課程': true,
     }],
   });
   await Promise.resolve();
 
   await context.fetchAvailableSubstitutes();
 
-  assert.match(getElement('pending-leaves-list').innerHTML, /難度或其他備註（選填）/);
-  assert.doesNotMatch(getElement('pending-leaves-list').innerHTML, /改成什麼課（必填）/);
+  assert.match(getElement('pending-leaves-list').innerHTML, /value="original"\s+checked/);
+  assert.doesNotMatch(getElement('pending-leaves-list').innerHTML, /需要改成可教授的課程/);
+});
+
+test('loads protected capability and searchable existing-class options for claims', () => {
+  assert.match(html, /callApi\(["']getClaimOptions["']/);
+  assert.match(html, /claimOptions/);
+  assert.match(html, /class-search/);
+  assert.match(html, /existing-class/);
+  assert.match(html, /搜尋 OB 現有課程/);
+});
+
+test('renders all three handling types with difficulty and an always-available note', () => {
+  assert.match(html, /value=["']original["']/);
+  assert.match(html, /value=["']existing["']/);
+  assert.match(html, /value=["']new["']/);
+  assert.match(html, /沿用原課程/);
+  assert.match(html, /改用既有 OB 課程/);
+  assert.match(html, /需要新增課程/);
+  assert.match(html, /claim-difficulty/);
+  assert.match(html, /claim-note/);
+});
+
+test('same-apparatus original handling allows optional difficulty and note', () => {
+  const { context } = createFrontendRuntime();
+  const payload = context.validateClaimDraft({
+    handlingType: 'original',
+    actualClassId: '',
+    actualCourseName: '',
+    category: '',
+    difficulty: '',
+    note: '',
+  }, {
+    '代課編號': 'leave-a',
+    '課程': '空環 Lv.1',
+    '課程大類': '空環',
+    '可沿用原課程': true,
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
+    substituteId: 'leave-a',
+    handlingType: 'original',
+    actualClassId: '',
+    actualCourseName: '',
+    category: '',
+    difficulty: '',
+    note: '',
+  });
+});
+
+test('cross-apparatus handling requires a structured course change and note', () => {
+  const { context } = createFrontendRuntime();
+  const item = {
+    '代課編號': 'leave-cross',
+    '課程': '舞綢 Lv.1',
+    '課程大類': '舞綢',
+    '可沿用原課程': false,
+  };
+
+  assert.throws(() => context.validateClaimDraft({
+    handlingType: 'original', note: '',
+  }, item), /不能沿用原課程/);
+  assert.throws(() => context.validateClaimDraft({
+    handlingType: 'existing', actualClassId: 'class-ring', category: '空環', note: '',
+  }, item), /備註/);
+  assert.throws(() => context.validateClaimDraft({
+    handlingType: 'new', actualCourseName: '', category: '空環', difficulty: 'Lv.1', note: '改課',
+  }, item), /課程名稱/);
+});
+
+test('marks the note required as soon as a same-capability teacher chooses another apparatus', () => {
+  const { context } = createFrontendRuntime();
+  const item = {
+    '課程大類': '空環',
+    '可沿用原課程': true,
+  };
+
+  assert.equal(context.claimNoteIsRequired(item, 'original', '空環'), false);
+  assert.equal(context.claimNoteIsRequired(item, 'existing', '空環'), false);
+  assert.equal(context.claimNoteIsRequired(item, 'existing', '舞綢'), true);
 });

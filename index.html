@@ -37,7 +37,7 @@
       letter-spacing: 0;
     }
 
-    button, input { font: inherit; }
+    button, input, select, textarea { font: inherit; }
     button { touch-action: manipulation; }
 
     .auth-shell,
@@ -350,21 +350,117 @@
     .status-tag.success { background: var(--success-soft); color: var(--success); }
     .status-tag.warning { background: var(--warm-soft); color: var(--warm); }
 
-    .change-note {
-      grid-column: 2;
-      margin-top: 3px;
-      padding: 11px;
-      border-left: 3px solid var(--warm);
-      background: var(--warm-soft);
+    .claim-card {
+      grid-template-columns: 24px minmax(0, 1fr);
+      padding: 0;
+      overflow: hidden;
     }
 
-    .change-note label {
-      display: block;
-      margin-bottom: 7px;
+    .claim-card > .claim-checkbox { margin: 18px 0 0 16px; }
+
+    .claim-summary {
+      min-width: 0;
+      padding: 15px 16px 14px 0;
+    }
+
+    .claim-requirement {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      margin-top: 9px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: var(--warm-soft);
       color: var(--warm);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
     }
+
+    .claim-editor {
+      grid-column: 1 / -1;
+      padding: 16px;
+      border-top: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .claim-editor[hidden] { display: none; }
+
+    .claim-editor-title {
+      margin: 0 0 12px;
+      font-size: 14px;
+      font-weight: 750;
+    }
+
+    .handling-options {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    .handling-option {
+      display: grid;
+      place-items: center;
+      min-height: 46px;
+      padding: 7px 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .handling-option:has(input:checked) {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent-hover);
+    }
+
+    .handling-option:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
+    .handling-option input { position: absolute; opacity: 0; pointer-events: none; }
+
+    .claim-fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .claim-field { min-width: 0; }
+    .claim-field.full { grid-column: 1 / -1; }
+
+    .claim-field label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .claim-control {
+      width: 100%;
+      min-height: 44px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    textarea.claim-control {
+      min-height: 82px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .claim-control:focus {
+      border-color: var(--accent);
+      outline: 2px solid var(--accent-soft);
+    }
+
+    .claim-required { color: var(--danger); }
 
     .hint { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
@@ -465,6 +561,9 @@
       .home-actions { grid-template-columns: 1fr; }
       .action-button { min-height: 90px; }
       .date-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .handling-options { grid-template-columns: 1fr; }
+      .claim-fields { grid-template-columns: 1fr; }
+      .claim-field.full { grid-column: auto; }
       .confirmation-row { grid-template-columns: 108px minmax(0, 1fr); }
     }
 
@@ -594,7 +693,8 @@
 
       <section id="view-claim" class="view">
         <h2 class="section-heading">領取代課</h2>
-        <p class="section-copy">目前可領取的課程。</p>
+        <p class="section-copy">依日期查看目前可領取的課程。</p>
+        <datalist id="existing-class-options"></datalist>
         <div id="pending-leaves-list" class="list">
           <div class="state">載入中...</div>
         </div>
@@ -619,6 +719,7 @@
     const authState = { sessionToken: "", teacherName: "", role: "" };
     let globalCourseList = [];
     let pendingLeaves = [];
+    let claimOptions = { capabilities: [], classes: [] };
     let selectedLeaveDates = new Set();
     let selectedLeaveCourses = new Set();
 
@@ -696,12 +797,54 @@
       return "其他";
     }
 
-    function requiresChangeNote(targetCourseName) {
-      const teacherCourses = globalCourseList.map((item) => normalizeCourseName(item["課程"]));
-      const targetName = normalizeCourseName(targetCourseName);
-      const targetCategory = getCourseCategory(targetName);
-      if (targetCategory === "其他") return !teacherCourses.includes(targetName);
-      return !teacherCourses.some((name) => getCourseCategory(name) === targetCategory);
+    function claimNoteIsRequired(item, handlingType, actualCategory) {
+      const target = item || {};
+      const targetCategory = target["課程大類"] || getCourseCategory(target["課程"]);
+      if (target["可沿用原課程"] !== true) return true;
+      return handlingType !== "original" && !!actualCategory && actualCategory !== targetCategory;
+    }
+
+    function validateClaimDraft(draft, item) {
+      const change = draft || {};
+      const target = item || {};
+      const handlingType = String(change.handlingType || "original");
+      const actualClassId = String(change.actualClassId || "").trim();
+      const actualCourseName = String(change.actualCourseName || "").trim();
+      const category = String(change.category || "").trim();
+      const difficulty = String(change.difficulty || "").trim();
+      const note = String(change.note || "").trim();
+      const canReuseOriginal = target["可沿用原課程"] === true;
+      const targetCategory = target["課程大類"] || getCourseCategory(target["課程"]);
+
+      if (handlingType === "original" && !canReuseOriginal) {
+        throw new Error("這堂課不在您的可教授類別中，不能沿用原課程。");
+      }
+      if (handlingType === "existing" && !actualClassId) {
+        throw new Error("請選擇要改用的 OB 現有課程。");
+      }
+      if (handlingType === "new") {
+        if (!actualCourseName) throw new Error("請填寫需要新增的課程名稱。");
+        if (!category) throw new Error("請選擇需要新增課程的類別。");
+        if (!difficulty) throw new Error("需要新增課程時，請填寫難度。");
+      }
+      if (!["original", "existing", "new"].includes(handlingType)) {
+        throw new Error("課程處理方式無效，請重新選擇。");
+      }
+
+      const actualCategory = handlingType === "original" ? targetCategory : category;
+      if (claimNoteIsRequired(target, handlingType, actualCategory) && !note) {
+        throw new Error("跨道具代課時，請填寫改課原因或補充備註。");
+      }
+
+      return {
+        substituteId: String(target["代課編號"] || ""),
+        handlingType,
+        actualClassId,
+        actualCourseName,
+        category,
+        difficulty,
+        note
+      };
     }
 
     function setNotice(message, type = "success") {
@@ -1041,18 +1184,35 @@
       const list = byId("pending-leaves-list");
       list.innerHTML = '<div class="state">載入中...</div>';
       try {
-        const [availableSubstitutes, teacherCourses] = await Promise.all([
+        const [availableSubstitutes, options] = await Promise.all([
           callApi("getAvailableSubstitutes"),
-          globalCourseList.length ? Promise.resolve(globalCourseList) : callApi("getMyCourses")
+          callApi("getClaimOptions")
         ]);
         pendingLeaves = availableSubstitutes;
-        globalCourseList = teacherCourses;
+        claimOptions = options || { capabilities: [], classes: [] };
+        renderClaimClassOptions();
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
         renderAvailableSubstitutes();
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
+    }
+
+    function getTeachableClaimClasses() {
+      const capabilities = new Set(claimOptions.capabilities || []);
+      return (claimOptions.classes || []).filter((item) => capabilities.has(item.category));
+    }
+
+    function renderClaimClassOptions() {
+      byId("existing-class-options").innerHTML = getTeachableClaimClasses().map((item) =>
+        `<option value="${escapeHtml(item.courseName)}">${escapeHtml(item.category)}</option>`
+      ).join("");
+    }
+
+    function findSelectedClaimClass(value) {
+      const wanted = normalizeCourseName(value);
+      return getTeachableClaimClasses().find((item) => normalizeCourseName(item.courseName) === wanted) || null;
     }
 
     function groupAvailableSubstitutesByDate(items) {
@@ -1091,31 +1251,115 @@
 
     function renderAvailableSubstituteItem(item) {
       const substituteId = item["代課編號"];
-      const noteRequired = requiresChangeNote(item["課程"]);
+      const canReuseOriginal = item["可沿用原課程"] === true;
+      const hasExistingClass = getTeachableClaimClasses().length > 0;
+      const defaultHandling = canReuseOriginal ? "original" : (hasExistingClass ? "existing" : "new");
+      const capabilities = claimOptions.capabilities || [];
       return `
-        <div class="list-item">
+        <article class="list-item claim-card" data-claim-card-id="${escapeHtml(substituteId)}">
           <input type="checkbox" class="claim-checkbox" data-substitute-id="${escapeHtml(substituteId)}">
-          <div>
+          <div class="claim-summary">
             <div class="item-date">${escapeHtml(item["時段"])}</div>
             <div class="item-course">${escapeHtml(item["課程"])}</div>
             <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
             <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
+            ${canReuseOriginal ? "" : '<div class="claim-requirement">需要改成可教授的課程</div>'}
           </div>
-          <div class="change-note">
-            <label for="note-${escapeHtml(substituteId)}">${noteRequired ? "改成什麼課（必填）" : "難度或其他備註（選填）"}</label>
-            <input
-              id="note-${escapeHtml(substituteId)}"
-              class="change-note-input"
-              type="text"
-              maxlength="120"
-              data-note-for="${escapeHtml(substituteId)}"
-              data-required="${noteRequired ? "true" : "false"}"
-              placeholder="例如：改空環 Lv.1／難度調整"
-            >
-            ${noteRequired ? '<div class="hint">這堂課不屬於您目前的授課大類。</div>' : ""}
+          <div class="claim-editor" hidden>
+            <div class="claim-editor-title">實際授課安排</div>
+            <div class="handling-options" role="group" aria-label="課程處理方式">
+              <label class="handling-option">
+                <input type="radio" name="handling-${escapeHtml(substituteId)}" value="original"
+                  ${defaultHandling === "original" ? "checked" : ""} ${canReuseOriginal ? "" : "disabled"}>
+                沿用原課程
+              </label>
+              <label class="handling-option">
+                <input type="radio" name="handling-${escapeHtml(substituteId)}" value="existing"
+                  ${defaultHandling === "existing" ? "checked" : ""} ${hasExistingClass ? "" : "disabled"}>
+                改用既有 OB 課程
+              </label>
+              <label class="handling-option">
+                <input type="radio" name="handling-${escapeHtml(substituteId)}" value="new"
+                  ${defaultHandling === "new" ? "checked" : ""}>
+                需要新增課程
+              </label>
+            </div>
+
+            <div class="claim-fields">
+              <div class="claim-field full existing-class-panel" hidden>
+                <label>搜尋 OB 現有課程 <span class="claim-required">必填</span></label>
+                <input class="claim-control class-search existing-class-search" type="text"
+                  list="existing-class-options" autocomplete="off" placeholder="輸入課名搜尋">
+              </div>
+
+              <div class="claim-field new-course-panel" hidden>
+                <label>新課程名稱 <span class="claim-required">必填</span></label>
+                <input class="claim-control new-course-name" type="text" maxlength="80" placeholder="例如：空環入門">
+              </div>
+
+              <div class="claim-field new-course-panel" hidden>
+                <label>課程類別 <span class="claim-required">必填</span></label>
+                <select class="claim-control new-course-category">
+                  <option value="">請選擇</option>
+                  ${capabilities.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("")}
+                </select>
+              </div>
+
+              <div class="claim-field">
+                <label>難度／等級 <span class="new-difficulty-required claim-required" hidden>必填</span></label>
+                <input class="claim-control claim-difficulty" type="text" maxlength="40" placeholder="例如：Lv.1、基礎">
+              </div>
+
+              <div class="claim-field full">
+                <label>備註 <span class="claim-note-required claim-required" ${canReuseOriginal ? "hidden" : ""}>跨道具必填</span></label>
+                <textarea class="claim-control claim-note" maxlength="240" placeholder="可填改課原因、難度調整或其他事項"></textarea>
+              </div>
+            </div>
           </div>
-        </div>
+        </article>
       `;
+    }
+
+    function updateClaimCardState(card) {
+      if (!card) return;
+      const checked = card.querySelector(".claim-checkbox").checked;
+      const editor = card.querySelector(".claim-editor");
+      editor.hidden = !checked;
+      if (!checked) return;
+      const handling = card.querySelector('input[type="radio"]:checked')?.value || "original";
+      card.querySelector(".existing-class-panel").hidden = handling !== "existing";
+      card.querySelectorAll(".new-course-panel").forEach((field) => {
+        field.hidden = handling !== "new";
+      });
+      card.querySelector(".new-difficulty-required").hidden = handling !== "new";
+      const substituteId = card.dataset.claimCardId;
+      const item = pendingLeaves.find((entry) => entry["代課編號"] === substituteId) || {};
+      let actualCategory = item["課程大類"] || getCourseCategory(item["課程"]);
+      if (handling === "existing") {
+        const selectedClass = findSelectedClaimClass(card.querySelector(".existing-class-search").value);
+        actualCategory = selectedClass ? selectedClass.category : "";
+      } else if (handling === "new") {
+        actualCategory = card.querySelector(".new-course-category").value;
+      }
+      card.querySelector(".claim-note-required").hidden =
+        !claimNoteIsRequired(item, handling, actualCategory);
+    }
+
+    function readClaimDraft(card) {
+      const handlingType = card.querySelector('input[type="radio"]:checked')?.value || "original";
+      const existingClass = findSelectedClaimClass(card.querySelector(".existing-class-search").value);
+      return {
+        handlingType,
+        actualClassId: handlingType === "existing" && existingClass ? existingClass.classId : "",
+        actualCourseName: handlingType === "existing" && existingClass
+          ? existingClass.courseName
+          : card.querySelector(".new-course-name").value,
+        category: handlingType === "existing" && existingClass
+          ? existingClass.category
+          : card.querySelector(".new-course-category").value,
+        difficulty: card.querySelector(".claim-difficulty").value,
+        note: card.querySelector(".claim-note").value
+      };
     }
 
     async function submitClaim() {
@@ -1125,13 +1369,14 @@
       const items = [];
       for (const checkbox of checked) {
         const substituteId = checkbox.dataset.substituteId;
-        const noteInput = document.querySelector(`[data-note-for="${CSS.escape(substituteId)}"]`);
-        const changeNote = noteInput ? noteInput.value.trim() : "";
-        if (noteInput && noteInput.dataset.required === "true" && !changeNote) {
-          noteInput.focus();
-          return setNotice("跨課程種類代課時，請填寫要改成什麼課。", "error");
+        const card = checkbox.closest(".claim-card");
+        const target = pendingLeaves.find((item) => item["代課編號"] === substituteId);
+        try {
+          items.push(validateClaimDraft(readClaimDraft(card), target));
+        } catch (error) {
+          if (card && card.scrollIntoView) card.scrollIntoView({ behavior: "smooth", block: "center" });
+          return setNotice(error.message, "error");
         }
-        items.push({ substituteId, changeNote });
       }
 
       const button = byId("claim-submit");
@@ -1171,6 +1416,9 @@
               <div class="item-date">${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
               <div class="item-course">${escapeHtml(item["課程"])}</div>
               <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
+              <div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div>
+              <div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>
+              ${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}
               ${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}
             </div>
           </article>
@@ -1187,6 +1435,12 @@
     byId("clear-leave-dates").addEventListener("click", clearLeaveDates);
     byId("leave-submit").addEventListener("click", submitLeave);
     byId("claim-submit").addEventListener("click", submitClaim);
+    function handleClaimEditorChange(event) {
+      const card = event.target.closest ? event.target.closest(".claim-card") : null;
+      if (card) updateClaimCardState(card);
+    }
+    byId("pending-leaves-list").addEventListener("change", handleClaimEditorChange);
+    byId("pending-leaves-list").addEventListener("input", handleClaimEditorChange);
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.view));
     });

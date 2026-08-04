@@ -17,12 +17,16 @@ var SHEET_HEADERS = {
     '登記時間', '原老師', '日期', '時段', '課程',
     '狀態', '代課老師', '備註', '入系統', '代課編號',
     'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
-    '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態'
+    '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
+    '實際課程類別'
   ],
   INVITATIONS: ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
   AUDIT: ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'],
   SETTINGS: ['設定名稱', '設定值', '更新時間', '備註'],
-  ACCOUNTS: ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至']
+  ACCOUNTS: [
+    '指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至',
+    '可教授類別'
+  ]
 };
 
 var CONFIG = {
@@ -147,7 +151,13 @@ function setupAccount_(adminToken, teacherName, pin, options) {
     }
   }
 
-  var accountValues = [teacher, salt, pinHash, active ? '是' : '否', role, 0, ''];
+  var capabilityValue = settings.capabilities == null
+    ? ''
+    : normalizeTeacherCapabilities_(settings.capabilities).join('、');
+  if (existingRow && settings.capabilities == null) {
+    capabilityValue = cleanText_(values[existingRow - 1][headers['可教授類別'] - 1]);
+  }
+  var accountValues = [teacher, salt, pinHash, active ? '是' : '否', role, 0, '', capabilityValue];
   if (existingRow) {
     sheet.getRange(existingRow, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([accountValues]);
   } else {
@@ -174,7 +184,7 @@ function initializeFirstAdmin_(teacherName, pin) {
     var salt = createRandomToken_();
     var pinHash = hashPin_(pinText, salt);
     sheet.getRange(2, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([[
-      teacher, salt, pinHash, '是', '管理員', 0, ''
+      teacher, salt, pinHash, '是', '管理員', 0, '', ''
     ]]);
     return { teacherName: teacher, role: '管理員', active: true };
   });
@@ -211,7 +221,8 @@ function findAccount_(teacherName) {
         active: row[headers['是否在職'] - 1],
         role: row[headers['角色'] - 1],
         failedAttempts: parseFailedAttempts_(row[headers['登入失敗次數'] - 1]),
-        lockedUntil: row[headers['鎖定至'] - 1]
+        lockedUntil: row[headers['鎖定至'] - 1],
+        capabilities: row[headers['可教授類別'] - 1]
       };
     }
   }
@@ -455,6 +466,7 @@ function doGet(e) {
     var action = cleanText_(e.parameter.action);
     var authenticatedActions = {
       getAvailableSubstitutes: true,
+      getClaimOptions: true,
       getMySubs: true,
       getMyCourses: true,
       getMyLeaves: true
@@ -464,6 +476,7 @@ function doGet(e) {
       : null;
     if ({
       getAvailableSubstitutes: true,
+      getClaimOptions: true,
       getMySubs: true,
       getMyCourses: true,
       getMyLeaves: true
@@ -473,6 +486,7 @@ function doGet(e) {
     var handlers = {
       getTeachers: function() { return getTeachers_(); },
       getAvailableSubstitutes: function() { return getAvailableSubstitutes_(session); },
+      getClaimOptions: function() { return getClaimOptions_(session); },
       getMySubs: function() { return getMySubs_(session.teacherName); },
       getMyCourses: function() { return getMyCourses_(session); },
       getMyLeaves: function() { return getMyLeaves_(session); }
@@ -1041,6 +1055,7 @@ function pauseClaims_(session, paused) {
 function getAvailableSubstitutes_(session) {
   var teacher = getSessionTeacherName_(session);
   assertTeacherExists_(teacher);
+  var capabilities = getTeacherCapabilities_(teacher);
 
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1076,13 +1091,75 @@ function getAvailableSubstitutes_(session) {
         '日期': formatMyDate(row[2]),
         '時段': formatMyTime(row[3]),
         '課程': cleanText_(row[4]),
-        '課程大類': getCourseCategory_(row[4])
+        '課程大類': getCourseCategory_(row[4]),
+        '可沿用原課程': capabilities.indexOf(getCourseCategory_(row[4])) !== -1
       };
     }).sort(function(a, b) {
       return [a['日期'], a['時段'], a['原老師'], a['代課編號']].join('|')
         .localeCompare([b['日期'], b['時段'], b['原老師'], b['代課編號']].join('|'));
     });
   });
+}
+
+function getClaimOptions_(session) {
+  var teacher = getSessionTeacherName_(session);
+  assertTeacherExists_(teacher);
+  return {
+    capabilities: getTeacherCapabilities_(teacher),
+    classes: getObClassOptions_()
+  };
+}
+
+function getObClassOptions_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
+  var values = sheet.getDataRange().getValues();
+  var seen = {};
+  var classes = [];
+
+  values.slice(1).forEach(function(row) {
+    var classId = cleanText_(row[5]);
+    var courseName = cleanText_(row[2]);
+    if (!classId || !courseName || seen[classId]) return;
+    seen[classId] = true;
+    classes.push({
+      classId: classId,
+      courseName: courseName,
+      category: getCourseCategory_(courseName)
+    });
+  });
+
+  return classes.sort(function(a, b) {
+    return [a.category, a.courseName, a.classId].join('|')
+      .localeCompare([b.category, b.courseName, b.classId].join('|'));
+  });
+}
+
+function normalizeTeacherCapabilities_(value) {
+  var source = Array.isArray(value) ? value : String(value == null ? '' : value).split(/[,，、;；\/|\n]+/);
+  var seen = {};
+  return source.map(function(item) {
+    var text = cleanText_(item);
+    if (!text) return '';
+    var category = getCourseCategory_(text);
+    return category === '其他' ? text : category;
+  }).filter(function(category) {
+    if (!category || seen[category]) return false;
+    seen[category] = true;
+    return true;
+  });
+}
+
+function getTeacherCapabilities_(teacherName) {
+  var account = findAccount_(teacherName);
+  if (!account) return [];
+  return normalizeTeacherCapabilities_(account.capabilities);
+}
+
+function teacherCanTeachCategory_(teacher, category) {
+  var normalizedCategory = normalizeTeacherCapabilities_([category])[0] || '';
+  return !!normalizedCategory && getTeacherCapabilities_(teacher).indexOf(normalizedCategory) !== -1;
 }
 
 function areClaimsPaused_() {
@@ -1147,7 +1224,12 @@ function getMySubs_(teacherName) {
       '課程': cleanText_(r[4]),
       '課程大類': getCourseCategory_(r[4]),
       '原老師': cleanText_(r[1]),
-      '備註': cleanText_(r[7])
+      '備註': cleanText_(r[7]),
+      '實際課程 ID': cleanText_(r[11]),
+      '實際課程名稱': cleanText_(r[12]),
+      '預計難度': cleanText_(r[13]),
+      '處理類型': cleanText_(r[14]),
+      '實際課程類別': cleanText_(r[19])
     };
   });
 }
@@ -1267,7 +1349,6 @@ function claimSubstitute_(session, items) {
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     ensureLeaveSheetHeaders_(leaveSheet);
     var values = leaveSheet.getDataRange().getValues();
-    var teacherCourses = getTeacherCourseNames_(teacher);
     var rowById = {};
     for (var rowIndex = 1; rowIndex < values.length; rowIndex++) {
       var substituteId = cleanText_(values[rowIndex][9]);
@@ -1290,29 +1371,156 @@ function claimSubstitute_(session, items) {
         throw new Error('不能領取自己原本的課程。');
       }
 
-      var noteRequired = requiresChangeNote_(teacherCourses, cleanText_(row[4]));
-      var changeNote = validateChangeNote_(noteRequired, item.changeNote);
+      var change = validateClaimChange_({
+        teacher: teacher,
+        targetCourseName: cleanText_(row[4]),
+        targetCalendarId: cleanText_(row[10]),
+        handlingType: item.handlingType,
+        actualClassId: item.actualClassId,
+        actualCourseName: item.actualCourseName,
+        category: item.category,
+        difficulty: item.difficulty,
+        note: item.note == null ? item.changeNote : item.note
+      });
+      var nextRow = row.slice();
+      while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
+      nextRow[5] = '已領取';
+      nextRow[6] = teacher;
+      nextRow[7] = change.summary;
+      nextRow[11] = change.actualClassId;
+      nextRow[12] = change.actualCourseName;
+      nextRow[13] = change.difficulty;
+      nextRow[14] = change.handlingType;
+      nextRow[19] = change.category;
       return {
         sheetRow: dataIndex + 1,
-        values: ['已領取', teacher, changeNote]
+        rowValues: nextRow,
+        summary: change.summary
       };
     });
 
     updates.forEach(function(update) {
-      leaveSheet.getRange(update.sheetRow, 6, 1, 3).setValues([update.values]);
+      leaveSheet.getRange(update.sheetRow, 6, 1, 15).setValues([update.rowValues.slice(5, 20)]);
       appendAudit_({
         actor: teacher,
         action: '領取代課',
         targetId: cleanText_(values[update.sheetRow - 1][9]),
         before: '確認中',
         after: '已領取',
-        reason: update.values[2]
+        reason: update.summary
       });
     });
     return { count: updates.length };
   } finally {
     lock.releaseLock();
   }
+}
+
+function validateClaimChange_(claim) {
+  var item = claim || {};
+  var teacher = cleanText_(item.teacher);
+  var targetCourseName = cleanText_(item.targetCourseName);
+  var targetCategory = getCourseCategory_(targetCourseName);
+  var handlingKey = cleanText_(item.handlingType) || 'original';
+  var difficulty = cleanText_(item.difficulty);
+  var note = cleanText_(item.note);
+  var actualClassId = '';
+  var actualCourseName = '';
+  var actualCategory = '';
+  var handlingType = '';
+
+  if (!teacher || !targetCourseName) throw new Error('代課課程資料不完整，請重新整理。');
+
+  if (handlingKey === 'original') {
+    if (!teacherCanTeachCategory_(teacher, targetCategory)) {
+      throw new Error('這堂課不在您的可教授類別中，不能沿用原課程。');
+    }
+    var originalCourse = findObCourseByCalendarId_(item.targetCalendarId);
+    actualClassId = originalCourse ? originalCourse.classId : '';
+    actualCourseName = targetCourseName;
+    actualCategory = targetCategory;
+    handlingType = '沿用原課程';
+  } else if (handlingKey === 'existing') {
+    actualClassId = cleanText_(item.actualClassId);
+    if (!actualClassId) throw new Error('請選擇要改用的 OB 現有課程。');
+    var existingCourse = findObCourseByClassId_(actualClassId);
+    if (!existingCourse) throw new Error('找不到選擇的 OB 現有課程，請重新整理。');
+    actualCourseName = existingCourse.courseName;
+    actualCategory = existingCourse.category;
+    handlingType = '改用既有 OB 課程';
+  } else if (handlingKey === 'new') {
+    actualCourseName = cleanText_(item.actualCourseName);
+    actualCategory = normalizeTeacherCapabilities_([item.category])[0] || '';
+    if (!actualCourseName) throw new Error('請填寫需要新增的課程名稱。');
+    if (!actualCategory) throw new Error('請選擇需要新增課程的類別。');
+    if (!difficulty) throw new Error('需要新增課程時，請填寫難度。');
+    handlingType = '需要新增課程';
+  } else {
+    throw new Error('課程處理方式無效，請重新選擇。');
+  }
+
+  if (!teacherCanTeachCategory_(teacher, actualCategory)) {
+    throw new Error('所選課程類別不在可教授類別中。');
+  }
+
+  var isCrossApparatus = actualCategory !== targetCategory ||
+    !teacherCanTeachCategory_(teacher, targetCategory);
+  if (isCrossApparatus && !note) {
+    throw new Error('跨道具代課時，請填寫改課原因或補充備註。');
+  }
+
+  var normalized = {
+    actualClassId: actualClassId,
+    actualCourseName: actualCourseName,
+    category: actualCategory,
+    difficulty: difficulty,
+    handlingType: handlingType,
+    note: note
+  };
+  normalized.summary = buildClaimSummary_(normalized);
+  return normalized;
+}
+
+function findObCourseByCalendarId_(calendarId) {
+  var wantedId = cleanText_(calendarId);
+  if (!wantedId) return null;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][4]) === wantedId) {
+      return {
+        calendarId: wantedId,
+        classId: cleanText_(values[index][5]),
+        courseName: cleanText_(values[index][2]),
+        category: getCourseCategory_(values[index][2])
+      };
+    }
+  }
+  return null;
+}
+
+function findObCourseByClassId_(classId) {
+  var wantedId = cleanText_(classId);
+  if (!wantedId) return null;
+  var classes = getObClassOptions_();
+  for (var index = 0; index < classes.length; index++) {
+    if (classes[index].classId === wantedId) return classes[index];
+  }
+  return null;
+}
+
+function buildClaimSummary_(change) {
+  var parts = [];
+  if (change.handlingType === '沿用原課程') {
+    parts.push('沿用原課程');
+  } else {
+    parts.push(change.handlingType + '：' + change.actualCourseName);
+  }
+  if (change.difficulty) parts.push('難度：' + change.difficulty);
+  if (change.note) parts.push('備註：' + change.note);
+  return parts.join('；');
 }
 
 function requiresChangeNote_(teacherCourseNames, targetCourseName) {

@@ -5,7 +5,8 @@ var SHEETS = {
   INVITATIONS: '代課邀請',
   AUDIT: '操作紀錄',
   SETTINGS: '系統設定',
-  ACCOUNTS: '登入帳號'
+  ACCOUNTS: '登入帳號',
+  PASSWORD_IMPORT: '密碼表'
 };
 
 var SHEET_HEADERS = {
@@ -41,6 +42,8 @@ var CONFIG = {
   AUTH_MAX_FAILED_ATTEMPTS: 5,
   AUTH_LOCK_DURATION_MS: 15 * 60 * 1000,
   AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_',
+  PASSWORD_IMPORT_COMPLETED_PROPERTY: 'TEACHER_PASSWORD_IMPORT_COMPLETED_AT',
+  PASSWORD_IMPORT_EXPECTED_ROWS: 37,
   LEAVE_BATCH_MAX: 50,
   INVITATION_OPEN_STATUS: '開放中',
   INVITATION_CLOSED_STATUS: '已關閉',
@@ -137,8 +140,6 @@ function setupAccount_(adminToken, teacherName, pin, options) {
   var settings = options || {};
   var active = settings.active !== false;
   var role = normalizeAccountRole_(settings.role);
-  var salt = createRandomToken_();
-  var pinHash = hashPin_(pinText, salt);
   var sheet = getAccountsSheet_();
   var headers = getHeaderMap_(sheet);
   var values = sheet.getDataRange().getValues();
@@ -157,7 +158,11 @@ function setupAccount_(adminToken, teacherName, pin, options) {
   if (existingRow && settings.capabilities == null) {
     capabilityValue = cleanText_(values[existingRow - 1][headers['可教授類別'] - 1]);
   }
-  var accountValues = [teacher, salt, pinHash, active ? '是' : '否', role, 0, '', capabilityValue];
+  var accountValues = buildAccountValues_(teacher, pinText, {
+    active: active,
+    role: role,
+    capabilities: capabilityValue
+  });
   if (existingRow) {
     sheet.getRange(existingRow, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([accountValues]);
   } else {
@@ -165,6 +170,138 @@ function setupAccount_(adminToken, teacherName, pin, options) {
   }
 
   return { teacherName: teacher, role: role, active: active };
+}
+
+function buildAccountValues_(teacherName, pin, options) {
+  var teacher = cleanText_(teacherName);
+  var pinText = cleanText_(pin);
+  if (!teacher || !pinText) throw new Error('請輸入老師姓名與身分證末碼。');
+
+  var settings = options || {};
+  var active = settings.active !== false;
+  var role = normalizeAccountRole_(settings.role);
+  var capabilities = settings.capabilities == null
+    ? ''
+    : normalizeTeacherCapabilities_(settings.capabilities).join('、');
+  var salt = createRandomToken_();
+  var pinHash = hashPin_(pinText, salt);
+  return [teacher, salt, pinHash, active ? '是' : '否', role, 0, '', capabilities];
+}
+
+function importTeacherAccountsFromPasswordSheet() {
+  return withScriptLock_(function() {
+    var properties = getScriptProperties_();
+    if (!properties) throw new Error('無法讀取指令碼屬性，請稍後再試。');
+    if (properties.getProperty(CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY)) {
+      throw new Error('老師密碼批次匯入已經完成過；如需重新匯入，請由管理員先人工確認。');
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sourceSheet = requireSheet_(ss, SHEETS.PASSWORD_IMPORT);
+    var sourceValues = sourceSheet.getDataRange().getValues();
+    var sourceHeaders = sourceValues[0] || [];
+    var teacherColumn = 0;
+    var passwordColumn = 0;
+    sourceHeaders.forEach(function(header, index) {
+      var name = cleanText_(header);
+      if (name === '老師' && !teacherColumn) teacherColumn = index + 1;
+      if (name === '密碼' && !passwordColumn) passwordColumn = index + 1;
+    });
+    if (!teacherColumn || !passwordColumn) {
+      throw new Error('「密碼表」必須包含「老師」與「密碼」標題。');
+    }
+
+    var records = [];
+    var seenNames = {};
+    var lastSourceRow = 1;
+    for (var index = 1; index < sourceValues.length; index++) {
+      var rowNumber = index + 1;
+      var teacher = cleanText_(sourceValues[index][teacherColumn - 1]);
+      var pin = cleanText_(sourceValues[index][passwordColumn - 1]);
+      if (!teacher && !pin) continue;
+      lastSourceRow = rowNumber;
+      if (!teacher) throw new Error('密碼表第 ' + rowNumber + ' 列缺少老師姓名。');
+      if (!/^\d{4}$/.test(pin)) {
+        throw new Error('密碼表第 ' + rowNumber + ' 列的密碼必須是 4 位數字。');
+      }
+      var teacherKey = teacher.toLowerCase();
+      if (seenNames[teacherKey]) {
+        throw new Error(
+          '老師姓名重複：密碼表第 ' + rowNumber + ' 列與第 ' + seenNames[teacherKey] + ' 列皆為「' + teacher + '」。'
+        );
+      }
+      seenNames[teacherKey] = rowNumber;
+      records.push({ teacherName: teacher, pin: pin });
+    }
+
+    if (records.length !== CONFIG.PASSWORD_IMPORT_EXPECTED_ROWS) {
+      throw new Error(
+        '密碼表應有 ' + CONFIG.PASSWORD_IMPORT_EXPECTED_ROWS + ' 位老師，目前讀到 ' + records.length + ' 位。'
+      );
+    }
+
+    var accountSheet = requireSheet_(ss, SHEETS.ACCOUNTS);
+    var actualHeaders = accountSheet
+      .getRange(1, 1, 1, SHEET_HEADERS.ACCOUNTS.length)
+      .getValues()[0];
+    SHEET_HEADERS.ACCOUNTS.forEach(function(header, headerIndex) {
+      if (cleanText_(actualHeaders[headerIndex]) !== header) {
+        throw new Error('登入帳號第 ' + (headerIndex + 1) + ' 欄標題應為「' + header + '」。');
+      }
+    });
+
+    var accountValues = accountSheet.getDataRange().getValues();
+    var accountRows = accountValues.slice(1).map(function(row) {
+      return SHEET_HEADERS.ACCOUNTS.map(function(_header, columnIndex) {
+        return row[columnIndex] == null ? '' : row[columnIndex];
+      });
+    });
+    var accountIndexes = {};
+    accountRows.forEach(function(row, rowIndex) {
+      var existingName = cleanText_(row[0]);
+      if (!existingName) return;
+      var existingKey = existingName.toLowerCase();
+      if (accountIndexes[existingKey] != null) {
+        throw new Error('登入帳號內有重複老師姓名：「' + existingName + '」。');
+      }
+      accountIndexes[existingKey] = rowIndex;
+    });
+
+    var created = 0;
+    var updated = 0;
+    records.forEach(function(record) {
+      var values = buildAccountValues_(record.teacherName, record.pin, {
+        active: true,
+        role: '老師',
+        capabilities: []
+      });
+      var key = record.teacherName.toLowerCase();
+      if (accountIndexes[key] == null) {
+        accountIndexes[key] = accountRows.length;
+        accountRows.push(values);
+        created++;
+      } else {
+        accountRows[accountIndexes[key]] = values;
+        updated++;
+      }
+    });
+
+    accountSheet
+      .getRange(2, 1, accountRows.length, SHEET_HEADERS.ACCOUNTS.length)
+      .setValues(accountRows);
+    sourceSheet.getRange(2, passwordColumn, lastSourceRow - 1, 1).clearContent();
+    properties.setProperty(
+      CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY,
+      Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss')
+    );
+
+    return {
+      sourceSheet: SHEETS.PASSWORD_IMPORT,
+      imported: records.length,
+      created: created,
+      updated: updated
+    };
+  });
 }
 
 function initializeFirstAdmin_(teacherName, pin) {

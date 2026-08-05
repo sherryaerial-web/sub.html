@@ -6,26 +6,43 @@
   <title>Sherry Aerial | 教室管理</title>
   <style>
     :root {
-      --ink: #1f292b;
-      --muted: #647174;
-      --line: #d9e0e1;
+      --ink: #1d2d2e;
+      --muted: #637476;
+      --subtle: #829092;
+      --line: #d8e3e3;
+      --line-strong: #bccdcd;
       --surface: #ffffff;
-      --page: #edf2f2;
-      --soft: #f5f8f8;
-      --accent: #24656a;
-      --accent-hover: #194e52;
-      --accent-soft: #e4f1f1;
-      --warm: #9a5a13;
-      --warm-soft: #fff4e5;
-      --danger: #a33a32;
-      --danger-soft: #fceceb;
-      --success: #2d6845;
-      --success-soft: #e9f5ed;
+      --page: #eef3f3;
+      --soft: #f6f8f8;
+      --sea-800: #164c50;
+      --sea-700: #1f666b;
+      --sea-600: #2d7a7f;
+      --aqua-100: #e1f1f0;
+      --aqua-50: #f0f8f7;
+      --coral-600: #b34a41;
+      --coral-100: #fceceb;
+      --amber-700: #8a5a17;
+      --amber-100: #fff3dd;
+      --green-700: #2e6847;
+      --green-100: #e7f4eb;
+      --accent: var(--sea-700);
+      --accent-hover: var(--sea-800);
+      --accent-soft: var(--aqua-100);
+      --warm: var(--amber-700);
+      --warm-soft: var(--amber-100);
+      --danger: var(--coral-600);
+      --danger-soft: var(--coral-100);
+      --success: var(--green-700);
+      --success-soft: var(--green-100);
+      --shadow-sm: 0 1px 3px rgba(22, 55, 57, 0.08);
+      --shadow-md: 0 12px 32px rgba(22, 55, 57, 0.11);
       --radius: 8px;
     }
 
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
+
+    html { min-width: 320px; background: var(--page); }
 
     body {
       margin: 0;
@@ -39,129 +56,247 @@
 
     button, input, select, textarea { font: inherit; }
     button { touch-action: manipulation; }
+    button, label, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid rgba(45, 122, 127, 0.2);
+      outline-offset: 1px;
+    }
 
-    .auth-shell,
-    .app-shell {
-      width: min(100%, 820px);
-      min-height: 100vh;
-      margin: 0 auto;
-      background: var(--surface);
-      border-left: 1px solid var(--line);
-      border-right: 1px solid var(--line);
+    svg.lucide {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      stroke-width: 1.8;
     }
 
     .auth-shell {
       display: grid;
-      align-items: center;
-      padding: 32px 20px;
+      min-height: 100vh;
+      place-items: center;
+      padding: 32px 18px;
+      background: var(--page);
     }
 
     .login-panel {
       width: min(100%, 420px);
-      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-md);
     }
 
     .login-brand {
-      margin-bottom: 28px;
-      padding-bottom: 20px;
-      border-bottom: 3px solid var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 24px 26px 22px;
+      border-bottom: 1px solid var(--line);
+      background: var(--aqua-50);
     }
+
+    .brand-mark {
+      display: grid;
+      width: 44px;
+      height: 44px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid #acd1d0;
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--sea-700);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .brand-mark svg.lucide { width: 23px; height: 23px; }
 
     .login-brand h1 {
       margin: 0;
-      font-size: 28px;
-      line-height: 1.25;
+      font-size: 22px;
+      line-height: 1.3;
     }
 
     .login-brand p {
-      margin: 7px 0 0;
+      margin: 3px 0 0;
       color: var(--muted);
-      font-size: 15px;
+      font-size: 13px;
+    }
+
+    .login-form-body { padding: 24px 26px 26px; }
+    .login-title { margin: 0 0 4px; font-size: 17px; }
+    .login-copy { margin: 0 0 22px; color: var(--muted); font-size: 13px; }
+    .login-footnote { margin: 16px 0 0; color: var(--subtle); font-size: 12px; text-align: center; }
+
+    .field { margin-bottom: 17px; }
+    .field label,
+    .step-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .input-wrap { position: relative; }
+    .input-wrap > svg.lucide {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      z-index: 1;
+      width: 17px;
+      height: 17px;
+      color: var(--subtle);
+      pointer-events: none;
+      transform: translateY(-50%);
+    }
+
+    .text-input,
+    .change-note-input,
+    .claim-control,
+    .admin-select {
+      width: 100%;
+      min-height: 44px;
+      padding: 9px 11px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    .input-wrap .text-input { padding-left: 40px; }
+    .text-input:hover, .change-note-input:hover, .claim-control:hover, .admin-select:hover { border-color: #99b7b8; }
+    .text-input:focus, .change-note-input:focus, .claim-control:focus, .admin-select:focus {
+      border-color: var(--sea-600);
+      outline: 3px solid rgba(45, 122, 127, 0.15);
+    }
+
+    .app-shell {
+      width: min(100%, 1180px);
+      max-width: 1180px;
+      min-height: 100vh;
+      margin: 0 auto;
+      border-right: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
     }
 
     .topbar {
       position: sticky;
       top: 0;
-      z-index: 10;
+      z-index: 20;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      min-height: 68px;
-      padding: 10px 20px;
-      background: rgba(255, 255, 255, 0.97);
+      min-height: 64px;
+      padding: 9px 18px;
       border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.97);
     }
 
-    .brand { min-width: 0; }
+    .brand { display: flex; min-width: 0; align-items: center; gap: 10px; }
+    .topbar .brand-mark { width: 34px; height: 34px; box-shadow: none; }
+    .topbar .brand-mark svg.lucide { width: 19px; height: 19px; }
 
-    .brand-name {
-      margin: 0;
-      font-size: 18px;
-      font-weight: 750;
-    }
+    .brand-name { margin: 0; font-size: 15px; font-weight: 750; line-height: 1.3; }
+    .brand-subtitle { margin-top: 1px; color: var(--muted); font-size: 11px; }
 
-    .brand-subtitle {
-      margin-top: 2px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .topbar-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
+    .topbar-actions { display: flex; min-width: 0; align-items: center; gap: 8px; }
     .current-user {
-      max-width: 160px;
+      max-width: 180px;
       overflow: hidden;
+      padding: 6px 9px;
+      border-radius: 4px;
+      background: var(--soft);
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
+      font-weight: 650;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .icon-button,
-    .compact-button,
-    .secondary-button {
-      min-height: 40px;
-      border: 1px solid var(--line);
+    .app-layout {
+      display: grid;
+      grid-template-columns: 196px minmax(0, 1fr);
+      min-height: calc(100vh - 64px);
+    }
+
+    .sidebar {
+      position: relative;
+      border-right: 1px solid var(--line);
+      background: #fbfdfd;
+    }
+
+    .primary-nav {
+      position: sticky;
+      top: 80px;
+      display: grid;
+      gap: 4px;
+      padding: 16px 12px;
+    }
+
+    .nav-item {
+      display: flex;
+      width: 100%;
+      min-height: 42px;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border: 1px solid transparent;
       border-radius: var(--radius);
-      background: var(--surface);
-      color: var(--ink);
-      cursor: pointer;
-    }
-
-    .icon-button { padding: 8px 12px; }
-    .compact-button { padding: 7px 11px; font-size: 13px; }
-    .secondary-button { width: 100%; padding: 10px 14px; }
-
-    .icon-button:hover,
-    .compact-button:hover,
-    .secondary-button:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-
-    #back-button { display: none; }
-    #back-button.visible { display: inline-flex; align-items: center; justify-content: center; }
-
-    main { padding: 26px 22px 56px; }
-    .view { display: none; }
-    .view.active { display: block; }
-
-    .section-heading {
-      margin: 0 0 6px;
-      font-size: 23px;
-      line-height: 1.35;
-    }
-
-    .section-copy {
-      margin: 0 0 22px;
+      background: transparent;
       color: var(--muted);
-      font-size: 14px;
-      line-height: 1.55;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 680;
+      text-align: left;
     }
+
+    .nav-item:hover { border-color: var(--line); background: var(--surface); color: var(--sea-700); }
+    .nav-item.active {
+      border-color: #b9d6d5;
+      background: var(--aqua-100);
+      color: var(--sea-800);
+    }
+
+    .workspace {
+      min-width: 0;
+      padding: 28px 30px 64px;
+      background: var(--page);
+    }
+
+    .view { display: none; width: 100%; max-width: 900px; margin: 0 auto; }
+    .view.active { display: block; }
+    #view-admin { max-width: none; }
+
+    .view-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 20px;
+    }
+
+    .section-heading { margin: 0 0 4px; font-size: 22px; line-height: 1.35; }
+    .section-copy { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .eyebrow { display: block; margin-bottom: 5px; color: var(--sea-700); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+
+    .home-welcome {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+      padding: 14px 16px;
+      border: 1px solid #c7dedc;
+      border-radius: var(--radius);
+      background: var(--aqua-50);
+      color: var(--sea-800);
+    }
+
+    .home-welcome > svg.lucide { width: 20px; height: 20px; }
+    .home-welcome .section-copy { color: var(--sea-800); }
 
     .home-actions {
       display: grid;
@@ -170,64 +305,69 @@
     }
 
     .action-button {
-      min-height: 106px;
-      padding: 17px;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) 18px;
+      min-height: 92px;
+      align-items: center;
+      gap: 12px;
+      padding: 15px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
       color: var(--ink);
-      text-align: left;
       cursor: pointer;
+      text-align: left;
+      box-shadow: var(--shadow-sm);
     }
 
-    .action-button:hover,
-    .action-button:focus-visible {
-      border-color: var(--accent);
-      background: var(--accent-soft);
-      outline: none;
+    .action-button:hover, .action-button:focus-visible {
+      border-color: #9fc4c3;
+      background: var(--aqua-50);
     }
 
-    .action-title {
-      display: block;
-      margin-bottom: 7px;
-      font-size: 17px;
-      font-weight: 750;
+    .action-icon {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border-radius: var(--radius);
+      background: var(--aqua-100);
+      color: var(--sea-700);
     }
 
-    .action-copy {
-      display: block;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }
+    .action-icon svg.lucide { width: 19px; height: 19px; }
+    .action-arrow { color: var(--subtle); }
+    .action-title { display: block; margin-bottom: 3px; font-size: 15px; font-weight: 750; }
+    .action-copy { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
-    .field { margin-bottom: 18px; }
-
-    .field label,
-    .step-title {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--ink);
-      font-size: 14px;
+    .icon-button,
+    .compact-button,
+    .secondary-button,
+    .danger-button,
+    .primary-button {
+      display: inline-flex;
+      min-height: 40px;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border-radius: var(--radius);
+      cursor: pointer;
       font-weight: 700;
     }
 
-    .text-input,
-    .change-note-input {
-      width: 100%;
-      min-height: 46px;
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
+    .icon-button, .compact-button, .secondary-button {
+      border: 1px solid var(--line-strong);
       background: var(--surface);
       color: var(--ink);
     }
 
-    .text-input:focus,
-    .change-note-input:focus {
-      border-color: var(--accent);
-      outline: 2px solid var(--accent-soft);
-    }
+    .icon-button { width: 40px; padding: 8px; }
+    .compact-button { padding: 7px 11px; font-size: 12px; }
+    .secondary-button { width: 100%; padding: 9px 13px; }
+    .icon-button:hover, .compact-button:hover, .secondary-button:hover { border-color: var(--sea-600); color: var(--sea-700); }
+
+    #back-button { display: none; }
+    #back-button.visible { display: none; }
 
     .toolbar {
       display: flex;
@@ -235,438 +375,346 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      margin: 24px 0 10px;
+      margin: 22px 0 10px;
     }
 
-    .toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .toolbar-actions, .record-actions, .admin-header-actions, .admin-item-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .admin-header-actions { justify-content: flex-end; margin: 0; }
+    .record-actions, .admin-item-actions { margin-top: 12px; }
 
     .date-list {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
     }
 
     .date-option {
       display: flex;
+      min-height: 46px;
       align-items: center;
-      min-height: 44px;
       gap: 9px;
       padding: 9px 10px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
       cursor: pointer;
+      font-size: 13px;
+      box-shadow: var(--shadow-sm);
     }
 
+    .date-option:hover { border-color: #a9c6c6; }
     .date-option:has(input:checked) {
-      border-color: var(--accent);
-      background: var(--accent-soft);
-      color: var(--accent-hover);
+      border-color: var(--sea-600);
+      background: var(--aqua-100);
+      color: var(--sea-800);
       font-weight: 700;
     }
 
     input[type="checkbox"] {
-      width: 20px;
-      height: 20px;
-      margin: 0;
-      accent-color: var(--accent);
+      width: 19px;
+      height: 19px;
       flex: 0 0 auto;
+      margin: 0;
+      accent-color: var(--sea-700);
     }
 
-    .list {
+    .list { display: grid; min-height: 76px; gap: 9px; }
+    .list-item {
       display: grid;
-      gap: 9px;
-      min-height: 76px;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px 15px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
     }
+
+    .list-item.single-column { grid-template-columns: minmax(0, 1fr); }
+    .list-item.is-disabled { background: var(--soft); opacity: 0.65; }
+    .item-date { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+    .item-course { margin-top: 3px; overflow-wrap: anywhere; font-size: 15px; font-weight: 750; line-height: 1.45; }
+    .item-meta { margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; line-height: 1.55; }
+
+    .category-tag, .status-tag {
+      display: inline-flex;
+      min-height: 23px;
+      align-items: center;
+      gap: 4px;
+      margin-top: 7px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .category-tag { background: var(--aqua-100); color: var(--sea-700); }
+    .status-tag { background: var(--soft); color: var(--muted); }
+    .status-tag.success { background: var(--success-soft); color: var(--success); }
+    .status-tag.warning { background: var(--warm-soft); color: var(--warm); }
 
     .claim-date-group + .claim-date-group { margin-top: 26px; }
-
     .claim-date-heading {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       margin: 0 0 10px;
-      padding-bottom: 8px;
-      border-bottom: 2px solid var(--ink);
+      padding-bottom: 9px;
+      border-bottom: 2px solid var(--line-strong);
     }
 
-    .claim-date-heading h3 {
-      margin: 0;
-      font-size: 17px;
-      line-height: 1.4;
-    }
-
-    .claim-date-count {
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-
-    .list-item {
-      display: grid;
-      grid-template-columns: 24px minmax(0, 1fr);
-      gap: 12px;
-      padding: 15px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-    }
-
-    .list-item.single-column { grid-template-columns: minmax(0, 1fr); }
-    .list-item.is-disabled { opacity: 0.62; background: var(--soft); }
-
-    .item-date { color: var(--muted); font-size: 13px; }
-
-    .item-course {
-      margin-top: 3px;
-      font-size: 16px;
-      font-weight: 750;
-      line-height: 1.45;
-      overflow-wrap: anywhere;
-    }
-
-    .item-meta {
-      margin-top: 5px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
-      overflow-wrap: anywhere;
-    }
-
-    .category-tag,
-    .status-tag {
-      display: inline-block;
-      margin-top: 7px;
-      padding: 3px 7px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .category-tag { background: var(--accent-soft); color: var(--accent); }
-    .status-tag { background: var(--soft); color: var(--muted); }
-    .status-tag.success { background: var(--success-soft); color: var(--success); }
-    .status-tag.warning { background: var(--warm-soft); color: var(--warm); }
-
-    .claim-card {
-      grid-template-columns: 24px minmax(0, 1fr);
-      padding: 0;
-      overflow: hidden;
-    }
-
-    .claim-card > .claim-checkbox { margin: 18px 0 0 16px; }
-
-    .claim-summary {
-      min-width: 0;
-      padding: 15px 16px 14px 0;
-    }
-
+    .claim-date-heading h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 15px; line-height: 1.4; }
+    .claim-date-count { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .claim-card { grid-template-columns: 24px minmax(0, 1fr); padding: 0; overflow: hidden; }
+    .claim-card > .claim-checkbox { margin: 17px 0 0 15px; }
+    .claim-summary { min-width: 0; padding: 14px 15px 13px 0; }
     .claim-requirement {
       display: inline-flex;
+      min-height: 25px;
       align-items: center;
-      min-height: 26px;
-      margin-top: 9px;
-      padding: 3px 8px;
+      gap: 5px;
+      margin-top: 8px;
+      padding: 3px 7px;
       border-radius: 4px;
-      background: var(--warm-soft);
-      color: var(--warm);
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .claim-editor {
-      grid-column: 1 / -1;
-      padding: 16px;
-      border-top: 1px solid var(--line);
-      background: var(--soft);
-    }
-
-    .claim-editor[hidden] { display: none; }
-
-    .claim-editor-title {
-      margin: 0 0 12px;
-      font-size: 14px;
+      background: var(--amber-100);
+      color: var(--amber-700);
+      font-size: 11px;
       font-weight: 750;
     }
 
-    .handling-options {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 7px;
-      margin-bottom: 14px;
-    }
-
+    .claim-editor { grid-column: 1 / -1; padding: 15px; border-top: 1px solid var(--line); background: var(--soft); }
+    .claim-editor[hidden] { display: none; }
+    .claim-editor-title { display: flex; align-items: center; gap: 7px; margin: 0 0 12px; font-size: 13px; font-weight: 750; }
+    .handling-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-bottom: 14px; }
     .handling-option {
       display: grid;
+      min-height: 45px;
       place-items: center;
-      min-height: 46px;
       padding: 7px 8px;
-      border: 1px solid var(--line);
+      border: 1px solid var(--line-strong);
       border-radius: var(--radius);
       background: var(--surface);
       cursor: pointer;
-      text-align: center;
-      font-size: 13px;
-      font-weight: 700;
-      line-height: 1.35;
-    }
-
-    .handling-option:has(input:checked) {
-      border-color: var(--accent);
-      background: var(--accent-soft);
-      color: var(--accent-hover);
-    }
-
-    .handling-option:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
-    .handling-option input { position: absolute; opacity: 0; pointer-events: none; }
-
-    .claim-fields {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-    }
-
-    .claim-field { min-width: 0; }
-    .claim-field.full { grid-column: 1 / -1; }
-
-    .claim-field label {
-      display: block;
-      margin-bottom: 6px;
-      color: var(--muted);
       font-size: 12px;
       font-weight: 700;
+      line-height: 1.35;
+      text-align: center;
     }
 
-    .claim-control {
-      width: 100%;
-      min-height: 44px;
-      padding: 9px 10px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-      color: var(--ink);
-    }
-
-    textarea.claim-control {
-      min-height: 82px;
-      resize: vertical;
-      line-height: 1.5;
-    }
-
-    .claim-control:focus {
-      border-color: var(--accent);
-      outline: 2px solid var(--accent-soft);
-    }
-
+    .handling-option:has(input:checked) { border-color: var(--sea-600); background: var(--aqua-100); color: var(--sea-800); }
+    .handling-option:has(input:disabled) { cursor: not-allowed; opacity: 0.45; }
+    .handling-option input { position: absolute; opacity: 0; pointer-events: none; }
+    .claim-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .claim-field { min-width: 0; }
+    .claim-field.full { grid-column: 1 / -1; }
+    .claim-field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 750; }
+    textarea.claim-control { min-height: 82px; resize: vertical; line-height: 1.5; }
     .claim-required { color: var(--danger); }
-
-    .hint { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .hint { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 
     .confirmation {
-      margin-top: 24px;
-      padding-top: 20px;
-      border-top: 2px solid var(--ink);
+      margin-top: 22px;
+      padding: 17px;
+      border: 1px solid #bdd7d6;
+      border-radius: var(--radius);
+      background: var(--aqua-50);
     }
 
-    .confirmation-heading {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 10px;
-    }
-
-    .confirmation-heading h3 { margin: 0; font-size: 17px; }
-    .confirmation-count { color: var(--accent); font-size: 14px; font-weight: 750; }
-
-    .confirmation-list {
-      max-height: 320px;
-      overflow: auto;
-      border-top: 1px solid var(--line);
-      border-bottom: 1px solid var(--line);
-    }
-
-    .confirmation-row {
-      display: grid;
-      grid-template-columns: 130px minmax(0, 1fr);
-      gap: 12px;
-      padding: 10px 2px;
-      border-bottom: 1px solid var(--line);
-      font-size: 13px;
-      line-height: 1.45;
-    }
-
+    .confirmation-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .confirmation-heading h3 { margin: 0; font-size: 15px; }
+    .confirmation-count { color: var(--sea-700); font-size: 13px; font-weight: 750; }
+    .confirmation-list { max-height: 320px; overflow: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .confirmation-row { display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 12px; padding: 9px 2px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.45; }
     .confirmation-row:last-child { border-bottom: 0; }
     .confirmation-row span:first-child { color: var(--muted); }
 
     .primary-button {
       width: 100%;
-      min-height: 50px;
-      margin-top: 18px;
-      border: 0;
-      border-radius: var(--radius);
-      background: var(--accent);
+      min-height: 46px;
+      margin-top: 17px;
+      padding: 9px 14px;
+      border: 1px solid var(--sea-700);
+      background: var(--sea-700);
       color: #ffffff;
-      font-weight: 750;
-      cursor: pointer;
+      box-shadow: var(--shadow-sm);
     }
 
-    .primary-button:hover { background: var(--accent-hover); }
-    .primary-button:disabled { background: #aeb8ba; cursor: not-allowed; }
-
-    .record-actions, .admin-header-actions, .admin-item-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .danger-button {
-      min-height: 40px;
-      padding: 8px 12px;
-      border: 1px solid #dfaaa5;
-      border-radius: var(--radius);
-      background: var(--danger-soft);
-      color: var(--danger);
-      font-weight: 700;
-      cursor: pointer;
-    }
+    .primary-button:hover { border-color: var(--sea-800); background: var(--sea-800); }
+    .primary-button:disabled { border-color: #abb7b8; background: #abb7b8; cursor: not-allowed; box-shadow: none; }
+    .danger-button { padding: 7px 11px; border: 1px solid #e0aaa5; background: var(--coral-100); color: var(--coral-600); font-size: 12px; }
+    .danger-button:hover { border-color: var(--coral-600); }
 
     .admin-summary {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 8px;
-      margin: 18px 0;
+      gap: 9px;
+      margin: 0 0 18px;
     }
 
-    .summary-item, .admin-control {
-      padding: 12px;
+    .summary-item {
+      padding: 13px 14px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: var(--soft);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
     }
 
-    .summary-item strong { display: block; margin-top: 3px; font-size: 20px; }
-    .summary-item span { color: var(--muted); font-size: 12px; }
-    .admin-control { margin-bottom: 14px; }
+    .summary-item strong { display: block; margin-top: 2px; color: var(--ink); font-size: 20px; }
+    .summary-item span { color: var(--muted); font-size: 11px; }
+    .admin-workspace { min-width: 0; }
+    .admin-control { margin-bottom: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
 
     .admin-tabs {
       display: flex;
-      gap: 6px;
+      gap: 4px;
       overflow-x: auto;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--line);
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      scrollbar-width: thin;
     }
 
     .admin-tab {
-      flex: 0 0 auto;
-      min-height: 40px;
-      padding: 8px 11px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
+      display: inline-flex;
+      min-height: 38px;
+      flex: 1 0 auto;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 9px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
       color: var(--muted);
       cursor: pointer;
-      font-size: 13px;
-      font-weight: 700;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
     }
 
-    .admin-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-    .admin-tab-content { margin-top: 16px; }
-
-    .teacher-picker {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 7px;
-      margin: 10px 0;
-    }
-
-    .teacher-option {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-height: 42px;
-      padding: 8px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: var(--surface);
-      font-size: 13px;
-    }
-
-    .admin-select { width: 100%; min-height: 42px; margin-top: 8px; }
+    .admin-tab:hover { background: var(--soft); color: var(--sea-700); }
+    .admin-tab.active { border-color: #bad6d5; background: var(--aqua-100); color: var(--sea-800); }
+    .admin-tab-count { display: inline-grid; min-width: 20px; height: 20px; place-items: center; padding: 0 5px; border-radius: 4px; background: var(--soft); color: var(--muted); font-size: 10px; }
+    .admin-tab.active .admin-tab-count { background: var(--surface); color: var(--sea-700); }
+    .admin-tab-content { margin-top: 12px; }
+    .ob-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .teacher-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
+    .teacher-option { display: flex; min-width: 0; min-height: 40px; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 12px; overflow-wrap: anywhere; }
+    .teacher-option:has(input:checked) { border-color: var(--sea-600); background: var(--aqua-100); color: var(--sea-800); }
+    .admin-select { margin-top: 8px; }
 
     dialog {
       width: min(calc(100% - 28px), 480px);
       padding: 0;
       border: 1px solid var(--line);
       border-radius: var(--radius);
+      background: var(--surface);
       box-shadow: 0 20px 60px rgba(20, 37, 39, 0.22);
     }
 
     dialog::backdrop { background: rgba(19, 33, 35, 0.48); }
     .dialog-body { padding: 20px; }
-    .dialog-body h3 { margin: 0 0 7px; }
+    .dialog-body h3 { margin: 0 0 7px; font-size: 17px; }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .dialog-actions .primary-button { width: auto; min-width: 110px; margin-top: 0; }
 
     .state {
       padding: 22px 14px;
-      border: 1px dashed var(--line);
+      border: 1px dashed var(--line-strong);
       border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.58);
       color: var(--muted);
-      text-align: center;
-      font-size: 14px;
+      font-size: 13px;
       line-height: 1.55;
+      text-align: center;
     }
 
-    .state.error {
-      border-style: solid;
-      border-color: #efc3bf;
-      background: var(--danger-soft);
-      color: var(--danger);
-    }
-
+    .state.error { border-style: solid; border-color: #e7bbb7; background: var(--coral-100); color: var(--coral-600); }
     .notice {
       position: fixed;
-      z-index: 30;
+      z-index: 40;
       top: 14px;
       left: 50%;
       display: none;
       width: min(calc(100% - 28px), 620px);
-      padding: 12px 14px;
+      padding: 11px 13px;
       border: 1px solid transparent;
       border-radius: var(--radius);
-      box-shadow: 0 8px 24px rgba(20, 37, 39, 0.15);
-      font-size: 14px;
+      box-shadow: var(--shadow-md);
+      font-size: 13px;
       line-height: 1.5;
       transform: translateX(-50%);
     }
 
     .notice.visible { display: block; }
     .notice.success { border-color: #b8dac4; background: var(--success-soft); color: var(--success); }
-    .notice.error { border-color: #efc3bf; background: var(--danger-soft); color: var(--danger); }
+    .notice.error { border-color: #e7bbb7; background: var(--coral-100); color: var(--coral-600); }
 
-    @media (max-width: 680px) {
-      .auth-shell, .app-shell { border: 0; }
-      .topbar { padding: 9px 14px; }
-      .current-user { max-width: 92px; }
-      main { padding: 22px 15px 44px; }
+    .spin { animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; }
+    }
+
+    @media (max-width: 920px) {
+      .app-layout { grid-template-columns: 170px minmax(0, 1fr); }
+      .workspace { padding: 24px 22px 60px; }
+      .teacher-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .date-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .view-header { flex-direction: column; }
+      .admin-header-actions { justify-content: flex-start; }
+    }
+
+    @media (max-width: 760px) {
+      .app-shell { border: 0; box-shadow: none; }
+      .topbar { min-height: 58px; padding: 8px 12px; }
+      .topbar .brand-mark { width: 32px; height: 32px; }
+      .brand-name { font-size: 13px; }
+      .brand-subtitle { font-size: 10px; }
+      .current-user { max-width: 102px; padding: 5px 7px; }
+      .app-layout { display: block; min-height: calc(100vh - 58px); }
+      .sidebar { border: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
+      .primary-nav {
+        position: static;
+        display: flex;
+        min-height: 62px;
+        gap: 0;
+        padding: 4px 5px;
+        overflow-x: auto;
+        background: var(--surface);
+      }
+
+      .nav-item { display: grid; min-width: 62px; min-height: 55px; flex: 1 0 62px; place-items: center; align-content: center; gap: 3px; padding: 4px 3px; border: 0; font-size: 10px; text-align: center; }
+      .nav-item.active { border: 0; background: var(--aqua-100); }
+      .nav-item svg.lucide { width: 19px; height: 19px; }
+      .workspace { min-height: calc(100vh - 120px); padding: 20px 14px 40px; }
+      #back-button.visible { display: inline-flex; }
+      .button-label { display: none; }
       .home-actions { grid-template-columns: 1fr; }
-      .action-button { min-height: 90px; }
+      .action-button { min-height: 82px; }
       .date-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .handling-options { grid-template-columns: 1fr; }
       .claim-fields { grid-template-columns: 1fr; }
       .claim-field.full { grid-column: auto; }
-      .confirmation-row { grid-template-columns: 108px minmax(0, 1fr); }
-      .admin-summary, .teacher-picker { grid-template-columns: 1fr 1fr; }
+      .confirmation-row { grid-template-columns: 105px minmax(0, 1fr); }
+      .admin-summary, .teacher-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .admin-tabs { margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; border-right: 0; border-left: 0; border-radius: 0; }
+      .admin-tab { flex: 0 0 auto; }
     }
 
     @media (max-width: 380px) {
-      .brand-subtitle { display: none; }
-      .topbar-actions { gap: 5px; }
-      .icon-button { padding: 8px 9px; }
+      .login-brand, .login-form-body { padding-right: 20px; padding-left: 20px; }
+      .current-user { max-width: 80px; }
       .date-list { grid-template-columns: 1fr; }
+      .admin-summary, .teacher-picker { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -676,35 +724,50 @@
   <section id="auth-shell" class="auth-shell">
     <div class="login-panel">
       <div class="login-brand">
-        <h1>Sherry Aerial Studio</h1>
-        <p>教室管理系統</p>
+        <span class="brand-mark" aria-hidden="true"><i data-lucide="wind"></i></span>
+        <div>
+          <h1>Sherry Aerial Studio</h1>
+          <p>教室管理系統</p>
+        </div>
       </div>
-      <form id="login-form">
+      <form id="login-form" class="login-form-body">
+        <h2 class="login-title">老師登入</h2>
+        <p class="login-copy">使用您的姓名與身分證末四碼</p>
         <div class="field">
-          <label for="login-teacher">姓名</label>
-          <input
-            id="login-teacher"
-            class="text-input"
-            type="text"
-            list="teacher-options"
-            autocomplete="name"
-            required
-          >
+          <label for="login-teacher"><i data-lucide="user-round"></i>姓名</label>
+          <div class="input-wrap">
+            <i data-lucide="search"></i>
+            <input
+              id="login-teacher"
+              class="text-input"
+              type="text"
+              list="teacher-options"
+              autocomplete="name"
+              placeholder="搜尋或選擇姓名"
+              required
+            >
+          </div>
           <datalist id="teacher-options"></datalist>
         </div>
         <div class="field">
-          <label for="login-pin">身分證末碼</label>
-          <input
-            id="login-pin"
-            class="text-input"
-            type="password"
-            inputmode="numeric"
-            autocomplete="current-password"
-            maxlength="10"
-            required
-          >
+          <label for="login-pin"><i data-lucide="key-round"></i>身分證末四碼</label>
+          <div class="input-wrap">
+            <i data-lucide="lock-keyhole"></i>
+            <input
+              id="login-pin"
+              class="text-input"
+              type="password"
+              inputmode="numeric"
+              autocomplete="current-password"
+              maxlength="4"
+              pattern="[0-9]{4}"
+              placeholder="4 位數字"
+              required
+            >
+          </div>
         </div>
-        <button id="login-submit" class="primary-button" type="submit">登入</button>
+        <button id="login-submit" class="primary-button" type="submit"><i data-lucide="log-in"></i>登入</button>
+        <p class="login-footnote">僅供教室老師與管理人員使用</p>
       </form>
     </div>
   </section>
@@ -712,123 +775,128 @@
   <div id="app-shell" class="app-shell" hidden>
     <header class="topbar">
       <div class="brand">
-        <h1 class="brand-name">Sherry Aerial Studio</h1>
-        <div class="brand-subtitle">教室管理</div>
+        <span class="brand-mark" aria-hidden="true"><i data-lucide="wind"></i></span>
+        <div>
+          <h1 class="brand-name">Sherry Aerial Studio</h1>
+          <div class="brand-subtitle">教室管理</div>
+        </div>
       </div>
       <div class="topbar-actions">
         <span id="current-user" class="current-user"></span>
-        <button id="back-button" class="icon-button" type="button">返回</button>
-        <button id="logout-button" class="icon-button" type="button">登出</button>
+        <button id="back-button" class="icon-button" type="button" aria-label="返回首頁" title="返回首頁"><i data-lucide="arrow-left"></i></button>
+        <button id="logout-button" class="icon-button" type="button" aria-label="登出" title="登出"><i data-lucide="log-out"></i></button>
       </div>
     </header>
 
-    <main>
-      <section id="view-home" class="view active">
-        <h2 class="section-heading">教室工作台</h2>
-        <p id="home-greeting" class="section-copy"></p>
-        <div class="home-actions">
-          <button class="action-button" type="button" data-view="view-leave">
-            <span class="action-title">請假登記</span>
-            <span class="action-copy">依日期選擇自己的課程。</span>
-          </button>
-          <button class="action-button" type="button" data-view="view-myleaves">
-            <span class="action-title">我的請假紀錄</span>
-            <span class="action-copy">查看代課與 OB 處理狀態。</span>
-          </button>
-          <button class="action-button" type="button" data-view="view-claim">
-            <span class="action-title">尋找與領取代課</span>
-            <span class="action-copy">查看目前開放的待領課程。</span>
-          </button>
-          <button class="action-button" type="button" data-view="view-mysubs">
-            <span class="action-title">查看我的代課紀錄</span>
-            <span class="action-copy">查看已領取課程與改課內容。</span>
-          </button>
-          <button id="admin-entry" class="action-button" type="button" data-view="view-admin" hidden>
-            <span class="action-title">管理工作台</span>
-            <span class="action-copy">邀請、異動、OB 處理與核對。</span>
-          </button>
-        </div>
-      </section>
+    <div class="app-layout">
+      <aside class="sidebar">
+        <nav class="primary-nav" aria-label="主要功能">
+          <button class="nav-item active" type="button" data-view="view-home"><i data-lucide="layout-dashboard"></i><span>首頁</span></button>
+          <button class="nav-item" type="button" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
+          <button class="nav-item" type="button" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>請假紀錄</span></button>
+          <button class="nav-item" type="button" data-view="view-claim"><i data-lucide="hand"></i><span>領取代課</span></button>
+          <button class="nav-item" type="button" data-view="view-mysubs"><i data-lucide="badge-check"></i><span>代課紀錄</span></button>
+          <button id="admin-entry" class="nav-item" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
+        </nav>
+      </aside>
 
-      <section id="view-leave" class="view">
-        <h2 class="section-heading">請假登記</h2>
-        <p class="section-copy">目前顯示您的可登記課程。</p>
-
-        <div class="toolbar">
-          <span class="step-title">1. 選擇日期</span>
-          <div class="toolbar-actions">
-            <button id="select-all-visible-dates" class="compact-button" type="button">全選目前可見日期</button>
-            <button id="clear-leave-dates" class="compact-button" type="button">清除全部</button>
+      <main class="workspace">
+        <section id="view-home" class="view active">
+          <div class="view-header">
+            <div>
+              <span class="eyebrow">Workspace</span>
+              <h2 class="section-heading">教室工作台</h2>
+            </div>
           </div>
-        </div>
-        <div id="leave-date-list" class="date-list">
-          <div class="state">載入中...</div>
-        </div>
-
-        <div class="toolbar">
-          <span class="step-title">2. 選擇課程</span>
-        </div>
-        <div id="leave-course-list" class="list">
-          <div class="state">請先選擇日期</div>
-        </div>
-
-        <section id="leave-confirmation" class="confirmation" hidden>
-          <div class="confirmation-heading">
-            <h3>送出確認</h3>
-            <span id="leave-confirmation-count" class="confirmation-count">已選 0 堂</span>
+          <div class="home-welcome">
+            <i data-lucide="circle-user-round"></i>
+            <p id="home-greeting" class="section-copy"></p>
           </div>
-          <div id="leave-confirmation-list" class="confirmation-list"></div>
-          <button id="leave-submit" class="primary-button" type="button">確認送出</button>
+          <div class="home-actions">
+            <button class="action-button" type="button" data-view="view-leave">
+              <span class="action-icon"><i data-lucide="calendar-plus"></i></span>
+              <span><span class="action-title">請假登記</span><span class="action-copy">選擇日期與課程</span></span>
+              <i class="action-arrow" data-lucide="chevron-right"></i>
+            </button>
+            <button class="action-button" type="button" data-view="view-myleaves">
+              <span class="action-icon"><i data-lucide="clipboard-list"></i></span>
+              <span><span class="action-title">我的請假紀錄</span><span class="action-copy">查看處理進度</span></span>
+              <i class="action-arrow" data-lucide="chevron-right"></i>
+            </button>
+            <button class="action-button" type="button" data-view="view-claim">
+              <span class="action-icon"><i data-lucide="hand"></i></span>
+              <span><span class="action-title">尋找與領取代課</span><span class="action-copy">查看開放課程</span></span>
+              <i class="action-arrow" data-lucide="chevron-right"></i>
+            </button>
+            <button class="action-button" type="button" data-view="view-mysubs">
+              <span class="action-icon"><i data-lucide="badge-check"></i></span>
+              <span><span class="action-title">查看我的代課紀錄</span><span class="action-copy">確認課程與改課內容</span></span>
+              <i class="action-arrow" data-lucide="chevron-right"></i>
+            </button>
+          </div>
         </section>
-      </section>
 
-      <section id="view-myleaves" class="view">
-        <h2 class="section-heading">我的請假紀錄</h2>
-        <p class="section-copy">請假、代課與 OB 核對進度。</p>
-        <div id="my-leaves-list" class="list">
-          <div class="state">載入中...</div>
-        </div>
-      </section>
+        <section id="view-leave" class="view">
+          <div class="view-header">
+            <div><span class="eyebrow">Leave</span><h2 class="section-heading">請假登記</h2><p class="section-copy">可登記課程</p></div>
+          </div>
+          <div class="toolbar">
+            <span class="step-title"><i data-lucide="calendar-days"></i>1. 選擇日期</span>
+            <div class="toolbar-actions">
+              <button id="select-all-visible-dates" class="compact-button" type="button"><i data-lucide="list-checks"></i>全選日期</button>
+              <button id="clear-leave-dates" class="compact-button" type="button"><i data-lucide="x"></i>清除</button>
+            </div>
+          </div>
+          <div id="leave-date-list" class="date-list"><div class="state">載入中...</div></div>
+          <div class="toolbar"><span class="step-title"><i data-lucide="book-open-check"></i>2. 選擇課程</span></div>
+          <div id="leave-course-list" class="list"><div class="state">請先選擇日期</div></div>
+          <section id="leave-confirmation" class="confirmation" hidden>
+            <div class="confirmation-heading"><h3>送出確認</h3><span id="leave-confirmation-count" class="confirmation-count">已選 0 堂</span></div>
+            <div id="leave-confirmation-list" class="confirmation-list"></div>
+            <button id="leave-submit" class="primary-button" type="button"><i data-lucide="send"></i>確認送出</button>
+          </section>
+        </section>
 
-      <section id="view-claim" class="view">
-        <h2 class="section-heading">領取代課</h2>
-        <p class="section-copy">依日期查看目前可領取的課程。</p>
-        <datalist id="existing-class-options"></datalist>
-        <div id="pending-leaves-list" class="list">
-          <div class="state">載入中...</div>
-        </div>
-        <button id="claim-submit" class="primary-button" type="button">確認領取勾選課程</button>
-      </section>
+        <section id="view-myleaves" class="view">
+          <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的請假紀錄</h2><p class="section-copy">請假、代課與 OB 核對進度</p></div></div>
+          <div id="my-leaves-list" class="list"><div class="state">載入中...</div></div>
+        </section>
 
-      <section id="view-mysubs" class="view">
-        <h2 class="section-heading">我的代課紀錄</h2>
-        <p class="section-copy">已領取課程與改課內容。</p>
-        <div id="my-subs-list" class="list">
-          <div class="state">載入中...</div>
-        </div>
-      </section>
+        <section id="view-claim" class="view">
+          <div class="view-header"><div><span class="eyebrow">Substitute</span><h2 class="section-heading">領取代課</h2><p class="section-copy">目前開放的代課課程</p></div></div>
+          <datalist id="existing-class-options"></datalist>
+          <div id="pending-leaves-list" class="list"><div class="state">載入中...</div></div>
+          <button id="claim-submit" class="primary-button" type="button"><i data-lucide="hand"></i>確認領取勾選課程</button>
+        </section>
 
-      <section id="view-admin" class="view">
-        <h2 class="section-heading">代課管理工作台</h2>
-        <p class="section-copy">所有操作都會留下紀錄；OB 課表只在您手動同步時更新。</p>
-        <div class="admin-header-actions">
-          <button id="admin-sync" class="compact-button" type="button">同步 OB 課表</button>
-          <button id="admin-reconcile" class="compact-button" type="button">重新核對 OB</button>
-        </div>
-        <div id="admin-summary" class="admin-summary"></div>
-        <div class="admin-tabs" role="tablist" aria-label="管理工作區">
-          <button class="admin-tab active" type="button" data-admin-tab="pendingInvitations">待邀請</button>
-          <button class="admin-tab" type="button" data-admin-tab="activeInvitees">邀請中</button>
-          <button class="admin-tab" type="button" data-admin-tab="obWork">待處理 OB</button>
-          <button class="admin-tab" type="button" data-admin-tab="changeRequests">取消／退出</button>
-          <button class="admin-tab" type="button" data-admin-tab="exceptions">核對異常</button>
-          <button class="admin-tab" type="button" data-admin-tab="completed">已完成</button>
-        </div>
-        <div id="admin-tab-content" class="admin-tab-content">
-          <div class="state">載入中...</div>
-        </div>
-      </section>
-    </main>
+        <section id="view-mysubs" class="view">
+          <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的代課紀錄</h2><p class="section-copy">已領取課程與改課內容</p></div></div>
+          <div id="my-subs-list" class="list"><div class="state">載入中...</div></div>
+        </section>
+
+        <section id="view-admin" class="view">
+          <div class="view-header">
+            <div><span class="eyebrow">Operations</span><h2 class="section-heading">代課管理工作台</h2><p class="section-copy">邀請、異動與 OB 處理狀態</p></div>
+            <div class="admin-header-actions">
+              <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
+              <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
+            </div>
+          </div>
+          <div id="admin-summary" class="admin-summary"></div>
+          <div class="admin-workspace">
+            <div class="admin-tabs" role="tablist" aria-label="管理工作區">
+              <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">0</span></button>
+            </div>
+            <div id="admin-tab-content" class="admin-tab-content"><div class="state">載入中...</div></div>
+          </div>
+        </section>
+      </main>
+    </div>
   </div>
 
   <dialog id="request-dialog">
@@ -837,12 +905,13 @@
       <p id="request-dialog-copy" class="section-copy"></p>
       <textarea id="request-reason" class="claim-control" maxlength="240" placeholder="請填寫原因"></textarea>
       <div class="dialog-actions">
-        <button id="request-cancel" class="compact-button" type="button">返回</button>
-        <button id="request-confirm" class="primary-button" type="submit">確認送出</button>
+        <button id="request-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
+        <button id="request-confirm" class="primary-button" type="submit"><i data-lucide="send"></i>確認送出</button>
       </div>
     </form>
   </dialog>
 
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -859,6 +928,12 @@
     let requestDialogState = null;
 
     const byId = (id) => document.getElementById(id);
+
+    function refreshIcons() {
+      if (window.lucide && typeof window.lucide.createIcons === "function") {
+        window.lucide.createIcons({ attrs: { "aria-hidden": "true" } });
+      }
+    }
 
     async function readApiResponse(response) {
       if (!response.ok) throw new Error(`系統連線失敗（HTTP ${response.status}）`);
@@ -998,9 +1073,12 @@
     }
 
     function setButtonBusy(button, busy, busyText) {
-      if (!button.dataset.defaultText) button.dataset.defaultText = button.textContent;
+      if (!button.dataset.defaultHtml) button.dataset.defaultHtml = button.innerHTML || button.textContent;
       button.disabled = busy;
-      button.textContent = busy ? busyText : button.dataset.defaultText;
+      button.innerHTML = busy
+        ? `<i class="spin" data-lucide="loader-circle"></i>${escapeHtml(busyText)}`
+        : button.dataset.defaultHtml;
+      refreshIcons();
     }
 
     function rememberTeacher(name) {
@@ -1018,6 +1096,7 @@
       byId("home-greeting").textContent = `${authState.teacherName}，您好。`;
       byId("admin-entry").hidden = authState.role !== "管理員";
       switchView("view-home");
+      refreshIcons();
     }
 
     function clearSession() {
@@ -1037,6 +1116,7 @@
     }
 
     async function initialize() {
+      refreshIcons();
       try {
         const teachers = await callApi("getTeachers");
         const names = [...new Set(teachers.map((item) => item["指導者"]).filter(Boolean))]
@@ -1055,6 +1135,7 @@
       const teacherName = byId("login-teacher").value.trim();
       const pin = byId("login-pin").value.trim();
       if (!teacherName || !pin) return setNotice("請輸入姓名與身分證末碼。", "error");
+      if (!/^\d{4}$/.test(pin)) return setNotice("身分證末碼請輸入 4 位數字。", "error");
 
       const button = byId("login-submit");
       clearNotice();
@@ -1093,6 +1174,12 @@
       document.querySelectorAll(".view").forEach((view) => {
         view.classList.toggle("active", view.id === viewId);
       });
+      document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
+        const active = button.dataset.view === viewId;
+        button.classList.toggle("active", active);
+        if (active) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+      });
       byId("back-button").classList.toggle("visible", viewId !== "view-home");
 
       if (viewId === "view-leave") loadMyCourses();
@@ -1100,6 +1187,7 @@
       if (viewId === "view-claim") fetchAvailableSubstitutes();
       if (viewId === "view-mysubs") fetchMySubs();
       if (viewId === "view-admin") fetchAdminDashboard();
+      refreshIcons();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1143,6 +1231,7 @@
           renderLeaveCourses();
         });
       });
+      refreshIcons();
     }
 
     function selectAllVisibleDates() {
@@ -1190,7 +1279,7 @@
           <label class="list-item">
             <input type="checkbox" class="leave-course-checkbox" data-calendar-id="${escapeHtml(calendarId)}" ${selectedLeaveCourses.has(calendarId) ? "checked" : ""}>
             <span>
-              <span class="item-date">${escapeHtml(item["日期"])} ${escapeHtml(item["時間"])}</span>
+              <span class="item-date"><i data-lucide="clock-3"></i>${escapeHtml(item["日期"])} ${escapeHtml(item["時間"])}</span>
               <span class="item-course">${escapeHtml(item["課程"])}</span>
               <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
             </span>
@@ -1206,6 +1295,7 @@
         });
       });
       updateLeaveConfirmation();
+      refreshIcons();
     }
 
     function getSelectedLeaveItems() {
@@ -1226,7 +1316,10 @@
           <strong>${escapeHtml(item["課程"])}</strong>
         </div>
       `).join("");
-      byId("leave-submit").textContent = `確認送出 ${selectedLeaveCourses.length} 堂`;
+      const submitButton = byId("leave-submit");
+      submitButton.innerHTML = `<i data-lucide="send"></i>確認送出 ${selectedLeaveCourses.length} 堂`;
+      submitButton.dataset.defaultHtml = submitButton.innerHTML;
+      refreshIcons();
     }
 
     function validateLeaveBatchResult(result, batchLength) {
@@ -1301,7 +1394,7 @@
           return `
             <article class="list-item single-column">
               <div>
-                <div class="item-date">${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
+                <div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
                 <div class="item-course">${escapeHtml(item["課程"])}</div>
                 <span class="status-tag ${statusClass(item["狀態"])}">${escapeHtml(item["狀態"] || "未設定")}</span>
                 <div class="item-meta">代課老師：${escapeHtml(item["代課老師"] || "尚未領取")}</div>
@@ -1315,13 +1408,14 @@
                 ${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}
                 ${renderAuditHistory(item["異動紀錄"])}
                 <div class="record-actions">
-                  ${item["可自行取消"] ? `<button class="danger-button" type="button" data-leave-action="cancel" data-substitute-id="${escapeHtml(item["代課編號"])}">取消請假</button>` : ""}
-                  ${item["可申請取消"] ? `<button class="danger-button" type="button" data-leave-action="request-cancel" data-substitute-id="${escapeHtml(item["代課編號"])}">申請取消</button>` : ""}
+                  ${item["可自行取消"] ? `<button class="danger-button" type="button" data-leave-action="cancel" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="calendar-x"></i>取消請假</button>` : ""}
+                  ${item["可申請取消"] ? `<button class="danger-button" type="button" data-leave-action="request-cancel" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="message-square-warning"></i>申請取消</button>` : ""}
                 </div>
               </div>
             </article>
           `;
         }).join("");
+        refreshIcons();
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
@@ -1386,7 +1480,7 @@
       list.innerHTML = [...groups.entries()].map(([date, items]) => `
         <section class="claim-date-group" data-claim-date="${escapeHtml(date)}">
           <div class="claim-date-heading">
-            <h3>${escapeHtml(date)}</h3>
+            <h3><i data-lucide="calendar-days"></i>${escapeHtml(date)}</h3>
             <span class="claim-date-count">${items.length} 堂待領</span>
           </div>
           <div class="list">
@@ -1394,6 +1488,7 @@
           </div>
         </section>
       `).join("");
+      refreshIcons();
     }
 
     function renderAvailableSubstituteItem(item) {
@@ -1406,14 +1501,14 @@
         <article class="list-item claim-card" data-claim-card-id="${escapeHtml(substituteId)}">
           <input type="checkbox" class="claim-checkbox" data-substitute-id="${escapeHtml(substituteId)}">
           <div class="claim-summary">
-            <div class="item-date">${escapeHtml(item["時段"])}</div>
+            <div class="item-date"><i data-lucide="clock-3"></i>${escapeHtml(item["時段"])}</div>
             <div class="item-course">${escapeHtml(item["課程"])}</div>
             <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
             <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
-            ${canReuseOriginal ? "" : '<div class="claim-requirement">需要改成可教授的課程</div>'}
+            ${canReuseOriginal ? "" : '<div class="claim-requirement"><i data-lucide="triangle-alert"></i>需要改成可教授的課程</div>'}
           </div>
           <div class="claim-editor" hidden>
-            <div class="claim-editor-title">實際授課安排</div>
+            <div class="claim-editor-title"><i data-lucide="sliders-horizontal"></i>實際授課安排</div>
             <div class="handling-options" role="group" aria-label="課程處理方式">
               <label class="handling-option">
                 <input type="radio" name="handling-${escapeHtml(substituteId)}" value="original"
@@ -1560,7 +1655,7 @@
         list.innerHTML = items.map((item) => `
           <article class="list-item single-column">
             <div>
-              <div class="item-date">${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
+              <div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
               <div class="item-course">${escapeHtml(item["課程"])}</div>
               <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
               <div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div>
@@ -1570,11 +1665,12 @@
               <div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>
               ${renderAuditHistory(item["異動紀錄"])}
               <div class="record-actions">
-                ${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}">申請退出代課</button>` : ""}
+                ${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="log-out"></i>申請退出代課</button>` : ""}
               </div>
             </div>
           </article>
         `).join("");
+        refreshIcons();
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
@@ -1668,9 +1764,20 @@
         ["待處理異動", (data.changeRequests || []).length]
       ].map(([label, count]) => `<div class="summary-item"><span>${label}</span><strong>${count}</strong></div>`).join("");
       document.querySelectorAll(".admin-tab").forEach((button) => {
-        button.classList.toggle("active", button.dataset.adminTab === activeAdminTab);
+        const active = button.dataset.adminTab === activeAdminTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
       });
+      updateAdminTabCounts(data);
       renderAdminTab();
+      refreshIcons();
+    }
+
+    function updateAdminTabCounts(data = adminDashboard || {}) {
+      document.querySelectorAll("[data-admin-count]").forEach((badge) => {
+        const items = data[badge.dataset.adminCount];
+        badge.textContent = Array.isArray(items) ? String(items.length) : "0";
+      });
     }
 
     function renderAdminTab() {
@@ -1684,35 +1791,37 @@
             <strong>開放代課給老師</strong>
             <div class="teacher-picker">${teachers.map((name) => `<label class="teacher-option"><input class="admin-teacher-checkbox" type="checkbox" value="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></label>`).join("") || "目前沒有其他可邀請老師"}</div>
             <div class="admin-item-actions">
-              <button class="compact-button" type="button" data-admin-action="open-invitations">開放給勾選老師</button>
-              <button class="compact-button" type="button" data-admin-action="copy-invitation">複製 LINE 邀請文字</button>
+              <button class="compact-button" type="button" data-admin-action="open-invitations"><i data-lucide="send"></i>開放給勾選老師</button>
+              <button class="compact-button" type="button" data-admin-action="copy-invitation"><i data-lucide="copy"></i>複製 LINE 邀請文字</button>
             </div>
           </div>
           ${renderAdminItems(data.pendingInvitations, "目前沒有待領取代課")}`;
       } else if (activeAdminTab === "activeInvitees") {
         content.innerHTML = `
-          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause">${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>
-          ${(data.activeInvitees || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}">關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
+          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>
+          ${(data.activeInvitees || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}"><i data-lucide="user-x"></i>關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
       } else if (activeAdminTab === "obWork" || activeAdminTab === "exceptions") {
         const items = data[activeAdminTab] || [];
         content.innerHTML = items.map((item) => renderAdminObItem(item, data.replacementOptions || [])).join("") || `<div class="state">目前沒有${activeAdminTab === "obWork" ? "待處理 OB" : "核對異常"}</div>`;
       } else if (activeAdminTab === "changeRequests") {
-        content.innerHTML = (data.changeRequests || []).map((item) => `${renderAdminItem(item)}<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve" data-decision="approve" data-substitute-id="${escapeHtml(item.substituteId)}">核准</button><button class="danger-button" type="button" data-admin-action="resolve" data-decision="reject" data-substitute-id="${escapeHtml(item.substituteId)}">駁回</button></div>`).join("") || '<div class="state">目前沒有取消或退出申請</div>';
+        content.innerHTML = (data.changeRequests || []).map((item) => renderAdminItem(item, `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve" data-decision="approve" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="check"></i>核准</button><button class="danger-button" type="button" data-admin-action="resolve" data-decision="reject" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="x"></i>駁回</button></div>`)).join("") || '<div class="state">目前沒有取消或退出申請</div>';
       } else {
         content.innerHTML = renderAdminItems(data.completed, "目前沒有已完成紀錄");
       }
+      refreshIcons();
     }
 
     function renderAdminItems(items, emptyText) {
-      return (items || []).map(renderAdminItem).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`;
+      return (items || []).map((item) => renderAdminItem(item)).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`;
     }
 
-    function renderAdminItem(item) {
-      return `<article class="list-item single-column"><div><div class="item-date">${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div><div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}</div></article>`;
+    function renderAdminItem(item, extraHtml = "") {
+      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div><div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}${extraHtml}</div></article>`;
     }
 
     function renderAdminObItem(item, options) {
-      return `${renderAdminItem(item)}<div class="admin-control"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}">連結替代課程</button></div></div>`;
+      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+      return renderAdminItem(item, detail);
     }
 
     async function openAdminInvitations() {

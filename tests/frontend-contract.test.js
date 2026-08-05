@@ -381,3 +381,41 @@ test('admin entry stays hidden for teachers and is enabled only by the authentic
   assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
   assert.match(html, /admin-entry["']\)\.hidden\s*=\s*authState\.role\s*!==\s*["']管理員["']/);
 });
+
+test('uses the approved calm sea-glass operations design system', () => {
+  assert.match(html, /--sea-700:\s*#[0-9a-f]{6}/i);
+  assert.match(html, /--aqua-100:\s*#[0-9a-f]{6}/i);
+  assert.match(html, /--coral-600:\s*#[0-9a-f]{6}/i);
+  assert.match(html, /--shadow-sm:/);
+  assert.match(html, /\.app-layout\s*\{/);
+  assert.match(html, /\.workspace\s*\{/);
+  assert.match(html, /max-width:\s*1180px/);
+});
+
+test('uses lucide icons and accessible icon controls throughout navigation', () => {
+  assert.match(html, /unpkg\.com\/lucide/);
+  assert.match(html, /class=["'][^"']*primary-nav[^"']*["']/);
+  assert.match(html, /data-lucide=["']layout-dashboard["']/);
+  assert.match(html, /data-lucide=["']log-out["']/);
+  assert.match(html, /id=["']logout-button["'][^>]*aria-label=["']登出["']/);
+  assert.match(html, /function\s+refreshIcons\s*\(/);
+});
+
+test('keeps the six admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 6);
+  assert.match(html, /aria-selected=["']true["']/);
+  assert.match(html, /class=["']admin-tab-count["']/);
+  assert.match(html, /updateAdminTabCounts/);
+});
+
+test('admin queue rendering does not leak Array.map indexes into cards', () => {
+  assert.doesNotMatch(html, /\.map\(renderAdminItem\)/);
+  assert.match(html, /\.map\(\(item\)\s*=>\s*renderAdminItem\(item\)\)/);
+});
+
+test('optimizes login and navigation for the supplied four-digit PIN workflow', () => {
+  assert.match(html, /id=["']login-pin["'][^>]*maxlength=["']4["']/s);
+  assert.match(html, /id=["']login-pin["'][^>]*pattern=["']\[0-9\]\{4\}["']/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.primary-nav\s*\{[\s\S]*position:\s*static/);
+  assert.doesNotMatch(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.primary-nav\s*\{[\s\S]*position:\s*fixed[\s\S]*bottom:\s*0/);
+});

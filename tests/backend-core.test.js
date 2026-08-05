@@ -238,6 +238,37 @@ function createAccount(backend, teacherName, pin, options = {}) {
   ];
 }
 
+function createPasswordImportRows() {
+  return Array.from({ length: 37 }, (_, index) => [
+    `老師${String(index + 1).padStart(2, '0')}`,
+    String(1000 + index),
+  ]);
+}
+
+function createPasswordImportBackend(rows, options = {}) {
+  const services = createAuthServices();
+  let uuid = 0;
+  services.Utilities.getUuid = () => `password-import-${++uuid}`;
+  const bootstrap = loadBackend(services);
+  const existingAccounts = options.existingAccounts || [
+    createAccount(bootstrap, '系統管理員', '9999', { role: '管理員' }).concat(''),
+  ];
+  const accountSheet = createSheetFixture('登入帳號', [
+    EXPECTED_ACCOUNT_HEADERS,
+    ...existingAccounts,
+  ]);
+  const passwordSheet = createSheetFixture('密碼表', [
+    ['老師', '密碼'],
+    ...rows,
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, passwordSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  return { backend, services, spreadsheet, accountSheet, passwordSheet };
+}
+
 function formatTaipeiDate(value, _timezone, pattern) {
   const timestamp = value && typeof value.getTime === 'function' ? value.getTime() : new Date(value).getTime();
   if (!Number.isFinite(timestamp)) {
@@ -608,6 +639,97 @@ test('administrator account setup stores only salt and hash for the new teacher'
   assert.notEqual(accountSheet.values[2][1], '');
   assert.notEqual(accountSheet.values[2][2], '5678');
   assert.equal(JSON.stringify(accountSheet.values[2]).includes('5678'), false);
+});
+
+test('teacher password bulk import validates all 37 rows before changing any account or plaintext cell', () => {
+  const rows = createPasswordImportRows();
+  rows[9][1] = '12A4';
+  const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
+  const accountsBefore = JSON.stringify(accountSheet.values);
+  const passwordsBefore = passwordSheet.values.slice(1).map((row) => row[1]);
+
+  assert.throws(
+    () => backend.importTeacherAccountsFromPasswordSheet(),
+    /第 11 列.*4 位數字/
+  );
+  assert.equal(JSON.stringify(accountSheet.values), accountsBefore);
+  assert.deepEqual(passwordSheet.values.slice(1).map((row) => row[1]), passwordsBefore);
+  assert.equal(services.__properties.has('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'), false);
+});
+
+test('teacher password bulk import rejects duplicate teacher names without partial writes', () => {
+  const rows = createPasswordImportRows();
+  rows[20][0] = rows[0][0];
+  const { backend, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
+  const accountsBefore = JSON.stringify(accountSheet.values);
+
+  assert.throws(
+    () => backend.importTeacherAccountsFromPasswordSheet(),
+    /老師姓名重複.*第 22 列/
+  );
+  assert.equal(JSON.stringify(accountSheet.values), accountsBefore);
+  assert.equal(passwordSheet.values[1][1], '1000');
+  assert.equal(passwordSheet.values[21][1], '1020');
+});
+
+test('teacher password bulk import hashes every PIN and clears plaintext only after all accounts succeed', () => {
+  const rows = createPasswordImportRows();
+  const services = createAuthServices();
+  const bootstrap = loadBackend(services);
+  const existingTeacher = createAccount(bootstrap, '老師01', '7777', {
+    active: '否',
+    role: '老師',
+  }).concat('空環');
+  const { backend, accountSheet, passwordSheet, spreadsheet } = createPasswordImportBackend(rows, {
+    existingAccounts: [
+      createAccount(bootstrap, '系統管理員', '9999', { role: '管理員' }).concat(''),
+      existingTeacher,
+    ],
+  });
+
+  const result = backend.importTeacherAccountsFromPasswordSheet();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    sourceSheet: '密碼表',
+    imported: 37,
+    created: 36,
+    updated: 1,
+  });
+  assert.equal(accountSheet.values.length, 39);
+  const imported = accountSheet.values.find((row) => row[0] === '老師01');
+  assert.notEqual(imported[1], '');
+  assert.equal(imported[2], backend.hashPin_('1000', imported[1]));
+  assert.equal(imported.includes('1000'), false);
+  assert.equal(imported[3], '是');
+  assert.equal(imported[4], '老師');
+  assert.equal(imported[7], '');
+  assert.deepEqual(passwordSheet.values.slice(1, 38).map((row) => row[0]), rows.map((row) => row[0]));
+  assert.deepEqual(passwordSheet.values.slice(1, 38).map((row) => row[1] || ''), Array(37).fill(''));
+  assert.equal(spreadsheet.getSheetByName('密碼表'), passwordSheet);
+  assert.ok(backend.getScriptProperties_().getProperty('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'));
+  assert.throws(() => backend.importTeacherAccountsFromPasswordSheet(), /已經完成過/);
+});
+
+test('teacher password bulk import keeps every plaintext PIN when the account batch write fails', () => {
+  const rows = createPasswordImportRows();
+  const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
+  const accountsBefore = JSON.stringify(accountSheet.values);
+  const originalGetRange = accountSheet.getRange.bind(accountSheet);
+  accountSheet.getRange = function(row, column, numRows = 1, numColumns = 1) {
+    const range = originalGetRange(row, column, numRows, numColumns);
+    if (column === 1 && numRows > 1 && numColumns === EXPECTED_ACCOUNT_HEADERS.length) {
+      range.setValues = () => { throw new Error('injected account batch write failure'); };
+    }
+    return range;
+  };
+
+  assert.throws(
+    () => backend.importTeacherAccountsFromPasswordSheet(),
+    /injected account batch write failure/
+  );
+  assert.equal(JSON.stringify(accountSheet.values), accountsBefore);
+  assert.deepEqual(passwordSheet.values.slice(1).map((row) => row[1]), rows.map((row) => row[1]));
+  assert.equal(services.__properties.has('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'), false);
 });
 
 test('initializes the first administrator once without storing the plaintext PIN', () => {

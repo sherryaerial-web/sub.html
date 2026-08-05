@@ -1,20 +1,21 @@
-# Sherry Aerial Studio 代課系統
+# Sherry Aerial Studio 請假代課系統 v2.1
 
-GitHub Pages 前端搭配 Google Apps Script、Google Sheets 與 Omcean Booking API。
+GitHub Pages 前端搭配 Google Apps Script、Google Sheets 與 Omcean Booking API。老師與管理員使用同一個網站，登入角色會決定可見功能。
 
-## 檔案
+## 系統入口
 
-- `index.html`：正式 GitHub Pages 前端。
-- `Code.gs`：完整 Apps Script 後端，可全選覆蓋既有程式。
-- `tests/backend-core.test.js`：課程分類、同步與代課規則測試。
-- `tests/frontend-contract.test.js`：前端安全與資料契約測試。
-- `tests/visual-check.mjs`：桌機與手機畫面檢查。
+- `index.html`：GitHub Pages 前端，老師登入後可請假、領取代課及查看個人紀錄。
+- `Code.gs`：完整 Apps Script 後端。
+- 管理員以管理員帳號登入同一個前端後，可開啟邀請、OB 待辦、異動申請與核對後台。
+- 正式網址：`https://sherryaerial-web.github.io/sub.html/`
 
-## 試算表
+## 試算表契約
+
+部署前先建立試算表副本備份。既有欄位不移動，新欄位只追加在右側。
 
 ### CourseList
 
-既有 A:D 固定欄位不移動；同步時只更新這張表作為「目前 OB 課表快照」。
+`CourseList` 是最近一次手動同步的 OB 課表快照。A:D 保持原位置。
 
 | 欄 | 標題 |
 |---|---|
@@ -28,76 +29,115 @@ GitHub Pages 前端搭配 Google Apps Script、Google Sheets 與 Omcean Booking 
 | H | 是否代課 |
 | I | 最後同步時間 |
 
-API 同步不會寫入或覆蓋「請假代課紀錄」；請假、代課與 OB 處理歷史會保留在該表。
+API 同步不會覆蓋請假、代課或異動歷史。同步失敗時會保留原本快照。
 
 ### 請假代課紀錄
 
-原本的「工作表1」會在首次執行 `ensureSystemStructure_()` 時更名為「請假代課紀錄」。既有 A:J 不會移動，後續欄位只追加在右側。
+首次執行 `ensureSystemStructure_()` 時，舊「工作表1」會更名為「請假代課紀錄」。若新舊兩張表同時存在，程式會停止，必須先人工確認哪張才是正式資料。
 
-| 欄 | 標題 |
-|---|---|
-| A | 登記時間 |
-| B | 原老師 |
-| C | 日期 |
-| D | 時段 |
-| E | 課程 |
-| F | 狀態 |
-| G | 代課老師 |
-| H | 備註 |
-| I | 入系統 |
-| J | 代課編號 |
+A:J 固定欄位如下，K:U 由新版追加：
 
-### 登入帳號
+| 欄 | 標題 | 欄 | 標題 |
+|---|---|---|---|
+| A | 登記時間 | K | OB Calendar ID |
+| B | 原老師 | L | 實際課程 ID |
+| C | 日期 | M | 實際課程名稱 |
+| D | 時段 | N | 預計難度 |
+| E | 課程 | O | 處理類型 |
+| F | 狀態 | P | OB 核對狀態 |
+| G | 代課老師 | Q | OB 核對時間 |
+| H | 備註 | R | 差異原因 |
+| I | 入系統 | S | 異動狀態 |
+| J | 代課編號 | T | 實際課程類別 |
+|  |  | U | 替代 OB Calendar ID |
 
-`ensureSystemStructure_()` 會建立「登入帳號」表。它只保存 Salt、PIN 雜湊、啟用狀態、角色與登入保護資訊，不保存可直接使用的 PIN。
+### 其他工作表
 
-第一次建立管理員時，先在「指令碼屬性」暫存下列兩個值，執行 `initializeFirstAdminFromProperties` 一次；成功或失敗後，程式都會立即刪除這兩個暫存值：
+`ensureSystemStructure_()` 會建立或檢查：
+
+- `代課邀請`：隱藏邀請權限與查看狀態。
+- `操作紀錄`：取消、退出、核對與管理操作歷史。
+- `系統設定`：包含「暫停全部領取」。
+- `登入帳號`：只保存 Salt、PIN 雜湊、在職狀態、角色、登入保護與可教授類別。
+
+`老師名單` 的 A1 必須是「指導者」，A2 以下姓名需與 OB 及登入姓名一致。老師選單從這張表讀取。
+
+## 37 位老師密碼一次性匯入
+
+來源檔為 `老師密碼表.xlsx`，工作表名稱是 `密碼表`，A1:B1 必須是「老師、密碼」，A2:B38 共 37 位老師。PIN 必須是 4 位數字；開頭為 0 的 PIN 必須保留為四碼文字。
+
+請嚴格依照下列順序：
+
+1. 先完成 `ensureSystemStructure_()`，並先建立第一位管理員帳號。
+2. 在正式 Google 試算表選擇「檔案 → 匯入 → 上傳」，上傳 `老師密碼表.xlsx`。
+3. 匯入位置選「插入新工作表」，不可取代目前試算表，也不可覆蓋其他資料。
+4. 確認工作表仍叫 `密碼表`，A1 是「老師」、B1 是「密碼」，A2:B38 恰好 37 筆。
+5. 確認 37 個姓名無重複，並與 `老師名單`、OB 的顯示姓名完全一致。姓名中的空格、符號與表情符號不要自行改寫。
+6. 在 Apps Script 編輯器的函式選單選擇 `importTeacherAccountsFromPasswordSheet`，手動執行一次並授權。
+7. 成功結果應顯示 `imported: 37`。新帳號會設為「在職＝是、角色＝老師」，既有同名老師帳號會更新。
+8. 到 `登入帳號` 確認每位老師都有 Salt 與 PIN 雜湊，且表內沒有任何原始四碼 PIN。
+9. 回到 `密碼表`，確認 A2:A38 姓名仍保留、B2:B38 已清空；來源工作表不會被刪除。
+10. 到 `登入帳號` H 欄「可教授類別」補資料。一次性匯入會刻意保持此欄空白，之後可用「、」分隔多個類別。
+
+匯入函式會先驗證完整 37 筆，再一次寫入帳號。任一列缺姓名、PIN 不是四碼、姓名重複、欄位錯誤或帳號寫入失敗時，帳號資料不會部分更新，`密碼表` 的明碼也不會先清除。成功後會記錄指令碼屬性 `TEACHER_PASSWORD_IMPORT_COMPLETED_AT`，避免誤執行第二次。
+
+此函式沒有前端或 Web API 路由，只能由有權限的管理員在 Apps Script 編輯器手動執行。不要將 `老師密碼表.xlsx`、PIN、Salt 或雜湊提交到 GitHub。
+
+## 第一位管理員
+
+`登入帳號` 尚無任何帳號時，先到 Apps Script「專案設定 → 指令碼屬性」暫存：
 
 | 屬性 | 值 |
 |---|---|
 | `INITIAL_ADMIN_NAME` | 管理員姓名 |
-| `INITIAL_ADMIN_PIN` | 管理員身分證末碼 |
+| `INITIAL_ADMIN_PIN` | 管理員四碼 PIN |
 
-若「登入帳號」已有任何帳號，請勿再設定這兩個屬性。後續帳號會由管理員功能建立。
+手動執行 `initializeFirstAdminFromProperties` 一次。成功或失敗後，兩個暫存屬性都會立即刪除。必須在匯入 37 位老師前完成，因為已有帳號後不能再使用首次管理員初始化。
 
-### 老師名單
+## 完整部署順序
 
-A1 必須是「指導者」，A2 以下放可使用系統的老師姓名。
+1. 建立正式 Google 試算表備份，並保留目前可用的 GAS deployment ID 與 GitHub commit。
+2. 開啟綁定該試算表的 Apps Script，將 repository 的 `Code.gs` 完整覆蓋舊程式並儲存。
+3. 在「指令碼屬性」設定 `OMCEAN_API_TOKEN`。請使用重新產生的新 token，不要沿用曾貼在對話或程式碼中的 token。
+4. 手動執行 `ensureSystemStructure_()` 一次，完成工作表改名、欄位追加與輔助工作表建立。
+5. 若同時看到「工作表1」與「請假代課紀錄」，立即停止，不要刪資料；先人工比對並只保留正確正式表。
+6. 依上一節建立第一位管理員。
+7. 依「37 位老師密碼一次性匯入」流程建立老師帳號。
+8. 確認 `老師名單` 包含可登入的老師，並在 `登入帳號` H 欄補上可教授類別。未補類別前，跨道具領取判斷不完整。
+9. 到 Apps Script 左側「觸發條件」刪除舊版 `syncCourseListFromApi` 的時間觸發條件。新版只允許管理員手動同步。
+10. 部署 Apps Script Web App 的新版本；執行身分使用部署者，存取權沿用目前正式設定。
+11. 若 Web App URL 改變，更新 `index.html` 內的 `APP_URL`。
+12. 先用測試帳號直接測 Web App：登入、選日期、送出一堂測試請假、取消測試資料，再測管理員後台。
+13. 管理員按「同步 OB 課表」，確認同步範圍為今天至下個月底，且 `CourseList` 筆數與日期合理。
+14. 將 `index.html` 發布到 GitHub Pages，等待 Pages 完成後再開正式網址測試桌機與手機。
+15. 以兩個老師帳號同時嘗試同一堂代課，確認只有第一位成功；再檢查邀請、改課、退出與 OB 核對流程。
 
-## Apps Script 部署與手動同步
+## 必測情境
 
-請依照順序操作，避免新版前端先連到舊後端。部署前先備份試算表。
+1. 老師登入後先選日期，再看自己的課程；「全選日期」與「清除全部」正確。
+2. 大量請假分批送出，前端只有在後端回報精確成功筆數後才顯示成功。
+3. 未受邀老師看不到代課；受邀老師看到全部待領代課，但看不到邀請順序或其他受邀者。
+4. 自己請假的課不會出現在可領清單。
+5. 跨類代課必須選擇改課方式並填寫備註；同類也能選填難度與備註。
+6. 同時領取同一堂課，只能有一位成功。
+7. 未被領取的請假可自行取消；已領取或已處理 OB 的項目只能提出取消申請。
+8. 代課老師退出必須填原因，由管理員核准後重新開放。
+9. OB 同步遇到零筆、無效 JSON、HTTP 錯誤或任一無效課程時，原本 `CourseList` 不會被清空。
+10. 管理後台六個工作區、全域暫停領取與重新核對皆可操作。
 
-1. 開啟此試算表綁定的 Apps Script。
-2. 將 repository 內 `Code.gs` 全選複製，完整覆蓋 Apps Script 舊程式。
-3. 到「專案設定」的「指令碼屬性」新增：
-   - 屬性：`OMCEAN_API_TOKEN`
-   - 值：Omcean Booking 後台產生的 API token
-4. 在 Apps Script 編輯器手動執行 `ensureSystemStructure_` 一次，完成「工作表1」改名與新增欄位／輔助工作表。
-5. 若是首次使用登入系統，設定 `INITIAL_ADMIN_NAME`、`INITIAL_ADMIN_PIN` 後，執行 `initializeFirstAdminFromProperties` 一次。
-6. 到 Apps Script 左側「觸發條件」刪除舊版 `syncCourseListFromApi` 的時間觸發條件。新版不安裝、也不執行每小時同步。
-7. 重新部署 Web App 新版本，執行身分使用部署者，存取權依現有正式設定。
-8. 若重新部署後 Web App URL 改變，更新 `index.html` 的 `APP_URL`。
-9. 最後才將新版 `index.html` 發布到 GitHub Pages。
+## 回復方式
 
-管理端每次按「同步 OB 課表」時，會以管理員 Session 呼叫 `syncCourseListFromApi(sessionToken)`。它只抓取今天至下個月底、排除已取消課程，並在完整取得、解析及驗證資料後才以鎖定方式取代 `CourseList`。Task 4 的管理端頁面會提供這個按鈕；不得再建立時間觸發條件。
+- 前端問題：把 GitHub Pages 回復到上線前 commit；舊前端會重新生效。
+- GAS 問題：在 Apps Script「部署 → 管理部署作業」重新部署上一個可用版本；不要刪除目前試算表。
+- 試算表問題：停止所有同步與領取，從部署前備份比對或還原。不要手動搬動 A:J 與 A:D 固定欄位。
+- API 問題：先使用管理端「暫停全部領取」，保留現有 `CourseList`，確認 token 與 OB 回應後再手動同步。
 
-API 權杖、登入 PIN 與管理員 Session 不得放入 `index.html`、GitHub 或試算表。
-
-## 上線檢查
-
-1. 同類代課：例如平常上空環的老師領取空環，能直接送出。
-2. 跨類代課：例如平常上瑜伽的老師領取空環，未填改課內容時不得送出。
-3. 填寫改課後，內容會寫入「請假代課紀錄」H 欄。
-4. 同時在兩個瀏覽器領取同一堂課，只能有一位成功。
-5. 重複送出同一堂請假會被拒絕。
-6. 「我的代課紀錄」會顯示原老師與改課備註。
-7. API 同步遇到零筆、無效 JSON、HTTP 錯誤或無有效課程時，原本 `CourseList` 不會被清空。
-
-## 本機測試
+## 本機驗證
 
 ```bash
-node --test tests/*.test.js
+node --check tests/backend-core.test.js
+node --test tests/backend-core.test.js tests/frontend-contract.test.js
+node tests/visual-check.mjs
 ```
 
-GAS 語法檢查可先複製成暫存 `.js` 後執行 `node --check`。正式程式仍以 `Code.gs` 為準。
+視覺測試會在 `/private/tmp/substitute-v2-screenshots` 產生桌機與手機共 22 張截圖，並檢查非空白、水平溢出、控制項裁切及手機導覽遮擋。GAS 語法檢查可將 `Code.gs` 複製成暫存 `.js` 後執行 `node --check`；正式檔案仍以 `Code.gs` 為準。

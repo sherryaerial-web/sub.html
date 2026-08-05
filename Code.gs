@@ -775,6 +775,14 @@ function syncCourseListFromApi(sessionToken) {
     try {
       sheet.getRange(2, 1, replacementRows.length, writtenColumns).setValues(replacementRows);
       sheet.getRange(1, 1, 1, writtenColumns).setValues([headers]);
+      appendAudit_({
+        actor: admin.teacherName,
+        action: '同步 OB 課表',
+        targetId: range.dateFrom + '~' + range.dateTo,
+        before: '',
+        after: String(normalized.length) + ' 筆',
+        reason: ''
+      });
     } catch (writeError) {
       try {
         restoreSheetSnapshot_(sheet, snapshot, writtenRows, writtenColumns);
@@ -789,15 +797,6 @@ function syncCourseListFromApi(sessionToken) {
   } finally {
     lock.releaseLock();
   }
-
-  appendAudit_({
-    actor: admin.teacherName,
-    action: '同步 OB 課表',
-    targetId: range.dateFrom + '~' + range.dateTo,
-    before: '',
-    after: String(normalized.length) + ' 筆',
-    reason: ''
-  });
   return {
     status: 'success',
     count: normalized.length,

@@ -19,11 +19,17 @@ Status: completed
 - Confirmed the focused tests failed because Task 7 functions and the appended header did not exist.
 - Implemented the minimum backend and frontend contracts, then reran focused and complete suites.
 
+## Review Round 1 Fix
+
+- Moved the OB sync audit append inside the sync operation's existing script lock, so the audit sheet's `getLastRow()` and write cannot race with another state change.
+- Reused the already-held lock instead of acquiring a nested lock.
+- Added a regression test that first failed with audit lock depth `0`, then passed with depth `1`, exactly one lock acquisition/release, and the audit row appended.
+
 ## Verification
 
-- `node --test tests/backend-core.test.js --test-name-pattern="cancel|withdraw|audit|reconcile|replacement|dashboard"`: 75 passed, 0 failed.
+- `node --test tests/backend-core.test.js --test-name-pattern="cancel|withdraw|audit|reconcile|replacement|dashboard"`: 76 passed, 0 failed.
 - `node --test tests/frontend-contract.test.js`: 24 passed, 0 failed.
-- `node --test tests/*.test.js`: 99 passed, 0 failed.
+- `node --test tests/*.test.js`: 100 passed, 0 failed.
 - GAS and inline frontend JavaScript syntax parsing passed.
 - `git diff --check` passed.
 - Public frontend secret scan found no JWT, bearer header, `OMCEAN_API_TOKEN`, or `no-cors` write.

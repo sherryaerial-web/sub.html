@@ -303,6 +303,8 @@ function createSyncBackend(options = {}) {
   backend.getSyncDateRange_ = () => ({ dateFrom: '2026-08-03', dateTo: '2026-09-30' });
   return {
     backend,
+    services,
+    spreadsheet,
     courseSheet,
     calls,
     adminToken: backend.authenticate_('管理員甲', '9999').sessionToken,
@@ -1280,6 +1282,35 @@ test('manual sync fetches every page and replaces CourseList with appended OB me
   assert.equal(courseSheet.values.length, 101);
   assert.equal(courseSheet.values.some((row) => row[2] === '舊課程'), false);
   assert.equal(courseSheet.values.some((row) => row[2] === '空環 1'), false);
+});
+
+test('manual sync audit write stays inside one script lock without nested acquisition', () => {
+  const { backend, services, spreadsheet, adminToken } = createSyncBackend({
+    pages: [[{
+      id: 1100,
+      classTime: '2026-08-10T10:30:00Z',
+      class: { id: 2100, nameZhHant: '空環 Lv.1' },
+      instructors: [{ id: 3100, firstName: '代課', lastName: '老師', isSubstitute: true }],
+    }]],
+  });
+  const originalAppendAudit = backend.appendAudit_;
+  const waitsBeforeSync = services.__lockState.waits;
+  const releasesBeforeSync = services.__lockState.releases;
+  let auditLockDepth = -1;
+  backend.appendAudit_ = (event) => {
+    auditLockDepth = services.__lockState.depth;
+    return originalAppendAudit(event);
+  };
+
+  backend.syncCourseListFromApi(adminToken);
+
+  const auditSheet = spreadsheet.getSheetByName('操作紀錄');
+  assert.equal(auditLockDepth, 1);
+  assert.equal(services.__lockState.waits, waitsBeforeSync + 1);
+  assert.equal(services.__lockState.releases, releasesBeforeSync + 1);
+  assert.equal(services.__lockState.depth, 0);
+  assert.equal(auditSheet.values.length, 2);
+  assert.equal(auditSheet.values[1][2], '同步 OB 課表');
 });
 
 test('manual sync no longer exposes an hourly trigger installation command', () => {

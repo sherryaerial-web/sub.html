@@ -92,7 +92,7 @@ function createFrontendRuntime(fixtures = {}) {
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   vm.createContext(context);
   vm.runInContext(script, context, { filename: 'index.html' });
-  return { context, elements, getElement };
+  return { context, elements, getElement, claimCard, claimControls };
 }
 
 test('keeps API secrets out of the public frontend', () => {
@@ -318,4 +318,34 @@ test('marks the note required as soon as a same-capability teacher chooses anoth
   assert.equal(context.claimNoteIsRequired(item, 'original', '空環'), false);
   assert.equal(context.claimNoteIsRequired(item, 'existing', '空環'), false);
   assert.equal(context.claimNoteIsRequired(item, 'existing', '舞綢'), true);
+});
+
+test('keeps duplicate course names distinct by classId in the existing-class selector', async () => {
+  const { context, getElement, claimCard, claimControls } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [
+        { classId: 'class-ring-1', courseName: '空環 Lv.1', category: '空環' },
+        { classId: 'class-ring-2', courseName: '空環 Lv.1', category: '空環' },
+      ],
+    },
+    getAvailableSubstitutes: [],
+  });
+  await Promise.resolve();
+
+  await context.fetchAvailableSubstitutes();
+
+  assert.equal(context.findSelectedClaimClass('class-ring-2').classId, 'class-ring-2');
+  assert.match(getElement('existing-class-options').innerHTML, /value="class-ring-1"/);
+  assert.match(getElement('existing-class-options').innerHTML, /value="class-ring-2"/);
+  claimControls['input[type="radio"]:checked'].value = 'existing';
+  claimControls['.existing-class-search'].value = 'class-ring-2';
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
+    handlingType: 'existing',
+    actualClassId: 'class-ring-2',
+    actualCourseName: '空環 Lv.1',
+    category: '空環',
+    difficulty: '',
+    note: '',
+  });
 });

@@ -1648,16 +1648,77 @@ test('same-apparatus change keeps difficulty and note optional', () => {
   assert.equal(normalized.note, '');
 });
 
-test('claim options return capabilities and searchable OB classes without account secrets', () => {
-  const { backend, teacherASession } = createInvitationBackend({ teacherACapabilities: '空環、瑜伽' });
+test('claim options return only invited teacher capabilities and authorised OB classes', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    teacherACapabilities: '空環、瑜伽',
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
 
   const options = backend.getClaimOptions_(teacherASession);
 
   assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空環', '瑜伽']);
   assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
     { classId: 'class-ring-1', courseName: '空環 Lv.1', category: '空環' },
-    { classId: 'class-silk-1', courseName: '舞綢 Lv.1', category: '舞綢' },
   ]);
   assert.equal(options.pinHash, undefined);
   assert.equal(options.role, undefined);
+});
+
+test('uninvited claim-options route returns no capabilities or OB classes', () => {
+  const { backend, teacherAToken } = createInvitationBackend({ teacherACapabilities: '空環' });
+
+  const response = JSON.parse(backend.doGet({ parameter: {
+    action: 'getClaimOptions',
+    sessionToken: teacherAToken,
+  } }).text);
+
+  assert.equal(response.status, 'success');
+  assert.deepEqual(response.data, { capabilities: [], classes: [] });
+});
+
+test('paused claim-options route returns no capabilities or OB classes to an invited teacher', () => {
+  const { backend, adminSession, adminToken, teacherAToken } = createInvitationBackend({
+    teacherACapabilities: '空環',
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  backend.pauseClaims_({ teacherName: '管理員甲', role: '管理員' }, true);
+
+  const response = JSON.parse(backend.doGet({ parameter: {
+    action: 'getClaimOptions',
+    sessionToken: teacherAToken,
+    adminToken,
+  } }).text);
+
+  assert.equal(response.status, 'success');
+  assert.deepEqual(response.data, { capabilities: [], classes: [] });
+});
+
+test('existing-course change resolves duplicate display names by the selected classId', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    teacherACapabilities: '空環',
+    courseRows: [
+      ['2026/08/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-ring-1', 'class-ring-1', 'teacher-a', '否', ''],
+      ['2026/08/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-ring-2', 'class-ring-2', 'teacher-b', '否', ''],
+      ['2026/08/01', '11:00', '舞綢 Lv.1', '老師丙', 'calendar-silk', 'class-silk-1', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      '2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '舞綢 Lv.1',
+      '確認中', '', '', '', 'leave-duplicate-name', 'calendar-silk',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-duplicate-name',
+    handlingType: 'existing',
+    actualClassId: 'class-ring-2',
+    actualCourseName: '空環 Lv.1',
+    category: '空環',
+    difficulty: '',
+    note: '改成空環。',
+  }]);
+
+  const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-duplicate-name');
+  assert.equal(claimedRow[11], 'class-ring-2');
+  assert.equal(claimedRow[12], '空環 Lv.1');
 });

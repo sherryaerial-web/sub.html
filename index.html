@@ -1206,13 +1206,13 @@
 
     function renderClaimClassOptions() {
       byId("existing-class-options").innerHTML = getTeachableClaimClasses().map((item) =>
-        `<option value="${escapeHtml(item.courseName)}">${escapeHtml(item.category)}</option>`
+        `<option value="${escapeHtml(item.classId)}" label="${escapeHtml(`${item.courseName}｜${item.category}｜${item.classId}`)}"></option>`
       ).join("");
     }
 
     function findSelectedClaimClass(value) {
-      const wanted = normalizeCourseName(value);
-      return getTeachableClaimClasses().find((item) => normalizeCourseName(item.courseName) === wanted) || null;
+      const wantedClassId = String(value || "").trim();
+      return getTeachableClaimClasses().find((item) => item.classId === wantedClassId) || null;
     }
 
     function groupAvailableSubstitutesByDate(items) {
@@ -1289,7 +1289,7 @@
               <div class="claim-field full existing-class-panel" hidden>
                 <label>搜尋 OB 現有課程 <span class="claim-required">必填</span></label>
                 <input class="claim-control class-search existing-class-search" type="text"
-                  list="existing-class-options" autocomplete="off" placeholder="輸入課名搜尋">
+                  list="existing-class-options" autocomplete="off" placeholder="輸入課名或課程代碼搜尋">
               </div>
 
               <div class="claim-field new-course-panel" hidden>

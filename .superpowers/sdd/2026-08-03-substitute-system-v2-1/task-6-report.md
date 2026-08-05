@@ -2,6 +2,14 @@
 
 Status: completed
 
+## Review Round 1 Fixes
+
+- `getClaimOptions_` now returns an empty result unless the authenticated teacher has an active invitation and claiming is not globally paused.
+- Claim options are filtered server-side to the teacher's protected capability categories before OB classes are returned.
+- Existing OB class choices now use the stable `classId` as the datalist value. The visible label includes course name, category, and class ID so duplicate display names remain distinguishable.
+- Frontend lookup and claim payload construction resolve the exact selected class ID; backend validation and Sheet persistence also resolve by that class ID.
+- Added direct-route tests for uninvited and paused claim options plus duplicate-name regression tests for frontend payload and backend persistence.
+
 ## Implemented
 
 - Added protected teacher capability data in the appended `可教授類別` account column.
@@ -24,7 +32,8 @@ Status: completed
 
 ## Verification
 
-- `node --test tests/backend-core.test.js tests/frontend-contract.test.js`: 84 passed, 0 failed.
+- Focused claim-options and duplicate-name tests passed.
+- `node --test tests/*.test.js`: 88 passed, 0 failed.
 - `Code.gs` and the inline `index.html` script both passed JavaScript syntax parsing.
 - `git diff --check` passed.
 - Secret scan found no embedded JWT or frontend bearer token. The expected server-side bearer header remains in `Code.gs`.

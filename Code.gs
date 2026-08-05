@@ -1104,9 +1104,15 @@ function getAvailableSubstitutes_(session) {
 function getClaimOptions_(session) {
   var teacher = getSessionTeacherName_(session);
   assertTeacherExists_(teacher);
+  if (areClaimsPaused_() || !hasActiveInvitation_(teacher)) {
+    return { capabilities: [], classes: [] };
+  }
+  var capabilities = getTeacherCapabilities_(teacher);
   return {
-    capabilities: getTeacherCapabilities_(teacher),
-    classes: getObClassOptions_()
+    capabilities: capabilities,
+    classes: getObClassOptions_().filter(function(item) {
+      return capabilities.indexOf(item.category) !== -1;
+    })
   };
 }
 

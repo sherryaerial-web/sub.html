@@ -18,7 +18,7 @@ var SHEET_HEADERS = {
     '狀態', '代課老師', '備註', '入系統', '代課編號',
     'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
     '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
-    '實際課程類別'
+    '實際課程類別', '替代 OB Calendar ID'
   ],
   INVITATIONS: ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
   AUDIT: ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'],
@@ -469,7 +469,8 @@ function doGet(e) {
       getClaimOptions: true,
       getMySubs: true,
       getMyCourses: true,
-      getMyLeaves: true
+      getMyLeaves: true,
+      getAdminDashboard: true
     };
     var session = authenticatedActions[action]
       ? requireSession_(e.parameter.sessionToken)
@@ -479,7 +480,8 @@ function doGet(e) {
       getClaimOptions: true,
       getMySubs: true,
       getMyCourses: true,
-      getMyLeaves: true
+      getMyLeaves: true,
+      getAdminDashboard: true
     }[action]) {
       ensureSystemStructure_();
     }
@@ -489,7 +491,8 @@ function doGet(e) {
       getClaimOptions: function() { return getClaimOptions_(session); },
       getMySubs: function() { return getMySubs_(session.teacherName); },
       getMyCourses: function() { return getMyCourses_(session); },
-      getMyLeaves: function() { return getMyLeaves_(session); }
+      getMyLeaves: function() { return getMyLeaves_(session); },
+      getAdminDashboard: function() { return getAdminDashboard_(session); }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
     return createJsonResponse_({ status: 'success', data: handlers[action]() });
@@ -537,6 +540,37 @@ function doPost(e) {
       },
       pauseClaims: function() {
         return pauseClaims_(session, parseBoolean_(parameters.paused, '暫停設定'));
+      },
+      cancelLeave: function() {
+        return cancelLeave_(session, parameters.substituteId);
+      },
+      requestLeaveCancellation: function() {
+        return requestLeaveCancellation_(session, parameters.substituteId, parameters.reason);
+      },
+      requestClaimWithdrawal: function() {
+        return requestClaimWithdrawal_(session, parameters.substituteId, parameters.reason);
+      },
+      resolveChangeRequest: function() {
+        return resolveChangeRequest_(
+          session,
+          parameters.substituteId,
+          parameters.decision,
+          parameters.reason
+        );
+      },
+      reconcileObChanges: function() {
+        return reconcileObChanges_(session);
+      },
+      linkReplacementCalendarItem: function() {
+        return linkReplacementCalendarItem_(
+          session,
+          parameters.substituteId,
+          parameters.replacementCalendarId
+        );
+      },
+      syncObCalendar: function() {
+        assertAdminSession_(session);
+        return syncCourseListFromApi(parameters.sessionToken);
       }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
@@ -676,7 +710,7 @@ function fetchCalendarPages_(token, dateFrom, dateTo) {
 }
 
 function syncCourseListFromApi(sessionToken) {
-  requireAdmin_(sessionToken);
+  var admin = requireAdmin_(sessionToken);
 
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) {
@@ -756,6 +790,14 @@ function syncCourseListFromApi(sessionToken) {
     lock.releaseLock();
   }
 
+  appendAudit_({
+    actor: admin.teacherName,
+    action: '同步 OB 課表',
+    targetId: range.dateFrom + '~' + range.dateTo,
+    before: '',
+    after: String(normalized.length) + ' 筆',
+    reason: ''
+  });
   return {
     status: 'success',
     count: normalized.length,
@@ -865,6 +907,7 @@ function getMyLeaves_(session) {
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   ensureLeaveSheetHeaders_(sheet);
 
+  var auditByTarget = getAuditHistoryMap_();
   return sheet.getDataRange().getValues().slice(1).filter(function(r) {
     return cleanText_(r[1]) === teacher;
   }).map(function(r) {
@@ -883,7 +926,10 @@ function getMyLeaves_(session) {
       'OB 核對狀態': cleanText_(r[15]),
       'OB 核對時間': cleanText_(r[16]),
       '差異原因': cleanText_(r[17]),
-      '異動狀態': cleanText_(r[18])
+      '異動狀態': cleanText_(r[18]),
+      '可自行取消': canSelfCancelLeaveRow_(r),
+      '可申請取消': canRequestLeaveCancellationRow_(r),
+      '異動紀錄': auditByTarget[cleanText_(r[9])] || []
     };
   }).sort(function(a, b) {
     return [b['日期'], b['時段'], b['登記時間']].join('|')
@@ -1220,6 +1266,7 @@ function getMySubs_(teacherName) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   ensureLeaveSheetHeaders_(sheet);
+  var auditByTarget = getAuditHistoryMap_();
   return sheet.getDataRange().getValues().slice(1).filter(function(r) {
     return cleanText_(r[6]) === name && cleanText_(r[5]) === '已領取';
   }).map(function(r) {
@@ -1235,7 +1282,10 @@ function getMySubs_(teacherName) {
       '實際課程名稱': cleanText_(r[12]),
       '預計難度': cleanText_(r[13]),
       '處理類型': cleanText_(r[14]),
-      '實際課程類別': cleanText_(r[19])
+      '實際課程類別': cleanText_(r[19]),
+      '異動狀態': cleanText_(r[18]),
+      '可申請退出': cleanText_(r[18]) !== '申請退出中',
+      '異動紀錄': auditByTarget[cleanText_(r[9])] || []
     };
   });
 }
@@ -1397,7 +1447,12 @@ function claimSubstitute_(session, items) {
       nextRow[12] = change.actualCourseName;
       nextRow[13] = change.difficulty;
       nextRow[14] = change.handlingType;
+      nextRow[15] = '待核對';
+      nextRow[16] = '';
+      nextRow[17] = '';
+      nextRow[18] = '';
       nextRow[19] = change.category;
+      nextRow[20] = '';
       return {
         sheetRow: dataIndex + 1,
         rowValues: nextRow,
@@ -1406,7 +1461,7 @@ function claimSubstitute_(session, items) {
     });
 
     updates.forEach(function(update) {
-      leaveSheet.getRange(update.sheetRow, 6, 1, 15).setValues([update.rowValues.slice(5, 20)]);
+      leaveSheet.getRange(update.sheetRow, 6, 1, 16).setValues([update.rowValues.slice(5, 21)]);
       appendAudit_({
         actor: teacher,
         action: '領取代課',
@@ -1420,6 +1475,390 @@ function claimSubstitute_(session, items) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function cancelLeave_(session, substituteId) {
+  var teacher = getSessionTeacherName_(session);
+  var id = requireSubstituteId_(substituteId);
+  return withScriptLock_(function() {
+    var record = getLeaveRecordByIdUnlocked_(id);
+    if (cleanText_(record.row[1]) !== teacher) throw new Error('只能取消自己的請假。');
+    if (!canSelfCancelLeaveRow_(record.row)) {
+      throw new Error('這堂課已有人領取或已開始處理 OB，請改用申請取消。');
+    }
+
+    var before = cleanText_(record.row[5]);
+    record.sheet.getRange(record.rowNumber, 6).setValue('已取消');
+    record.sheet.getRange(record.rowNumber, 19).setValue('已自行取消');
+    appendAudit_({
+      actor: teacher,
+      action: '自行取消請假',
+      targetId: id,
+      before: before,
+      after: '已取消',
+      reason: ''
+    });
+    return { substituteId: id, status: '已取消' };
+  });
+}
+
+function requestLeaveCancellation_(session, substituteId, reason) {
+  var teacher = getSessionTeacherName_(session);
+  var id = requireSubstituteId_(substituteId);
+  var requestReason = requireChangeReason_(reason);
+  return withScriptLock_(function() {
+    var record = getLeaveRecordByIdUnlocked_(id);
+    if (cleanText_(record.row[1]) !== teacher) throw new Error('只能申請取消自己的請假。');
+    if (canSelfCancelLeaveRow_(record.row)) throw new Error('這堂課目前可以直接取消。');
+    if (!canRequestLeaveCancellationRow_(record.row)) throw new Error('目前狀態無法申請取消。');
+
+    var before = cleanText_(record.row[18]);
+    record.sheet.getRange(record.rowNumber, 19).setValue('申請取消中');
+    appendAudit_({
+      actor: teacher,
+      action: '申請取消請假',
+      targetId: id,
+      before: before,
+      after: '申請取消中',
+      reason: requestReason
+    });
+    return { substituteId: id, status: '申請取消中' };
+  });
+}
+
+function requestClaimWithdrawal_(session, substituteId, reason) {
+  var teacher = getSessionTeacherName_(session);
+  var id = requireSubstituteId_(substituteId);
+  var requestReason = requireChangeReason_(reason);
+  return withScriptLock_(function() {
+    var record = getLeaveRecordByIdUnlocked_(id);
+    if (cleanText_(record.row[5]) !== '已領取' || cleanText_(record.row[6]) !== teacher) {
+      throw new Error('只有目前的代課老師可以申請退出。');
+    }
+    if (cleanText_(record.row[18]) === '申請退出中') throw new Error('退出申請已送出，請等待處理。');
+    if (cleanText_(record.row[18]) === '申請取消中') throw new Error('原老師已申請取消，請等待處理。');
+
+    var before = cleanText_(record.row[18]);
+    record.sheet.getRange(record.rowNumber, 19).setValue('申請退出中');
+    appendAudit_({
+      actor: teacher,
+      action: '申請退出代課',
+      targetId: id,
+      before: before,
+      after: '申請退出中',
+      reason: requestReason
+    });
+    return { substituteId: id, status: '申請退出中' };
+  });
+}
+
+function resolveChangeRequest_(session, substituteId, decision, reason) {
+  var actor = assertAdminSession_(session);
+  var id = requireSubstituteId_(substituteId);
+  var normalizedDecision = normalizeResolutionDecision_(decision);
+  var resolutionReason = cleanText_(reason);
+  if (normalizedDecision === 'reject' && !resolutionReason) throw new Error('駁回時請填寫原因。');
+
+  return withScriptLock_(function() {
+    var record = getLeaveRecordByIdUnlocked_(id);
+    var row = record.row.slice();
+    while (row.length < SHEET_HEADERS.LEAVES.length) row.push('');
+    var requestState = cleanText_(row[18]);
+    var requestType;
+    var action;
+    var priorSubstitute = cleanText_(row[6]);
+
+    if (requestState === '申請取消中') {
+      requestType = 'cancellation';
+      if (normalizedDecision === 'approve') {
+        row[5] = '已取消';
+        row[18] = '取消申請已核准';
+        action = '核准取消請假';
+      } else {
+        row[18] = '取消申請已駁回';
+        action = '駁回取消請假';
+      }
+    } else if (requestState === '申請退出中') {
+      requestType = 'withdrawal';
+      if (normalizedDecision === 'approve') {
+        row[5] = '確認中';
+        row[6] = '';
+        row[7] = '';
+        row[8] = '';
+        for (var index = 11; index <= 17; index++) row[index] = '';
+        row[18] = '退出已核准，已重新開放';
+        row[19] = '';
+        row[20] = '';
+        action = '核准退出代課';
+      } else {
+        row[18] = '退出申請已駁回';
+        action = '駁回退出代課';
+      }
+    } else {
+      throw new Error('這筆資料目前沒有待處理的取消或退出申請。');
+    }
+
+    record.sheet.getRange(record.rowNumber, 6, 1, 16).setValues([row.slice(5, 21)]);
+    var auditReason = resolutionReason;
+    if (requestType === 'withdrawal' && normalizedDecision === 'approve') {
+      auditReason = ['原代課老師：' + priorSubstitute, resolutionReason].filter(Boolean).join('；');
+    }
+    appendAudit_({
+      actor: actor,
+      action: action,
+      targetId: id,
+      before: requestState,
+      after: row[18],
+      reason: auditReason
+    });
+    return {
+      substituteId: id,
+      requestType: requestType,
+      decision: normalizedDecision,
+      status: cleanText_(row[5])
+    };
+  });
+}
+
+function reconcileObChanges_(session) {
+  var actor = assertAdminSession_(session);
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    ensureLeaveSheetHeaders_(leaveSheet);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    var leaveRows = leaveSheet.getDataRange().getValues();
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var courseByCalendarId = {};
+    courseRows.forEach(function(row) {
+      var calendarId = cleanText_(row[4]);
+      if (calendarId) courseByCalendarId[calendarId] = row;
+    });
+
+    var result = { checked: 0, matched: 0, exceptions: 0 };
+    for (var rowIndex = 1; rowIndex < leaveRows.length; rowIndex++) {
+      var row = leaveRows[rowIndex];
+      if (cleanText_(row[5]) !== '已領取') continue;
+      result.checked += 1;
+      var effectiveCalendarId = cleanText_(row[20]) || cleanText_(row[10]);
+      var obRow = courseByCalendarId[effectiveCalendarId];
+      var differences = [];
+      if (!obRow) {
+        differences.push('找不到 OB 課程（Calendar ID：' + effectiveCalendarId + '）');
+      } else {
+        var expectedTeacher = cleanText_(row[6]);
+        var expectedClassId = cleanText_(row[11]);
+        var expectedCourse = cleanText_(row[12]) || cleanText_(row[4]);
+        if (cleanText_(obRow[3]) !== expectedTeacher) {
+          differences.push('代課老師不一致：預期 ' + expectedTeacher + '，OB 為 ' + cleanText_(obRow[3]));
+        }
+        if (expectedClassId) {
+          if (cleanText_(obRow[5]) !== expectedClassId) {
+            differences.push('課程不一致：預期 Class ID ' + expectedClassId + '，OB 為 ' + cleanText_(obRow[5]));
+          }
+        } else if (normalizeCourseName_(obRow[2]) !== normalizeCourseName_(expectedCourse)) {
+          differences.push('課程不一致：預期 ' + expectedCourse + '，OB 為 ' + cleanText_(obRow[2]));
+        }
+      }
+
+      var now = getTimestamp_();
+      var before = cleanText_(row[15]);
+      if (!differences.length) {
+        leaveSheet.getRange(rowIndex + 1, 9).setValue('已完成');
+        leaveSheet.getRange(rowIndex + 1, 16, 1, 3).setValues([['已核對', now, '']]);
+        result.matched += 1;
+        appendAudit_({ actor: actor, action: 'OB 核對完成', targetId: row[9], before: before, after: '已核對', reason: effectiveCalendarId });
+      } else {
+        var differenceText = differences.join('；');
+        leaveSheet.getRange(rowIndex + 1, 16, 1, 3).setValues([['核對異常', now, differenceText]]);
+        result.exceptions += 1;
+        appendAudit_({ actor: actor, action: 'OB 核對異常', targetId: row[9], before: before, after: '核對異常', reason: differenceText });
+      }
+    }
+    return result;
+  });
+}
+
+function linkReplacementCalendarItem_(session, substituteId, replacementCalendarId) {
+  var actor = assertAdminSession_(session);
+  var id = requireSubstituteId_(substituteId);
+  var replacementId = cleanText_(replacementCalendarId);
+  if (!replacementId) throw new Error('請選擇替代的 OB 課程。');
+
+  return withScriptLock_(function() {
+    var obCourse = findObCourseByCalendarId_(replacementId);
+    if (!obCourse) throw new Error('找不到選擇的替代 OB 課程，請先重新同步。');
+    var record = getLeaveRecordByIdUnlocked_(id);
+    if (cleanText_(record.row[5]) !== '已領取') throw new Error('只有已領取的代課可以連結替代 OB 課程。');
+    var before = cleanText_(record.row[20]) || cleanText_(record.row[10]);
+    record.sheet.getRange(record.rowNumber, 21).setValue(replacementId);
+    record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([['待核對', '', '']]);
+    appendAudit_({
+      actor: actor,
+      action: '連結替代 OB 課程',
+      targetId: id,
+      before: before,
+      after: replacementId,
+      reason: obCourse.courseName
+    });
+    return { substituteId: id, replacementCalendarId: replacementId };
+  });
+}
+
+function getAdminDashboard_(session) {
+  assertAdminSession_(session);
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
+    var accountSheet = requireSheet_(ss, SHEETS.ACCOUNTS);
+    var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    ensureLeaveSheetHeaders_(leaveSheet);
+    ensureSheetHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
+    ensureSheetHeaders_(accountSheet, SHEET_HEADERS.ACCOUNTS);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+
+    var auditByTarget = getAuditHistoryMap_();
+    var leaves = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
+      return cleanText_(row[9]);
+    }).map(function(row) {
+      return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || []);
+    });
+    var activeInvitees = invitationSheet.getDataRange().getValues().slice(1).filter(function(row) {
+      return cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
+    }).map(function(row) {
+      return {
+        invitationId: cleanText_(row[0]),
+        teacherName: cleanText_(row[1]),
+        openedAt: cleanText_(row[2]),
+        viewedAt: cleanText_(row[3])
+      };
+    });
+    var accountHeaders = getHeaderMap_(accountSheet);
+    var teachers = accountSheet.getDataRange().getValues().slice(1).filter(function(row) {
+      return cleanText_(row[accountHeaders['指導者'] - 1]) &&
+        isAccountActive_(row[accountHeaders['是否在職'] - 1]);
+    }).map(function(row) {
+      return cleanText_(row[accountHeaders['指導者'] - 1]);
+    });
+    var replacementOptions = courseSheet.getDataRange().getValues().slice(1).map(function(row) {
+      return {
+        calendarId: cleanText_(row[4]),
+        courseName: cleanText_(row[2]),
+        teacherName: cleanText_(row[3]),
+        date: formatMyDate(row[0]),
+        time: formatMyTime(row[1])
+      };
+    }).filter(function(item) { return item.calendarId; });
+
+    return {
+      paused: areClaimsPaused_(),
+      teachers: teachers,
+      pendingInvitations: leaves.filter(function(item) { return item.status === '確認中'; }),
+      activeInvitees: activeInvitees,
+      obWork: leaves.filter(function(item) { return item.status === '已領取' && item.verificationStatus !== '已核對'; }),
+      changeRequests: leaves.filter(function(item) { return ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1; }),
+      exceptions: leaves.filter(function(item) { return item.verificationStatus === '核對異常'; }),
+      completed: leaves.filter(function(item) { return item.status === '已取消' || item.verificationStatus === '已核對'; }),
+      replacementOptions: replacementOptions
+    };
+  });
+}
+
+function toAdminLeaveItem_(row, auditHistory) {
+  return {
+    substituteId: cleanText_(row[9]),
+    originalTeacher: cleanText_(row[1]),
+    substituteTeacher: cleanText_(row[6]),
+    date: formatMyDate(row[2]),
+    time: formatMyTime(row[3]),
+    originalCourse: cleanText_(row[4]),
+    actualCourse: cleanText_(row[12]) || cleanText_(row[4]),
+    actualClassId: cleanText_(row[11]),
+    difficulty: cleanText_(row[13]),
+    handlingType: cleanText_(row[14]),
+    note: cleanText_(row[7]),
+    status: cleanText_(row[5]),
+    changeStatus: cleanText_(row[18]),
+    verificationStatus: cleanText_(row[15]),
+    verificationTime: cleanText_(row[16]),
+    differenceReason: cleanText_(row[17]),
+    originalCalendarId: cleanText_(row[10]),
+    replacementCalendarId: cleanText_(row[20]),
+    auditHistory: auditHistory
+  };
+}
+
+function getAuditHistoryMap_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEETS.AUDIT);
+  if (!sheet) return {};
+  ensureSheetHeaders_(sheet, SHEET_HEADERS.AUDIT);
+  var history = {};
+  sheet.getDataRange().getValues().slice(1).forEach(function(row) {
+    var targetId = cleanText_(row[3]);
+    if (!targetId) return;
+    if (!history[targetId]) history[targetId] = [];
+    history[targetId].push({
+      time: cleanText_(row[0]),
+      actor: cleanText_(row[1]),
+      action: cleanText_(row[2]),
+      before: cleanText_(row[4]),
+      after: cleanText_(row[5]),
+      reason: cleanText_(row[6])
+    });
+  });
+  return history;
+}
+
+function getLeaveRecordByIdUnlocked_(substituteId) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  ensureLeaveSheetHeaders_(sheet);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][9]) === substituteId) {
+      var row = values[index].slice();
+      while (row.length < SHEET_HEADERS.LEAVES.length) row.push('');
+      return { sheet: sheet, rowNumber: index + 1, row: row };
+    }
+  }
+  throw new Error('找不到指定的請假代課紀錄，請重新整理。');
+}
+
+function canSelfCancelLeaveRow_(row) {
+  return cleanText_(row[5]) === '確認中' && !cleanText_(row[6]) && !hasObProcessingStarted_(row) &&
+    ['申請取消中', '申請退出中'].indexOf(cleanText_(row[18])) === -1;
+}
+
+function canRequestLeaveCancellationRow_(row) {
+  return ['確認中', '已領取'].indexOf(cleanText_(row[5])) !== -1 &&
+    !canSelfCancelLeaveRow_(row) &&
+    ['申請取消中', '申請退出中'].indexOf(cleanText_(row[18])) === -1;
+}
+
+function hasObProcessingStarted_(row) {
+  return [row[8], row[15], row[16], row[17]].some(function(value) { return !!cleanText_(value); });
+}
+
+function requireSubstituteId_(value) {
+  var id = cleanText_(value);
+  if (!id) throw new Error('缺少代課編號。');
+  return id;
+}
+
+function requireChangeReason_(value) {
+  var reason = cleanText_(value);
+  if (!reason) throw new Error('請填寫申請原因。');
+  return reason;
+}
+
+function normalizeResolutionDecision_(value) {
+  var decision = cleanText_(value).toLowerCase();
+  if (['approve', '核准', '同意'].indexOf(decision) !== -1) return 'approve';
+  if (['reject', '駁回', '不同意'].indexOf(decision) !== -1) return 'reject';
+  throw new Error('處理決定無效。');
 }
 
 function validateClaimChange_(claim) {

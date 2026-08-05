@@ -57,7 +57,7 @@ const EXPECTED_LEAVE_HEADERS = [
 const EXPECTED_LEAVE_EXTENSION_HEADERS = [
   'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
   '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
-  '實際課程類別',
+  '實際課程類別', '替代 OB Calendar ID',
 ];
 
 const EXPECTED_ACCOUNT_HEADERS = [
@@ -768,6 +768,9 @@ test('getMyLeaves returns personal status, substitute, intended course, verifica
     'OB 核對時間': '2026-08-04 10:00:00',
     '差異原因': '',
     '異動狀態': '申請取消中',
+    '可自行取消': false,
+    '可申請取消': false,
+    '異動紀錄': [],
   });
 });
 
@@ -1721,4 +1724,164 @@ test('existing-course change resolves duplicate display names by the selected cl
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-duplicate-name');
   assert.equal(claimedRow[11], 'class-ring-2');
   assert.equal(claimedRow[12], '空環 Lv.1');
+});
+
+test('cancel leaves the original row and records a complete audit event', () => {
+  const { backend, leaveSheet, auditSheet, teacherASession } = createInvitationBackend();
+  const rowCount = leaveSheet.values.length;
+
+  const result = backend.cancelLeave_(teacherASession, 'leave-a');
+
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-a');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { substituteId: 'leave-a', status: '已取消' });
+  assert.equal(leaveSheet.values.length, rowCount);
+  assert.equal(row[5], '已取消');
+  assert.equal(row[18], '已自行取消');
+  assert.deepEqual(auditSheet.values.at(-1).slice(1), [
+    '老師甲', '自行取消請假', 'leave-a', '確認中', '已取消', '',
+  ]);
+});
+
+test('cancel rejects claimed or OB-started leave and requires an approval request instead', () => {
+  const { backend, teacherASession } = createInvitationBackend({
+    leaveRows: [
+      ['時間', '老師甲', '2026/08/10', '09:00', '空環', '已領取', '老師乙', '', '', 'leave-claimed-a', 'calendar-a'],
+      ['時間', '老師甲', '2026/08/11', '10:00', '空環', '確認中', '', '', '處理中', 'leave-ob-a', 'calendar-b'],
+    ],
+  });
+
+  assert.throws(() => backend.cancelLeave_(teacherASession, 'leave-claimed-a'), /申請取消/);
+  assert.throws(() => backend.cancelLeave_(teacherASession, 'leave-ob-a'), /申請取消/);
+});
+
+test('cancel request after a claim requires a reason and admin can approve it', () => {
+  const { backend, leaveSheet, auditSheet, teacherASession, adminSession } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師甲', '2026/08/10', '09:00', '空環', '已領取', '老師乙', '', '',
+      'leave-cancel-request', 'calendar-a', 'class-ring-1', '空環 Lv.1', '', '沿用原課程',
+    ]],
+  });
+
+  assert.throws(
+    () => backend.requestLeaveCancellation_(teacherASession, 'leave-cancel-request', ''),
+    /原因/
+  );
+  backend.requestLeaveCancellation_(teacherASession, 'leave-cancel-request', '行程恢復，可以照常上課。');
+  assert.equal(leaveSheet.values[1][18], '申請取消中');
+
+  const result = backend.resolveChangeRequest_(adminSession, 'leave-cancel-request', 'approve', '已確認雙方');
+  assert.equal(result.status, '已取消');
+  assert.equal(leaveSheet.values[1][5], '已取消');
+  assert.equal(leaveSheet.values[1][18], '取消申請已核准');
+  assert.deepEqual(auditSheet.values.slice(1).map((row) => row[2]), [
+    '申請取消請假', '核准取消請假',
+  ]);
+});
+
+test('withdraw request requires the current substitute and a reason', () => {
+  const { backend, leaveSheet, teacherASession, teacherBSession } = createInvitationBackend();
+
+  assert.throws(
+    () => backend.requestClaimWithdrawal_(teacherBSession, 'leave-claimed', ''),
+    /原因/
+  );
+  assert.throws(
+    () => backend.requestClaimWithdrawal_(teacherASession, 'leave-claimed', '臨時有事'),
+    /目前的代課老師/
+  );
+
+  backend.requestClaimWithdrawal_(teacherBSession, 'leave-claimed', '臨時無法上課');
+  assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-claimed')[18], '申請退出中');
+});
+
+test('admin-approved withdraw clears active claim fields and reopens with prior substitute in audit', () => {
+  const { backend, leaveSheet, auditSheet, adminSession, teacherBSession } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師丙', '2026/08/12', '12:00', '空環', '已領取', '老師乙',
+      '沿用原課程；難度：Lv.1', '待處理', 'leave-withdraw', 'calendar-c', 'class-ring-1',
+      '空環 Lv.1', 'Lv.1', '沿用原課程', '待核對', '', '', '', '空環',
+    ]],
+  });
+  backend.requestClaimWithdrawal_(teacherBSession, 'leave-withdraw', '手腕受傷');
+
+  const result = backend.resolveChangeRequest_(adminSession, 'leave-withdraw', 'approve', '同意重新開放');
+
+  const row = leaveSheet.values[1];
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    substituteId: 'leave-withdraw', requestType: 'withdrawal', decision: 'approve', status: '確認中',
+  });
+  assert.equal(row[5], '確認中');
+  assert.equal(row[6], '');
+  assert.equal(row[7], '');
+  assert.equal(row[8], '');
+  assert.deepEqual(row.slice(11, 18), ['', '', '', '', '', '', '']);
+  assert.equal(row[18], '退出已核准，已重新開放');
+  assert.equal(row[19], '');
+  assert.match(auditSheet.values.at(-1)[6], /原代課老師：老師乙/);
+});
+
+test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', '空環 Lv.1', '老師乙', 'calendar-match', 'class-ring-1', 'teacher-b', '是', ''],
+      ['2026/08/11', '10:00', '舞綢 Lv.1', '老師丙', 'calendar-mismatch', 'class-silk-1', 'teacher-c', '是', ''],
+    ],
+    leaveRows: [
+      ['時間', '老師甲', '2026/08/10', '09:00', '空環', '已領取', '老師乙', '', '', 'leave-match', 'calendar-match', 'class-ring-1', '空環 Lv.1', '', '沿用原課程'],
+      ['時間', '老師甲', '2026/08/11', '10:00', '空環', '已領取', '老師乙', '', '', 'leave-mismatch', 'calendar-mismatch', 'class-ring-1', '空環 Lv.1', '', '改用既有 OB 課程'],
+      ['時間', '老師甲', '2026/08/12', '11:00', '空環', '已領取', '老師乙', '', '', 'leave-missing', 'calendar-missing', 'class-ring-1', '空環 Lv.1', '', '沿用原課程'],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 3, matched: 1, exceptions: 2 });
+  const matched = leaveSheet.values.find((row) => row[9] === 'leave-match');
+  const mismatch = leaveSheet.values.find((row) => row[9] === 'leave-mismatch');
+  const missing = leaveSheet.values.find((row) => row[9] === 'leave-missing');
+  assert.equal(matched[8], '已完成');
+  assert.equal(matched[15], '已核對');
+  assert.ok(matched[16]);
+  assert.equal(mismatch[15], '核對異常');
+  assert.match(mismatch[17], /代課老師|課程/);
+  assert.equal(missing[15], '核對異常');
+  assert.match(missing[17], /找不到/);
+});
+
+test('replacement calendar linking preserves the original ID and can then reconcile', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [[
+      '2026/08/15', '13:00', '空環入門', '老師乙', 'calendar-new', 'class-new', 'teacher-b', '是', '',
+    ]],
+    leaveRows: [[
+      '時間', '老師甲', '2026/08/15', '13:00', '舞綢', '已領取', '老師乙', '需要新增', '',
+      'leave-new-calendar', 'calendar-old', '', '空環入門', '', '需要新增課程', '', '', '', '', '空環',
+    ]],
+  });
+
+  backend.linkReplacementCalendarItem_(adminSession, 'leave-new-calendar', 'calendar-new');
+  assert.equal(leaveSheet.values[1][10], 'calendar-old');
+  assert.equal(leaveSheet.values[1][20], 'calendar-new');
+  assert.equal(leaveSheet.values[1][15], '待核對');
+
+  const result = backend.reconcileObChanges_(adminSession);
+  assert.equal(result.matched, 1);
+  assert.equal(leaveSheet.values[1][15], '已核對');
+});
+
+test('admin dashboard separates work queues without exposing account secrets', () => {
+  const { backend, adminSession } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const dashboard = backend.getAdminDashboard_(adminSession);
+  const serialized = JSON.stringify(dashboard);
+
+  assert.equal(dashboard.paused, false);
+  assert.ok(Array.isArray(dashboard.pendingInvitations));
+  assert.ok(Array.isArray(dashboard.activeInvitees));
+  assert.ok(Array.isArray(dashboard.obWork));
+  assert.ok(Array.isArray(dashboard.changeRequests));
+  assert.ok(Array.isArray(dashboard.exceptions));
+  assert.ok(Array.isArray(dashboard.completed));
+  assert.doesNotMatch(serialized, /PIN 雜湊|fixed-salt|Salt/);
 });

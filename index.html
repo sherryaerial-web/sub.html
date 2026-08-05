@@ -516,6 +516,100 @@
     .primary-button:hover { background: var(--accent-hover); }
     .primary-button:disabled { background: #aeb8ba; cursor: not-allowed; }
 
+    .record-actions, .admin-header-actions, .admin-item-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .danger-button {
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid #dfaaa5;
+      border-radius: var(--radius);
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .admin-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .summary-item, .admin-control {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--soft);
+    }
+
+    .summary-item strong { display: block; margin-top: 3px; font-size: 20px; }
+    .summary-item span { color: var(--muted); font-size: 12px; }
+    .admin-control { margin-bottom: 14px; }
+
+    .admin-tabs {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .admin-tab {
+      flex: 0 0 auto;
+      min-height: 40px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .admin-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    .admin-tab-content { margin-top: 16px; }
+
+    .teacher-picker {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+      margin: 10px 0;
+    }
+
+    .teacher-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      font-size: 13px;
+    }
+
+    .admin-select { width: 100%; min-height: 42px; margin-top: 8px; }
+
+    dialog {
+      width: min(calc(100% - 28px), 480px);
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 20px 60px rgba(20, 37, 39, 0.22);
+    }
+
+    dialog::backdrop { background: rgba(19, 33, 35, 0.48); }
+    .dialog-body { padding: 20px; }
+    .dialog-body h3 { margin: 0 0 7px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
     .state {
       padding: 22px 14px;
       border: 1px dashed var(--line);
@@ -565,6 +659,7 @@
       .claim-fields { grid-template-columns: 1fr; }
       .claim-field.full { grid-column: auto; }
       .confirmation-row { grid-template-columns: 108px minmax(0, 1fr); }
+      .admin-summary, .teacher-picker { grid-template-columns: 1fr 1fr; }
     }
 
     @media (max-width: 380px) {
@@ -648,6 +743,10 @@
             <span class="action-title">查看我的代課紀錄</span>
             <span class="action-copy">查看已領取課程與改課內容。</span>
           </button>
+          <button id="admin-entry" class="action-button" type="button" data-view="view-admin" hidden>
+            <span class="action-title">管理工作台</span>
+            <span class="action-copy">邀請、異動、OB 處理與核對。</span>
+          </button>
         </div>
       </section>
 
@@ -708,8 +807,41 @@
           <div class="state">載入中...</div>
         </div>
       </section>
+
+      <section id="view-admin" class="view">
+        <h2 class="section-heading">代課管理工作台</h2>
+        <p class="section-copy">所有操作都會留下紀錄；OB 課表只在您手動同步時更新。</p>
+        <div class="admin-header-actions">
+          <button id="admin-sync" class="compact-button" type="button">同步 OB 課表</button>
+          <button id="admin-reconcile" class="compact-button" type="button">重新核對 OB</button>
+        </div>
+        <div id="admin-summary" class="admin-summary"></div>
+        <div class="admin-tabs" role="tablist" aria-label="管理工作區">
+          <button class="admin-tab active" type="button" data-admin-tab="pendingInvitations">待邀請</button>
+          <button class="admin-tab" type="button" data-admin-tab="activeInvitees">邀請中</button>
+          <button class="admin-tab" type="button" data-admin-tab="obWork">待處理 OB</button>
+          <button class="admin-tab" type="button" data-admin-tab="changeRequests">取消／退出</button>
+          <button class="admin-tab" type="button" data-admin-tab="exceptions">核對異常</button>
+          <button class="admin-tab" type="button" data-admin-tab="completed">已完成</button>
+        </div>
+        <div id="admin-tab-content" class="admin-tab-content">
+          <div class="state">載入中...</div>
+        </div>
+      </section>
     </main>
   </div>
+
+  <dialog id="request-dialog">
+    <form id="request-form" class="dialog-body" method="dialog">
+      <h3 id="request-dialog-title">填寫原因</h3>
+      <p id="request-dialog-copy" class="section-copy"></p>
+      <textarea id="request-reason" class="claim-control" maxlength="240" placeholder="請填寫原因"></textarea>
+      <div class="dialog-actions">
+        <button id="request-cancel" class="compact-button" type="button">返回</button>
+        <button id="request-confirm" class="primary-button" type="submit">確認送出</button>
+      </div>
+    </form>
+  </dialog>
 
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
@@ -722,6 +854,9 @@
     let claimOptions = { capabilities: [], classes: [] };
     let selectedLeaveDates = new Set();
     let selectedLeaveCourses = new Set();
+    let adminDashboard = null;
+    let activeAdminTab = "pendingInvitations";
+    let requestDialogState = null;
 
     const byId = (id) => document.getElementById(id);
 
@@ -881,6 +1016,7 @@
       byId("app-shell").hidden = false;
       byId("current-user").textContent = authState.teacherName;
       byId("home-greeting").textContent = `${authState.teacherName}，您好。`;
+      byId("admin-entry").hidden = authState.role !== "管理員";
       switchView("view-home");
     }
 
@@ -892,6 +1028,8 @@
       pendingLeaves = [];
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
+      adminDashboard = null;
+      byId("admin-entry").hidden = true;
       byId("app-shell").hidden = true;
       byId("auth-shell").hidden = false;
       byId("login-pin").value = "";
@@ -948,6 +1086,9 @@
     }
 
     function switchView(viewId) {
+      if (viewId === "view-admin" && authState.role !== "管理員") {
+        return setNotice("需要管理權限。", "error");
+      }
       clearNotice();
       document.querySelectorAll(".view").forEach((view) => {
         view.classList.toggle("active", view.id === viewId);
@@ -958,6 +1099,7 @@
       if (viewId === "view-myleaves") fetchMyLeaves();
       if (viewId === "view-claim") fetchAvailableSubstitutes();
       if (viewId === "view-mysubs") fetchMySubs();
+      if (viewId === "view-admin") fetchAdminDashboard();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1171,6 +1313,11 @@
                 ${item["差異原因"] ? `<div class="item-meta">核對差異：${escapeHtml(item["差異原因"])}</div>` : ""}
                 <div class="item-meta">異動狀態：${escapeHtml(changeState)}</div>
                 ${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}
+                ${renderAuditHistory(item["異動紀錄"])}
+                <div class="record-actions">
+                  ${item["可自行取消"] ? `<button class="danger-button" type="button" data-leave-action="cancel" data-substitute-id="${escapeHtml(item["代課編號"])}">取消請假</button>` : ""}
+                  ${item["可申請取消"] ? `<button class="danger-button" type="button" data-leave-action="request-cancel" data-substitute-id="${escapeHtml(item["代課編號"])}">申請取消</button>` : ""}
+                </div>
               </div>
             </article>
           `;
@@ -1420,12 +1567,201 @@
               <div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>
               ${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}
               ${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}
+              <div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>
+              ${renderAuditHistory(item["異動紀錄"])}
+              <div class="record-actions">
+                ${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}">申請退出代課</button>` : ""}
+              </div>
             </div>
           </article>
         `).join("");
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
+    }
+
+    function renderAuditHistory(history) {
+      const items = Array.isArray(history) ? history : [];
+      if (!items.length) return "";
+      return `<details class="item-meta"><summary>查看異動紀錄（${items.length}）</summary>${items.map((entry) =>
+        `<div>${escapeHtml(entry.time)}｜${escapeHtml(entry.action)}${entry.reason ? `｜${escapeHtml(entry.reason)}` : ""}</div>`
+      ).join("")}</details>`;
+    }
+
+    async function cancelOwnLeave(substituteId) {
+      if (!window.confirm("確定取消這堂請假嗎？")) return;
+      await callPostApi("cancelLeave", { substituteId });
+      setNotice("請假已取消。");
+      await fetchMyLeaves();
+    }
+
+    async function requestOwnLeaveCancellation(substituteId, reason) {
+      await callPostApi("requestLeaveCancellation", { substituteId, reason });
+      setNotice("取消申請已送出。");
+      await fetchMyLeaves();
+    }
+
+    async function requestOwnClaimWithdrawal(substituteId, reason) {
+      await callPostApi("requestClaimWithdrawal", { substituteId, reason });
+      setNotice("退出代課申請已送出。");
+      await fetchMySubs();
+    }
+
+    function openRequestDialog(options) {
+      requestDialogState = options;
+      byId("request-dialog-title").textContent = options.title;
+      byId("request-dialog-copy").textContent = options.copy || "";
+      byId("request-reason").value = "";
+      byId("request-reason").required = options.reasonRequired !== false;
+      const dialog = byId("request-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+    }
+
+    function closeRequestDialog() {
+      requestDialogState = null;
+      const dialog = byId("request-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+    }
+
+    async function submitRequestDialog(event) {
+      event.preventDefault();
+      if (!requestDialogState) return;
+      const state = requestDialogState;
+      const reason = byId("request-reason").value.trim();
+      if (state.reasonRequired !== false && !reason) return setNotice("請填寫原因。", "error");
+      const button = byId("request-confirm");
+      setButtonBusy(button, true, "處理中...");
+      try {
+        if (state.action === "request-cancel") {
+          await requestOwnLeaveCancellation(state.substituteId, reason);
+        } else if (state.action === "withdraw") {
+          await requestOwnClaimWithdrawal(state.substituteId, reason);
+        } else if (state.action === "resolve") {
+          await resolveAdminChangeRequest(state.substituteId, state.decision, reason);
+        }
+        closeRequestDialog();
+      } catch (error) {
+        setNotice(error.message, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function fetchAdminDashboard() {
+      const content = byId("admin-tab-content");
+      content.innerHTML = '<div class="state">載入中...</div>';
+      try {
+        adminDashboard = await callApi("getAdminDashboard");
+        renderAdminDashboard();
+      } catch (error) {
+        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderAdminDashboard() {
+      const data = adminDashboard || {};
+      byId("admin-summary").innerHTML = [
+        ["待領取", (data.pendingInvitations || []).length],
+        ["待處理 OB", (data.obWork || []).length],
+        ["待處理異動", (data.changeRequests || []).length]
+      ].map(([label, count]) => `<div class="summary-item"><span>${label}</span><strong>${count}</strong></div>`).join("");
+      document.querySelectorAll(".admin-tab").forEach((button) => {
+        button.classList.toggle("active", button.dataset.adminTab === activeAdminTab);
+      });
+      renderAdminTab();
+    }
+
+    function renderAdminTab() {
+      const data = adminDashboard || {};
+      const content = byId("admin-tab-content");
+      if (activeAdminTab === "pendingInvitations") {
+        const activeNames = new Set((data.activeInvitees || []).map((item) => item.teacherName));
+        const teachers = (data.teachers || []).filter((name) => !activeNames.has(name));
+        content.innerHTML = `
+          <div class="admin-control">
+            <strong>開放代課給老師</strong>
+            <div class="teacher-picker">${teachers.map((name) => `<label class="teacher-option"><input class="admin-teacher-checkbox" type="checkbox" value="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></label>`).join("") || "目前沒有其他可邀請老師"}</div>
+            <div class="admin-item-actions">
+              <button class="compact-button" type="button" data-admin-action="open-invitations">開放給勾選老師</button>
+              <button class="compact-button" type="button" data-admin-action="copy-invitation">複製 LINE 邀請文字</button>
+            </div>
+          </div>
+          ${renderAdminItems(data.pendingInvitations, "目前沒有待領取代課")}`;
+      } else if (activeAdminTab === "activeInvitees") {
+        content.innerHTML = `
+          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause">${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>
+          ${(data.activeInvitees || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}">關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
+      } else if (activeAdminTab === "obWork" || activeAdminTab === "exceptions") {
+        const items = data[activeAdminTab] || [];
+        content.innerHTML = items.map((item) => renderAdminObItem(item, data.replacementOptions || [])).join("") || `<div class="state">目前沒有${activeAdminTab === "obWork" ? "待處理 OB" : "核對異常"}</div>`;
+      } else if (activeAdminTab === "changeRequests") {
+        content.innerHTML = (data.changeRequests || []).map((item) => `${renderAdminItem(item)}<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve" data-decision="approve" data-substitute-id="${escapeHtml(item.substituteId)}">核准</button><button class="danger-button" type="button" data-admin-action="resolve" data-decision="reject" data-substitute-id="${escapeHtml(item.substituteId)}">駁回</button></div>`).join("") || '<div class="state">目前沒有取消或退出申請</div>';
+      } else {
+        content.innerHTML = renderAdminItems(data.completed, "目前沒有已完成紀錄");
+      }
+    }
+
+    function renderAdminItems(items, emptyText) {
+      return (items || []).map(renderAdminItem).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`;
+    }
+
+    function renderAdminItem(item) {
+      return `<article class="list-item single-column"><div><div class="item-date">${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div><div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}</div></article>`;
+    }
+
+    function renderAdminObItem(item, options) {
+      return `${renderAdminItem(item)}<div class="admin-control"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}">連結替代課程</button></div></div>`;
+    }
+
+    async function openAdminInvitations() {
+      const teacherNames = [...document.querySelectorAll(".admin-teacher-checkbox:checked")].map((input) => input.value);
+      if (!teacherNames.length) throw new Error("請至少勾選一位老師。");
+      await callPostApi("openInvitations", { teacherNames });
+      setNotice(`已開放給 ${teacherNames.length} 位老師。`);
+      await fetchAdminDashboard();
+    }
+
+    async function closeAdminInvitation(teacherName) {
+      await callPostApi("closeInvitations", { teacherNames: [teacherName] });
+      setNotice("邀請已關閉。");
+      await fetchAdminDashboard();
+    }
+
+    async function toggleAdminPause() {
+      await callPostApi("pauseClaims", { paused: !(adminDashboard && adminDashboard.paused) });
+      await fetchAdminDashboard();
+    }
+
+    async function syncObCalendar() {
+      const result = await callPostApi("syncObCalendar");
+      setNotice(`OB 課表同步完成：${result.count} 筆。`);
+      await fetchAdminDashboard();
+    }
+
+    async function reconcileAdminObChanges() {
+      const result = await callPostApi("reconcileObChanges");
+      setNotice(`核對完成：一致 ${result.matched} 筆，異常 ${result.exceptions} 筆。`);
+      await fetchAdminDashboard();
+    }
+
+    async function linkAdminReplacement(substituteId, replacementCalendarId) {
+      await callPostApi("linkReplacementCalendarItem", { substituteId, replacementCalendarId });
+      setNotice("替代 OB 課程已連結，請重新核對。");
+      await fetchAdminDashboard();
+    }
+
+    async function resolveAdminChangeRequest(substituteId, decision, reason) {
+      await callPostApi("resolveChangeRequest", { substituteId, decision, reason });
+      setNotice(decision === "approve" ? "申請已核准。" : "申請已駁回。");
+      await fetchAdminDashboard();
+    }
+
+    async function copyInvitationMessage() {
+      const text = "您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。";
+      await navigator.clipboard.writeText(text);
+      setNotice("LINE 邀請文字已複製。");
     }
 
     byId("login-form").addEventListener("submit", login);
@@ -1435,6 +1771,72 @@
     byId("clear-leave-dates").addEventListener("click", clearLeaveDates);
     byId("leave-submit").addEventListener("click", submitLeave);
     byId("claim-submit").addEventListener("click", submitClaim);
+    byId("request-form").addEventListener("submit", submitRequestDialog);
+    byId("request-cancel").addEventListener("click", closeRequestDialog);
+    byId("my-leaves-list").addEventListener("click", async (event) => {
+      const button = event.target.closest ? event.target.closest("[data-leave-action]") : null;
+      if (!button) return;
+      try {
+        if (button.dataset.leaveAction === "cancel") {
+          await cancelOwnLeave(button.dataset.substituteId);
+        } else {
+          openRequestDialog({
+            action: "request-cancel",
+            substituteId: button.dataset.substituteId,
+            title: "申請取消請假",
+            copy: "這堂課已有人領取或進入 OB 處理，請填寫原因交由管理員確認。"
+          });
+        }
+      } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("my-subs-list").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-sub-action='withdraw']") : null;
+      if (!button) return;
+      openRequestDialog({
+        action: "withdraw",
+        substituteId: button.dataset.substituteId,
+        title: "申請退出代課",
+        copy: "管理員核准後，這堂課才會重新放回待領清單。"
+      });
+    });
+    document.querySelectorAll(".admin-tab").forEach((button) => {
+      button.addEventListener("click", () => {
+        activeAdminTab = button.dataset.adminTab;
+        renderAdminDashboard();
+      });
+    });
+    byId("admin-tab-content").addEventListener("click", async (event) => {
+      const button = event.target.closest ? event.target.closest("[data-admin-action]") : null;
+      if (!button) return;
+      try {
+        const action = button.dataset.adminAction;
+        if (action === "open-invitations") await openAdminInvitations();
+        if (action === "copy-invitation") await copyInvitationMessage();
+        if (action === "close-invitation") await closeAdminInvitation(button.dataset.teacherName);
+        if (action === "toggle-pause") await toggleAdminPause();
+        if (action === "link-replacement") {
+          const select = document.querySelector(`[data-replacement-select="${CSS.escape(button.dataset.substituteId)}"]`);
+          if (!select || !select.value) throw new Error("請先選擇替代 OB 課程。");
+          await linkAdminReplacement(button.dataset.substituteId, select.value);
+        }
+        if (action === "resolve") {
+          openRequestDialog({
+            action: "resolve",
+            substituteId: button.dataset.substituteId,
+            decision: button.dataset.decision,
+            title: button.dataset.decision === "approve" ? "核准申請" : "駁回申請",
+            copy: button.dataset.decision === "approve" ? "備註可以留空。" : "請填寫駁回原因。",
+            reasonRequired: button.dataset.decision !== "approve"
+          });
+        }
+      } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("admin-sync").addEventListener("click", async () => {
+      try { await syncObCalendar(); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("admin-reconcile").addEventListener("click", async () => {
+      try { await reconcileAdminObChanges(); } catch (error) { setNotice(error.message, "error"); }
+    });
     function handleClaimEditorChange(event) {
       const card = event.target.closest ? event.target.closest(".claim-card") : null;
       if (card) updateClaimCardState(card);

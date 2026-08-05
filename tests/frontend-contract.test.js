@@ -349,3 +349,35 @@ test('keeps duplicate course names distinct by classId in the existing-class sel
     note: '',
   });
 });
+
+test('teacher records expose cancel and withdraw request actions', () => {
+  assert.match(html, /callPostApi\(["']cancelLeave["']/);
+  assert.match(html, /callPostApi\(["']requestLeaveCancellation["']/);
+  assert.match(html, /callPostApi\(["']requestClaimWithdrawal["']/);
+  assert.match(html, /申請取消/);
+  assert.match(html, /申請退出代課/);
+});
+
+test('admin-only dashboard provides all work queues and required actions', () => {
+  assert.match(html, /id=["']view-admin["']/);
+  assert.match(html, /待邀請/);
+  assert.match(html, /邀請中/);
+  assert.match(html, /待處理 OB/);
+  assert.match(html, /取消.*退出/);
+  assert.match(html, /核對異常/);
+  assert.match(html, /已完成/);
+  assert.match(html, /callApi\(["']getAdminDashboard["']/);
+  assert.match(html, /callPostApi\(["']openInvitations["']/);
+  assert.match(html, /callPostApi\(["']closeInvitations["']/);
+  assert.match(html, /callPostApi\(["']pauseClaims["']/);
+  assert.match(html, /callPostApi\(["']syncObCalendar["']/);
+  assert.match(html, /callPostApi\(["']reconcileObChanges["']/);
+  assert.match(html, /callPostApi\(["']linkReplacementCalendarItem["']/);
+  assert.match(html, /callPostApi\(["']resolveChangeRequest["']/);
+  assert.match(html, /複製 LINE 邀請文字/);
+});
+
+test('admin entry stays hidden for teachers and is enabled only by the authenticated role', () => {
+  assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
+  assert.match(html, /admin-entry["']\)\.hidden\s*=\s*authState\.role\s*!==\s*["']管理員["']/);
+});

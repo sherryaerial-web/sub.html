@@ -1561,12 +1561,26 @@ function getAvailableSubstitutes_(session) {
 function isOrdinaryOpenLeaveRow_(row) {
   return cleanText_(row[5]) === '確認中' &&
     !cleanText_(row[6]) &&
-    !cleanText_(row[8]) &&
     !!cleanText_(row[9]) &&
     !!cleanText_(row[10]) &&
-    !cleanText_(row[15]) &&
-    !cleanText_(row[18]) &&
-    !cleanText_(row[20]);
+    !getOpenLeaveBlockingState_(row);
+}
+
+function getOpenLeaveBlockingState_(row) {
+  var verificationState = cleanText_(row[15]);
+  if (verificationState) return verificationState;
+
+  var changeState = cleanText_(row[18]);
+  if ([
+    '申請取消中',
+    '申請退出中',
+    '取消後待回復 OB',
+    '退出後待回復 OB'
+  ].indexOf(changeState) !== -1) {
+    return changeState;
+  }
+
+  return cleanText_(row[8]) === '待回復' ? '待回復' : '';
 }
 
 function recordInvitationFirstView_(session) {
@@ -1900,7 +1914,7 @@ function claimSubstitute_(session, items) {
         throw new Error('此課程尚未連結 OB Calendar ID，請通知管理員先完成核對。');
       }
       if (!isOrdinaryOpenLeaveRow_(row)) {
-        var unresolvedState = [row[15], row[18], row[8]].map(cleanText_).filter(Boolean).join('／');
+        var unresolvedState = getOpenLeaveBlockingState_(row);
         throw new Error(
           '此課程尚待管理員完成 OB 核對或回復' +
           (unresolvedState ? '（' + unresolvedState + '）' : '') +
@@ -2062,6 +2076,7 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
     var requestState = cleanText_(row[18]);
     var requestType;
     var action;
+    var auditAfter = '';
     var priorSubstitute = cleanText_(row[6]);
 
     if (requestState === '申請取消中') {
@@ -2075,7 +2090,8 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
         row[18] = '取消後待回復 OB';
         action = '核准取消請假';
       } else {
-        row[18] = '取消申請已駁回';
+        row[18] = '';
+        auditAfter = '取消申請已駁回';
         action = '駁回取消請假';
       }
     } else if (requestState === '申請退出中') {
@@ -2110,7 +2126,7 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
         action: action,
         targetId: id,
         before: requestState,
-        after: row[18],
+        after: auditAfter || row[18],
         reason: auditReason
       }]);
       return {

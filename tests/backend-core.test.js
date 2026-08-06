@@ -2425,6 +2425,87 @@ test('cancel request after a claim requires a reason and admin can approve it', 
   assert.ok(afterRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
 });
 
+test('rejected cancellation restores an OB-started pending leave to list and claim while audit keeps rejection', () => {
+  const {
+    backend,
+    leaveSheet,
+    auditSheet,
+    adminSession,
+    teacherASession,
+    teacherBSession,
+  } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '處理中',
+      'leave-cancel-rejected', 'calendar-b', '', '', '', '', '', '', '', '', '', '',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  backend.requestLeaveCancellation_(teacherBSession, 'leave-cancel-rejected', '想取消這堂課');
+  assert.equal(leaveSheet.values[1][18], '申請取消中');
+  assert.ok(!backend.getAvailableSubstitutes_(teacherASession)
+    .some((item) => item['代課編號'] === 'leave-cancel-rejected'));
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-cancel-rejected', changeNote: '' }]),
+    /尚待管理員|申請取消中/
+  );
+
+  const resolution = backend.resolveChangeRequest_(
+    adminSession,
+    'leave-cancel-rejected',
+    'reject',
+    '維持原代課需求'
+  );
+
+  const row = leaveSheet.values[1];
+  assert.equal(resolution.status, '確認中');
+  assert.equal(row[5], '確認中');
+  assert.equal(row[8], '處理中');
+  assert.equal(row[18] || '', '');
+  const rejectionAudit = auditSheet.values.find((auditRow) =>
+    auditRow[2] === '駁回取消請假' && auditRow[3] === 'leave-cancel-rejected');
+  assert.ok(rejectionAudit);
+  assert.equal(rejectionAudit[5], '取消申請已駁回');
+  assert.equal(rejectionAudit[6], '維持原代課需求');
+  assert.ok(backend.getAdminDashboard_(adminSession).pendingInvitations
+    .some((item) => item.substituteId === 'leave-cancel-rejected'));
+  assert.ok(backend.getAvailableSubstitutes_(teacherASession)
+    .some((item) => item['代課編號'] === 'leave-cancel-rejected'));
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-cancel-rejected',
+      changeNote: '',
+    }]))),
+    { count: 1 }
+  );
+  assert.equal(row[5], '已領取');
+  assert.equal(row[6], '老師甲');
+  assert.ok(auditSheet.values.some((auditRow) =>
+    auditRow[2] === '駁回取消請假' && auditRow[3] === 'leave-cancel-rejected'));
+});
+
+test('terminal I and S history labels do not block an otherwise eligible pending claim', () => {
+  const { backend, leaveSheet, teacherASession } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '已完成',
+      'leave-terminal-history', 'calendar-b', '', '', '', '', '', '', '', '取消申請已駁回', '', '',
+    ]],
+    invitationRows: [['invite-a', '老師甲', '時間', '', '開放中', '']],
+  });
+
+  assert.ok(backend.getAvailableSubstitutes_(teacherASession)
+    .some((item) => item['代課編號'] === 'leave-terminal-history'));
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-terminal-history',
+      changeNote: '',
+    }]))),
+    { count: 1 }
+  );
+  assert.equal(leaveSheet.values[1][5], '已領取');
+});
+
 test('withdraw request requires the current substitute and a reason', () => {
   const { backend, leaveSheet, teacherASession, teacherBSession } = createInvitationBackend();
 

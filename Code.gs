@@ -1540,7 +1540,7 @@ function getAvailableSubstitutes_(session) {
     throw new Error('代課資料尚未完成初始化，請通知管理員執行系統設定。');
   }
   var pendingRows = allPendingRows.filter(function(row) {
-    return cleanText_(row[10]) && cleanText_(row[15]) !== '待人工核對';
+    return isOrdinaryOpenLeaveRow_(row);
   });
   return pendingRows.map(function(row) {
     return {
@@ -1556,6 +1556,17 @@ function getAvailableSubstitutes_(session) {
     return [a['日期'], a['時段'], a['原老師'], a['代課編號']].join('|')
       .localeCompare([b['日期'], b['時段'], b['原老師'], b['代課編號']].join('|'));
   });
+}
+
+function isOrdinaryOpenLeaveRow_(row) {
+  return cleanText_(row[5]) === '確認中' &&
+    !cleanText_(row[6]) &&
+    !cleanText_(row[8]) &&
+    !!cleanText_(row[9]) &&
+    !!cleanText_(row[10]) &&
+    !cleanText_(row[15]) &&
+    !cleanText_(row[18]) &&
+    !cleanText_(row[20]);
 }
 
 function recordInvitationFirstView_(session) {
@@ -1885,6 +1896,17 @@ function claimSubstitute_(session, items) {
       if (cleanText_(row[5]) !== '確認中') {
         throw new Error('此課程剛被其他老師領取，請重新整理。');
       }
+      if (!cleanText_(row[10])) {
+        throw new Error('此課程尚未連結 OB Calendar ID，請通知管理員先完成核對。');
+      }
+      if (!isOrdinaryOpenLeaveRow_(row)) {
+        var unresolvedState = [row[15], row[18], row[8]].map(cleanText_).filter(Boolean).join('／');
+        throw new Error(
+          '此課程尚待管理員完成 OB 核對或回復' +
+          (unresolvedState ? '（' + unresolvedState + '）' : '') +
+          '，暫時不能領取。'
+        );
+      }
       if (cleanText_(row[1]) === teacher) {
         throw new Error('不能領取自己原本的課程。');
       }
@@ -2147,6 +2169,7 @@ function reconcileObChanges_(session) {
 
       var now = getTimestamp_();
       var before = cleanText_(row[15]);
+      var auditAfter = '';
       var nextRow = row.slice();
       while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
       if (!differences.length) {
@@ -2161,7 +2184,8 @@ function reconcileObChanges_(session) {
           nextRow[15] = '';
           nextRow[16] = '';
           nextRow[17] = '';
-          nextRow[18] = '退出已核准，已重新開放';
+          nextRow[18] = '';
+          auditAfter = '已重新開放';
         } else {
           nextRow[8] = '已完成';
           nextRow[15] = '已核對';
@@ -2174,7 +2198,7 @@ function reconcileObChanges_(session) {
           action: expectation.restoreType ? 'OB 回復完成' : 'OB 核對完成',
           targetId: row[9],
           before: before,
-          after: cleanText_(nextRow[15]) || cleanText_(nextRow[18]),
+          after: auditAfter || cleanText_(nextRow[15]) || cleanText_(nextRow[18]),
           reason: effectiveCalendarId
         });
       } else {
@@ -2302,9 +2326,10 @@ function getAdminDashboard_(session) {
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
 
     var auditByTarget = getAuditHistoryMap_();
-    var leaves = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    var leaveSourceRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
       return cleanText_(row[9]);
-    }).map(function(row) {
+    });
+    var leaves = leaveSourceRows.map(function(row) {
       return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || []);
     });
     var activeInvitees = invitationSheet.getDataRange().getValues().slice(1).filter(function(row) {
@@ -2337,7 +2362,9 @@ function getAdminDashboard_(session) {
     return {
       paused: areClaimsPaused_(),
       teachers: teachers,
-      pendingInvitations: leaves.filter(function(item) { return item.status === '確認中'; }),
+      pendingInvitations: leaves.filter(function(item, index) {
+        return isOrdinaryOpenLeaveRow_(leaveSourceRows[index]);
+      }),
       activeInvitees: activeInvitees,
       obWork: leaves.filter(function(item) {
         return ['取消後待回復 OB', '退出後待回復 OB'].indexOf(item.changeStatus) !== -1 ||

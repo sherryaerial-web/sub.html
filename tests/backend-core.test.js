@@ -1821,6 +1821,22 @@ test('tracked operational documents do not instruct deprecated hourly synchroniz
   });
 });
 
+test('README runs structure, OB sync, and idempotent migration rerun before teacher smoke tests', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+  const deployment = readme.slice(readme.indexOf('## 完整部署順序'));
+  const initialSetup = deployment.indexOf('手動執行 `ensureSystemStructure_()` 一次');
+  const firstSync = deployment.indexOf('同步 OB 課表');
+  const migrationRerun = deployment.indexOf('再次手動執行 `ensureSystemStructure_()`', firstSync);
+  const teacherSmoke = deployment.indexOf('測試帳號', firstSync);
+
+  assert.ok(initialSetup >= 0, 'missing initial structure setup');
+  assert.ok(firstSync > initialSetup, 'OB sync must follow initial setup');
+  assert.ok(migrationRerun > firstSync, 'migration rerun must follow the first OB sync');
+  assert.ok(teacherSmoke > migrationRerun, 'teacher smoke test must follow migration rerun');
+  assert.match(deployment, /可安全重複執行|冪等/);
+  assert.match(deployment, /assignedIds.*linked.*manualReview/);
+});
+
 test('allows substitute teachers to claim a course in their usual category', () => {
   const backend = loadBackend();
   assert.equal(typeof backend.requiresChangeNote_, 'function');
@@ -2426,13 +2442,21 @@ test('withdraw request requires the current substitute and a reason', () => {
 });
 
 test('admin-approved withdraw stays in OB restore work until reconciliation then reopens', () => {
-  const { backend, leaveSheet, auditSheet, adminSession, teacherBSession } = createInvitationBackend({
+  const {
+    backend,
+    leaveSheet,
+    auditSheet,
+    adminSession,
+    teacherASession,
+    teacherBSession,
+  } = createInvitationBackend({
     leaveRows: [[
       '時間', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '已領取', '老師乙',
       '沿用原課程；難度：Lv.1', '待處理', 'leave-withdraw', 'calendar-c', 'class-ring-1',
       '空環 Lv.1', 'Lv.1', '沿用原課程', '待核對', '', '', '', '空環',
     ]],
   });
+  backend.openInvitations_(adminSession, ['老師甲']);
   backend.requestClaimWithdrawal_(teacherBSession, 'leave-withdraw', '手腕受傷');
 
   const result = backend.resolveChangeRequest_(adminSession, 'leave-withdraw', 'approve', '同意重新開放');
@@ -2453,14 +2477,50 @@ test('admin-approved withdraw stays in OB restore work until reconciliation then
 
   const beforeRestore = backend.getAdminDashboard_(adminSession);
   assert.ok(beforeRestore.obWork.some((item) => item.substituteId === 'leave-withdraw'));
+  assert.ok(!beforeRestore.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
+  assert.ok(!backend.getAvailableSubstitutes_(teacherASession)
+    .some((item) => item['代課編號'] === 'leave-withdraw'));
   const reconciliation = backend.reconcileObChanges_(adminSession);
   assert.equal(reconciliation.matched, 1);
   assert.equal(row[8], '');
   assert.equal(row[15], '');
-  assert.equal(row[18], '退出已核准，已重新開放');
+  assert.equal(row[18], '');
   const afterRestore = backend.getAdminDashboard_(adminSession);
   assert.ok(!afterRestore.obWork.some((item) => item.substituteId === 'leave-withdraw'));
   assert.ok(afterRestore.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
+  assert.ok(backend.getAvailableSubstitutes_(teacherASession)
+    .some((item) => item['代課編號'] === 'leave-withdraw'));
+});
+
+test('stale claim cannot consume withdrawal restore work or clear its restore state', () => {
+  const {
+    backend,
+    leaveSheet,
+    auditSheet,
+    adminSession,
+    teacherASession,
+    teacherBSession,
+  } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '已領取', '老師乙',
+      '沿用原課程', '待處理', 'leave-withdraw-stale', 'calendar-c', 'class-ring-1',
+      '空環 Lv.1', '', '沿用原課程', '待核對', '', '', '', '空環',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  backend.requestClaimWithdrawal_(teacherBSession, 'leave-withdraw-stale', '臨時受傷');
+  backend.resolveChangeRequest_(adminSession, 'leave-withdraw-stale', 'approve', '等待 OB 回復');
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-withdraw-stale', changeNote: '' }]),
+    /OB.*回復|回復.*OB|尚待管理員/
+  );
+
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+  assert.equal(leaveSheet.values[1][18], '退出後待回復 OB');
 });
 
 test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {
@@ -2558,7 +2618,7 @@ test('replacement calendar linking preserves the original ID and can then reconc
 });
 
 test('legacy manual-review leave stays unavailable until admin links its original OB course', () => {
-  const { backend, leaveSheet, adminSession, teacherBSession } = createInvitationBackend({
+  const { backend, leaveSheet, auditSheet, adminSession, teacherBSession } = createInvitationBackend({
     leaveRows: [[
       '時間', '老師甲', '2026/08/01', '09:00', '空環 Lv.1', '確認中', '', '', '',
       'leave-manual', '', '', '', '', '', '待人工核對', '', '找不到完全相同的 OB 課程', '', '', '',
@@ -2568,12 +2628,51 @@ test('legacy manual-review leave stays unavailable until admin links its origina
 
   assert.deepEqual(JSON.parse(JSON.stringify(backend.getAvailableSubstitutes_(teacherBSession))), []);
   assert.equal(backend.getAdminDashboard_(adminSession).exceptions[0].substituteId, 'leave-manual');
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  assert.throws(
+    () => backend.claimSubstitute_(teacherBSession, [{ substituteId: 'leave-manual', changeNote: '' }]),
+    /OB Calendar ID|待人工核對|尚待管理員/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
 
   backend.linkReplacementCalendarItem_(adminSession, 'leave-manual', 'calendar-a');
 
   assert.equal(leaveSheet.values[1][10], 'calendar-a');
   assert.equal(leaveSheet.values[1][15] || '', '');
   assert.equal(backend.getAvailableSubstitutes_(teacherBSession)[0]['代課編號'], 'leave-manual');
+});
+
+test('claim rejects missing Calendar IDs and every unresolved verification state', () => {
+  const cases = [
+    { name: 'missing Calendar ID', calendarId: '', verification: '', expected: /OB Calendar ID/ },
+    { name: 'manual review', calendarId: 'calendar-b', verification: '待人工核對', expected: /待人工核對|尚待管理員/ },
+    { name: 'verification exception', calendarId: 'calendar-b', verification: '核對異常', expected: /核對異常|尚待管理員/ },
+    { name: 'pending verification', calendarId: 'calendar-b', verification: '待核對', expected: /待核對|尚待管理員/ },
+    { name: 'pending restore', calendarId: 'calendar-b', verification: '待回復 OB', expected: /待回復|尚待管理員/ },
+  ];
+
+  cases.forEach((item, index) => {
+    const substituteId = `leave-unresolved-${index}`;
+    const { backend, leaveSheet, auditSheet, teacherASession } = createInvitationBackend({
+      leaveRows: [[
+        '時間', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '',
+        substituteId, item.calendarId, '', '', '', '', item.verification, '', '', '', '', '',
+      ]],
+      invitationRows: [['invite-a', '老師甲', '時間', '', '開放中', '']],
+    });
+    const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+    const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+
+    assert.throws(
+      () => backend.claimSubstitute_(teacherASession, [{ substituteId, changeNote: '' }]),
+      item.expected,
+      item.name
+    );
+    assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore, item.name);
+    assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore, item.name);
+  });
 });
 
 test('admin dashboard separates work queues without exposing account secrets', () => {

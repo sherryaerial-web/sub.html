@@ -118,9 +118,20 @@ function requireSession_(token) {
     removeSession_(sessionToken);
     throw new Error('登入狀態已逾期，請重新登入。');
   }
+
+  var account = findAccount_(cleanText_(session.teacherName));
+  if (!account) {
+    removeSession_(sessionToken);
+    throw new Error('登入帳號不存在，請重新登入。');
+  }
+  if (!isAccountActive_(account.active)) {
+    removeSession_(sessionToken);
+    throw new Error('帳號目前未啟用。');
+  }
   return {
-    teacherName: cleanText_(session.teacherName),
-    role: normalizeAccountRole_(session.role)
+    teacherName: account.teacherName,
+    role: normalizeAccountRole_(account.role),
+    capabilities: normalizeTeacherCapabilities_(account.capabilities)
   };
 }
 
@@ -134,13 +145,14 @@ function setupAccount_(adminToken, teacherName, pin, options) {
   requireAdmin_(adminToken);
 
   var teacher = cleanText_(teacherName);
-  var pinText = cleanText_(pin);
-  if (!teacher || !pinText) throw new Error('請輸入老師姓名與身分證末碼。');
+  var pinText = requireFourDigitPin_(pin);
+  if (!teacher) throw new Error('請輸入老師姓名與身分證末碼。');
 
   var settings = options || {};
   var active = settings.active !== false;
   var role = normalizeAccountRole_(settings.role);
   var sheet = getAccountsSheet_();
+  protectAccountsSheet_(sheet);
   var headers = getHeaderMap_(sheet);
   var values = sheet.getDataRange().getValues();
   var existingRow = 0;
@@ -174,8 +186,8 @@ function setupAccount_(adminToken, teacherName, pin, options) {
 
 function buildAccountValues_(teacherName, pin, options) {
   var teacher = cleanText_(teacherName);
-  var pinText = cleanText_(pin);
-  if (!teacher || !pinText) throw new Error('請輸入老師姓名與身分證末碼。');
+  var pinText = requireFourDigitPin_(pin);
+  if (!teacher) throw new Error('請輸入老師姓名與身分證末碼。');
 
   var settings = options || {};
   var active = settings.active !== false;
@@ -241,6 +253,7 @@ function importTeacherAccountsFromPasswordSheet() {
     }
 
     var accountSheet = requireSheet_(ss, SHEETS.ACCOUNTS);
+    protectAccountsSheet_(accountSheet);
     var actualHeaders = accountSheet
       .getRange(1, 1, 1, SHEET_HEADERS.ACCOUNTS.length)
       .getValues()[0];
@@ -383,11 +396,12 @@ function getErrorMessage_(error) {
 
 function initializeFirstAdmin_(teacherName, pin) {
   var teacher = cleanText_(teacherName);
-  var pinText = cleanText_(pin);
-  if (!teacher || !pinText) throw new Error('請輸入管理員姓名與身分證末碼。');
+  var pinText = requireFourDigitPin_(pin);
+  if (!teacher) throw new Error('請輸入管理員姓名與身分證末碼。');
 
   return withScriptLock_(function() {
     var sheet = getAccountsSheet_();
+    protectAccountsSheet_(sheet);
     var headers = getHeaderMap_(sheet);
     var values = sheet.getDataRange().getValues();
     var hasAccount = values.slice(1).some(function(row) {
@@ -402,6 +416,45 @@ function initializeFirstAdmin_(teacherName, pin) {
     ]]);
     return { teacherName: teacher, role: '管理員', active: true };
   });
+}
+
+function requireFourDigitPin_(pin) {
+  var pinText = cleanText_(pin);
+  if (!/^\d{4}$/.test(pinText)) {
+    throw new Error('身分證末碼必須是 4 位數字。');
+  }
+  return pinText;
+}
+
+function protectAccountsSheet_(sheet) {
+  if (!sheet || typeof sheet.protect !== 'function' || typeof sheet.getProtections !== 'function') {
+    throw new Error('目前無法保護「' + SHEETS.ACCOUNTS + '」工作表，請確認執行帳號權限。');
+  }
+  var protectionType = SpreadsheetApp.ProtectionType
+    ? SpreadsheetApp.ProtectionType.SHEET
+    : null;
+  var description = '系統保護：' + SHEETS.ACCOUNTS;
+  var protections = sheet.getProtections(protectionType) || [];
+  var protection = null;
+  for (var index = 0; index < protections.length; index++) {
+    if (protections[index].getDescription() === description) {
+      protection = protections[index];
+      break;
+    }
+  }
+  if (!protection) protection = sheet.protect().setDescription(description);
+
+  var effectiveUser = Session.getEffectiveUser ? Session.getEffectiveUser() : null;
+  var effectiveEmail = effectiveUser && effectiveUser.getEmail
+    ? cleanText_(effectiveUser.getEmail())
+    : '';
+  if (effectiveUser) protection.addEditor(effectiveUser);
+  var removableEditors = (protection.getEditors() || []).filter(function(editor) {
+    return !effectiveEmail || cleanText_(editor.getEmail()) !== effectiveEmail;
+  });
+  if (removableEditors.length) protection.removeEditors(removableEditors);
+  if (protection.canDomainEdit()) protection.setDomainEdit(false);
+  return protection;
 }
 
 function initializeFirstAdminFromProperties() {
@@ -446,7 +499,7 @@ function findAccount_(teacherName) {
 function getAccountsSheet_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, SHEETS.ACCOUNTS);
-  ensureSheetHeaders_(sheet, SHEET_HEADERS.ACCOUNTS);
+  assertHeaders_(sheet, SHEET_HEADERS.ACCOUNTS);
   return sheet;
 }
 
@@ -597,17 +650,107 @@ function currentTimeMs_() {
 }
 
 function ensureSystemStructure_() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var leaveSheet = migrateLeaveSheet_(ss);
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = migrateLeaveSheet_(ss);
+    var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
 
-  ensureSheetHeaders_(requireSheet_(ss, SHEETS.COURSE_LIST), SHEET_HEADERS.COURSE_LIST);
-  ensureSheetHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
-  ensureSupportingSheet_(ss, SHEETS.INVITATIONS, SHEET_HEADERS.INVITATIONS);
-  ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
-  ensureSupportingSheet_(ss, SHEETS.SETTINGS, SHEET_HEADERS.SETTINGS);
-  ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
+    ensureSheetHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    ensureSheetHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    ensureSupportingSheet_(ss, SHEETS.INVITATIONS, SHEET_HEADERS.INVITATIONS);
+    ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
+    ensureSupportingSheet_(ss, SHEETS.SETTINGS, SHEET_HEADERS.SETTINGS);
+    var accountSheet = ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
+    protectAccountsSheet_(accountSheet);
 
-  return { leaveSheetName: SHEETS.LEAVES };
+    return {
+      leaveSheetName: SHEETS.LEAVES,
+      migration: migrateLegacyLeaveLinksUnlocked_(leaveSheet, courseSheet)
+    };
+  });
+}
+
+function migrateLegacyLeaveLinksUnlocked_(leaveSheet, courseSheet) {
+  var leaveValues = leaveSheet.getDataRange().getValues();
+  var courseValues = courseSheet.getDataRange().getValues();
+  var matchesByKey = {};
+  courseValues.slice(1).forEach(function(row) {
+    var calendarId = cleanText_(row[4]);
+    if (!calendarId) return;
+    var key = getLegacyCourseMatchKey_(row[3], row[0], row[1], row[2]);
+    if (!matchesByKey[key]) matchesByKey[key] = [];
+    matchesByKey[key].push(calendarId);
+  });
+
+  var result = { assignedIds: 0, linked: 0, manualReview: 0 };
+  var updates = [];
+  for (var index = 1; index < leaveValues.length; index++) {
+    var row = leaveValues[index].slice();
+    while (row.length < SHEET_HEADERS.LEAVES.length) row.push('');
+    if (['確認中', '已領取'].indexOf(cleanText_(row[5])) === -1) continue;
+    var changed = false;
+
+    if (!cleanText_(row[9])) {
+      row[9] = Utilities.getUuid();
+      result.assignedIds += 1;
+      changed = true;
+    }
+
+    if (!cleanText_(row[10])) {
+      var key = getLegacyCourseMatchKey_(row[1], row[2], row[3], row[4]);
+      var matches = matchesByKey[key] || [];
+      if (matches.length === 1) {
+        row[10] = matches[0];
+        row[17] = '';
+        if (cleanText_(row[5]) === '已領取') row[15] = '待核對';
+        else if (cleanText_(row[15]) === '待人工核對') row[15] = '';
+        result.linked += 1;
+        changed = true;
+      } else {
+        var reason = matches.length > 1
+          ? '找到多筆完全相同的 OB 課程，請人工指定。'
+          : '找不到完全相同的 OB 課程，請人工核對。';
+        if (cleanText_(row[15]) !== '待人工核對' || cleanText_(row[17]) !== reason) {
+          row[15] = '待人工核對';
+          row[16] = '';
+          row[17] = reason;
+          result.manualReview += 1;
+          changed = true;
+        }
+      }
+    }
+    if (changed) updates.push({ rowNumber: index + 1, values: row });
+  }
+
+  if (!updates.length) return result;
+  return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+    updates.forEach(function(update) {
+      leaveSheet.getRange(update.rowNumber, 1, 1, SHEET_HEADERS.LEAVES.length)
+        .setValues([update.values]);
+    });
+    appendAudits([{
+      actor: '系統設定',
+      action: '舊資料遷移',
+      targetId: SHEETS.LEAVES,
+      before: '',
+      after: [
+        '補代課編號 ' + result.assignedIds,
+        '安全連結 ' + result.linked,
+        '待人工核對 ' + result.manualReview
+      ].join('；'),
+      reason: '僅回填老師、日期、時間與課名完全一致且唯一的 OB Calendar ID'
+    }]);
+    return result;
+  });
+}
+
+function getLegacyCourseMatchKey_(teacher, date, time, course) {
+  return [
+    cleanText_(teacher),
+    formatMyDate(date),
+    formatMyTime(time),
+    normalizeCourseName_(course)
+  ].join('|');
 }
 
 function migrateLeaveSheet_(ss) {
@@ -655,18 +798,33 @@ function getHeaderMap_(sheet) {
 
 function appendAudit_(event) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
+  var sheet = requireSheet_(ss, SHEETS.AUDIT);
+  assertHeaders_(sheet, SHEET_HEADERS.AUDIT);
+  appendAuditEventsUnlocked_(sheet, [event]);
+}
+
+function createAuditRow_(event) {
   var item = event || {};
-  var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
-  sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.AUDIT.length).setValues([[
-    now,
+  return [
+    Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'),
     cleanText_(item.actor),
     cleanText_(item.action),
     cleanText_(item.targetId),
     cleanText_(item.before),
     cleanText_(item.after),
     cleanText_(item.reason)
-  ]]);
+  ];
+}
+
+function appendAuditEventsUnlocked_(sheet, events) {
+  var rows = (events || []).map(createAuditRow_);
+  if (!rows.length) return;
+  sheet.getRange(
+    sheet.getLastRow() + 1,
+    1,
+    rows.length,
+    SHEET_HEADERS.AUDIT.length
+  ).setValues(rows);
 }
 
 function doGet(e) {
@@ -678,35 +836,8 @@ function doGet(e) {
 
   try {
     var action = cleanText_(e.parameter.action);
-    var authenticatedActions = {
-      getAvailableSubstitutes: true,
-      getClaimOptions: true,
-      getMySubs: true,
-      getMyCourses: true,
-      getMyLeaves: true,
-      getAdminDashboard: true
-    };
-    var session = authenticatedActions[action]
-      ? requireSession_(e.parameter.sessionToken)
-      : null;
-    if ({
-      getAvailableSubstitutes: true,
-      getClaimOptions: true,
-      getMySubs: true,
-      getMyCourses: true,
-      getMyLeaves: true,
-      getAdminDashboard: true
-    }[action]) {
-      ensureSystemStructure_();
-    }
     var handlers = {
-      getTeachers: function() { return getTeachers_(); },
-      getAvailableSubstitutes: function() { return getAvailableSubstitutes_(session); },
-      getClaimOptions: function() { return getClaimOptions_(session); },
-      getMySubs: function() { return getMySubs_(session.teacherName); },
-      getMyCourses: function() { return getMyCourses_(session); },
-      getMyLeaves: function() { return getMyLeaves_(session); },
-      getAdminDashboard: function() { return getAdminDashboard_(session); }
+      getTeachers: function() { return getTeachers_(); }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
     return createJsonResponse_({ status: 'success', data: handlers[action]() });
@@ -738,8 +869,27 @@ function doPost(e) {
       return createJsonResponse_({ status: 'success', data: { loggedOut: true } });
     }
 
-    ensureSystemStructure_();
     var handlers = {
+      getAvailableSubstitutes: function() {
+        var available = getAvailableSubstitutes_(session);
+        recordInvitationFirstView_(session);
+        return available;
+      },
+      getClaimOptions: function() {
+        return getClaimOptions_(session);
+      },
+      getMySubs: function() {
+        return getMySubs_(session.teacherName);
+      },
+      getMyCourses: function() {
+        return getMyCourses_(session);
+      },
+      getMyLeaves: function() {
+        return getMyLeaves_(session);
+      },
+      getAdminDashboard: function() {
+        return getAdminDashboard_(session);
+      },
       submitLeave: function() {
         return submitLeave_(session, parseJsonArray_(parameters.items, '請假課程'));
       },
@@ -1042,10 +1192,55 @@ function captureSheetSnapshot_(sheet) {
 }
 
 function restoreSheetSnapshot_(sheet, snapshot, writtenRows, writtenColumns) {
-  var rows = Math.max(snapshot.rows, writtenRows, sheet.getLastRow());
-  var columns = Math.max(snapshot.columns, writtenColumns, sheet.getLastColumn());
+  var targetRows = Number(writtenRows);
+  var targetColumns = Number(writtenColumns);
+  if (!isFinite(targetRows) || targetRows < 1) targetRows = snapshot.rows;
+  if (!isFinite(targetColumns) || targetColumns < 1) targetColumns = snapshot.columns;
+  var rows = Math.max(snapshot.rows, targetRows, sheet.getLastRow());
+  var columns = Math.max(snapshot.columns, targetColumns, sheet.getLastColumn());
   sheet.getRange(1, 1, rows, columns).clearContent();
   sheet.getRange(1, 1, snapshot.rows, snapshot.columns).setValues(snapshot.values);
+}
+
+function runStateTransitionUnlocked_(businessSheets, callback) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var auditSheet = requireSheet_(ss, SHEETS.AUDIT);
+  assertHeaders_(auditSheet, SHEET_HEADERS.AUDIT);
+
+  var uniqueSheets = [];
+  var seen = {};
+  (businessSheets || []).concat([auditSheet]).forEach(function(sheet) {
+    var key = sheet.getName();
+    if (seen[key]) return;
+    seen[key] = true;
+    uniqueSheets.push(sheet);
+  });
+  var snapshots = uniqueSheets.map(function(sheet) {
+    return { sheet: sheet, snapshot: captureSheetSnapshot_(sheet) };
+  });
+
+  try {
+    return callback(function(events) {
+      appendAuditEventsUnlocked_(auditSheet, events);
+    });
+  } catch (error) {
+    var rollbackFailures = [];
+    snapshots.slice().reverse().forEach(function(item) {
+      try {
+        restoreSheetSnapshot_(item.sheet, item.snapshot);
+      } catch (restoreError) {
+        rollbackFailures.push(
+          item.sheet.getName() + '：' + getErrorMessage_(restoreError)
+        );
+      }
+    });
+    if (rollbackFailures.length) {
+      throw new Error(
+        getErrorMessage_(error) + '；資料回復失敗：' + rollbackFailures.join('；')
+      );
+    }
+    throw error;
+  }
 }
 
 function getTeachers_() {
@@ -1086,7 +1281,7 @@ function getMyCourses_(session) {
   var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
   var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(sheet, ['日期', '時間', '課程', '指導者', 'OB Calendar ID']);
-  ensureLeaveSheetHeaders_(leaveSheet);
+  assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
   var activeLeaveIds = {};
   leaveSheet.getDataRange().getValues().slice(1).forEach(function(r) {
     if (cleanText_(r[1]) === teacher &&
@@ -1118,7 +1313,7 @@ function getMyLeaves_(session) {
   var teacher = getSessionTeacherName_(session);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
-  ensureLeaveSheetHeaders_(sheet);
+  assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
 
   var auditByTarget = getAuditHistoryMap_();
   return sheet.getDataRange().getValues().slice(1).filter(function(r) {
@@ -1171,7 +1366,7 @@ function openInvitations_(session, teacherNames) {
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
-    ensureSheetHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+    assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
     var values = sheet.getDataRange().getValues();
     var activeTeachers = {};
     values.slice(1).forEach(function(row) {
@@ -1194,30 +1389,32 @@ function openInvitations_(session, teacherNames) {
       ]);
       activeTeachers[teacher] = true;
     });
-    if (rowsToAppend.length) {
-      sheet.getRange(
-        sheet.getLastRow() + 1,
-        1,
-        rowsToAppend.length,
-        SHEET_HEADERS.INVITATIONS.length
-      ).setValues(rowsToAppend);
-    }
-    rowsToAppend.forEach(function(row) {
-      appendAudit_({
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      if (rowsToAppend.length) {
+        sheet.getRange(
+          sheet.getLastRow() + 1,
+          1,
+          rowsToAppend.length,
+          SHEET_HEADERS.INVITATIONS.length
+        ).setValues(rowsToAppend);
+      }
+      appendAudits(rowsToAppend.map(function(row) {
+        return {
         actor: actor,
         action: '開放代課',
         targetId: row[0],
         before: '',
         after: CONFIG.INVITATION_OPEN_STATUS,
         reason: row[1]
-      });
-    });
+        };
+      }));
 
-    return {
-      requested: teachers.length,
-      opened: rowsToAppend.length,
-      alreadyOpen: teachers.length - rowsToAppend.length
-    };
+      return {
+        requested: teachers.length,
+        opened: rowsToAppend.length,
+        alreadyOpen: teachers.length - rowsToAppend.length
+      };
+    });
   });
 }
 
@@ -1229,42 +1426,45 @@ function closeInvitations_(session, teacherNames) {
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
-    ensureSheetHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+    assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
     var values = sheet.getDataRange().getValues();
     var requestedTeachers = {};
     teachers.forEach(function(teacher) { requestedTeachers[teacher] = true; });
     var closedTeachers = {};
     var auditTargets = {};
     var now = getTimestamp_();
+    var updates = [];
 
     for (var index = 1; index < values.length; index++) {
       var row = values[index];
       var teacher = cleanText_(row[1]);
       if (!requestedTeachers[teacher] || cleanText_(row[4]) !== CONFIG.INVITATION_OPEN_STATUS) continue;
-      sheet.getRange(index + 1, 5, 1, 2).setValues([[
-        CONFIG.INVITATION_CLOSED_STATUS,
-        now
-      ]]);
+      updates.push({ rowNumber: index + 1, values: [CONFIG.INVITATION_CLOSED_STATUS, now] });
       closedTeachers[teacher] = true;
       if (!auditTargets[teacher]) auditTargets[teacher] = cleanText_(row[0]);
     }
-    Object.keys(closedTeachers).forEach(function(teacher) {
-      appendAudit_({
-        actor: actor,
-        action: '關閉代課',
-        targetId: auditTargets[teacher],
-        before: CONFIG.INVITATION_OPEN_STATUS,
-        after: CONFIG.INVITATION_CLOSED_STATUS,
-        reason: teacher
-      });
-    });
 
     var closed = Object.keys(closedTeachers).length;
-    return {
-      requested: teachers.length,
-      closed: closed,
-      notOpen: teachers.length - closed
-    };
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      updates.forEach(function(update) {
+        sheet.getRange(update.rowNumber, 5, 1, 2).setValues([update.values]);
+      });
+      appendAudits(Object.keys(closedTeachers).map(function(teacher) {
+        return {
+          actor: actor,
+          action: '關閉代課',
+          targetId: auditTargets[teacher],
+          before: CONFIG.INVITATION_OPEN_STATUS,
+          after: CONFIG.INVITATION_CLOSED_STATUS,
+          reason: teacher
+        };
+      }));
+      return {
+        requested: teachers.length,
+        closed: closed,
+        notOpen: teachers.length - closed
+      };
+    });
   });
 }
 
@@ -1275,7 +1475,7 @@ function pauseClaims_(session, paused) {
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = requireSheet_(ss, SHEETS.SETTINGS);
-    ensureSheetHeaders_(sheet, SHEET_HEADERS.SETTINGS);
+    assertHeaders_(sheet, SHEET_HEADERS.SETTINGS);
     var values = sheet.getDataRange().getValues();
     var rowNumber = 0;
     var previous = false;
@@ -1294,20 +1494,22 @@ function pauseClaims_(session, paused) {
       now,
       '由管理員手動控制'
     ]];
-    if (rowNumber) {
-      sheet.getRange(rowNumber, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
-    } else {
-      sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
-    }
-    appendAudit_({
-      actor: actor,
-      action: shouldPause ? '暫停全部領取' : '恢復全部領取',
-      targetId: CONFIG.CLAIMS_PAUSED_SETTING,
-      before: previous ? '是' : '否',
-      after: shouldPause ? '是' : '否',
-      reason: ''
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      if (rowNumber) {
+        sheet.getRange(rowNumber, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
+      } else {
+        sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
+      }
+      appendAudits([{
+        actor: actor,
+        action: shouldPause ? '暫停全部領取' : '恢復全部領取',
+        targetId: CONFIG.CLAIMS_PAUSED_SETTING,
+        before: previous ? '是' : '否',
+        after: shouldPause ? '是' : '否',
+        reason: ''
+      }]);
+      return { paused: shouldPause };
     });
-    return { paused: shouldPause };
   });
 }
 
@@ -1315,48 +1517,62 @@ function getAvailableSubstitutes_(session) {
   var teacher = getSessionTeacherName_(session);
   assertTeacherExists_(teacher);
   var capabilities = getTeacherCapabilities_(teacher);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
+  assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
+  var invitationValues = invitationSheet.getDataRange().getValues();
+  var hasInvitation = invitationValues.slice(1).some(function(row) {
+    return cleanText_(row[1]) === teacher &&
+      cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
+  });
+  if (!hasInvitation || areClaimsPaused_()) return [];
 
+  var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+  var leaveValues = leaveSheet.getDataRange().getValues();
+  var allPendingRows = leaveValues.slice(1).filter(function(row) {
+    return cleanText_(row[5]) === '確認中' && cleanText_(row[1]) !== teacher;
+  });
+  if (allPendingRows.some(function(row) {
+    return !cleanText_(row[9]) ||
+      (!cleanText_(row[10]) && cleanText_(row[15]) !== '待人工核對');
+  })) {
+    throw new Error('代課資料尚未完成初始化，請通知管理員執行系統設定。');
+  }
+  var pendingRows = allPendingRows.filter(function(row) {
+    return cleanText_(row[10]) && cleanText_(row[15]) !== '待人工核對';
+  });
+  return pendingRows.map(function(row) {
+    return {
+      '代課編號': cleanText_(row[9]),
+      '原老師': cleanText_(row[1]),
+      '日期': formatMyDate(row[2]),
+      '時段': formatMyTime(row[3]),
+      '課程': cleanText_(row[4]),
+      '課程大類': getCourseCategory_(row[4]),
+      '可沿用原課程': capabilities.indexOf(getCourseCategory_(row[4])) !== -1
+    };
+  }).sort(function(a, b) {
+    return [a['日期'], a['時段'], a['原老師'], a['代課編號']].join('|')
+      .localeCompare([b['日期'], b['時段'], b['原老師'], b['代課編號']].join('|'));
+  });
+}
+
+function recordInvitationFirstView_(session) {
+  var teacher = getSessionTeacherName_(session);
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
-    ensureSheetHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
-    var invitationValues = invitationSheet.getDataRange().getValues();
-    var activeRows = [];
-    for (var invitationIndex = 1; invitationIndex < invitationValues.length; invitationIndex++) {
-      var invitationRow = invitationValues[invitationIndex];
-      if (cleanText_(invitationRow[1]) === teacher &&
-          cleanText_(invitationRow[4]) === CONFIG.INVITATION_OPEN_STATUS) {
-        activeRows.push(invitationIndex + 1);
+    var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
+    assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+    var values = sheet.getDataRange().getValues();
+    var viewedAt = getTimestamp_();
+    for (var index = 1; index < values.length; index++) {
+      if (cleanText_(values[index][1]) === teacher &&
+          cleanText_(values[index][4]) === CONFIG.INVITATION_OPEN_STATUS &&
+          !cleanText_(values[index][3])) {
+        sheet.getRange(index + 1, 4).setValue(viewedAt);
       }
     }
-    if (!activeRows.length || areClaimsPaused_()) return [];
-
-    var viewedAt = getTimestamp_();
-    activeRows.forEach(function(rowNumber) {
-      if (!cleanText_(invitationValues[rowNumber - 1][3])) {
-        invitationSheet.getRange(rowNumber, 4).setValue(viewedAt);
-      }
-    });
-
-    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
-    ensureLeaveSheetHeaders_(leaveSheet);
-    var leaveValues = ensurePendingLeaveIdsUnlocked_(leaveSheet);
-    return leaveValues.slice(1).filter(function(row) {
-      return cleanText_(row[5]) === '確認中' && cleanText_(row[1]) !== teacher;
-    }).map(function(row) {
-      return {
-        '代課編號': cleanText_(row[9]),
-        '原老師': cleanText_(row[1]),
-        '日期': formatMyDate(row[2]),
-        '時段': formatMyTime(row[3]),
-        '課程': cleanText_(row[4]),
-        '課程大類': getCourseCategory_(row[4]),
-        '可沿用原課程': capabilities.indexOf(getCourseCategory_(row[4])) !== -1
-      };
-    }).sort(function(a, b) {
-      return [a['日期'], a['時段'], a['原老師'], a['代課編號']].join('|')
-        .localeCompare([b['日期'], b['時段'], b['原老師'], b['代課編號']].join('|'));
-    });
   });
 }
 
@@ -1430,7 +1646,7 @@ function teacherCanTeachCategory_(teacher, category) {
 function areClaimsPaused_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, SHEETS.SETTINGS);
-  ensureSheetHeaders_(sheet, SHEET_HEADERS.SETTINGS);
+  assertHeaders_(sheet, SHEET_HEADERS.SETTINGS);
   var values = sheet.getDataRange().getValues();
   for (var index = 1; index < values.length; index++) {
     if (cleanText_(values[index][0]) === CONFIG.CLAIMS_PAUSED_SETTING) {
@@ -1443,7 +1659,7 @@ function areClaimsPaused_() {
 function hasActiveInvitation_(teacherName) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
-  ensureSheetHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+  assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
   var values = sheet.getDataRange().getValues();
   return values.slice(1).some(function(row) {
     return cleanText_(row[1]) === cleanText_(teacherName) &&
@@ -1451,12 +1667,30 @@ function hasActiveInvitation_(teacherName) {
   });
 }
 
+function getActiveInvitationId_(teacherName) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
+  assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][1]) === cleanText_(teacherName) &&
+        cleanText_(values[index][4]) === CONFIG.INVITATION_OPEN_STATUS) {
+      return cleanText_(values[index][0]);
+    }
+  }
+  return '';
+}
+
 function getPendingLeaves_() {
-  ensurePendingLeaveIds_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
-  ensureLeaveSheetHeaders_(sheet);
+  assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   var values = sheet.getDataRange().getValues();
+  if (values.slice(1).some(function(row) {
+    return cleanText_(row[5]) === '確認中' && !cleanText_(row[9]);
+  })) {
+    throw new Error('代課資料尚未完成初始化，請先執行系統設定。');
+  }
   return values.slice(1).filter(function(r) {
     return cleanText_(r[5]) === '確認中';
   }).map(function(r) {
@@ -1478,7 +1712,7 @@ function getMySubs_(teacherName) {
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
-  ensureLeaveSheetHeaders_(sheet);
+  assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   var auditByTarget = getAuditHistoryMap_();
   return sheet.getDataRange().getValues().slice(1).filter(function(r) {
     return cleanText_(r[6]) === name && cleanText_(r[5]) === '已領取';
@@ -1518,7 +1752,7 @@ function submitLeave_(session, items) {
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     assertHeaders_(courseSheet, ['日期', '時間', '課程', '指導者']);
-    ensureLeaveSheetHeaders_(leaveSheet);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
 
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
     var leaveRows = leaveSheet.getDataRange().getValues().slice(1);
@@ -1555,6 +1789,9 @@ function submitLeave_(session, items) {
         errors.push({
           index: index,
           calendarId: calendarId,
+          date: formatMyDate(rawItem && (rawItem['日期'] || rawItem.date)),
+          time: formatMyTime(rawItem && (rawItem['時間'] || rawItem['時段'] || rawItem.time)),
+          course: cleanText_(rawItem && (rawItem['課程'] || rawItem.course)),
           message: error && error.message ? error.message : String(error)
         });
       }
@@ -1584,12 +1821,6 @@ function submitLeave_(session, items) {
         ''
       ];
     });
-    if (rowsToAppend.length) {
-      leaveSheet
-        .getRange(leaveSheet.getLastRow() + 1, 1, rowsToAppend.length, SHEET_HEADERS.LEAVES.length)
-        .setValues(rowsToAppend);
-    }
-
     var result = {
       requested: items.length,
       created: rowsToAppend.length,
@@ -1597,7 +1828,24 @@ function submitLeave_(session, items) {
       failed: errors.length
     };
     if (errors.length) result.errors = errors;
-    return result;
+    if (!rowsToAppend.length) return result;
+
+    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+      leaveSheet
+        .getRange(leaveSheet.getLastRow() + 1, 1, rowsToAppend.length, SHEET_HEADERS.LEAVES.length)
+        .setValues(rowsToAppend);
+      appendAudits(rowsToAppend.map(function(row) {
+        return {
+          actor: teacher,
+          action: '送出請假',
+          targetId: row[9],
+          before: '',
+          after: '確認中',
+          reason: [row[2], row[3], row[4]].join(' ')
+        };
+      }));
+      return result;
+    });
   } finally {
     lock.releaseLock();
   }
@@ -1612,11 +1860,12 @@ function claimSubstitute_(session, items) {
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
     if (areClaimsPaused_()) throw new Error('目前暫停全部代課領取。');
-    if (!hasActiveInvitation_(teacher)) throw new Error('目前尚未開放代課領取。');
+    var invitationId = getActiveInvitationId_(teacher);
+    if (!invitationId) throw new Error('目前尚未開放代課領取。');
 
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
-    ensureLeaveSheetHeaders_(leaveSheet);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
     var values = leaveSheet.getDataRange().getValues();
     var rowById = {};
     for (var rowIndex = 1; rowIndex < values.length; rowIndex++) {
@@ -1656,6 +1905,7 @@ function claimSubstitute_(session, items) {
       nextRow[5] = '已領取';
       nextRow[6] = teacher;
       nextRow[7] = change.summary;
+      nextRow[8] = '待處理';
       nextRow[11] = change.actualClassId;
       nextRow[12] = change.actualCourseName;
       nextRow[13] = change.difficulty;
@@ -1673,18 +1923,23 @@ function claimSubstitute_(session, items) {
       };
     });
 
-    updates.forEach(function(update) {
-      leaveSheet.getRange(update.sheetRow, 6, 1, 16).setValues([update.rowValues.slice(5, 21)]);
-      appendAudit_({
-        actor: teacher,
-        action: '領取代課',
-        targetId: cleanText_(values[update.sheetRow - 1][9]),
-        before: '確認中',
-        after: '已領取',
-        reason: update.summary
+    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+      updates.forEach(function(update) {
+        leaveSheet.getRange(update.sheetRow, 6, 1, 16)
+          .setValues([update.rowValues.slice(5, 21)]);
       });
+      appendAudits(updates.map(function(update) {
+        return {
+          actor: teacher,
+          action: '領取代課',
+          targetId: cleanText_(values[update.sheetRow - 1][9]),
+          before: '確認中',
+          after: '已領取',
+          reason: [update.summary, '邀請編號：' + invitationId].filter(Boolean).join('；')
+        };
+      }));
+      return { count: updates.length };
     });
-    return { count: updates.length };
   } finally {
     lock.releaseLock();
   }
@@ -1701,17 +1956,19 @@ function cancelLeave_(session, substituteId) {
     }
 
     var before = cleanText_(record.row[5]);
-    record.sheet.getRange(record.rowNumber, 6).setValue('已取消');
-    record.sheet.getRange(record.rowNumber, 19).setValue('已自行取消');
-    appendAudit_({
-      actor: teacher,
-      action: '自行取消請假',
-      targetId: id,
-      before: before,
-      after: '已取消',
-      reason: ''
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 6).setValue('已取消');
+      record.sheet.getRange(record.rowNumber, 19).setValue('已自行取消');
+      appendAudits([{
+        actor: teacher,
+        action: '自行取消請假',
+        targetId: id,
+        before: before,
+        after: '已取消',
+        reason: ''
+      }]);
+      return { substituteId: id, status: '已取消' };
     });
-    return { substituteId: id, status: '已取消' };
   });
 }
 
@@ -1726,16 +1983,18 @@ function requestLeaveCancellation_(session, substituteId, reason) {
     if (!canRequestLeaveCancellationRow_(record.row)) throw new Error('目前狀態無法申請取消。');
 
     var before = cleanText_(record.row[18]);
-    record.sheet.getRange(record.rowNumber, 19).setValue('申請取消中');
-    appendAudit_({
-      actor: teacher,
-      action: '申請取消請假',
-      targetId: id,
-      before: before,
-      after: '申請取消中',
-      reason: requestReason
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 19).setValue('申請取消中');
+      appendAudits([{
+        actor: teacher,
+        action: '申請取消請假',
+        targetId: id,
+        before: before,
+        after: '申請取消中',
+        reason: requestReason
+      }]);
+      return { substituteId: id, status: '申請取消中' };
     });
-    return { substituteId: id, status: '申請取消中' };
   });
 }
 
@@ -1752,16 +2011,18 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
     if (cleanText_(record.row[18]) === '申請取消中') throw new Error('原老師已申請取消，請等待處理。');
 
     var before = cleanText_(record.row[18]);
-    record.sheet.getRange(record.rowNumber, 19).setValue('申請退出中');
-    appendAudit_({
-      actor: teacher,
-      action: '申請退出代課',
-      targetId: id,
-      before: before,
-      after: '申請退出中',
-      reason: requestReason
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 19).setValue('申請退出中');
+      appendAudits([{
+        actor: teacher,
+        action: '申請退出代課',
+        targetId: id,
+        before: before,
+        after: '申請退出中',
+        reason: requestReason
+      }]);
+      return { substituteId: id, status: '申請退出中' };
     });
-    return { substituteId: id, status: '申請退出中' };
   });
 }
 
@@ -1785,7 +2046,11 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
       requestType = 'cancellation';
       if (normalizedDecision === 'approve') {
         row[5] = '已取消';
-        row[18] = '取消申請已核准';
+        row[8] = '待回復';
+        row[15] = '待回復 OB';
+        row[16] = '';
+        row[17] = '';
+        row[18] = '取消後待回復 OB';
         action = '核准取消請假';
       } else {
         row[18] = '取消申請已駁回';
@@ -1797,9 +2062,10 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
         row[5] = '確認中';
         row[6] = '';
         row[7] = '';
-        row[8] = '';
+        row[8] = '待回復';
         for (var index = 11; index <= 17; index++) row[index] = '';
-        row[18] = '退出已核准，已重新開放';
+        row[15] = '待回復 OB';
+        row[18] = '退出後待回復 OB';
         row[19] = '';
         row[20] = '';
         action = '核准退出代課';
@@ -1811,25 +2077,27 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
       throw new Error('這筆資料目前沒有待處理的取消或退出申請。');
     }
 
-    record.sheet.getRange(record.rowNumber, 6, 1, 16).setValues([row.slice(5, 21)]);
     var auditReason = resolutionReason;
     if (requestType === 'withdrawal' && normalizedDecision === 'approve') {
       auditReason = ['原代課老師：' + priorSubstitute, resolutionReason].filter(Boolean).join('；');
     }
-    appendAudit_({
-      actor: actor,
-      action: action,
-      targetId: id,
-      before: requestState,
-      after: row[18],
-      reason: auditReason
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 6, 1, 16).setValues([row.slice(5, 21)]);
+      appendAudits([{
+        actor: actor,
+        action: action,
+        targetId: id,
+        before: requestState,
+        after: row[18],
+        reason: auditReason
+      }]);
+      return {
+        substituteId: id,
+        requestType: requestType,
+        decision: normalizedDecision,
+        status: cleanText_(row[5])
+      };
     });
-    return {
-      substituteId: id,
-      requestType: requestType,
-      decision: normalizedDecision,
-      status: cleanText_(row[5])
-    };
   });
 }
 
@@ -1839,7 +2107,7 @@ function reconcileObChanges_(session) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
-    ensureLeaveSheetHeaders_(leaveSheet);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
     var leaveRows = leaveSheet.getDataRange().getValues();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
@@ -1850,47 +2118,128 @@ function reconcileObChanges_(session) {
     });
 
     var result = { checked: 0, matched: 0, exceptions: 0 };
+    var updates = [];
+    var audits = [];
     for (var rowIndex = 1; rowIndex < leaveRows.length; rowIndex++) {
       var row = leaveRows[rowIndex];
-      if (cleanText_(row[5]) !== '已領取') continue;
+      if (!isActiveObWorkRow_(row)) continue;
       result.checked += 1;
       var effectiveCalendarId = cleanText_(row[20]) || cleanText_(row[10]);
       var obRow = courseByCalendarId[effectiveCalendarId];
+      var expectation = getObExpectation_(row);
       var differences = [];
-      if (!obRow) {
+      if (!effectiveCalendarId) {
+        differences.push('尚未連結 OB Calendar ID');
+      } else if (!obRow) {
         differences.push('找不到 OB 課程（Calendar ID：' + effectiveCalendarId + '）');
       } else {
-        var expectedTeacher = cleanText_(row[6]);
-        var expectedClassId = cleanText_(row[11]);
-        var expectedCourse = cleanText_(row[12]) || cleanText_(row[4]);
-        if (cleanText_(obRow[3]) !== expectedTeacher) {
-          differences.push('代課老師不一致：預期 ' + expectedTeacher + '，OB 為 ' + cleanText_(obRow[3]));
+        if (cleanText_(obRow[3]) !== expectation.teacher) {
+          differences.push('指導者不一致：預期 ' + expectation.teacher + '，OB 為 ' + cleanText_(obRow[3]));
         }
-        if (expectedClassId) {
-          if (cleanText_(obRow[5]) !== expectedClassId) {
-            differences.push('課程不一致：預期 Class ID ' + expectedClassId + '，OB 為 ' + cleanText_(obRow[5]));
+        if (expectation.classId) {
+          if (cleanText_(obRow[5]) !== expectation.classId) {
+            differences.push('課程不一致：預期 Class ID ' + expectation.classId + '，OB 為 ' + cleanText_(obRow[5]));
           }
-        } else if (normalizeCourseName_(obRow[2]) !== normalizeCourseName_(expectedCourse)) {
-          differences.push('課程不一致：預期 ' + expectedCourse + '，OB 為 ' + cleanText_(obRow[2]));
+        } else if (normalizeCourseName_(obRow[2]) !== normalizeCourseName_(expectation.course)) {
+          differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
         }
       }
 
       var now = getTimestamp_();
       var before = cleanText_(row[15]);
+      var nextRow = row.slice();
+      while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
       if (!differences.length) {
-        leaveSheet.getRange(rowIndex + 1, 9).setValue('已完成');
-        leaveSheet.getRange(rowIndex + 1, 16, 1, 3).setValues([['已核對', now, '']]);
+        if (expectation.restoreType === 'cancellation') {
+          nextRow[8] = '已完成';
+          nextRow[15] = '已回復核對';
+          nextRow[16] = now;
+          nextRow[17] = '';
+          nextRow[18] = '取消後已回復 OB';
+        } else if (expectation.restoreType === 'withdrawal') {
+          nextRow[8] = '';
+          nextRow[15] = '';
+          nextRow[16] = '';
+          nextRow[17] = '';
+          nextRow[18] = '退出已核准，已重新開放';
+        } else {
+          nextRow[8] = '已完成';
+          nextRow[15] = '已核對';
+          nextRow[16] = now;
+          nextRow[17] = '';
+        }
         result.matched += 1;
-        appendAudit_({ actor: actor, action: 'OB 核對完成', targetId: row[9], before: before, after: '已核對', reason: effectiveCalendarId });
+        audits.push({
+          actor: actor,
+          action: expectation.restoreType ? 'OB 回復完成' : 'OB 核對完成',
+          targetId: row[9],
+          before: before,
+          after: cleanText_(nextRow[15]) || cleanText_(nextRow[18]),
+          reason: effectiveCalendarId
+        });
       } else {
         var differenceText = differences.join('；');
-        leaveSheet.getRange(rowIndex + 1, 16, 1, 3).setValues([['核對異常', now, differenceText]]);
+        nextRow[8] = expectation.restoreType ? '待回復' : '待處理';
+        nextRow[15] = '核對異常';
+        nextRow[16] = now;
+        nextRow[17] = differenceText;
         result.exceptions += 1;
-        appendAudit_({ actor: actor, action: 'OB 核對異常', targetId: row[9], before: before, after: '核對異常', reason: differenceText });
+        audits.push({
+          actor: actor,
+          action: expectation.restoreType ? 'OB 回復異常' : 'OB 核對異常',
+          targetId: row[9],
+          before: before,
+          after: '核對異常',
+          reason: differenceText
+        });
       }
+      updates.push({ rowNumber: rowIndex + 1, values: nextRow.slice(5, 21) });
     }
-    return result;
+
+    if (!updates.length) return result;
+    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+      updates.forEach(function(update) {
+        leaveSheet.getRange(update.rowNumber, 6, 1, 16).setValues([update.values]);
+      });
+      appendAudits(audits);
+      return result;
+    });
   });
+}
+
+function isActiveObWorkRow_(row) {
+  var changeStatus = cleanText_(row[18]);
+  if (['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) !== -1) {
+    return true;
+  }
+  if (cleanText_(row[5]) !== '已領取') return false;
+  return ['', '待核對', '核對異常'].indexOf(cleanText_(row[15])) !== -1;
+}
+
+function getObExpectation_(row) {
+  var changeStatus = cleanText_(row[18]);
+  if (changeStatus === '取消後待回復 OB') {
+    return {
+      teacher: cleanText_(row[1]),
+      course: cleanText_(row[4]),
+      classId: '',
+      restoreType: 'cancellation'
+    };
+  }
+  if (changeStatus === '退出後待回復 OB') {
+    return {
+      teacher: cleanText_(row[1]),
+      course: cleanText_(row[4]),
+      classId: '',
+      restoreType: 'withdrawal'
+    };
+  }
+  return {
+    teacher: cleanText_(row[6]),
+    course: cleanText_(row[12]) || cleanText_(row[4]),
+    classId: cleanText_(row[11]),
+    restoreType: ''
+  };
 }
 
 function linkReplacementCalendarItem_(session, substituteId, replacementCalendarId) {
@@ -1903,19 +2252,39 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
     var obCourse = findObCourseByCalendarId_(replacementId);
     if (!obCourse) throw new Error('找不到選擇的替代 OB 課程，請先重新同步。');
     var record = getLeaveRecordByIdUnlocked_(id);
-    if (cleanText_(record.row[5]) !== '已領取') throw new Error('只有已領取的代課可以連結替代 OB 課程。');
+    var changeStatus = cleanText_(record.row[18]);
+    var manualReview = cleanText_(record.row[15]) === '待人工核對';
+    if (!manualReview && cleanText_(record.row[5]) !== '已領取' &&
+        ['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) === -1) {
+      throw new Error('只有待處理 OB 的紀錄可以連結替代 OB 課程。');
+    }
     var before = cleanText_(record.row[20]) || cleanText_(record.row[10]);
-    record.sheet.getRange(record.rowNumber, 21).setValue(replacementId);
-    record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([['待核對', '', '']]);
-    appendAudit_({
-      actor: actor,
-      action: '連結替代 OB 課程',
-      targetId: id,
-      before: before,
-      after: replacementId,
-      reason: obCourse.courseName
+    var nextVerification = ['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) !== -1
+      ? '待回復 OB'
+      : '待核對';
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      if (manualReview) {
+        record.sheet.getRange(record.rowNumber, 11).setValue(replacementId);
+        if (cleanText_(record.row[5]) === '已領取') {
+          record.sheet.getRange(record.rowNumber, 9).setValue('待處理');
+          record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([['待核對', '', '']]);
+        } else {
+          record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([['', '', '']]);
+        }
+      } else {
+        record.sheet.getRange(record.rowNumber, 21).setValue(replacementId);
+        record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([[nextVerification, '', '']]);
+      }
+      appendAudits([{
+        actor: actor,
+        action: manualReview ? '連結舊資料 OB 課程' : '連結替代 OB 課程',
+        targetId: id,
+        before: before,
+        after: replacementId,
+        reason: obCourse.courseName
+      }]);
+      return { substituteId: id, replacementCalendarId: replacementId };
     });
-    return { substituteId: id, replacementCalendarId: replacementId };
   });
 }
 
@@ -1927,9 +2296,9 @@ function getAdminDashboard_(session) {
     var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
     var accountSheet = requireSheet_(ss, SHEETS.ACCOUNTS);
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
-    ensureLeaveSheetHeaders_(leaveSheet);
-    ensureSheetHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
-    ensureSheetHeaders_(accountSheet, SHEET_HEADERS.ACCOUNTS);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
+    assertHeaders_(accountSheet, SHEET_HEADERS.ACCOUNTS);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
 
     var auditByTarget = getAuditHistoryMap_();
@@ -1970,10 +2339,19 @@ function getAdminDashboard_(session) {
       teachers: teachers,
       pendingInvitations: leaves.filter(function(item) { return item.status === '確認中'; }),
       activeInvitees: activeInvitees,
-      obWork: leaves.filter(function(item) { return item.status === '已領取' && item.verificationStatus !== '已核對'; }),
+      obWork: leaves.filter(function(item) {
+        return ['取消後待回復 OB', '退出後待回復 OB'].indexOf(item.changeStatus) !== -1 ||
+          (item.status === '已領取' &&
+            ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
+      }),
       changeRequests: leaves.filter(function(item) { return ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1; }),
-      exceptions: leaves.filter(function(item) { return item.verificationStatus === '核對異常'; }),
-      completed: leaves.filter(function(item) { return item.status === '已取消' || item.verificationStatus === '已核對'; }),
+      exceptions: leaves.filter(function(item) {
+        return ['核對異常', '待人工核對'].indexOf(item.verificationStatus) !== -1;
+      }),
+      completed: leaves.filter(function(item) {
+        return (item.status === '已取消' && item.changeStatus !== '取消後待回復 OB') ||
+          ['已核對', '已回復核對'].indexOf(item.verificationStatus) !== -1;
+      }),
       replacementOptions: replacementOptions
     };
   });
@@ -2007,7 +2385,7 @@ function getAuditHistoryMap_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(SHEETS.AUDIT);
   if (!sheet) return {};
-  ensureSheetHeaders_(sheet, SHEET_HEADERS.AUDIT);
+  assertHeaders_(sheet, SHEET_HEADERS.AUDIT);
   var history = {};
   sheet.getDataRange().getValues().slice(1).forEach(function(row) {
     var targetId = cleanText_(row[3]);
@@ -2028,7 +2406,7 @@ function getAuditHistoryMap_() {
 function getLeaveRecordByIdUnlocked_(substituteId) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
-  ensureLeaveSheetHeaders_(sheet);
+  assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   var values = sheet.getDataRange().getValues();
   for (var index = 1; index < values.length; index++) {
     if (cleanText_(values[index][9]) === substituteId) {

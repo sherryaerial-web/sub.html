@@ -1,8 +1,8 @@
 # 代課系統 v2.1 設計規格
 
-日期：2026-08-03  
-專案：Sherry Aerial Studio 教室內部管理網站／代課模組  
-前端：`sherryaerial-web/sub.html`  
+日期：2026-08-03
+專案：Sherry Aerial Studio 教室內部管理網站／代課模組
+前端：`sherryaerial-web/sub.html`
 後端：Google Apps Script + Google Sheets + Omcean Booking API
 
 ## 範圍與目標

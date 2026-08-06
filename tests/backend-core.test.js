@@ -7,6 +7,7 @@ const vm = require('node:vm');
 function loadBackend(overrides = {}) {
   const file = path.join(__dirname, '..', 'Code.gs');
   const source = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  let defaultUuid = 0;
   const context = {
     console,
     Date,
@@ -38,10 +39,22 @@ function loadBackend(overrides = {}) {
         if (pattern === 'yyyy-MM-dd') return `${parts.year}-${parts.month}-${parts.day}`;
         if (pattern === 'yyyy/MM/dd') return `${parts.year}/${parts.month}/${parts.day}`;
         if (pattern === 'HH:mm') return `${parts.hour}:${parts.minute}`;
+        if (pattern === 'yyyy-MM-dd HH:mm:ss') {
+          return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:00`;
+        }
         return '';
       },
+      getUuid() { return `default-uuid-${++defaultUuid}`; },
     },
-    Session: { getScriptTimeZone: () => 'Asia/Taipei' },
+    Session: {
+      getScriptTimeZone: () => 'Asia/Taipei',
+      getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }),
+    },
+    LockService: {
+      getScriptLock() {
+        return { waitLock() {}, releaseLock() {} };
+      },
+    },
     ...overrides,
   };
   vm.createContext(context);
@@ -71,6 +84,7 @@ const EXPECTED_COURSE_HEADERS = [
 ];
 
 function createSheetFixture(name, values) {
+  const protections = [];
   return {
     name,
     values: values.map((row) => row.slice()),
@@ -87,6 +101,33 @@ function createSheetFixture(name, values) {
     getDataRange() {
       const width = Math.max(1, ...this.values.map((row) => row.length));
       return this.getRange(1, 1, Math.max(1, this.values.length), width);
+    },
+    getProtections() { return protections.slice(); },
+    protect() {
+      const protection = {
+        description: '',
+        editors: [{ getEmail: () => 'other-editor@example.com' }],
+        domainEdit: true,
+        setDescription(value) { this.description = value; return this; },
+        getDescription() { return this.description; },
+        addEditor(user) {
+          const email = user && user.getEmail ? user.getEmail() : String(user || '');
+          if (email && !this.editors.some((editor) => editor.getEmail() === email)) {
+            this.editors.push({ getEmail: () => email });
+          }
+          return this;
+        },
+        getEditors() { return this.editors.slice(); },
+        removeEditors(editors) {
+          const emails = new Set((editors || []).map((editor) => editor.getEmail()));
+          this.editors = this.editors.filter((editor) => !emails.has(editor.getEmail()));
+          return this;
+        },
+        canDomainEdit() { return this.domainEdit; },
+        setDomainEdit(value) { this.domainEdit = value; return this; },
+      };
+      protections.push(protection);
+      return protection;
     },
     getRange(row, column, numRows = 1, numColumns = 1) {
       const sheet = this;
@@ -130,6 +171,24 @@ function createSheetFixture(name, values) {
       };
     },
   };
+}
+
+function injectSetValuesFailureOnce(sheet, predicate, message = 'injected Sheet write failure') {
+  const originalGetRange = sheet.getRange.bind(sheet);
+  let fired = false;
+  sheet.getRange = (row, column, numRows = 1, numColumns = 1) => {
+    const range = originalGetRange(row, column, numRows, numColumns);
+    const originalSetValues = range.setValues.bind(range);
+    range.setValues = (nextValues) => {
+      if (!fired && predicate({ row, column, numRows, numColumns, nextValues })) {
+        fired = true;
+        throw new Error(message);
+      }
+      return originalSetValues(nextValues);
+    };
+    return range;
+  };
+  return () => fired;
 }
 
 function createSpreadsheetFixture(sheets) {
@@ -215,7 +274,7 @@ function createAuthServices() {
 
 function createAuthBackend(accounts, services = createAuthServices()) {
   const accountSheet = createSheetFixture('登入帳號', [
-    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    EXPECTED_ACCOUNT_HEADERS,
     ...accounts,
   ]);
   const spreadsheet = createSpreadsheetFixture([accountSheet]);
@@ -302,7 +361,7 @@ function createSyncBackend(options = {}) {
   services.Utilities.formatDate = formatTaipeiDate;
   const bootstrap = loadBackend(services);
   const accountSheet = createSheetFixture('登入帳號', [
-    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    EXPECTED_ACCOUNT_HEADERS,
     createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }),
     createAccount(bootstrap, '老師甲', '1234'),
   ]);
@@ -310,7 +369,10 @@ function createSyncBackend(options = {}) {
     EXPECTED_COURSE_HEADERS,
     ['2026/08/05', '10:00', '舊課程', '舊老師', 'old-calendar', 'old-class', 'old-teacher', '否', '2026-08-03 10:00:00'],
   ]);
-  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet, auditSheet]);
   const pages = (options.pages || []).slice();
   const calls = [];
   services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
@@ -350,7 +412,7 @@ function createLeaveBackend(options = {}) {
   services.Utilities.getUuid = () => `uuid-${++uuid}`;
   const bootstrap = loadBackend(services);
   const accountSheet = createSheetFixture('登入帳號', [
-    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    EXPECTED_ACCOUNT_HEADERS,
     createAccount(bootstrap, '老師甲', '1234'),
     createAccount(bootstrap, '老師乙', '5678'),
   ]);
@@ -375,7 +437,12 @@ function createLeaveBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS),
     ...(options.leaveRows || []),
   ]);
-  const spreadsheet = createSpreadsheetFixture([accountSheet, teacherSheet, courseSheet, leaveSheet]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([
+    accountSheet, teacherSheet, courseSheet, leaveSheet, auditSheet,
+  ]);
   const backend = loadBackend({
     ...services,
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
@@ -384,6 +451,7 @@ function createLeaveBackend(options = {}) {
     backend,
     courseSheet,
     leaveSheet,
+    auditSheet,
     spreadsheet,
     sessionToken: backend.authenticate_('老師甲', '1234').sessionToken,
   };
@@ -585,7 +653,7 @@ test('valid fallback session survives early cache eviction but expires on schedu
   services.__cache.delete(key);
   assert.deepEqual(
     JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
-    { teacherName: '老師甲', role: '老師' }
+    { teacherName: '老師甲', role: '老師', capabilities: [] }
   );
 
   services.__properties.set(key, JSON.stringify({
@@ -618,9 +686,42 @@ test('teacher session cannot access administrator-only helpers', () => {
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
-    { teacherName: '老師甲', role: '老師' }
+    { teacherName: '老師甲', role: '老師', capabilities: [] }
   );
   assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
+});
+
+test('existing session immediately follows current account role capabilities and active state', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend, accountSheet, services } = createAuthBackend([
+    createAccount(bootstrap, '管理員', '9999', { role: '管理員' }).concat('空環'),
+  ]);
+  const response = backend.authenticate_('管理員', '9999');
+
+  accountSheet.values[1][4] = '老師';
+  accountSheet.values[1][7] = '舞綢、瑜伽';
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
+    { teacherName: '管理員', role: '老師', capabilities: ['舞綢', '瑜伽'] }
+  );
+  assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
+
+  accountSheet.values[1][3] = '否';
+  assert.throws(() => backend.requireSession_(response.sessionToken), /帳號目前未啟用/);
+  assert.equal(services.__properties.has(backend.getSessionKey_(response.sessionToken)), false);
+});
+
+test('existing session is revoked when its account is removed', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend, accountSheet, services } = createAuthBackend([
+    createAccount(bootstrap, '老師甲', '1234'),
+  ]);
+  const response = backend.authenticate_('老師甲', '1234');
+
+  accountSheet.values.splice(1, 1);
+
+  assert.throws(() => backend.requireSession_(response.sessionToken), /帳號不存在|登入狀態無效/);
+  assert.equal(services.__properties.has(backend.getSessionKey_(response.sessionToken)), false);
 });
 
 test('administrator account setup stores only salt and hash for the new teacher', () => {
@@ -640,6 +741,35 @@ test('administrator account setup stores only salt and hash for the new teacher'
   assert.notEqual(accountSheet.values[2][1], '');
   assert.notEqual(accountSheet.values[2][2], '5678');
   assert.equal(JSON.stringify(accountSheet.values[2]).includes('5678'), false);
+});
+
+test('all backend account setup paths require exactly four numeric PIN digits', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend, accountSheet } = createAuthBackend([
+    createAccount(bootstrap, '管理員', '9999', { role: '管理員' }),
+  ]);
+  const adminToken = backend.authenticate_('管理員', '9999').sessionToken;
+  const rowCount = accountSheet.values.length;
+
+  ['123', '12345', '12A4', '１２３４'].forEach((pin) => {
+    assert.throws(
+      () => backend.setupAccount_(adminToken, '老師乙', pin, { role: '老師' }),
+      /4 位數字/
+    );
+    assert.throws(() => backend.buildAccountValues_('老師乙', pin, {}), /4 位數字/);
+  });
+  assert.equal(accountSheet.values.length, rowCount);
+
+  const emptyAccountSheet = createSheetFixture('登入帳號', [EXPECTED_ACCOUNT_HEADERS]);
+  const emptyBackend = loadBackend({
+    ...createAuthServices(),
+    SpreadsheetApp: {
+      ProtectionType: { SHEET: 'SHEET' },
+      getActiveSpreadsheet() { return createSpreadsheetFixture([emptyAccountSheet]); },
+    },
+  });
+  assert.throws(() => emptyBackend.initializeFirstAdmin_('Ivy', '12A4'), /4 位數字/);
+  assert.equal(emptyAccountSheet.values.length, 1);
 });
 
 test('teacher password bulk import validates all 37 rows before changing any account or plaintext cell', () => {
@@ -708,6 +838,11 @@ test('teacher password bulk import hashes every PIN and clears plaintext only af
   assert.deepEqual(passwordSheet.values.slice(1, 38).map((row) => row[1] || ''), Array(37).fill(''));
   assert.equal(spreadsheet.getSheetByName('密碼表'), passwordSheet);
   assert.ok(backend.getScriptProperties_().getProperty('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'));
+  const protections = accountSheet.getProtections();
+  assert.equal(protections.length, 1);
+  assert.equal(protections[0].getDescription(), '系統保護：登入帳號');
+  assert.equal(protections[0].canDomainEdit(), false);
+  assert.deepEqual(protections[0].getEditors().map((editor) => editor.getEmail()), ['owner@example.com']);
   assert.throws(() => backend.importTeacherAccountsFromPasswordSheet(), /已經完成過/);
 });
 
@@ -735,7 +870,7 @@ test('teacher password bulk import preserves an imported first admin and its adm
   assert.equal(importedAdmin[4], '管理員');
   assert.equal(importedAdmin[7], '空環、空瑜');
   const login = backend.authenticate_('老師01', '1000');
-  const response = JSON.parse(backend.doGet({ parameter: {
+  const response = JSON.parse(backend.doPost({ parameter: {
     action: 'getAdminDashboard',
     sessionToken: login.sessionToken,
   } }).text);
@@ -883,7 +1018,7 @@ test('teacher password bulk import reports rollback failures while attempting ev
 test('initializes the first administrator once without storing the plaintext PIN', () => {
   const services = createAuthServices();
   const accountSheet = createSheetFixture('登入帳號', [
-    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    EXPECTED_ACCOUNT_HEADERS,
   ]);
   const spreadsheet = createSpreadsheetFixture([accountSheet]);
   const backend = loadBackend({
@@ -905,7 +1040,7 @@ test('initializes the first administrator from temporary Script Properties and r
   services.__properties.set('INITIAL_ADMIN_NAME', 'Ivy');
   services.__properties.set('INITIAL_ADMIN_PIN', '1234');
   const accountSheet = createSheetFixture('登入帳號', [
-    ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至'],
+    EXPECTED_ACCOUNT_HEADERS,
   ]);
   const spreadsheet = createSpreadsheetFixture([accountSheet]);
   const backend = loadBackend({
@@ -921,25 +1056,24 @@ test('initializes the first administrator from temporary Script Properties and r
   assert.equal(JSON.stringify(accountSheet.values[1]).includes('1234'), false);
 });
 
-test('personal GET and POST write routes require a session and ignore forged teacher parameters', () => {
+test('authenticated POST routes require a session and ignore forged teacher parameters', () => {
   const bootstrap = loadBackend(createAuthServices());
   const services = createAuthServices();
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
   const sessionToken = backend.authenticate_('老師甲', '1234').sessionToken;
   const calls = [];
   backend.console = { error() {} };
-  backend.ensureSystemStructure_ = () => {};
   backend.getMySubs_ = (teacherName) => { calls.push(['mySubs', teacherName]); return []; };
   backend.submitLeave_ = (session, items) => { calls.push(['leave', session.teacherName, items.length]); return { count: items.length }; };
   backend.claimSubstitute_ = (session, items) => { calls.push(['claim', session.teacherName, items.length]); return { count: items.length }; };
 
-  const missingSession = JSON.parse(backend.doGet({ parameter: {
+  const missingSession = JSON.parse(backend.doPost({ parameter: {
     action: 'getMySubs', name: '被偽造的老師',
   } }).text);
   assert.equal(missingSession.status, 'error');
   assert.match(missingSession.message, /請先登入/);
 
-  backend.doGet({ parameter: {
+  backend.doPost({ parameter: {
     action: 'getMySubs', sessionToken, name: '被偽造的老師',
   } });
   const getWrite = JSON.parse(backend.doGet({ parameter: {
@@ -962,15 +1096,14 @@ test('personal GET and POST write routes require a session and ignore forged tea
   ]);
 });
 
-test('available substitutes route rejects requests without a session', () => {
+test('available substitutes POST route rejects requests without a session', () => {
   const bootstrap = loadBackend(createAuthServices());
   const services = createAuthServices();
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
   backend.console = { error() {} };
-  backend.ensureSystemStructure_ = () => {};
   backend.getAvailableSubstitutes_ = () => [{ '原老師': '老師乙' }];
 
-  const response = JSON.parse(backend.doGet({ parameter: { action: 'getAvailableSubstitutes' } }).text);
+  const response = JSON.parse(backend.doPost({ parameter: { action: 'getAvailableSubstitutes' } }).text);
 
   assert.equal(response.status, 'error');
   assert.match(response.message, /請先登入/);
@@ -1107,6 +1240,9 @@ test('submitLeave reports per-item failures while preserving valid rows', () => 
   assert.equal(result.failed, 1);
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0].calendarId, 'calendar-missing');
+  assert.equal(result.errors[0].date, '2026/08/11');
+  assert.equal(result.errors[0].time, '19:30');
+  assert.equal(result.errors[0].course, '不存在');
   assert.match(result.errors[0].message, /找不到.*有效課程/);
   assert.equal(leaveSheet.values.length, 2);
 });
@@ -1137,15 +1273,14 @@ test('doPost parses a form-encoded leave batch and binds it to the authenticated
   });
 });
 
-test('personal GET routes use the authenticated identity and ignore forged names', () => {
+test('authenticated read actions use POST identity and ignore forged names', () => {
   const { backend, sessionToken } = createLeaveBackend({ courseRows: [] });
   const calls = [];
-  backend.ensureSystemStructure_ = () => {};
   backend.getMyCourses_ = (session) => { calls.push(['courses', session.teacherName]); return []; };
   backend.getMyLeaves_ = (session) => { calls.push(['leaves', session.teacherName]); return []; };
 
-  backend.doGet({ parameter: { action: 'getMyCourses', sessionToken, name: '老師乙' } });
-  backend.doGet({ parameter: { action: 'getMyLeaves', sessionToken, name: '老師乙' } });
+  backend.doPost({ parameter: { action: 'getMyCourses', sessionToken, name: '老師乙' } });
+  backend.doPost({ parameter: { action: 'getMyLeaves', sessionToken, name: '老師乙' } });
 
   assert.deepEqual(calls, [['courses', '老師甲'], ['leaves', '老師甲']]);
 });
@@ -1158,6 +1293,26 @@ test('public routes no longer expose the complete classroom course list', () => 
 
   assert.equal(response.status, 'error');
   assert.match(response.message, /不支援的操作/);
+});
+
+test('doGet exposes only public read-only actions and never accepts session tokens', () => {
+  const { backend } = createLeaveBackend();
+  backend.console = { error() {} };
+  let structureCalls = 0;
+  backend.ensureSystemStructure_ = () => { structureCalls += 1; };
+
+  const teachers = JSON.parse(backend.doGet({ parameter: {
+    action: 'getTeachers', sessionToken: 'must-not-be-used',
+  } }).text);
+  const protectedRead = JSON.parse(backend.doGet({ parameter: {
+    action: 'getMyLeaves', sessionToken: 'must-not-be-used',
+  } }).text);
+
+  assert.equal(teachers.status, 'success');
+  assert.deepEqual(teachers.data.map((item) => item['指導者']), ['老師甲', '老師乙']);
+  assert.equal(protectedRead.status, 'error');
+  assert.match(protectedRead.message, /不支援的操作/);
+  assert.equal(structureCalls, 0);
 });
 
 test('renames the legacy leave sheet and preserves fixed headers', () => {
@@ -1181,7 +1336,7 @@ test('renames the legacy leave sheet and preserves fixed headers', () => {
   ]);
 });
 
-test('bootstraps legacy-only leave sheets before the available-substitute handler runs', () => {
+test('legacy structure changes only through the explicit setup function, never a web read', () => {
   const legacyLeaveSheet = createSheetFixture('工作表1', [EXPECTED_LEAVE_HEADERS]);
   const spreadsheet = createSpreadsheetFixture([
     createSheetFixture('CourseList', [['日期', '時間', '課程', '指導者']]),
@@ -1205,12 +1360,14 @@ test('bootstraps legacy-only leave sheets before the available-substitute handle
       },
     },
   });
-  backend.requireSession_ = () => ({ teacherName: '測試老師', role: '老師' });
+  backend.console = { error() {} };
 
   const response = backend.doGet({ parameter: { action: 'getAvailableSubstitutes' } });
+  assert.equal(legacyLeaveSheet.getName(), '工作表1');
+  assert.equal(JSON.parse(response.text).status, 'error');
 
+  backend.ensureSystemStructure_();
   assert.equal(legacyLeaveSheet.getName(), '請假代課紀錄');
-  assert.deepEqual(JSON.parse(response.text), { status: 'success', data: [] });
 });
 
 test('appends the substitute and API headers without moving fixed columns', () => {
@@ -1245,6 +1402,62 @@ test('creates supporting sheets and does not change the structure when rerun', (
     spreadsheet.sheets.map((sheet) => sheet.name).sort(),
     ['CourseList', '代課邀請', '操作紀錄', '登入帳號', '系統設定', '請假代課紀錄'].sort()
   );
+});
+
+test('legacy migration backfills only unique exact OB links and marks every unresolved active row', () => {
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/08/10', '09:00', '空環 Lv.1', '老師甲', 'calendar-exact', 'class-ring', 'teacher-a', '否', ''],
+    ['2026/08/11', '10:00', '舞綢 Lv.1', '老師乙', 'calendar-ambiguous-a', 'class-silk', 'teacher-b', '否', ''],
+    ['2026/08/11', '10:00', '舞綢 Lv.1', '老師乙', 'calendar-ambiguous-b', 'class-silk', 'teacher-b', '否', ''],
+  ]);
+  const leaveSheet = createSheetFixture('請假代課紀錄', [
+    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS),
+    ['時間', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '已領取', '老師丙'],
+    ['時間', '老師乙', '2026/08/11', '10:00', '舞綢 Lv.1', '確認中'],
+    ['時間', '老師丙', '2026/08/12', '11:00', '空瑜 Lv.1', '已領取', '老師甲'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet, leaveSheet]);
+  const backend = loadBackend({
+    SpreadsheetApp: {
+      ProtectionType: { SHEET: 'SHEET' },
+      getActiveSpreadsheet() { return spreadsheet; },
+    },
+  });
+
+  const result = backend.ensureSystemStructure_();
+  const firstIds = leaveSheet.values.slice(1).map((row) => row[9]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.migration)), {
+    assignedIds: 3,
+    linked: 1,
+    manualReview: 2,
+  });
+  assert.ok(firstIds.every(Boolean));
+  assert.equal(leaveSheet.values[1][10], 'calendar-exact');
+  assert.equal(leaveSheet.values[1][15], '待核對');
+  assert.equal(leaveSheet.values[2][10] || '', '');
+  assert.equal(leaveSheet.values[2][15], '待人工核對');
+  assert.match(leaveSheet.values[2][17], /多筆/);
+  assert.equal(leaveSheet.values[3][15], '待人工核對');
+  assert.match(leaveSheet.values[3][17], /找不到/);
+
+  const auditSheet = spreadsheet.getSheetByName('操作紀錄');
+  assert.equal(auditSheet.values.filter((row) => row[2] === '舊資料遷移').length, 1);
+  const second = backend.ensureSystemStructure_();
+  assert.deepEqual(JSON.parse(JSON.stringify(second.migration)), {
+    assignedIds: 0,
+    linked: 0,
+    manualReview: 0,
+  });
+  assert.deepEqual(leaveSheet.values.slice(1).map((row) => row[9]), firstIds);
+  assert.equal(auditSheet.values.filter((row) => row[2] === '舊資料遷移').length, 1);
+
+  const accountSheet = spreadsheet.getSheetByName('登入帳號');
+  const protections = accountSheet.getProtections();
+  assert.equal(protections.length, 1);
+  assert.equal(protections[0].getDescription(), '系統保護：登入帳號');
+  assert.equal(protections[0].canDomainEdit(), false);
 });
 
 test('maps headers by their 1-based Sheet column and appends audit events', () => {
@@ -1703,13 +1916,27 @@ test('uninvited teacher cannot list pending substitutes', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(rows)), []);
 });
 
-test('invited teacher sees all pending substitutes except their own leave without invitation metadata', () => {
-  const { backend, invitationSheet, adminSession, teacherASession } = createInvitationBackend();
+test('invited list read is pure while the explicit POST route records first view once', () => {
+  const {
+    backend,
+    invitationSheet,
+    adminSession,
+    teacherASession,
+    teacherAToken,
+  } = createInvitationBackend();
   backend.openInvitations_(adminSession, ['老師甲']);
 
   const firstRows = backend.getAvailableSubstitutes_(teacherASession);
+  assert.equal(invitationSheet.values[1][3], '');
+  const postResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getAvailableSubstitutes',
+    sessionToken: teacherAToken,
+  } }).text);
   const firstViewedAt = invitationSheet.values[1][3];
-  const secondRows = backend.getAvailableSubstitutes_(teacherASession);
+  const secondResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getAvailableSubstitutes',
+    sessionToken: teacherAToken,
+  } }).text);
 
   assert.deepEqual(firstRows.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
   assert.ok(firstRows.every((row) => row['原老師'] !== '老師甲'));
@@ -1718,7 +1945,20 @@ test('invited teacher sees all pending substitutes except their own leave withou
   assert.ok(firstRows.every((row) => row['其他受邀老師'] === undefined));
   assert.ok(firstViewedAt);
   assert.equal(invitationSheet.values[1][3], firstViewedAt);
-  assert.deepEqual(JSON.parse(JSON.stringify(secondRows)), JSON.parse(JSON.stringify(firstRows)));
+  assert.deepEqual(postResult.data.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
+  assert.deepEqual(secondResult.data.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
+});
+
+test('available-substitute reads never invent missing legacy UUIDs', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '', '', 'calendar-b',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.throws(() => backend.getAvailableSubstitutes_(teacherASession), /初始化|代課編號/);
+  assert.equal(leaveSheet.values[1][9] || '', '');
 });
 
 test('global pause hides substitutes and blocks claims until admin resumes manually', () => {
@@ -1795,6 +2035,25 @@ test('two invited teachers with stale lists produce exactly one claim winner', (
   assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-c').length, 1);
 });
 
+test('claim rolls back the business row when its audit append fails', () => {
+  const { backend, leaveSheet, auditSheet, adminSession, teacherASession } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    auditSheet,
+    ({ row }) => row > 1,
+    'injected claim audit failure'
+  );
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-c', changeNote: '' }]),
+    /injected claim audit failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
 test('invitation POST actions require admin while list and claim bind to the logged-in teacher', () => {
   const {
     backend,
@@ -1822,7 +2081,7 @@ test('invitation POST actions require admin while list and claim bind to the log
   assert.equal(opened.data.opened, 2);
   assert.equal(invitationSheet.values.length, 3);
 
-  const listed = JSON.parse(backend.doGet({ parameter: {
+  const listed = JSON.parse(backend.doPost({ parameter: {
     action: 'getAvailableSubstitutes',
     sessionToken: teacherAToken,
     teacherName: '老師乙',
@@ -1837,6 +2096,24 @@ test('invitation POST actions require admin while list and claim bind to the log
   } }).text);
   assert.equal(claimed.status, 'success');
   assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-c')[6], '老師甲');
+});
+
+test('batch invitation is all-or-nothing when its audit batch fails', () => {
+  const { backend, invitationSheet, auditSheet, adminSession } = createInvitationBackend();
+  const invitationsBefore = JSON.stringify(invitationSheet.values);
+  const auditBefore = JSON.stringify(auditSheet.values);
+  injectSetValuesFailureOnce(
+    auditSheet,
+    ({ row }) => row > 1,
+    'injected invitation audit failure'
+  );
+
+  assert.throws(
+    () => backend.openInvitations_(adminSession, ['老師甲', '老師乙']),
+    /injected invitation audit failure/
+  );
+  assert.equal(JSON.stringify(invitationSheet.values), invitationsBefore);
+  assert.equal(JSON.stringify(auditSheet.values), auditBefore);
 });
 
 test('category capability validation reads only the protected account record', () => {
@@ -1991,7 +2268,7 @@ test('claim options return only invited teacher capabilities and authorised OB c
 test('uninvited claim-options route returns no capabilities or OB classes', () => {
   const { backend, teacherAToken } = createInvitationBackend({ teacherACapabilities: '空環' });
 
-  const response = JSON.parse(backend.doGet({ parameter: {
+  const response = JSON.parse(backend.doPost({ parameter: {
     action: 'getClaimOptions',
     sessionToken: teacherAToken,
   } }).text);
@@ -2007,7 +2284,7 @@ test('paused claim-options route returns no capabilities or OB classes to an inv
   backend.openInvitations_(adminSession, ['老師甲']);
   backend.pauseClaims_({ teacherName: '管理員甲', role: '管理員' }, true);
 
-  const response = JSON.parse(backend.doGet({ parameter: {
+  const response = JSON.parse(backend.doPost({ parameter: {
     action: 'getClaimOptions',
     sessionToken: teacherAToken,
     adminToken,
@@ -2063,6 +2340,24 @@ test('cancel leaves the original row and records a complete audit event', () => 
   ]);
 });
 
+test('cancel rolls back the business row when its audit append fails', () => {
+  const { backend, leaveSheet, auditSheet, teacherASession } = createInvitationBackend();
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    auditSheet,
+    ({ row }) => row > 1,
+    'injected cancellation audit failure'
+  );
+
+  assert.throws(
+    () => backend.cancelLeave_(teacherASession, 'leave-a'),
+    /injected cancellation audit failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
 test('cancel rejects claimed or OB-started leave and requires an approval request instead', () => {
   const { backend, teacherASession } = createInvitationBackend({
     leaveRows: [
@@ -2078,7 +2373,7 @@ test('cancel rejects claimed or OB-started leave and requires an approval reques
 test('cancel request after a claim requires a reason and admin can approve it', () => {
   const { backend, leaveSheet, auditSheet, teacherASession, adminSession } = createInvitationBackend({
     leaveRows: [[
-      '時間', '老師甲', '2026/08/10', '09:00', '空環', '已領取', '老師乙', '', '',
+      '時間', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '已領取', '老師乙', '', '',
       'leave-cancel-request', 'calendar-a', 'class-ring-1', '空環 Lv.1', '', '沿用原課程',
     ]],
   });
@@ -2093,10 +2388,25 @@ test('cancel request after a claim requires a reason and admin can approve it', 
   const result = backend.resolveChangeRequest_(adminSession, 'leave-cancel-request', 'approve', '已確認雙方');
   assert.equal(result.status, '已取消');
   assert.equal(leaveSheet.values[1][5], '已取消');
-  assert.equal(leaveSheet.values[1][18], '取消申請已核准');
+  assert.equal(leaveSheet.values[1][8], '待回復');
+  assert.equal(leaveSheet.values[1][15], '待回復 OB');
+  assert.equal(leaveSheet.values[1][18], '取消後待回復 OB');
   assert.deepEqual(auditSheet.values.slice(1).map((row) => row[2]), [
     '申請取消請假', '核准取消請假',
   ]);
+
+  const beforeRestore = backend.getAdminDashboard_(adminSession);
+  assert.ok(beforeRestore.obWork.some((item) => item.substituteId === 'leave-cancel-request'));
+  assert.ok(!beforeRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
+
+  const reconciliation = backend.reconcileObChanges_(adminSession);
+  assert.equal(reconciliation.matched, 1);
+  assert.equal(leaveSheet.values[1][8], '已完成');
+  assert.equal(leaveSheet.values[1][15], '已回復核對');
+  assert.equal(leaveSheet.values[1][18], '取消後已回復 OB');
+  const afterRestore = backend.getAdminDashboard_(adminSession);
+  assert.ok(!afterRestore.obWork.some((item) => item.substituteId === 'leave-cancel-request'));
+  assert.ok(afterRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
 });
 
 test('withdraw request requires the current substitute and a reason', () => {
@@ -2115,10 +2425,10 @@ test('withdraw request requires the current substitute and a reason', () => {
   assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-claimed')[18], '申請退出中');
 });
 
-test('admin-approved withdraw clears active claim fields and reopens with prior substitute in audit', () => {
+test('admin-approved withdraw stays in OB restore work until reconciliation then reopens', () => {
   const { backend, leaveSheet, auditSheet, adminSession, teacherBSession } = createInvitationBackend({
     leaveRows: [[
-      '時間', '老師丙', '2026/08/12', '12:00', '空環', '已領取', '老師乙',
+      '時間', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '已領取', '老師乙',
       '沿用原課程；難度：Lv.1', '待處理', 'leave-withdraw', 'calendar-c', 'class-ring-1',
       '空環 Lv.1', 'Lv.1', '沿用原課程', '待核對', '', '', '', '空環',
     ]],
@@ -2134,11 +2444,23 @@ test('admin-approved withdraw clears active claim fields and reopens with prior 
   assert.equal(row[5], '確認中');
   assert.equal(row[6], '');
   assert.equal(row[7], '');
-  assert.equal(row[8], '');
-  assert.deepEqual(row.slice(11, 18), ['', '', '', '', '', '', '']);
-  assert.equal(row[18], '退出已核准，已重新開放');
+  assert.equal(row[8], '待回復');
+  assert.deepEqual(row.slice(11, 18), ['', '', '', '', '待回復 OB', '', '']);
+  assert.equal(row[15], '待回復 OB');
+  assert.equal(row[18], '退出後待回復 OB');
   assert.equal(row[19], '');
   assert.match(auditSheet.values.at(-1)[6], /原代課老師：老師乙/);
+
+  const beforeRestore = backend.getAdminDashboard_(adminSession);
+  assert.ok(beforeRestore.obWork.some((item) => item.substituteId === 'leave-withdraw'));
+  const reconciliation = backend.reconcileObChanges_(adminSession);
+  assert.equal(reconciliation.matched, 1);
+  assert.equal(row[8], '');
+  assert.equal(row[15], '');
+  assert.equal(row[18], '退出已核准，已重新開放');
+  const afterRestore = backend.getAdminDashboard_(adminSession);
+  assert.ok(!afterRestore.obWork.some((item) => item.substituteId === 'leave-withdraw'));
+  assert.ok(afterRestore.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
 });
 
 test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {
@@ -2169,6 +2491,51 @@ test('reconcile marks exact OB teacher and class matches and reports mismatches'
   assert.match(missing[17], /找不到/);
 });
 
+test('reconcile ignores already verified history after it leaves the current OB snapshot', () => {
+  const verifiedRow = [
+    '時間', '老師甲', '2026/06/01', '09:00', '空環 Lv.1', '已領取', '老師乙', '', '已完成',
+    'leave-history', 'calendar-history', 'class-ring-1', '空環 Lv.1', '', '沿用原課程',
+    '已核對', '2026-06-01 10:00:00', '', '', '空環', '',
+  ];
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [],
+    leaveRows: [verifiedRow],
+  });
+  const before = JSON.stringify(leaveSheet.values[1]);
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 0, matched: 0, exceptions: 0 });
+  assert.equal(JSON.stringify(leaveSheet.values[1]), before);
+});
+
+test('reconciliation rolls back every checked row when its audit batch fails', () => {
+  const { backend, leaveSheet, auditSheet, adminSession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', '空環 Lv.1', '老師乙', 'calendar-match-a', 'class-ring-1', 'teacher-b', '是', ''],
+      ['2026/08/11', '10:00', '空環 Lv.1', '老師乙', 'calendar-match-b', 'class-ring-1', 'teacher-b', '是', ''],
+    ],
+    leaveRows: [
+      ['時間', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '已領取', '老師乙', '', '', 'leave-match-a', 'calendar-match-a', 'class-ring-1', '空環 Lv.1', '', '沿用原課程', '待核對'],
+      ['時間', '老師甲', '2026/08/11', '10:00', '空環 Lv.1', '已領取', '老師乙', '', '', 'leave-match-b', 'calendar-match-b', 'class-ring-1', '空環 Lv.1', '', '沿用原課程', '待核對'],
+    ],
+  });
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    auditSheet,
+    ({ row }) => row > 1,
+    'injected reconciliation audit failure'
+  );
+
+  assert.throws(
+    () => backend.reconcileObChanges_(adminSession),
+    /injected reconciliation audit failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
 test('replacement calendar linking preserves the original ID and can then reconcile', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     courseRows: [[
@@ -2188,6 +2555,25 @@ test('replacement calendar linking preserves the original ID and can then reconc
   const result = backend.reconcileObChanges_(adminSession);
   assert.equal(result.matched, 1);
   assert.equal(leaveSheet.values[1][15], '已核對');
+});
+
+test('legacy manual-review leave stays unavailable until admin links its original OB course', () => {
+  const { backend, leaveSheet, adminSession, teacherBSession } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師甲', '2026/08/01', '09:00', '空環 Lv.1', '確認中', '', '', '',
+      'leave-manual', '', '', '', '', '', '待人工核對', '', '找不到完全相同的 OB 課程', '', '', '',
+    ]],
+    invitationRows: [['invite-b', '老師乙', '時間', '', '開放中', '']],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getAvailableSubstitutes_(teacherBSession))), []);
+  assert.equal(backend.getAdminDashboard_(adminSession).exceptions[0].substituteId, 'leave-manual');
+
+  backend.linkReplacementCalendarItem_(adminSession, 'leave-manual', 'calendar-a');
+
+  assert.equal(leaveSheet.values[1][10], 'calendar-a');
+  assert.equal(leaveSheet.values[1][15] || '', '');
+  assert.equal(backend.getAvailableSubstitutes_(teacherBSession)[0]['代課編號'], 'leave-manual');
 });
 
 test('admin dashboard separates work queues without exposing account secrets', () => {

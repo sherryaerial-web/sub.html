@@ -65,7 +65,7 @@ function createFrontendRuntime(fixtures = {}) {
       ? new URLSearchParams(request.body || '').get('action')
       : new URL(url).searchParams.get('action');
     if (isPost && action === 'claimSubstitute') claimSubmitted = true;
-    if (!isPost && action === 'getAvailableSubstitutes' && claimSubmitted) {
+    if (isPost && action === 'getAvailableSubstitutes' && claimSubmitted) {
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -73,7 +73,13 @@ function createFrontendRuntime(fixtures = {}) {
         url,
       });
     }
-    const data = isPost ? { count: 1 } : (fixtures[action] || []);
+    const authenticatedReads = new Set([
+      'getAvailableSubstitutes', 'getClaimOptions', 'getMySubs',
+      'getMyCourses', 'getMyLeaves', 'getAdminDashboard',
+    ]);
+    const data = isPost && !authenticatedReads.has(action)
+      ? { count: 1 }
+      : (fixtures[action] || []);
     const payload = { status: 'success', data };
     return Promise.resolve({ ok: true, status: 200, json: async () => payload, url });
   };
@@ -138,6 +144,12 @@ test('provides teacher login and sends credentials through form-encoded POST', (
   assert.match(html, /method:\s*["']POST["']/);
 });
 
+test('keeps session tokens out of URLs by routing every authenticated read through POST', () => {
+  assert.match(html, /const PUBLIC_GET_ACTIONS\s*=\s*new Set\(\["getTeachers"\]\)/);
+  assert.match(html, /if \(!PUBLIC_GET_ACTIONS\.has\(action\)\) return callPostApi\(action, params\)/);
+  assert.doesNotMatch(html, /query\.set\([\s\S]{0,180}sessionToken/);
+});
+
 test('implements date-first leave selection with select-all-visible and clear controls', () => {
   assert.match(html, /id=["']leave-date-list["']/);
   assert.match(html, /id=["']select-all-visible-dates["']/);
@@ -162,6 +174,64 @@ test('submits leave items in bounded POST batches and verifies exact backend tot
   assert.match(html, /duplicates/);
   assert.match(html, /failed/);
   assert.match(html, /送出結果與勾選堂數不一致/);
+});
+
+test('lists every failed leave course and preserves only failed IDs for retry', () => {
+  const { context } = createFrontendRuntime();
+  const totals = { requested: 0, created: 0, duplicates: 0, failed: 0, errors: [] };
+  const batch = [
+    { 日期: '2026/08/10', 時間: '18:30', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a' },
+    { 日期: '2026/08/11', 時間: '19:30', 課程: '綢吊 Lv.1', 'OB Calendar ID': 'calendar-b' },
+  ];
+
+  context.mergeLeaveBatchResult(totals, {
+    requested: 2,
+    created: 1,
+    duplicates: 0,
+    failed: 1,
+    errors: [{
+      index: 1,
+      calendarId: 'calendar-b',
+      date: '2026/08/11',
+      time: '19:30',
+      course: '綢吊 Lv.1',
+      message: '課程已異動',
+    }],
+  }, batch);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(totals.errors)), [{
+    calendarId: 'calendar-b',
+    date: '2026/08/11',
+    time: '19:30',
+    course: '綢吊 Lv.1',
+    message: '課程已異動',
+  }]);
+  assert.match(context.formatLeaveFailureMessage(totals), /失敗課程：2026\/08\/11 19:30 綢吊 Lv\.1：課程已異動/);
+  assert.match(html, /selectedLeaveCourses\s*=\s*new Set\(totals\.errors/);
+  assert.match(html, /await fetchMyLeaves\(\)/);
+});
+
+test('reports prior successes and keeps every unconfirmed course after a later transport failure', () => {
+  const { context } = createFrontendRuntime();
+  const totals = { requested: 1, created: 1, duplicates: 0, failed: 0, errors: [] };
+  const unconfirmed = [
+    { 日期: '2026/08/12', 時間: '20:00', 課程: '空瑜 Lv.1', 'OB Calendar ID': 'calendar-c' },
+    { 日期: '2026/08/13', 時間: '21:00', 課程: '舞綢 Lv.2', 'OB Calendar ID': 'calendar-d' },
+  ];
+
+  context.appendUnconfirmedLeaveFailures(totals, unconfirmed, '網路中斷');
+
+  assert.equal(totals.created, 1);
+  assert.equal(totals.unconfirmed, 2);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(totals.errors.map((item) => item.calendarId))),
+    ['calendar-c', 'calendar-d']
+  );
+  const message = context.formatLeaveFailureMessage(totals);
+  assert.match(message, /新增 1 堂/);
+  assert.match(message, /空瑜 Lv\.1：尚未確認：網路中斷/);
+  assert.match(message, /舞綢 Lv\.2：尚未確認：網路中斷/);
+  assert.match(html, /appendUnconfirmedLeaveFailures\(totals, items\.slice\(start\), error\.message\)/);
 });
 
 test('renders personal leave history details for the logged-in teacher', () => {

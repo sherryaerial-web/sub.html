@@ -945,12 +945,14 @@
       return payload.data;
     }
 
+    const PUBLIC_GET_ACTIONS = new Set(["getTeachers"]);
+
     async function callApi(action, params = {}) {
+      if (!PUBLIC_GET_ACTIONS.has(action)) return callPostApi(action, params);
+
       const query = new URLSearchParams({ action });
       const requestParams = { ...params };
-      if (authState.sessionToken && !requestParams.sessionToken) {
-        requestParams.sessionToken = authState.sessionToken;
-      }
+      delete requestParams.sessionToken;
       Object.entries(requestParams).forEach(([key, value]) => {
         query.set(key, typeof value === "string" ? value : JSON.stringify(value));
       });
@@ -1333,24 +1335,84 @@
       }
     }
 
+    function normalizeLeaveFailure(error, batchItem) {
+      const failure = error || {};
+      const item = batchItem || {};
+      return {
+        calendarId: String(failure.calendarId || item["OB Calendar ID"] || ""),
+        date: String(failure.date || item["日期"] || ""),
+        time: String(failure.time || item["時間"] || item["時段"] || ""),
+        course: String(failure.course || item["課程"] || ""),
+        message: String(failure.message || "未知錯誤")
+      };
+    }
+
+    function mergeLeaveBatchResult(totals, result, batch) {
+      validateLeaveBatchResult(result, batch.length);
+      const errors = Array.isArray(result.errors) ? result.errors : [];
+      if (errors.length !== result.failed) {
+        throw new Error("系統未回傳完整的失敗課程明細，請查看我的請假紀錄後再試。");
+      }
+      totals.requested += result.requested;
+      totals.created += result.created;
+      totals.duplicates += result.duplicates;
+      totals.failed += result.failed;
+      errors.forEach((error) => {
+        const batchItem = Number.isInteger(error.index) ? batch[error.index] : null;
+        const fallbackItem = batchItem || batch.find((item) =>
+          String(item["OB Calendar ID"] || "") === String(error.calendarId || ""));
+        if (!fallbackItem) throw new Error("系統回傳的失敗課程編號無法辨識，請重新整理後再試。");
+        totals.errors.push(normalizeLeaveFailure(error, fallbackItem));
+      });
+      return totals;
+    }
+
+    function formatLeaveFailureMessage(totals) {
+      const list = totals.errors.map((item) =>
+        `${item.date} ${item.time} ${item.course}：${item.message}`
+      ).join("；");
+      const failureLabel = totals.unconfirmed ? "失敗或尚未確認" : "失敗";
+      return `請假未完全送出：新增 ${totals.created} 堂，原已登記 ${totals.duplicates} 堂，${failureLabel} ${totals.errors.length} 堂。失敗課程：${list}`;
+    }
+
+    function appendUnconfirmedLeaveFailures(totals, items, message) {
+      const reason = String(message || "系統連線中斷");
+      (items || []).forEach((item) => {
+        totals.errors.push(normalizeLeaveFailure({ message: `尚未確認：${reason}` }, item));
+      });
+      totals.unconfirmed = (totals.unconfirmed || 0) + (items || []).length;
+      return totals;
+    }
+
+    async function presentLeaveFailures(totals) {
+      selectedLeaveCourses = new Set(totals.errors.map((item) => item.calendarId).filter(Boolean));
+      selectedLeaveDates = new Set(totals.errors.map((item) => item.date).filter(Boolean));
+      renderLeaveDates();
+      renderLeaveCourses();
+      await fetchMyLeaves();
+      setNotice(formatLeaveFailureMessage(totals), "error");
+    }
+
     async function submitLeave() {
       const items = getSelectedLeaveItems();
       if (!items.length) return setNotice("請至少勾選一堂請假課程。", "error");
       if (!window.confirm(`確認送出 ${items.length} 堂請假申請？`)) return;
 
       const button = byId("leave-submit");
-      const totals = { requested: 0, created: 0, duplicates: 0, failed: 0 };
+      const totals = { requested: 0, created: 0, duplicates: 0, failed: 0, errors: [] };
       clearNotice();
       setButtonBusy(button, true, "正在送出...");
       try {
         for (let start = 0; start < items.length; start += LEAVE_BATCH_SIZE) {
           const batch = items.slice(start, start + LEAVE_BATCH_SIZE);
-          const result = await callPostApi("submitLeave", { items: batch });
-          validateLeaveBatchResult(result, batch.length);
-          totals.requested += result.requested;
-          totals.created += result.created;
-          totals.duplicates += result.duplicates;
-          totals.failed += result.failed;
+          try {
+            const result = await callPostApi("submitLeave", { items: batch });
+            mergeLeaveBatchResult(totals, result, batch);
+          } catch (error) {
+            appendUnconfirmedLeaveFailures(totals, items.slice(start), error.message);
+            await presentLeaveFailures(totals);
+            return;
+          }
         }
 
         if (totals.requested !== items.length ||
@@ -1358,7 +1420,8 @@
           throw new Error("送出結果與勾選堂數不一致，請查看我的請假紀錄後再試。");
         }
         if (totals.failed) {
-          throw new Error(`有 ${totals.failed} 堂送出失敗；已成功 ${totals.created} 堂，重複 ${totals.duplicates} 堂。`);
+          await presentLeaveFailures(totals);
+          return;
         }
 
         switchView("view-myleaves");

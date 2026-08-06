@@ -281,19 +281,51 @@ function importTeacherAccountsFromPasswordSheet() {
         accountRows.push(values);
         created++;
       } else {
+        var existingValues = accountRows[accountIndexes[key]];
+        values[3] = existingValues[3];
+        values[4] = existingValues[4];
+        values[5] = existingValues[5];
+        values[6] = existingValues[6];
+        values[7] = existingValues[7];
         accountRows[accountIndexes[key]] = values;
         updated++;
       }
     });
 
-    accountSheet
-      .getRange(2, 1, accountRows.length, SHEET_HEADERS.ACCOUNTS.length)
-      .setValues(accountRows);
-    sourceSheet.getRange(2, passwordColumn, lastSourceRow - 1, 1).clearContent();
-    properties.setProperty(
-      CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY,
-      Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss')
+    var accountRowsBefore = Math.max(0, accountSheet.getLastRow() - 1);
+    var accountRange = accountSheet.getRange(
+      2,
+      1,
+      accountRows.length,
+      SHEET_HEADERS.ACCOUNTS.length
     );
+    var pinRange = sourceSheet.getRange(2, passwordColumn, lastSourceRow - 1, 1);
+    var importSnapshot = {
+      accountSheet: accountSheet,
+      accountRange: accountRange,
+      accountRowsBefore: accountRowsBefore,
+      accountValues: accountRange.getValues(),
+      pinRange: pinRange,
+      pinValues: pinRange.getValues(),
+      properties: properties,
+      completionPropertyValue: properties.getProperty(CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY)
+    };
+
+    try {
+      accountRange.setValues(accountRows);
+      pinRange.clearContent();
+      properties.setProperty(
+        CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY,
+        Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss')
+      );
+    } catch (error) {
+      var rollbackFailures = rollbackTeacherPasswordImport_(importSnapshot);
+      var failureMessage = '老師密碼批次匯入失敗：' + getErrorMessage_(error);
+      if (rollbackFailures.length) {
+        throw new Error(failureMessage + '；回復失敗：' + rollbackFailures.join('；'));
+      }
+      throw new Error(failureMessage + '；已完成回復，未保留部分變更。');
+    }
 
     return {
       sourceSheet: SHEETS.PASSWORD_IMPORT,
@@ -302,6 +334,51 @@ function importTeacherAccountsFromPasswordSheet() {
       updated: updated
     };
   });
+}
+
+function rollbackTeacherPasswordImport_(snapshot) {
+  var failures = [];
+
+  try {
+    snapshot.accountRange.clearContent();
+    if (snapshot.accountRowsBefore > 0) {
+      snapshot.accountSheet
+        .getRange(
+          2,
+          1,
+          snapshot.accountRowsBefore,
+          SHEET_HEADERS.ACCOUNTS.length
+        )
+        .setValues(snapshot.accountValues.slice(0, snapshot.accountRowsBefore));
+    }
+  } catch (error) {
+    failures.push('登入帳號：' + getErrorMessage_(error));
+  }
+
+  try {
+    snapshot.pinRange.setValues(snapshot.pinValues);
+  } catch (error) {
+    failures.push('密碼表 PIN：' + getErrorMessage_(error));
+  }
+
+  try {
+    if (snapshot.completionPropertyValue == null) {
+      snapshot.properties.deleteProperty(CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY);
+    } else {
+      snapshot.properties.setProperty(
+        CONFIG.PASSWORD_IMPORT_COMPLETED_PROPERTY,
+        snapshot.completionPropertyValue
+      );
+    }
+  } catch (error) {
+    failures.push('完成標記：' + getErrorMessage_(error));
+  }
+
+  return failures;
+}
+
+function getErrorMessage_(error) {
+  return error && error.message ? error.message : String(error);
 }
 
 function initializeFirstAdmin_(teacherName, pin) {

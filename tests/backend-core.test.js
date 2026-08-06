@@ -93,9 +93,10 @@ function createSheetFixture(name, values) {
       return {
         getValues() {
           return Array.from({ length: numRows }, (_, rowOffset) =>
-            Array.from({ length: numColumns }, (_, columnOffset) =>
-              (sheet.values[row - 1 + rowOffset] || [])[column - 1 + columnOffset] || ''
-            )
+            Array.from({ length: numColumns }, (_, columnOffset) => {
+              const value = (sheet.values[row - 1 + rowOffset] || [])[column - 1 + columnOffset];
+              return value == null ? '' : value;
+            })
           );
         },
         getValue() { return this.getValues()[0][0]; },
@@ -700,9 +701,9 @@ test('teacher password bulk import hashes every PIN and clears plaintext only af
   assert.notEqual(imported[1], '');
   assert.equal(imported[2], backend.hashPin_('1000', imported[1]));
   assert.equal(imported.includes('1000'), false);
-  assert.equal(imported[3], '是');
+  assert.equal(imported[3], '否');
   assert.equal(imported[4], '老師');
-  assert.equal(imported[7], '');
+  assert.equal(imported[7], '空環');
   assert.deepEqual(passwordSheet.values.slice(1, 38).map((row) => row[0]), rows.map((row) => row[0]));
   assert.deepEqual(passwordSheet.values.slice(1, 38).map((row) => row[1] || ''), Array(37).fill(''));
   assert.equal(spreadsheet.getSheetByName('密碼表'), passwordSheet);
@@ -710,15 +711,57 @@ test('teacher password bulk import hashes every PIN and clears plaintext only af
   assert.throws(() => backend.importTeacherAccountsFromPasswordSheet(), /已經完成過/);
 });
 
+test('teacher password bulk import preserves an imported first admin and its admin route access', () => {
+  const rows = createPasswordImportRows();
+  const services = createAuthServices();
+  const bootstrap = loadBackend(services);
+  const firstAdmin = createAccount(bootstrap, '老師01', '7777', {
+    active: '是',
+    role: '管理員',
+  }).concat('空環、空瑜');
+  const { backend, accountSheet } = createPasswordImportBackend(rows, {
+    existingAccounts: [firstAdmin],
+  });
+  backend.ensureSystemStructure_ = () => {};
+  backend.getAdminDashboard_ = (session) => {
+    backend.assertAdminSession_(session);
+    return { allowed: true };
+  };
+
+  backend.importTeacherAccountsFromPasswordSheet();
+
+  const importedAdmin = accountSheet.values.find((row) => row[0] === '老師01');
+  assert.equal(importedAdmin[3], '是');
+  assert.equal(importedAdmin[4], '管理員');
+  assert.equal(importedAdmin[7], '空環、空瑜');
+  const login = backend.authenticate_('老師01', '1000');
+  const response = JSON.parse(backend.doGet({ parameter: {
+    action: 'getAdminDashboard',
+    sessionToken: login.sessionToken,
+  } }).text);
+  assert.deepEqual(JSON.parse(JSON.stringify(response)), {
+    status: 'success',
+    data: { allowed: true },
+  });
+});
+
 test('teacher password bulk import keeps every plaintext PIN when the account batch write fails', () => {
   const rows = createPasswordImportRows();
   const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
   const accountsBefore = JSON.stringify(accountSheet.values);
   const originalGetRange = accountSheet.getRange.bind(accountSheet);
+  let shouldFailWrite = true;
   accountSheet.getRange = function(row, column, numRows = 1, numColumns = 1) {
     const range = originalGetRange(row, column, numRows, numColumns);
     if (column === 1 && numRows > 1 && numColumns === EXPECTED_ACCOUNT_HEADERS.length) {
-      range.setValues = () => { throw new Error('injected account batch write failure'); };
+      const originalSetValues = range.setValues.bind(range);
+      range.setValues = (values) => {
+        if (shouldFailWrite) {
+          shouldFailWrite = false;
+          throw new Error('injected account batch write failure');
+        }
+        return originalSetValues(values);
+      };
     }
     return range;
   };
@@ -728,6 +771,111 @@ test('teacher password bulk import keeps every plaintext PIN when the account ba
     /injected account batch write failure/
   );
   assert.equal(JSON.stringify(accountSheet.values), accountsBefore);
+  assert.deepEqual(passwordSheet.values.slice(1).map((row) => row[1]), rows.map((row) => row[1]));
+  assert.equal(services.__properties.has('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'), false);
+});
+
+test('teacher password bulk import restores accounts and PINs when plaintext clearing fails after clearing', () => {
+  const rows = createPasswordImportRows();
+  const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
+  const accountsBefore = JSON.stringify(accountSheet.values);
+  const pinsBefore = passwordSheet.values.slice(1).map((row) => row[1]);
+  const originalGetRange = passwordSheet.getRange.bind(passwordSheet);
+  let shouldFailClear = true;
+  passwordSheet.getRange = function(row, column, numRows = 1, numColumns = 1) {
+    const range = originalGetRange(row, column, numRows, numColumns);
+    if (row === 2 && column === 2 && numRows === 37 && numColumns === 1) {
+      const originalClearContent = range.clearContent.bind(range);
+      range.clearContent = () => {
+        originalClearContent();
+        if (shouldFailClear) {
+          shouldFailClear = false;
+          throw new Error('injected PIN clear failure');
+        }
+        return range;
+      };
+    }
+    return range;
+  };
+
+  assert.throws(
+    () => backend.importTeacherAccountsFromPasswordSheet(),
+    /injected PIN clear failure.*已完成回復/
+  );
+  assert.equal(JSON.stringify(accountSheet.values), accountsBefore);
+  assert.deepEqual(passwordSheet.values.slice(1).map((row) => row[1]), pinsBefore);
+  assert.equal(services.__properties.has('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'), false);
+});
+
+test('teacher password bulk import restores accounts PINs and marker when completion property write fails', () => {
+  const rows = createPasswordImportRows();
+  const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
+  const accountsBefore = JSON.stringify(accountSheet.values);
+  const pinsBefore = passwordSheet.values.slice(1).map((row) => row[1]);
+  const originalGetProperties = services.PropertiesService.getScriptProperties.bind(services.PropertiesService);
+  let shouldFailProperty = true;
+  services.PropertiesService.getScriptProperties = () => {
+    const properties = originalGetProperties();
+    return {
+      ...properties,
+      setProperty(key, value) {
+        properties.setProperty(key, value);
+        if (key === 'TEACHER_PASSWORD_IMPORT_COMPLETED_AT' && shouldFailProperty) {
+          shouldFailProperty = false;
+          throw new Error('injected completion property failure');
+        }
+      },
+    };
+  };
+
+  assert.throws(
+    () => backend.importTeacherAccountsFromPasswordSheet(),
+    /injected completion property failure.*已完成回復/
+  );
+  assert.equal(JSON.stringify(accountSheet.values), accountsBefore);
+  assert.deepEqual(passwordSheet.values.slice(1).map((row) => row[1]), pinsBefore);
+  assert.equal(services.__properties.has('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'), false);
+});
+
+test('teacher password bulk import reports rollback failures while attempting every compensation', () => {
+  const rows = createPasswordImportRows();
+  const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);
+  const originalAccountGetRange = accountSheet.getRange.bind(accountSheet);
+  let accountClearCalls = 0;
+  accountSheet.getRange = function(row, column, numRows = 1, numColumns = 1) {
+    const range = originalAccountGetRange(row, column, numRows, numColumns);
+    if (row === 2 && column === 1 && numRows > 1 && numColumns === EXPECTED_ACCOUNT_HEADERS.length) {
+      const originalClearContent = range.clearContent.bind(range);
+      range.clearContent = () => {
+        accountClearCalls += 1;
+        if (accountClearCalls === 1) throw new Error('injected account rollback failure');
+        return originalClearContent();
+      };
+    }
+    return range;
+  };
+  const originalPasswordGetRange = passwordSheet.getRange.bind(passwordSheet);
+  let shouldFailClear = true;
+  passwordSheet.getRange = function(row, column, numRows = 1, numColumns = 1) {
+    const range = originalPasswordGetRange(row, column, numRows, numColumns);
+    if (row === 2 && column === 2 && numRows === 37 && numColumns === 1) {
+      const originalClearContent = range.clearContent.bind(range);
+      range.clearContent = () => {
+        originalClearContent();
+        if (shouldFailClear) {
+          shouldFailClear = false;
+          throw new Error('injected PIN clear failure');
+        }
+        return range;
+      };
+    }
+    return range;
+  };
+
+  assert.throws(
+    () => backend.importTeacherAccountsFromPasswordSheet(),
+    /injected PIN clear failure.*回復失敗.*登入帳號.*injected account rollback failure/
+  );
   assert.deepEqual(passwordSheet.values.slice(1).map((row) => row[1]), rows.map((row) => row[1]));
   assert.equal(services.__properties.has('TEACHER_PASSWORD_IMPORT_COMPLETED_AT'), false);
 });
@@ -1438,6 +1586,26 @@ test('manual sync audit write stays inside one script lock without nested acquis
 test('manual sync no longer exposes an hourly trigger installation command', () => {
   const backend = loadBackend();
   assert.equal(typeof backend.installHourlySyncTrigger, 'undefined');
+});
+
+test('tracked operational documents do not instruct deprecated hourly synchronization', () => {
+  const files = [
+    'README.md',
+    'docs/superpowers/plans/2026-08-03-substitute-system-v2.md',
+    'docs/superpowers/plans/2026-08-03-substitute-system-v2-1.md',
+    'docs/superpowers/specs/2026-08-03-substitute-system-v2-design.md',
+    'docs/superpowers/specs/2026-08-03-substitute-system-v2-1-design.md',
+    '.superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-brief.md',
+    '.superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-report.md',
+  ];
+  files.forEach((file) => {
+    const content = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    assert.doesNotMatch(
+      content,
+      /installHourlySyncTrigger|ScriptApp\.newTrigger|everyHours\(|timeBased\(|每小時/,
+      file
+    );
+  });
 });
 
 test('allows substitute teachers to claim a course in their usual category', () => {

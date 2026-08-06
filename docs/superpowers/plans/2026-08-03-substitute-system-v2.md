@@ -1,8 +1,10 @@
 # 代課系統 v2 Implementation Plan
 
+> **歷史文件，禁止作為部署指引。** 本計畫已由 [v2.1 Implementation Plan](./2026-08-03-substitute-system-v2-1.md) 取代。現行系統只允許管理員手動同步 OB，任何週期性時間觸發同步方案均已廢止；正式操作請以 repository 根目錄的 `README.md` 為準。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 將 Omcean Booking 行事曆自動同步至既有 CourseList，並安全完成請假、代課領取、跨類改課備註與查詢流程。
+**Historical Goal:** 此文件記錄早期 Omcean Booking 同步構想，不代表現行部署方式。
 
 **Architecture:** Google Apps Script 負責 API 同步、Sheet 資料存取與寫入鎖定，GitHub Pages 的 `index.html` 只呼叫 GAS JSON API。固定欄位 A:I 與既有陣列索引保持不變，J 欄新增 UUID 代課編號，API 權杖只從 Script Properties 讀取。
 
@@ -31,7 +33,7 @@
 
 **Interfaces:**
 - Consumes: Script Property `OMCEAN_API_TOKEN`、Omcean `/v1/calendar` 回應。
-- Produces: `getCourseCategory_(name)`、`getSyncDateRange_(now)`、`normalizeCalendarItem_(item)`、`fetchCalendarPages_(token, dateFrom, dateTo)`、`syncCourseListFromApi()`、`installHourlySyncTrigger()`。
+- Produces: `getCourseCategory_(name)`、`getSyncDateRange_(now)`、`normalizeCalendarItem_(item)`、`fetchCalendarPages_(token, dateFrom, dateTo)`、`syncCourseListFromApi()`。
 
 - [ ] **Step 1: 建立失敗測試**
 
@@ -71,9 +73,9 @@ Expected: FAIL，因 `Code.gs` 尚未提供對應函式。
 5. 一次批次寫入新資料。
 6. 錯誤時不進入清除階段。
 
-- [ ] **Step 4: 實作每小時觸發器安裝函式**
+- [ ] **Step 4: 記錄已廢止的自動同步構想**
 
-`installHourlySyncTrigger()` 先刪除僅指向 `syncCourseListFromApi` 的舊觸發器，再建立每小時觸發器，避免重複安裝。
+此構想未納入現行 v2.1。不得建立週期性同步觸發器；OB 課表只由管理員在後台手動同步。
 
 - [ ] **Step 5: 執行核心測試**
 
@@ -245,7 +247,7 @@ Expected: 無實際權杖命中；只允許程式組合 Bearer header 的安全�
 在 Apps Script 測試部署依序驗證：
 1. 設定 `OMCEAN_API_TOKEN`。
 2. 執行 `syncCourseListFromApi` 並確認日期至下個月底。
-3. 執行 `installHourlySyncTrigger` 一次。
+3. 確認 Apps Script 沒有任何週期性同步觸發器。
 4. 建立同類代課並成功領取。
 5. 建立跨類代課，空白備註被拒絕。
 6. 填寫改課內容後成功寫入 H 欄。

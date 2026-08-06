@@ -304,19 +304,47 @@ Commit: `feat: add substitute operations dashboard`
 ### Task 8: Full Verification and Deployment Package
 
 **Files:**
+- Modify: `Code.gs`
+- Modify: `index.html`
+- Modify: `tests/backend-core.test.js`
+- Modify: `tests/frontend-contract.test.js`
 - Modify: `tests/visual-check.mjs`
 - Modify: `README.md`
-- Verify: `Code.gs`
-- Verify: `index.html`
+- Modify: `docs/superpowers/plans/2026-08-03-substitute-system-v2.md`
+- Modify: `docs/superpowers/specs/2026-08-03-substitute-system-v2-design.md`
+- Modify: `docs/superpowers/plans/2026-08-03-substitute-system-v2-1.md`
+- Modify: `.superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-brief.md`
+- Modify: `.superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-report.md`
 
 **Interfaces:**
-- Produces: deployment checklist and visual screenshots for desktop and mobile.
+- Produces: approved responsive frontend redesign, manual one-time 37-teacher password import, deployment/rollback checklist, and 22 desktop/mobile visual-state screenshots.
+- Consumes: imported `密碼表` tab with headers `老師` and `密碼`, exactly 37 populated rows, and the existing protected `登入帳號` sheet.
 
-- [ ] **Step 1: Extend visual fixtures and journeys**
+- [x] **Step 1: Apply the user-approved visual redesign**
 
-Cover login, date selection, multi-course confirmation, invited claims, cross-apparatus form, personal history, and admin dashboard at 1280×900 and 390×844.
+Redesign production `index.html` with the approved sea-glass operations UI while preserving all authenticated teacher/admin routes and workflows. Mobile navigation must stay in document flow and never cover long forms.
 
-- [ ] **Step 2: Run complete automated checks**
+- [x] **Step 2: Add the one-time password import with TDD**
+
+`importTeacherAccountsFromPasswordSheet` must:
+
+- validate all 37 rows, four-digit PINs, required headers, and duplicate names before mutation;
+- hash every PIN through the existing Salt/SHA-256 account primitive and expose no Web route;
+- create new accounts as active role `老師` with blank capabilities;
+- update only Salt/PIN hash for an existing account while preserving role, active state, login protection, and capabilities;
+- snapshot the full account target range, source PIN range, and completion property;
+- compensate all three stores after any account-write, clear, or property failure, and explicitly report rollback failures;
+- preserve source names/tab and clear plaintext PINs only after the account batch succeeds.
+
+- [x] **Step 3: Extend bounded visual-state checks**
+
+Run one continuous desktop and one continuous mobile viewport journey. Capture 11 states per viewport, covering login, date/multi-course confirmation, personal histories, cross-apparatus claim form, and six admin tabs. The result is 22 visual states/screenshots, not 22 independent end-to-end journeys. Write behavior is covered by backend unit and frontend contract tests.
+
+- [x] **Step 4: Finalize deployment, rollback, and historical docs**
+
+README must include teacher data preparation, first-admin ordering, password import, Sheet migration, Script Properties, GAS version/deployment, GitHub Pages commit, manual sync, compatible-pair rollback, pre-deployment Sheet restoration for legacy names, and login/read/write smoke checks. Mark v2 docs as historical and remove any actionable periodic-sync instructions.
+
+- [x] **Step 5: Run complete automated checks**
 
 Run:
 
@@ -326,21 +354,23 @@ node --test tests/backend-core.test.js tests/frontend-contract.test.js
 node tests/visual-check.mjs
 ```
 
-Expected: all tests pass; screenshots are nonblank; no horizontal overflow or overlapping fixed controls.
+Expected: all tests pass; 22 screenshots are nonblank; no horizontal overflow, clipped tested controls, or mobile-navigation overlap.
 
-- [ ] **Step 3: Inspect secret and legacy behavior scans**
+- [x] **Step 6: Inspect production, secret, and operational-doc scans**
 
 Run:
 
 ```bash
-rg -n "eyJ|OMCEAN_API_TOKEN\s*=|no-cors|installHourlySyncTrigger|工作表1" Code.gs index.html README.md
+rg -n "eyJ[A-Za-z0-9_-]{20,}|NH8fg[c]sl|OMCEAN_API_TOKEN\s*[:=]\s*['\"]|no-cors" Code.gs index.html README.md
+rg -n "ScriptApp\.newTri[g]ger|everyHou[r]s\(|timeBas[e]d\(|每.{0}小時" Code.gs index.html README.md docs/superpowers .superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-brief.md .superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-report.md
+rg -n "工作表1" Code.gs index.html README.md docs/superpowers .superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-brief.md .superpowers/sdd/2026-08-03-substitute-system-v2-1/task-8-report.md
 git diff --check
 ```
 
-Expected: no embedded token, no `no-cors`, no hourly trigger; `工作表1` appears only in the intentional migration constant/documentation.
+Expected: no embedded token, no `no-cors`, and no periodic-sync installation instruction in production or operational docs. `工作表1` may appear only in historical/migration warnings and the intentional migration constant.
 
-- [ ] **Step 4: Finalize deployment instructions and commit**
+- [x] **Step 7: Update report and commit**
 
-README must list teacher data preparation, work-sheet migration, account initialization, Script Property setup, GAS redeploy, GitHub Pages deployment, manual sync, and a rollback note.
+Record exact test counts and visual evidence in `task-8-report.md`. Commit all production, test, documentation, brief, and report changes together after fresh verification.
 
-Commit: `docs: finalize substitute v2.1 deployment guide`
+**Safety acceptance criteria:** an imported first administrator remains active and can access an admin route; injected account-write, PIN-clear, and completion-property failures leave no partial state; rollback failure names the store that could not be restored; existing Sheet indexes and the approved redesign remain unchanged.

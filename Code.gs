@@ -7,6 +7,7 @@ var SHEETS = {
   SETTINGS: '系統設定',
   ACCOUNTS: '登入帳號',
   PASSWORD_IMPORT: '密碼表',
+  VVIP_MEMBERS: 'VVIP名單',
   VVIP_SELECTIONS: 'VVIP選課紀錄',
   VVIP_SETTINGS: 'VVIP選課設定'
 };
@@ -32,7 +33,10 @@ var SHEET_HEADERS = {
   ],
   VVIP_SELECTIONS: [
     '登記時間', 'Email', '月份', 'OB Calendar ID', '日期', '時間', '課程', '老師',
-    '狀態', '確認時間', '取消時間', '取消原因', '操作者'
+    '狀態', '確認時間', '取消時間', '取消原因', '操作者', 'VVIP ID', 'OB 名稱'
+  ],
+  VVIP_MEMBERS: [
+    'VVIP ID', 'OB 名稱', 'Email', '是否啟用', '備註', '建立時間', '更新時間', '更新者'
   ],
   VVIP_SETTINGS: ['設定鍵', '設定值', '更新時間', '操作者']
 };
@@ -742,6 +746,11 @@ function ensureVvipStructure_() {
 }
 
 function ensureVvipStructureUnlocked_(spreadsheet) {
+  var members = ensureSupportingSheet_(
+    spreadsheet,
+    SHEETS.VVIP_MEMBERS,
+    SHEET_HEADERS.VVIP_MEMBERS
+  );
   var selections = ensureSupportingSheet_(
     spreadsheet,
     SHEETS.VVIP_SELECTIONS,
@@ -752,7 +761,7 @@ function ensureVvipStructureUnlocked_(spreadsheet) {
     SHEETS.VVIP_SETTINGS,
     SHEET_HEADERS.VVIP_SETTINGS
   );
-  return { selections: selections.getName(), settings: settings.getName() };
+  return { members: members.getName(), selections: selections.getName(), settings: settings.getName() };
 }
 
 function migrateLegacyLeaveLinksUnlocked_(leaveSheet, courseSheet) {
@@ -951,15 +960,19 @@ function doPost(e) {
     if (action === 'getVvipSelection') {
       return createJsonResponse_({
         status: 'success',
-        data: getVvipSelection_(parameters.email)
+        data: getVvipSelection_(parameters.vvipId)
       });
+    }
+
+    if (action === 'getVvipMembers') {
+      return createJsonResponse_({ status: 'success', data: getPublicVvipMembers_() });
     }
 
     if (action === 'submitVvipSelection') {
       return createJsonResponse_({
         status: 'success',
         data: submitVvipSelection_(
-          parameters.email,
+          parameters.vvipId,
           parseJsonArray_(parameters.calendarIds, 'VVIP 課程')
         )
       });
@@ -994,6 +1007,22 @@ function doPost(e) {
       },
       getVvipAdminDashboard: function() {
         return getVvipAdminDashboard_(session, parameters.email);
+      },
+      saveVvipMember: function() {
+        return saveVvipMember_(session, {
+          id: parameters.vvipId,
+          name: parameters.name,
+          email: parameters.email,
+          active: parameters.active == null ? true : parseBoolean_(parameters.active, 'VVIP 啟用設定'),
+          note: parameters.note
+        });
+      },
+      setVvipMemberActive: function() {
+        return setVvipMemberActive_(
+          session,
+          parameters.vvipId,
+          parseBoolean_(parameters.active, 'VVIP 啟用設定')
+        );
       },
       submitLeave: function() {
         return submitLeave_(session, parseJsonArray_(parameters.items, '請假課程'));
@@ -1400,6 +1429,128 @@ function normalizeVvipEmail_(value) {
   return email;
 }
 
+function getVvipMemberRows_(sheet) {
+  assertHeaders_(sheet, SHEET_HEADERS.VVIP_MEMBERS);
+  return sheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    return {
+      rowNumber: index + 2,
+      id: cleanText_(row[0]),
+      name: cleanText_(row[1]),
+      email: cleanText_(row[2]).toLowerCase(),
+      active: isTruthySheetValue_(row[3]),
+      note: cleanText_(row[4]),
+      createdAt: cleanText_(row[5]),
+      updatedAt: cleanText_(row[6]),
+      updatedBy: cleanText_(row[7])
+    };
+  }).filter(function(member) {
+    return member.id || member.name || member.email;
+  });
+}
+
+function assertUniqueActiveVvipMembers_(members) {
+  var names = {};
+  var emails = {};
+  (members || []).filter(function(member) { return member.active; }).forEach(function(member) {
+    var nameKey = member.name.toLowerCase();
+    var emailKey = member.email.toLowerCase();
+    if (!member.id || !member.name || !member.email) {
+      throw new Error('啟用中的 VVIP 名單資料不完整。');
+    }
+    if (names[nameKey]) throw new Error('啟用中的 VVIP OB 名稱重複：' + member.name);
+    if (emails[emailKey]) throw new Error('啟用中的 VVIP Email 重複：' + member.email);
+    names[nameKey] = true;
+    emails[emailKey] = true;
+  });
+}
+
+function getPublicVvipMembers_() {
+  var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.VVIP_MEMBERS);
+  var members = getVvipMemberRows_(sheet);
+  assertUniqueActiveVvipMembers_(members);
+  return members.filter(function(member) { return member.active; }).map(function(member) {
+    return { id: member.id, name: member.name };
+  }).sort(function(a, b) {
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function resolveVvipMember_(memberId, requireActive) {
+  var id = cleanText_(memberId);
+  if (!id) throw new Error('請選擇 VVIP OB 名稱。');
+  var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.VVIP_MEMBERS);
+  var matches = getVvipMemberRows_(sheet).filter(function(member) { return member.id === id; });
+  if (matches.length !== 1) throw new Error('找不到 VVIP 名單資料。');
+  var member = matches[0];
+  if (requireActive !== false && !member.active) throw new Error('此 VVIP 名單目前未啟用。');
+  normalizeVvipEmail_(member.email);
+  if (!member.name) throw new Error('VVIP 名單缺少 OB 名稱。');
+  return member;
+}
+
+function saveVvipMember_(session, payload) {
+  var actor = assertCapabilitySession_(session, 'vvip_admin');
+  var input = payload || {};
+  var id = cleanText_(input.id) || Utilities.getUuid();
+  var name = cleanText_(input.name);
+  var email = normalizeVvipEmail_(input.email);
+  var active = input.active !== false;
+  var note = cleanText_(input.note);
+  if (!name) throw new Error('請填寫 VVIP OB 名稱。');
+
+  return withScriptLock_(function() {
+    var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.VVIP_MEMBERS);
+    var members = getVvipMemberRows_(sheet);
+    var existing = members.filter(function(member) { return member.id === id; });
+    if (existing.length > 1) throw new Error('VVIP ID 重複，請先整理名單。');
+    var now = getTimestamp_();
+    var candidate = {
+      id: id,
+      name: name,
+      email: email,
+      active: active,
+      note: note,
+      createdAt: existing.length ? existing[0].createdAt : now,
+      updatedAt: now,
+      updatedBy: actor
+    };
+    var nextMembers = members.filter(function(member) { return member.id !== id; }).concat(candidate);
+    assertUniqueActiveVvipMembers_(nextMembers);
+    var row = [[
+      candidate.id, candidate.name, candidate.email, candidate.active ? '是' : '否',
+      candidate.note, candidate.createdAt, candidate.updatedAt, candidate.updatedBy
+    ]];
+    if (existing.length) {
+      sheet.getRange(existing[0].rowNumber, 1, 1, SHEET_HEADERS.VVIP_MEMBERS.length).setValues(row);
+    } else {
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.VVIP_MEMBERS.length).setValues(row);
+    }
+    return { id: candidate.id, name: candidate.name, active: candidate.active };
+  });
+}
+
+function setVvipMemberActive_(session, memberId, active) {
+  var actor = assertCapabilitySession_(session, 'vvip_admin');
+  var id = cleanText_(memberId);
+  return withScriptLock_(function() {
+    var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.VVIP_MEMBERS);
+    var matches = getVvipMemberRows_(sheet).filter(function(member) { return member.id === id; });
+    if (matches.length !== 1) throw new Error('找不到 VVIP 名單資料。');
+    var member = matches[0];
+    var shouldEnable = active === true;
+    var nextMembers = getVvipMemberRows_(sheet).map(function(item) {
+      if (item.id !== id) return item;
+      item.active = shouldEnable;
+      return item;
+    });
+    assertUniqueActiveVvipMembers_(nextMembers);
+    sheet.getRange(member.rowNumber, 4, 1, 5).setValues([[
+      shouldEnable ? '是' : '否', member.note, member.createdAt, getTimestamp_(), actor
+    ]]);
+    return { id: id, name: member.name, active: shouldEnable };
+  });
+}
+
 function getNextMonthKey_(now) {
   var dateText = Utilities.formatDate(now || new Date(), getTimeZone_(), 'yyyy-MM-dd');
   var parts = dateText.split('-').map(Number);
@@ -1475,12 +1626,17 @@ function getVvipCourseRows_(month, requireCalendarIds) {
   });
 }
 
-function getVvipSelectionRows_(sheet, email, month) {
+function getVvipSelectionRows_(sheet, email, month, memberId) {
   assertHeaders_(sheet, SHEET_HEADERS.VVIP_SELECTIONS);
   return sheet.getDataRange().getValues().slice(1).map(function(row, index) {
     return { rowNumber: index + 2, row: row };
   }).filter(function(item) {
-    return cleanText_(item.row[1]) === email && cleanText_(item.row[2]) === month;
+    var storedMemberId = cleanText_(item.row[13]);
+    var requestedMemberId = cleanText_(memberId);
+    var identityMatches = requestedMemberId && storedMemberId
+      ? storedMemberId === requestedMemberId
+      : cleanText_(item.row[1]) === email;
+    return identityMatches && cleanText_(item.row[2]) === month;
   });
 }
 
@@ -1499,8 +1655,9 @@ function toVvipSelectionItem_(row) {
   };
 }
 
-function getVvipSelection_(emailValue) {
-  var email = normalizeVvipEmail_(emailValue);
+function getVvipSelection_(memberId) {
+  var member = resolveVvipMember_(memberId, true);
+  var email = member.email;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var settingsSheet = requireSheet_(ss, SHEETS.VVIP_SETTINGS);
   var settings = getVvipSettings_(settingsSheet);
@@ -1511,11 +1668,12 @@ function getVvipSelection_(emailValue) {
   var courses = getVvipCourseRows_(month, true);
   if (!courses.length) throw new Error('本期尚無可選課程，請稍後再試。');
   var selectionSheet = requireSheet_(ss, SHEETS.VVIP_SELECTIONS);
-  var selections = getVvipSelectionRows_(selectionSheet, email, month)
+  var selections = getVvipSelectionRows_(selectionSheet, email, month, member.id)
     .filter(function(item) { return isActiveVvipSelectionRow_(item.row); })
     .map(function(item) { return toVvipSelectionItem_(item.row); });
   return {
-    email: email,
+    memberId: member.id,
+    memberName: member.name,
     month: month,
     limit: CONFIG.VVIP_MAX_SELECTIONS,
     count: selections.length,
@@ -1539,8 +1697,9 @@ function normalizeVvipCalendarIds_(calendarIds) {
   return ids;
 }
 
-function submitVvipSelection_(emailValue, calendarIds) {
-  var email = normalizeVvipEmail_(emailValue);
+function submitVvipSelection_(memberId, calendarIds) {
+  var member = resolveVvipMember_(memberId, true);
+  var email = member.email;
   var requestedIds = normalizeVvipCalendarIds_(calendarIds);
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1561,7 +1720,7 @@ function submitVvipSelection_(emailValue, calendarIds) {
     });
 
     var selectionSheet = requireSheet_(ss, SHEETS.VVIP_SELECTIONS);
-    var existingRows = getVvipSelectionRows_(selectionSheet, email, month);
+    var existingRows = getVvipSelectionRows_(selectionSheet, email, month, member.id);
     var activeIds = {};
     existingRows.forEach(function(item) {
       if (isActiveVvipSelectionRow_(item.row)) activeIds[cleanText_(item.row[3])] = true;
@@ -1569,9 +1728,9 @@ function submitVvipSelection_(emailValue, calendarIds) {
     var newIds = requestedIds.filter(function(id) { return !activeIds[id]; });
     var activeCount = Object.keys(activeIds).length;
     if (activeCount + newIds.length > CONFIG.VVIP_MAX_SELECTIONS) {
-      throw new Error('每個 Email 最多可登記 ' + CONFIG.VVIP_MAX_SELECTIONS + ' 堂，目前已選 ' + activeCount + ' 堂。');
+      throw new Error('每位 VVIP 最多可登記 ' + CONFIG.VVIP_MAX_SELECTIONS + ' 堂，目前已選 ' + activeCount + ' 堂。');
     }
-    if (!newIds.length) return buildVvipSelectionResult_(email, month, courses, existingRows);
+    if (!newIds.length) return buildVvipSelectionResult_(member, month, courses, existingRows);
 
     var timestamp = getTimestamp_();
     var rowsToAppend = newIds.map(function(calendarId) {
@@ -1579,7 +1738,7 @@ function submitVvipSelection_(emailValue, calendarIds) {
       return [
         timestamp, email, month, course.calendarId, course.date, course.time,
         course.courseName, course.teacherName, CONFIG.VVIP_PENDING_STATUS,
-        '', '', '', email
+        '', '', '', member.name, member.id, member.name
       ];
     });
     return runStateTransitionUnlocked_([selectionSheet], function(appendAudits) {
@@ -1591,7 +1750,7 @@ function submitVvipSelection_(emailValue, calendarIds) {
       ).setValues(rowsToAppend);
       appendAudits(rowsToAppend.map(function(row) {
         return {
-          actor: email,
+          actor: member.name,
           action: 'VVIP 選課登記',
           targetId: row[3],
           before: '',
@@ -1600,23 +1759,24 @@ function submitVvipSelection_(emailValue, calendarIds) {
         };
       }));
       return buildVvipSelectionResult_(
-        email,
+        member,
         month,
         courses,
-        getVvipSelectionRows_(selectionSheet, email, month)
+        getVvipSelectionRows_(selectionSheet, email, month, member.id)
       );
     });
   });
 }
 
-function buildVvipSelectionResult_(email, month, courses, rows) {
+function buildVvipSelectionResult_(member, month, courses, rows) {
   var selections = (rows || []).filter(function(item) {
     return isActiveVvipSelectionRow_(item.row);
   }).map(function(item) {
     return toVvipSelectionItem_(item.row);
   });
   return {
-    email: email,
+    memberId: member.id,
+    memberName: member.name,
     month: month,
     limit: CONFIG.VVIP_MAX_SELECTIONS,
     count: selections.length,
@@ -1653,6 +1813,7 @@ function setVvipSelectionOpen_(session, open) {
     var settings = getVvipSettings_(settingsSheet);
     var month = getNextMonthKey_();
     if (shouldOpen) {
+      if (!getPublicVvipMembers_().length) throw new Error('尚無啟用中的 VVIP 名單，無法開放。');
       var courses = getVvipCourseRows_(month, true);
       if (!courses.length) throw new Error('下個月尚無可選課程，無法開放 VVIP 選課。');
     }
@@ -1716,6 +1877,17 @@ function getVvipAdminDashboard_(session, emailQuery) {
   return {
     month: month,
     isOpen: isVvipSelectionOpen_(settings),
+    whitelist: getVvipMemberRows_(requireSheet_(ss, SHEETS.VVIP_MEMBERS)).map(function(member) {
+      return {
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        active: member.active,
+        note: member.note,
+        updatedAt: member.updatedAt,
+        updatedBy: member.updatedBy
+      };
+    }),
     metrics: { members: Object.keys(emails).length, activeSelections: activeRows.length },
     members: members,
     courseView: Object.keys(grouped).map(function(id) { return grouped[id]; }).sort(function(a, b) {

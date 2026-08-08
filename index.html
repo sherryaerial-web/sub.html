@@ -1917,7 +1917,8 @@
         return `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(email)}</div><div class="item-meta">${rows.length} 堂｜${escapeHtml(rows.map((item) => item.status).join("、"))}</div>${rows.map((item) => `<div class="item-meta">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.courseName)}｜${escapeHtml(item.teacherName)}<button class="danger-button" type="button" data-admin-action="cancel-vvip" data-vvip-email="${escapeHtml(email)}" data-vvip-calendar-id="${escapeHtml(item.calendarId)}"><i data-lucide="x"></i>取消</button></div>`).join("")}<div class="admin-item-actions">${hasPending ? `<button class="compact-button" type="button" data-admin-action="confirm-vvip" data-vvip-email="${escapeHtml(email)}"><i data-lucide="badge-check"></i>確認 Email</button>` : ""}</div></div></article>`;
       }).join("") || '<div class="state">目前沒有符合條件的 VVIP 選課紀錄</div>';
       const courseView = (data.courseView || []).map((course) => `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(course.date)} ${escapeHtml(course.time)}</div><div class="item-course">${escapeHtml(course.courseName)}</div><div class="item-meta">${escapeHtml(course.teacherName)}｜${course.emails.length} 人：${escapeHtml(course.emails.join("、"))}</div></div></article>`).join("") || '<div class="state">目前沒有有效登記</div>';
-      content.innerHTML = `<div class="admin-control"><strong>${escapeHtml(data.month)} VVIP 選課：${data.isOpen ? "開放中" : "已關閉"}</strong><div class="item-meta">登記 Email：${data.metrics.members}｜有效選課：${data.metrics.activeSelections}</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-vvip" data-vvip-open="${data.isOpen ? "false" : "true"}"><i data-lucide="${data.isOpen ? "lock" : "unlock"}"></i>${data.isOpen ? "關閉本期選課" : "開放本期選課"}</button><button class="compact-button" type="button" data-admin-action="export-vvip"><i data-lucide="download"></i>匯出 CSV</button></div></div><form id="vvip-admin-search-form" class="admin-control"><label for="vvip-admin-search">依 Email 查詢</label><div class="admin-item-actions"><input id="vvip-admin-search" class="text-input" type="email" value="" placeholder="name@example.com"><button class="compact-button" type="submit"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="clear-vvip-search"><i data-lucide="rotate-ccw"></i>顯示全部</button></div></form><div class="admin-control"><strong>會員登記</strong></div>${members}<div class="admin-control"><strong>依課程查看</strong></div>${courseView}`;
+      const whitelist = (data.whitelist || []).map((member) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(member.name)}</div><div class="item-meta">${escapeHtml(member.email)}${member.note ? `｜${escapeHtml(member.note)}` : ""}</div><div class="admin-item-actions"><button class="${member.active ? "danger-button" : "compact-button"}" type="button" data-admin-action="toggle-vvip-member" data-vvip-id="${escapeHtml(member.id)}" data-vvip-active="${member.active ? "false" : "true"}">${member.active ? "停用" : "啟用"}</button></div></div></article>`).join("") || '<div class="state">尚未建立 VVIP 名單</div>';
+      content.innerHTML = `<div class="admin-control"><strong>${escapeHtml(data.month)} VVIP 選課：${data.isOpen ? "開放中" : "已關閉"}</strong><div class="item-meta">登記會員：${data.metrics.members}｜有效選課：${data.metrics.activeSelections}</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-vvip" data-vvip-open="${data.isOpen ? "false" : "true"}"><i data-lucide="${data.isOpen ? "lock" : "unlock"}"></i>${data.isOpen ? "關閉本期選課" : "開放本期選課"}</button><button class="compact-button" type="button" data-admin-action="export-vvip"><i data-lucide="download"></i>匯出 CSV</button></div></div><form id="vvip-member-form" class="admin-control"><strong>新增 VVIP 名單</strong><div class="admin-item-actions"><input id="vvip-member-name" class="text-input" type="text" placeholder="OB 名稱" required><input id="vvip-member-email" class="text-input" type="email" placeholder="Email" required><input id="vvip-member-note" class="text-input" type="text" placeholder="備註（選填）"><button class="compact-button" type="submit"><i data-lucide="user-plus"></i>新增</button></div></form>${whitelist}<form id="vvip-admin-search-form" class="admin-control"><label for="vvip-admin-search">依 Email 查詢登記</label><div class="admin-item-actions"><input id="vvip-admin-search" class="text-input" type="email" value="" placeholder="name@example.com"><button class="compact-button" type="submit"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="clear-vvip-search"><i data-lucide="rotate-ccw"></i>顯示全部</button></div></form><div class="admin-control"><strong>會員登記</strong></div>${members}<div class="admin-control"><strong>依課程查看</strong></div>${courseView}`;
       refreshIcons();
     }
 
@@ -1980,6 +1981,23 @@
     async function setVvipSelectionOpen(open) {
       await callPostApi("setVvipSelectionOpen", { open });
       setNotice(open ? "已開放本期 VVIP 選課。" : "已關閉本期 VVIP 選課。");
+      await fetchVvipAdminDashboard();
+    }
+
+    async function saveVvipMember() {
+      await callPostApi("saveVvipMember", {
+        name: byId("vvip-member-name").value.trim(),
+        email: byId("vvip-member-email").value.trim(),
+        note: byId("vvip-member-note").value.trim(),
+        active: true
+      });
+      setNotice("VVIP 名單已新增。");
+      await fetchVvipAdminDashboard();
+    }
+
+    async function setVvipMemberActive(vvipId, active) {
+      await callPostApi("setVvipMemberActive", { vvipId, active });
+      setNotice(active ? "VVIP 名單已啟用。" : "VVIP 名單已停用。");
       await fetchVvipAdminDashboard();
     }
 
@@ -2063,6 +2081,7 @@
         if (action === "close-invitation") await closeAdminInvitation(button.dataset.teacherName);
         if (action === "toggle-pause") await toggleAdminPause();
         if (action === "toggle-vvip") await setVvipSelectionOpen(button.dataset.vvipOpen === "true");
+        if (action === "toggle-vvip-member") await setVvipMemberActive(button.dataset.vvipId, button.dataset.vvipActive === "true");
         if (action === "confirm-vvip") await confirmVvipEmail(button.dataset.vvipEmail);
         if (action === "export-vvip") await exportVvipSelectionsCsv();
         if (action === "clear-vvip-search") await fetchVvipAdminDashboard();
@@ -2093,10 +2112,12 @@
       } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-tab-content").addEventListener("submit", async (event) => {
-      if (event.target.id !== "vvip-admin-search-form") return;
       event.preventDefault();
       try {
-        await fetchVvipAdminDashboard(byId("vvip-admin-search").value.trim());
+        if (event.target.id === "vvip-admin-search-form") {
+          await fetchVvipAdminDashboard(byId("vvip-admin-search").value.trim());
+        }
+        if (event.target.id === "vvip-member-form") await saveVvipMember();
       } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-sync").addEventListener("click", async () => {

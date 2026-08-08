@@ -11,19 +11,20 @@ test('VVIP public page is a standalone responsive intent-registration page', () 
   assert.match(html, /name=["']viewport["']/);
   assert.match(html, /VVIP 優先選課意願登記/);
   assert.match(html, /不代表正式保留名額/);
-  assert.match(html, /id=["']vvip-email-form["']/);
-  assert.match(html, /id=["']vvip-email["']/);
-  assert.match(html, /type=["']email["']/);
+  assert.match(html, /id=["']vvip-member-form["']/);
+  assert.match(html, /id=["']vvip-member["']/);
+  assert.doesNotMatch(html, /id=["']vvip-email["']/);
   assert.doesNotMatch(html, /老師登入|login-pin|teacher-options/);
 });
 
-test('VVIP public page posts Email and never adds it to a URL', () => {
+test('VVIP public page posts member ID and never exposes Email', () => {
+  assert.match(html, /callVvipApi\(["']getVvipMembers["']/);
   assert.match(html, /callVvipApi\(["']getVvipSelection["']/);
   assert.match(html, /callVvipApi\(["']submitVvipSelection["']/);
+  assert.match(html, /vvipId/);
   assert.match(html, /method:\s*["']POST["']/);
   assert.match(html, /application\/x-www-form-urlencoded/);
-  assert.doesNotMatch(html, /\?[^"']*email=/i);
-  assert.doesNotMatch(html, /URLSearchParams\(\{[^}]*email/i);
+  assert.doesNotMatch(html, /type=["']email["']/i);
 });
 
 test('VVIP public page groups courses, searches them, and enforces the cumulative four-course view', () => {
@@ -58,5 +59,7 @@ test('VVIP admin workspace is the seventh protected tab with management actions'
   assert.match(adminHtml, /confirmVvipEmail/);
   assert.match(adminHtml, /cancelVvipSelection/);
   assert.match(adminHtml, /exportVvipSelectionsCsv/);
+  assert.match(adminHtml, /saveVvipMember/);
+  assert.match(adminHtml, /setVvipMemberActive/);
   assert.match(adminHtml, /new Blob/);
 });

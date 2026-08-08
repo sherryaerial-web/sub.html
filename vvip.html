@@ -26,9 +26,9 @@
     .notice.visible { display:block; }
     .notice.error { border-color:#e0aaa5; background:var(--coral-soft); color:var(--coral); }
     .notice.success { border-color:#b9dcc9; background:#eff9f3; color:var(--success); }
-    .email-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
+    .member-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
     label { display:block; color:var(--muted); font-size:12px; font-weight:700; }
-    input[type="email"],input[type="search"] { width:100%; min-height:44px; margin-top:5px; padding:9px 11px; border:1px solid #b8cece; border-radius:6px; background:#fff; color:var(--ink); outline:none; }
+    input[type="text"],input[type="search"] { width:100%; min-height:44px; margin-top:5px; padding:9px 11px; border:1px solid #b8cece; border-radius:6px; background:#fff; color:var(--ink); outline:none; }
     input:focus { border-color:var(--sea); box-shadow:0 0 0 3px rgba(40,114,116,.13); }
     .button { display:inline-flex; min-height:44px; align-items:center; justify-content:center; gap:7px; padding:9px 15px; border:1px solid var(--sea); border-radius:6px; background:var(--sea); color:#fff; font-weight:700; }
     .button:hover:not(:disabled) { background:var(--sea-dark); }
@@ -57,17 +57,17 @@
     .state.error { border-style:solid; border-color:#dfaaa5; background:var(--coral-soft); color:var(--coral); }
     .helper { margin:8px 0 0; color:var(--muted); font-size:12px; }
     [hidden] { display:none !important; }
-    @media (max-width:620px) { .page { padding:22px 14px 38px; } h2 { font-size:23px; } .email-form { grid-template-columns:1fr; } .email-form .button { width:100%; } .toolbar { align-items:stretch; } .toolbar input { width:100%; } .course-item { grid-template-columns:auto minmax(0,1fr); } .course-badge { grid-column:2; max-width:none; text-align:left; } }
+    @media (max-width:620px) { .page { padding:22px 14px 38px; } h2 { font-size:23px; } .member-form { grid-template-columns:1fr; } .member-form .button { width:100%; } .toolbar { align-items:stretch; } .toolbar input { width:100%; } .course-item { grid-template-columns:auto minmax(0,1fr); } .course-badge { grid-column:2; max-width:none; text-align:left; } }
   </style>
 </head>
 <body>
   <main class="page">
     <header class="brand"><span class="brand-mark" aria-hidden="true">S</span><div><h1>Sherry Aerial Studio</h1><p>VVIP 選課服務</p></div></header>
-    <section class="headline"><span class="eyebrow">VVIP Priority Selection</span><h2>VVIP 優先選課意願登記</h2><p class="lead">請輸入 Email 查看本期課程並累積登記，最多四堂。此為選課意願登記，不代表正式保留名額。</p></section>
+    <section class="headline"><span class="eyebrow">VVIP Priority Selection</span><h2>VVIP 優先選課意願登記</h2><p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多四堂。此為選課意願登記，不代表正式保留名額。</p></section>
 
     <section class="panel">
-      <form id="vvip-email-form" class="email-form">
-        <label for="vvip-email">Email<input id="vvip-email" type="email" autocomplete="email" placeholder="name@example.com" required></label>
+      <form id="vvip-member-form" class="member-form">
+        <label for="vvip-member">OB 名稱<input id="vvip-member" type="text" list="vvip-member-options" autocomplete="off" placeholder="搜尋或選擇您的 OB 名稱" required><datalist id="vvip-member-options"></datalist></label>
         <button id="vvip-lookup" class="button" type="submit">查看課程</button>
       </form>
       <p class="helper">選錯課程請直接聯絡教室，由管理員協助取消。</p>
@@ -83,11 +83,10 @@
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LIMIT = 4;
-    const state = { email: "", data: null, selectedCalendarIds: new Set(), existingCalendarIds: new Set() };
+    const state = { members: [], memberId: "", data: null, selectedCalendarIds: new Set(), existingCalendarIds: new Set() };
     const byId = (id) => document.getElementById(id);
 
     function escapeHtml(value) { return String(value == null ? "" : value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
-    function normalizeEmail(value) { return String(value || "").trim().toLowerCase(); }
     function showNotice(message, type = "") { const el = byId("vvip-notice"); el.textContent = message; el.className = `notice visible ${type}`; }
     function clearNotice() { const el = byId("vvip-notice"); el.textContent = ""; el.className = "notice"; }
     function setBusy(button, busy, text) { if (!button.dataset.label) button.dataset.label = button.textContent; button.disabled = busy; button.textContent = busy ? text : button.dataset.label; }
@@ -135,14 +134,26 @@
     }
     function renderWorkspace() { byId("vvip-workspace").hidden = false; byId("vvip-course-search").value = ""; renderCounter(); renderCourses(); renderSummary(); }
 
+    async function loadVvipMembers() {
+      const button = byId("vvip-lookup"); setBusy(button, true, "載入名單...");
+      try {
+        state.members = await callVvipApi("getVvipMembers");
+        byId("vvip-member-options").innerHTML = state.members.map((member) => `<option value="${escapeHtml(member.name)}"></option>`).join("");
+        if (!state.members.length) showNotice("目前尚無可用的 VVIP 名單，請聯絡教室。", "error");
+      } catch (error) {
+        showNotice(error.message || "暫時無法載入 VVIP 名單。", "error");
+      } finally { setBusy(button, false, ""); }
+    }
+
     async function lookupVvip(event) {
       event.preventDefault();
-      const email = normalizeEmail(byId("vvip-email").value);
-      if (!/^\S+@\S+\.\S+$/.test(email)) return showNotice("請輸入有效的 Email。", "error");
+      const memberName = byId("vvip-member").value.trim();
+      const member = state.members.find((item) => item.name === memberName);
+      if (!member) return showNotice("請從名單選擇您的 OB 名稱。", "error");
       const button = byId("vvip-lookup"); setBusy(button, true, "載入中..."); clearNotice();
       try {
-        const data = await callVvipApi("getVvipSelection", { email });
-        state.email = data.email; state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).map((item) => item.calendarId));
+        const data = await callVvipApi("getVvipSelection", { vvipId: member.id });
+        state.memberId = member.id; state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).map((item) => item.calendarId));
         renderWorkspace();
         showNotice(`已載入 ${data.month} 課程。目前已累積 ${data.count} 堂。`, "success");
       } catch (error) {
@@ -166,7 +177,7 @@
       if (!ids.length) return;
       const button = byId("vvip-submit"); setBusy(button, true, "送出中..."); clearNotice();
       try {
-        const data = await callVvipApi("submitVvipSelection", { email: state.email, calendarIds: ids });
+        const data = await callVvipApi("submitVvipSelection", { vvipId: state.memberId, calendarIds: ids });
         state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).map((item) => item.calendarId));
         renderWorkspace();
         showNotice(`選課意願已送出，目前累積 ${data.count}／${LIMIT} 堂。不代表正式保留名額。`, "success");
@@ -176,11 +187,12 @@
       } finally { setBusy(button, false, ""); }
     }
 
-    byId("vvip-email-form").addEventListener("submit", lookupVvip);
+    byId("vvip-member-form").addEventListener("submit", lookupVvip);
     byId("vvip-course-search").addEventListener("input", renderCourses);
     byId("vvip-course-area").addEventListener("change", changeSelection);
     byId("vvip-submit").addEventListener("click", submitVvipSelection);
-    byId("vvip-retry").addEventListener("click", () => byId("vvip-email-form").requestSubmit());
+    byId("vvip-retry").addEventListener("click", () => byId("vvip-member-form").requestSubmit());
+    loadVvipMembers();
   </script>
 </body>
 </html>

@@ -447,6 +447,22 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
+test('pending invitation queue shows courses before the responsive teacher picker', () => {
+  const start = html.indexOf('activeAdminTab === "pendingInvitations"');
+  const end = html.indexOf('activeAdminTab === "activeInvitees"', start);
+  const pendingBlock = html.slice(start, end);
+
+  assert.ok(start >= 0 && end > start, 'pending invitation render block should exist');
+  assert.match(pendingBlock, /const pendingItems = data\.pendingInvitations \|\| \[\]/);
+  assert.match(pendingBlock, /pendingItems\.length \? `/);
+  assert.match(pendingBlock, /class="invite-teacher-panel"/);
+  assert.match(pendingBlock, /matchMedia\("\(min-width: 761px\)"\)/);
+  assert.ok(
+    pendingBlock.indexOf('renderAdminItems(pendingItems') < pendingBlock.indexOf('inviteTeacherPanel'),
+    'course list should be assembled before the teacher picker'
+  );
+});
+
 test('management entry stays hidden without capabilities and is enabled by authenticated capabilities', () => {
   assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
   assert.match(html, /managementCapabilities/);

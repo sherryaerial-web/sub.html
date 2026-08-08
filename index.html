@@ -608,6 +608,18 @@
     .admin-tab.active .admin-tab-count { background: var(--surface); color: var(--sea-700); }
     .admin-tab-content { margin-top: 12px; }
     .ob-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .queue-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 2px 10px; }
+    .queue-section-heading strong { font-size: 14px; }
+    .queue-section-heading span { color: var(--muted); font-size: 12px; }
+    .invite-teacher-panel { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .invite-teacher-panel summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; color: var(--ink); cursor: pointer; font-size: 13px; font-weight: 750; list-style: none; }
+    .invite-teacher-panel summary::-webkit-details-marker { display: none; }
+    .invite-teacher-panel summary::after { content: "+"; flex: 0 0 auto; color: var(--muted); font-size: 18px; font-weight: 400; }
+    .invite-teacher-panel[open] summary::after { content: "−"; }
+    .invite-teacher-title { display: inline-flex; min-width: 0; align-items: center; gap: 8px; }
+    .invite-teacher-title svg { width: 17px; height: 17px; }
+    .invite-teacher-count { color: var(--muted); font-size: 11px; font-weight: 600; }
+    .invite-teacher-body { padding: 0 14px 14px; border-top: 1px solid var(--line); }
     .teacher-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
     .teacher-option { display: flex; min-width: 0; min-height: 40px; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-size: 12px; overflow-wrap: anywhere; }
     .teacher-option:has(input:checked) { border-color: var(--sea-600); background: var(--aqua-100); color: var(--sea-800); }
@@ -709,6 +721,8 @@
       .claim-field.full { grid-column: auto; }
       .confirmation-row { grid-template-columns: 105px minmax(0, 1fr); }
       .admin-summary, .teacher-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .invite-teacher-panel summary { padding: 11px 12px; }
+      .invite-teacher-body { padding: 0 12px 12px; }
       .admin-tabs { margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; border-right: 0; border-left: 0; border-radius: 0; }
       .admin-tab { flex: 0 0 auto; }
     }
@@ -2042,18 +2056,28 @@
       } else if (activeAdminTab === "payroll") {
         renderPayrollAdminTab();
       } else if (activeAdminTab === "pendingInvitations") {
+        const pendingItems = data.pendingInvitations || [];
         const activeNames = new Set((data.activeInvitees || []).map((item) => item.teacherName));
         const teachers = (data.teachers || []).filter((name) => !activeNames.has(name));
-        content.innerHTML = `
-          <div class="admin-control">
-            <strong>開放代課給老師</strong>
-            <div class="teacher-picker">${teachers.map((name) => `<label class="teacher-option"><input class="admin-teacher-checkbox" type="checkbox" value="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></label>`).join("") || "目前沒有其他可邀請老師"}</div>
-            <div class="admin-item-actions">
-              <button class="compact-button" type="button" data-admin-action="open-invitations"><i data-lucide="send"></i>開放給勾選老師</button>
-              <button class="compact-button" type="button" data-admin-action="copy-invitation"><i data-lucide="copy"></i>複製 LINE 邀請文字</button>
+        const pendingCourseList = renderAdminItems(pendingItems, "目前沒有待領取代課");
+        const inviteTeacherPanel = pendingItems.length ? `
+          <details class="invite-teacher-panel"${window.matchMedia("(min-width: 761px)").matches ? " open" : ""}>
+            <summary>
+              <span class="invite-teacher-title"><i data-lucide="users-round"></i>選擇本輪邀請老師</span>
+              <span class="invite-teacher-count">${teachers.length} 位可邀請</span>
+            </summary>
+            <div class="invite-teacher-body">
+              <div class="teacher-picker">${teachers.map((name) => `<label class="teacher-option"><input class="admin-teacher-checkbox" type="checkbox" value="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></label>`).join("") || "目前沒有其他可邀請老師"}</div>
+              <div class="admin-item-actions">
+                <button class="compact-button" type="button" data-admin-action="open-invitations"><i data-lucide="send"></i>開放給勾選老師</button>
+                <button class="compact-button" type="button" data-admin-action="copy-invitation"><i data-lucide="copy"></i>複製 LINE 邀請文字</button>
+              </div>
             </div>
-          </div>
-          ${renderAdminItems(data.pendingInvitations, "目前沒有待領取代課")}`;
+          </details>` : "";
+        content.innerHTML = `
+          <div class="queue-section-heading"><strong>待領取課程</strong><span>${pendingItems.length} 堂</span></div>
+          ${pendingCourseList}
+          ${inviteTeacherPanel}`;
       } else if (activeAdminTab === "activeInvitees") {
         content.innerHTML = `
           <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>

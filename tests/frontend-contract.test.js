@@ -447,9 +447,11 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
-test('admin entry stays hidden for teachers and is enabled only by the authenticated role', () => {
+test('management entry stays hidden without capabilities and is enabled by authenticated capabilities', () => {
   assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
-  assert.match(html, /admin-entry["']\)\.hidden\s*=\s*authState\.role\s*!==\s*["']管理員["']/);
+  assert.match(html, /managementCapabilities/);
+  assert.match(html, /admin-entry["']\)\.hidden\s*=\s*!authState\.managementCapabilities\.length/);
+  assert.doesNotMatch(html, /viewId\s*===\s*["']view-admin["']\s*&&\s*authState\.role\s*!==\s*["']管理員["']/);
 });
 
 test('uses the approved calm sea-glass operations design system', () => {

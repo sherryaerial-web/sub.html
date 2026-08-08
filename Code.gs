@@ -28,7 +28,7 @@ var SHEET_HEADERS = {
   SETTINGS: ['設定名稱', '設定值', '更新時間', '備註'],
   ACCOUNTS: [
     '指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至',
-    '可教授類別'
+    '可教授類別', '功能權限'
   ],
   VVIP_SELECTIONS: [
     '登記時間', 'Email', '月份', 'OB Calendar ID', '日期', '時間', '課程', '老師',
@@ -60,6 +60,8 @@ var CONFIG = {
   VVIP_CONFIRMED_STATUS: '已確認',
   VVIP_CANCELLED_STATUS: '已取消'
 };
+
+var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin'];
 
 function setupSystemStructure() {
   return ensureSystemStructure_();
@@ -111,7 +113,8 @@ function authenticate_(teacherName, pin) {
     return {
       sessionToken: sessionToken,
       teacherName: account.teacherName,
-      role: role
+      role: role,
+      managementCapabilities: getAccountManagementCapabilities_(account)
     };
   });
 }
@@ -146,13 +149,28 @@ function requireSession_(token) {
   return {
     teacherName: account.teacherName,
     role: normalizeAccountRole_(account.role),
-    capabilities: normalizeTeacherCapabilities_(account.capabilities)
+    capabilities: normalizeTeacherCapabilities_(account.capabilities),
+    managementCapabilities: getAccountManagementCapabilities_(account)
   };
 }
 
 function requireAdmin_(token) {
   var session = requireSession_(token);
   if (!isAdminRole_(session.role)) throw new Error('需要管理權限。');
+  return session;
+}
+
+function requireCapability_(token, capability) {
+  var session = requireSession_(token);
+  var required = cleanText_(capability);
+  if (session.managementCapabilities.indexOf(required) === -1) {
+    var labels = {
+      course_admin: '課程管理權限',
+      payroll_admin: '薪資管理權限',
+      vvip_admin: 'VVIP 管理權限'
+    };
+    throw new Error('沒有' + (labels[required] || '此功能管理權限') + '。');
+  }
   return session;
 }
 
@@ -185,10 +203,17 @@ function setupAccount_(adminToken, teacherName, pin, options) {
   if (existingRow && settings.capabilities == null) {
     capabilityValue = cleanText_(values[existingRow - 1][headers['可教授類別'] - 1]);
   }
+  var managementCapabilityValue = settings.managementCapabilities == null
+    ? ''
+    : normalizeManagementCapabilities_(settings.managementCapabilities).join(',');
+  if (existingRow && settings.managementCapabilities == null) {
+    managementCapabilityValue = cleanText_(values[existingRow - 1][headers['功能權限'] - 1]);
+  }
   var accountValues = buildAccountValues_(teacher, pinText, {
     active: active,
     role: role,
-    capabilities: capabilityValue
+    capabilities: capabilityValue,
+    managementCapabilities: managementCapabilityValue
   });
   if (existingRow) {
     sheet.getRange(existingRow, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([accountValues]);
@@ -210,9 +235,12 @@ function buildAccountValues_(teacherName, pin, options) {
   var capabilities = settings.capabilities == null
     ? ''
     : normalizeTeacherCapabilities_(settings.capabilities).join('、');
+  var managementCapabilities = settings.managementCapabilities == null
+    ? ''
+    : normalizeManagementCapabilities_(settings.managementCapabilities).join(',');
   var salt = createRandomToken_();
   var pinHash = hashPin_(pinText, salt);
-  return [teacher, salt, pinHash, active ? '是' : '否', role, 0, '', capabilities];
+  return [teacher, salt, pinHash, active ? '是' : '否', role, 0, '', capabilities, managementCapabilities];
 }
 
 function importTeacherAccountsFromPasswordSheet() {
@@ -301,7 +329,8 @@ function importTeacherAccountsFromPasswordSheet() {
       var values = buildAccountValues_(record.teacherName, record.pin, {
         active: true,
         role: '老師',
-        capabilities: []
+        capabilities: [],
+        managementCapabilities: []
       });
       var key = record.teacherName.toLowerCase();
       if (accountIndexes[key] == null) {
@@ -315,6 +344,7 @@ function importTeacherAccountsFromPasswordSheet() {
         values[5] = existingValues[5];
         values[6] = existingValues[6];
         values[7] = existingValues[7];
+        values[8] = existingValues[8];
         accountRows[accountIndexes[key]] = values;
         updated++;
       }
@@ -427,7 +457,7 @@ function initializeFirstAdmin_(teacherName, pin) {
     var salt = createRandomToken_();
     var pinHash = hashPin_(pinText, salt);
     sheet.getRange(2, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([[
-      teacher, salt, pinHash, '是', '管理員', 0, '', ''
+      teacher, salt, pinHash, '是', '管理員', 0, '', '', MANAGEMENT_CAPABILITIES.join(',')
     ]]);
     return { teacherName: teacher, role: '管理員', active: true };
   });
@@ -504,7 +534,8 @@ function findAccount_(teacherName) {
         role: row[headers['角色'] - 1],
         failedAttempts: parseFailedAttempts_(row[headers['登入失敗次數'] - 1]),
         lockedUntil: row[headers['鎖定至'] - 1],
-        capabilities: row[headers['可教授類別'] - 1]
+        capabilities: row[headers['可教授類別'] - 1],
+        managementCapabilities: row[headers['功能權限'] - 1]
       };
     }
   }
@@ -550,6 +581,24 @@ function normalizeAccountRole_(value) {
 
 function isAdminRole_(value) {
   return ['管理員', 'admin', 'ADMIN'].indexOf(cleanText_(value)) !== -1;
+}
+
+function normalizeManagementCapabilities_(value) {
+  var source = Array.isArray(value) ? value : cleanText_(value).split(/[、,，;；\s]+/);
+  var seen = {};
+  return source.map(cleanText_).filter(function(capability) {
+    if (MANAGEMENT_CAPABILITIES.indexOf(capability) === -1 || seen[capability]) return false;
+    seen[capability] = true;
+    return true;
+  });
+}
+
+function getAccountManagementCapabilities_(account) {
+  var capabilities = normalizeManagementCapabilities_(account && account.managementCapabilities);
+  if (!capabilities.length && account && isAdminRole_(account.role)) {
+    return MANAGEMENT_CAPABILITIES.slice();
+  }
+  return capabilities;
 }
 
 function parseFailedAttempts_(value) {
@@ -989,7 +1038,7 @@ function doPost(e) {
         );
       },
       syncObCalendar: function() {
-        assertAdminSession_(session);
+        assertCapabilitySession_(session, 'course_admin');
         return syncCourseListFromApi(parameters.sessionToken);
       },
       setVvipSelectionOpen: function() {
@@ -1142,7 +1191,7 @@ function fetchCalendarPages_(token, dateFrom, dateTo) {
 }
 
 function syncCourseListFromApi(sessionToken) {
-  var admin = requireAdmin_(sessionToken);
+  var admin = requireCapability_(sessionToken, 'course_admin');
 
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) {
@@ -1596,7 +1645,7 @@ function setVvipSettingRowsUnlocked_(sheet, updates, actor) {
 }
 
 function setVvipSelectionOpen_(session, open) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'vvip_admin');
   var shouldOpen = open === true;
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1626,7 +1675,7 @@ function setVvipSelectionOpen_(session, open) {
 }
 
 function getVvipAdminDashboard_(session, emailQuery) {
-  assertAdminSession_(session);
+  assertCapabilitySession_(session, 'vvip_admin');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var settingsSheet = requireSheet_(ss, SHEETS.VVIP_SETTINGS);
   var selectionSheet = requireSheet_(ss, SHEETS.VVIP_SELECTIONS);
@@ -1676,7 +1725,7 @@ function getVvipAdminDashboard_(session, emailQuery) {
 }
 
 function confirmVvipEmail_(session, emailValue) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'vvip_admin');
   var email = normalizeVvipEmail_(emailValue);
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1710,7 +1759,7 @@ function confirmVvipEmail_(session, emailValue) {
 }
 
 function cancelVvipSelection_(session, emailValue, calendarIdValue, reasonValue) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'vvip_admin');
   var email = normalizeVvipEmail_(emailValue);
   var calendarId = cleanText_(calendarIdValue);
   var reason = cleanText_(reasonValue);
@@ -1852,8 +1901,33 @@ function assertAdminSession_(session) {
   return teacher;
 }
 
+function getSessionManagementCapabilities_(session) {
+  var teacher = getSessionTeacherName_(session);
+  if (session.managementCapabilities != null) {
+    var supplied = normalizeManagementCapabilities_(session.managementCapabilities);
+    if (supplied.length || !isAdminRole_(session.role)) return supplied;
+  }
+  var account = findAccount_(teacher);
+  if (account) return getAccountManagementCapabilities_(account);
+  return isAdminRole_(session.role) ? MANAGEMENT_CAPABILITIES.slice() : [];
+}
+
+function assertCapabilitySession_(session, capability) {
+  var teacher = getSessionTeacherName_(session);
+  var required = cleanText_(capability);
+  if (getSessionManagementCapabilities_(session).indexOf(required) === -1) {
+    var labels = {
+      course_admin: '課程管理權限',
+      payroll_admin: '薪資管理權限',
+      vvip_admin: 'VVIP 管理權限'
+    };
+    throw new Error('沒有' + (labels[required] || '此功能管理權限') + '。');
+  }
+  return teacher;
+}
+
 function openInvitations_(session, teacherNames) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'course_admin');
   var teachers = normalizeTeacherNames_(teacherNames);
   teachers.forEach(assertTeacherExists_);
 
@@ -1913,7 +1987,7 @@ function openInvitations_(session, teacherNames) {
 }
 
 function closeInvitations_(session, teacherNames) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'course_admin');
   var teachers = normalizeTeacherNames_(teacherNames);
   teachers.forEach(assertTeacherExists_);
 
@@ -1963,7 +2037,7 @@ function closeInvitations_(session, teacherNames) {
 }
 
 function pauseClaims_(session, paused) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'course_admin');
   var shouldPause = paused === true;
 
   return withScriptLock_(function() {
@@ -2558,7 +2632,7 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
 }
 
 function resolveChangeRequest_(session, substituteId, decision, reason) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'course_admin');
   var id = requireSubstituteId_(substituteId);
   var normalizedDecision = normalizeResolutionDecision_(decision);
   var resolutionReason = cleanText_(reason);
@@ -2635,7 +2709,7 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
 }
 
 function reconcileObChanges_(session) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'course_admin');
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
@@ -2778,7 +2852,7 @@ function getObExpectation_(row) {
 }
 
 function linkReplacementCalendarItem_(session, substituteId, replacementCalendarId) {
-  var actor = assertAdminSession_(session);
+  var actor = assertCapabilitySession_(session, 'course_admin');
   var id = requireSubstituteId_(substituteId);
   var replacementId = cleanText_(replacementCalendarId);
   if (!replacementId) throw new Error('請選擇替代的 OB 課程。');
@@ -2824,7 +2898,7 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
 }
 
 function getAdminDashboard_(session) {
-  assertAdminSession_(session);
+  assertCapabilitySession_(session, 'course_admin');
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);

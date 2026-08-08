@@ -75,7 +75,7 @@ const EXPECTED_LEAVE_EXTENSION_HEADERS = [
 
 const EXPECTED_ACCOUNT_HEADERS = [
   '指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至',
-  '可教授類別',
+  '可教授類別', '功能權限',
 ];
 
 const EXPECTED_COURSE_HEADERS = [
@@ -322,7 +322,7 @@ function createPasswordImportBackend(rows, options = {}) {
   services.Utilities.getUuid = () => `password-import-${++uuid}`;
   const bootstrap = loadBackend(services);
   const existingAccounts = options.existingAccounts || [
-    createAccount(bootstrap, '系統管理員', '9999', { role: '管理員' }).concat(''),
+    createAccount(bootstrap, '系統管理員', '9999', { role: '管理員' }).concat('', ''),
   ];
   const accountSheet = createSheetFixture('登入帳號', [
     EXPECTED_ACCOUNT_HEADERS,
@@ -614,10 +614,30 @@ test('login returns an opaque session without exposing credentials', () => {
   const response = backend.authenticate_('老師甲', '1234');
 
   assert.ok(response.sessionToken);
-  assert.deepEqual(Object.keys(response).sort(), ['role', 'sessionToken', 'teacherName']);
+  assert.deepEqual(Object.keys(response).sort(), ['managementCapabilities', 'role', 'sessionToken', 'teacherName']);
   assert.equal('pinHash' in response, false);
   assert.equal('salt' in response, false);
   assert.equal('expiresAt' in response, false);
+});
+
+test('functional capabilities are independent from teaching categories and enforced server-side', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, 'IVY', '0912', { role: '管理員' }).concat('空環', 'course_admin,payroll_admin,vvip_admin'),
+    createAccount(bootstrap, 'Tako', '1127').concat('空環、舞綢', 'course_admin'),
+    createAccount(bootstrap, '一般老師', '1234').concat('空環', ''),
+  ]);
+
+  const ivy = backend.authenticate_('IVY', '0912');
+  const tako = backend.authenticate_('Tako', '1127');
+  const teacher = backend.authenticate_('一般老師', '1234');
+
+  assert.deepEqual(Array.from(ivy.managementCapabilities), ['course_admin', 'payroll_admin', 'vvip_admin']);
+  assert.deepEqual(Array.from(tako.managementCapabilities), ['course_admin']);
+  assert.deepEqual(Array.from(teacher.managementCapabilities), []);
+  assert.equal(backend.requireCapability_(tako.sessionToken, 'course_admin').teacherName, 'Tako');
+  assert.throws(() => backend.requireCapability_(tako.sessionToken, 'payroll_admin'), /薪資管理權限/);
+  assert.throws(() => backend.requireCapability_(teacher.sessionToken, 'course_admin'), /課程管理權限/);
 });
 
 test('login rejects an invalid PIN and records a failed attempt', () => {
@@ -720,7 +740,7 @@ test('valid fallback session survives early cache eviction but expires on schedu
   services.__cache.delete(key);
   assert.deepEqual(
     JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
-    { teacherName: '老師甲', role: '老師', capabilities: [] }
+    { teacherName: '老師甲', role: '老師', capabilities: [], managementCapabilities: [] }
   );
 
   services.__properties.set(key, JSON.stringify({
@@ -753,7 +773,7 @@ test('teacher session cannot access administrator-only helpers', () => {
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
-    { teacherName: '老師甲', role: '老師', capabilities: [] }
+    { teacherName: '老師甲', role: '老師', capabilities: [], managementCapabilities: [] }
   );
   assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
 });
@@ -769,7 +789,7 @@ test('existing session immediately follows current account role capabilities and
   accountSheet.values[1][7] = '舞綢、瑜伽';
   assert.deepEqual(
     JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
-    { teacherName: '管理員', role: '老師', capabilities: ['舞綢', '瑜伽'] }
+    { teacherName: '管理員', role: '老師', capabilities: ['舞綢', '瑜伽'], managementCapabilities: [] }
   );
   assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
 

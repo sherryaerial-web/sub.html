@@ -918,7 +918,7 @@
     const LEAVE_BATCH_SIZE = 25;
     const LAST_TEACHER_KEY = "sherry-substitute-last-teacher";
 
-    const authState = { sessionToken: "", teacherName: "", role: "" };
+    const authState = { sessionToken: "", teacherName: "", role: "", managementCapabilities: [] };
     let globalCourseList = [];
     let pendingLeaves = [];
     let claimOptions = { capabilities: [], classes: [] };
@@ -1098,7 +1098,7 @@
       byId("app-shell").hidden = false;
       byId("current-user").textContent = authState.teacherName;
       byId("home-greeting").textContent = `${authState.teacherName}，您好。`;
-      byId("admin-entry").hidden = authState.role !== "管理員";
+      byId("admin-entry").hidden = !authState.managementCapabilities.length;
       switchView("view-home");
       refreshIcons();
     }
@@ -1107,6 +1107,7 @@
       authState.sessionToken = "";
       authState.teacherName = "";
       authState.role = "";
+      authState.managementCapabilities = [];
       globalCourseList = [];
       pendingLeaves = [];
       selectedLeaveDates = new Set();
@@ -1150,6 +1151,9 @@
         authState.sessionToken = session.sessionToken;
         authState.teacherName = session.teacherName;
         authState.role = session.role;
+        authState.managementCapabilities = Array.isArray(session.managementCapabilities)
+          ? session.managementCapabilities
+          : [];
         rememberTeacher(session.teacherName);
         byId("login-pin").value = "";
         showLoggedInApp();
@@ -1172,7 +1176,7 @@
     }
 
     function switchView(viewId) {
-      if (viewId === "view-admin" && authState.role !== "管理員") {
+      if (viewId === "view-admin" && !authState.managementCapabilities.length) {
         return setNotice("需要管理權限。", "error");
       }
       clearNotice();

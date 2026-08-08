@@ -11,6 +11,8 @@ test('VVIP public page is a standalone responsive intent-registration page', () 
   assert.match(html, /name=["']viewport["']/);
   assert.match(html, /VVIP 優先選課意願登記/);
   assert.match(html, /不代表正式保留名額/);
+  assert.match(html, /<p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多四堂。<\/p>/);
+  assert.doesNotMatch(html, /<p class="lead">[^<]*不代表正式保留名額[^<]*<\/p>/);
   assert.match(html, /id=["']vvip-member-form["']/);
   assert.match(html, /id=["']vvip-member["']/);
   assert.doesNotMatch(html, /id=["']vvip-email["']/);

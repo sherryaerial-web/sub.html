@@ -122,7 +122,7 @@ VVIP 頁面只收集選課意願，**不代表正式保留 OB 名額**。同一�
 1. 建立正式 Google 試算表完整副本，記錄副本名稱與建立時間；同時記錄目前可用的 Apps Script 版本號、Web App deployment ID，以及正式前端 Git commit。三者必須視為同一組可回復版本。
 2. 開啟綁定該試算表的 Apps Script，將 repository 的 `Code.gs` 完整覆蓋舊程式並儲存。
 3. 在「指令碼屬性」設定 `OMCEAN_API_TOKEN`。請使用重新產生的新 token，不要沿用曾貼在對話或程式碼中的 token。
-4. 手動執行 `ensureSystemStructure_()` 一次，完成工作表改名、欄位追加與輔助工作表建立。
+4. 手動執行 `setupSystemStructure()` 一次，完成工作表改名、欄位追加與輔助工作表建立。
 5. 若同時看到「工作表1」與「請假代課紀錄」，立即停止，不要刪資料；先人工比對並只保留正確正式表。
 6. 依上一節建立第一位管理員。
 7. 依「37 位老師密碼一次性匯入」流程建立老師帳號。
@@ -131,7 +131,7 @@ VVIP 頁面只收集選課意願，**不代表正式保留 OB 名額**。同一�
 10. 部署 Apps Script Web App 的新版本；執行身分使用部署者，存取權沿用目前正式設定。
 11. 若 Web App URL 改變，更新 `index.html` 內的 `APP_URL`。
 12. 先以管理員登入並按「同步 OB 課表」，確認同步範圍為今天至下個月底，且 `CourseList` 筆數、日期及 OB Calendar ID 都合理。
-13. 首次同步成功後，再次手動執行 `ensureSystemStructure_()`，檢查回傳的 migration 計數 `assignedIds`、`linked`、`manualReview`。確認唯一完全相符的舊資料已安全連結，無法唯一判定者留在「待人工核對」。此步驟可安全重複執行，不會覆蓋既有 ID。
+13. 首次同步成功後，再次手動執行 `setupSystemStructure()`，檢查回傳的 migration 計數 `assignedIds`、`linked`、`manualReview`。確認唯一完全相符的舊資料已安全連結，無法唯一判定者留在「待人工核對」。此步驟可安全重複執行，不會覆蓋既有 ID。
 14. 完成同步後 backfill，再用測試帳號測 Web App：登入、選日期、送出一堂測試請假、取消測試資料，最後檢查管理員後台。
 15. 將 `index.html` 與 `vvip.html` 一起發布到 GitHub Pages，等待 Pages 完成後再開正式網址測試桌機與手機。
 16. 以兩個老師帳號同時嘗試同一堂代課，確認只有第一位成功；再檢查邀請、改課、退出與 OB 核對流程。

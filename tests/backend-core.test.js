@@ -1896,9 +1896,9 @@ test('tracked operational documents do not instruct deprecated hourly synchroniz
 test('README runs structure, OB sync, and idempotent migration rerun before teacher smoke tests', () => {
   const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
   const deployment = readme.slice(readme.indexOf('## 完整部署順序'));
-  const initialSetup = deployment.indexOf('手動執行 `ensureSystemStructure_()` 一次');
+  const initialSetup = deployment.indexOf('手動執行 `setupSystemStructure()` 一次');
   const firstSync = deployment.indexOf('同步 OB 課表');
-  const migrationRerun = deployment.indexOf('再次手動執行 `ensureSystemStructure_()`', firstSync);
+  const migrationRerun = deployment.indexOf('再次手動執行 `setupSystemStructure()`', firstSync);
   const teacherSmoke = deployment.indexOf('測試帳號', firstSync);
 
   assert.ok(initialSetup >= 0, 'missing initial structure setup');

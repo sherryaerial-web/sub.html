@@ -682,6 +682,10 @@ function ensureSystemStructure_() {
   });
 }
 
+function setupSystemStructure() {
+  return ensureSystemStructure_();
+}
+
 function ensureVvipStructure_() {
   return withScriptLock_(function() {
     return ensureVvipStructureUnlocked_(SpreadsheetApp.getActiveSpreadsheet());

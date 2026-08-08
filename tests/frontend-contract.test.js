@@ -454,10 +454,10 @@ test('management entry stays hidden without capabilities and is enabled by authe
   assert.doesNotMatch(html, /viewId\s*===\s*["']view-admin["']\s*&&\s*authState\.role\s*!==\s*["']管理員["']/);
 });
 
-test('uses the approved calm sea-glass operations design system', () => {
-  assert.match(html, /--sea-700:\s*#[0-9a-f]{6}/i);
-  assert.match(html, /--aqua-100:\s*#[0-9a-f]{6}/i);
-  assert.match(html, /--coral-600:\s*#[0-9a-f]{6}/i);
+test('uses the approved Morandi taupe operations design system', () => {
+  assert.match(html, /--sea-700:\s*#786c64/i);
+  assert.match(html, /--aqua-100:\s*#eee0dc/i);
+  assert.match(html, /--coral-600:\s*#8f5f68/i);
   assert.match(html, /--shadow-sm:/);
   assert.match(html, /\.app-layout\s*\{/);
   assert.match(html, /\.workspace\s*\{/);

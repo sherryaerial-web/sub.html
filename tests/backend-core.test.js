@@ -93,6 +93,30 @@ const EXPECTED_VVIP_MEMBER_HEADERS = [
   'VVIP ID', 'OB 名稱', 'Email', '是否啟用', '備註', '建立時間', '更新時間', '更新者',
 ];
 
+const EXPECTED_PAYROLL_RULE_HEADERS = ['老師姓名', '課程關鍵字 (可留空)', '計費類型', '人數門檻', '金額'];
+const EXPECTED_PAYROLL_SOURCE_HEADERS = [
+  '月份', 'OB Calendar ID', '日期時間', '課程', '指導者', '出席狀態', '缺席',
+  '課程收入', '盈利', '教室', '分店', '更新時間',
+];
+const EXPECTED_PAYROLL_SNAPSHOT_HEADERS = [
+  '同步版本', '月份', 'OB Calendar ID', '日期', '時間', '課程', '全部指導者 JSON',
+  '出席人數', '容量', '課程收入', '盈利', '教室', '分店', '同步時間', '檢查狀態',
+];
+const EXPECTED_PAYROLL_LINE_HEADERS = [
+  '月份', '明細 ID', '同步版本', 'OB Calendar ID', '老師', '日期', '時間', '課程',
+  '計費類型', '出席人數', '課程收入', '套用規則', '規則說明', '金額', '人工調整',
+  '調整理由', '狀態', '建立時間',
+];
+const EXPECTED_PAYROLL_SUMMARY_HEADERS = [
+  '月份', '老師', '鐘點費小計', '獎金比例', '獎金金額', '固定津貼/扣項',
+  '應領總薪資', '盈利', '發布版本', '狀態', '確認時間', '最後更新時間',
+];
+const EXPECTED_PAYROLL_DISPUTE_HEADERS = [
+  '異議 ID', '月份', '老師', '明細 ID', '問題說明', '狀態', '管理員回覆',
+  '提出時間', '處理者', '處理時間',
+];
+const EXPECTED_PAYROLL_PAYMENT_HEADERS = ['老師', '轉帳群組/銀行', '備註', '是否啟用'];
+
 function createSheetFixture(name, values) {
   const protections = [];
   return {
@@ -3018,4 +3042,166 @@ test('VVIP admin opens, confirms, cancels, groups courses, and exports CSV safel
   assert.match(backend.exportVvipSelectionsCsv_(adminSession).csv, /vvip@example\.com/);
   assert.ok(settingsSheet.values.some((row) => row[0] === 'openedAt'));
   assert.ok(auditSheet.values.some((row) => row[2] === 'VVIP 取消選課'));
+});
+
+test('payroll bonus thresholds use the approved 15000 20000 and 30000 boundaries', () => {
+  const backend = loadBackend();
+  assert.equal(backend.calculateBonusRate_(14999), 0);
+  assert.equal(backend.calculateBonusRate_(15000), 0.03);
+  assert.equal(backend.calculateBonusRate_(19999), 0.03);
+  assert.equal(backend.calculateBonusRate_(20000), 0.04);
+  assert.equal(backend.calculateBonusRate_(29999), 0.04);
+  assert.equal(backend.calculateBonusRate_(30000), 0.05);
+});
+
+test('payroll special courses pay sixty percent or split Sherry and one partner six to four', () => {
+  const backend = loadBackend();
+  const settings = [];
+  const solo = backend.calculatePayrollLinesForCourse_({
+    calendarId: 'special-solo',
+    courseName: '空環 Flare 特別課',
+    instructors: [{ name: 'Liz 🌰' }],
+    attendanceCount: 8,
+    courseIncome: 7430,
+  }, settings);
+  assert.deepEqual(JSON.parse(JSON.stringify(solo)), [{
+    teacherName: 'Liz 🌰', amount: 4458, ruleType: '特別課60%', ruleDetail: '課程收入 7430 × 60%',
+  }]);
+
+  const collaboration = backend.calculatePayrollLinesForCourse_({
+    calendarId: 'special-duo',
+    courseName: '雙人合作特別課',
+    instructors: [{ name: '合作老師' }, { name: 'Sherry❤雪莉' }],
+    attendanceCount: 6,
+    courseIncome: 10001,
+  }, settings);
+  assert.deepEqual(JSON.parse(JSON.stringify(collaboration)), [
+    { teacherName: 'Sherry❤雪莉', amount: 6001, ruleType: '雪莉合作60%', ruleDetail: '課程收入 10001－合作老師 4000' },
+    { teacherName: '合作老師', amount: 4000, ruleType: '合作老師40%', ruleDetail: '課程收入 10001 × 40%' },
+  ]);
+  assert.equal(collaboration.reduce((total, line) => total + line.amount, 0), 10001);
+});
+
+test('payroll general courses prefer teacher keyword rates then exact attendance tiers', () => {
+  const backend = loadBackend();
+  const settings = [
+    { teacherName: '妙妙 簡', courseKeyword: '綢吊', billingType: '標準時薪', threshold: 0, amount: 1200 },
+    { teacherName: '預設值', courseKeyword: '', billingType: '人數階梯', threshold: 3, amount: 800 },
+    { teacherName: '預設值', courseKeyword: '', billingType: '人數階梯', threshold: 4, amount: 900 },
+  ];
+  const override = backend.calculatePayrollLinesForCourse_({
+    calendarId: 'course-override', courseName: 'A－綢吊 Lv.1', instructors: [{ name: '妙妙 簡' }],
+    attendanceCount: 4, courseIncome: 2400,
+  }, settings);
+  const tier = backend.calculatePayrollLinesForCourse_({
+    calendarId: 'course-tier', courseName: 'A－空環 Lv.1', instructors: [{ name: '老師甲' }],
+    attendanceCount: 4, courseIncome: 2400,
+  }, settings);
+  assert.equal(override[0].amount, 1200);
+  assert.equal(tier[0].amount, 900);
+  assert.throws(() => backend.calculatePayrollLinesForCourse_({
+    calendarId: 'course-unknown', courseName: 'A－空環 Lv.1', instructors: [{ name: '老師甲' }],
+    attendanceCount: 1, courseIncome: 500,
+  }, settings), /找不到.*薪項|人數階梯/);
+});
+
+test('payroll summary includes special lines in bonus subtotal before fixed additions and deductions', () => {
+  const backend = loadBackend();
+  const summary = backend.calculatePayrollSummary_('Tako', [
+    { teacherName: 'Tako', amount: 20000 },
+    { teacherName: 'Tako', amount: 15763 },
+  ], [
+    { teacherName: 'Tako', courseKeyword: '店長固定底薪', billingType: '固定加給', threshold: 0, amount: 32000 },
+    { teacherName: 'Tako', courseKeyword: '勞健保扣除額', billingType: '固定扣項', threshold: 0, amount: 1139 },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(summary)), {
+    teacherName: 'Tako', subtotal: 35763, bonusRate: 0.05, bonusAmount: 1788,
+    fixedAdjustment: 30861, totalSalary: 68412,
+  });
+});
+
+test('payroll structure creates append-only operational sheets idempotently', () => {
+  const spreadsheet = createSpreadsheetFixture([]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensurePayrollStructureUnlocked_(spreadsheet);
+  backend.ensurePayrollStructureUnlocked_(spreadsheet);
+
+  assert.deepEqual(spreadsheet.getSheetByName('薪項設定').values[0], EXPECTED_PAYROLL_RULE_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資來源資料').values[0], EXPECTED_PAYROLL_SOURCE_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資同步快照').values[0], EXPECTED_PAYROLL_SNAPSHOT_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資明細').values[0], EXPECTED_PAYROLL_LINE_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資結算').values[0], EXPECTED_PAYROLL_SUMMARY_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資異議').values[0], EXPECTED_PAYROLL_DISPUTE_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資付款設定').values[0], EXPECTED_PAYROLL_PAYMENT_HEADERS);
+  assert.equal(spreadsheet.sheets.filter((sheet) => sheet.name === '薪資明細').length, 1);
+});
+
+test('payroll draft blocks missing special-course income and keeps complete instructor lists', () => {
+  const backend = loadBackend();
+  const rules = [
+    { teacherName: '預設值', billingType: '人數階梯', threshold: 4, amount: 900 },
+  ];
+  const normalized = backend.normalizePayrollCalendarItem_({
+    id: 987,
+    class: { id: 42, nameZhHant: 'A－雙人合作特別課' },
+    classTime: '2026-08-20T09:30:00Z',
+    size: 10,
+    customersAttended: 4,
+    instructors: [
+      { id: 7, firstName: 'Sherry❤雪莉' },
+      { id: 8, firstName: '合作老師' },
+    ],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(normalized.instructors)), [
+    { id: '7', name: 'Sherry❤雪莉', isSubstitute: false },
+    { id: '8', name: '合作老師', isSubstitute: false },
+  ]);
+  const blocked = backend.buildPayrollDraft_('2026-08', [normalized], rules);
+  assert.equal(blocked.errors.length, 1);
+  assert.match(blocked.errors[0].message, /課程收入/);
+  assert.equal(blocked.lines.length, 0);
+
+  normalized.courseIncome = 10001;
+  normalized.profit = 4200;
+  const ready = backend.buildPayrollDraft_('2026-08', [normalized], rules);
+  assert.equal(ready.errors.length, 0);
+  assert.equal(ready.lines.length, 2);
+  assert.equal(ready.summaries.length, 2);
+});
+
+test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {
+  const lines = createSheetFixture('薪資明細', [
+    EXPECTED_PAYROLL_LINE_HEADERS,
+    ['2026-08', 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '草稿', 'now'],
+    ['2026-08', 'cal-2:老師乙', 'version-1', 'cal-2', '老師乙', '2026/08/02', '11:00', '舞綢', '人數階梯', 5, '', '人數階梯', '5 人', 1000, 0, '', '草稿', 'now'],
+  ]);
+  const summaries = createSheetFixture('薪資結算', [
+    EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    ['2026-08', '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '草稿', '', 'now'],
+    ['2026-08', '老師乙', 1000, 0, 0, 0, 1000, 1300, 'version-1', '草稿', '', 'now'],
+  ]);
+  const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
+  const audit = createSheetFixture('操作紀錄', [['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因']]);
+  const spreadsheet = createSpreadsheetFixture([lines, summaries, disputes, audit]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  const ivy = { teacherName: 'IVY', role: '管理員', managementCapabilities: ['payroll_admin'] };
+  const tako = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+  const teacherA = { teacherName: '老師甲', role: '老師', managementCapabilities: [] };
+
+  assert.throws(() => backend.publishPayroll_(tako, '2026-08', 'version-1'), /薪資管理權限/);
+  backend.publishPayroll_(ivy, '2026-08', 'version-1');
+  const mine = backend.getMyPayroll_(teacherA, '2026-08');
+  assert.equal(mine.summary.teacherName, '老師甲');
+  assert.equal(mine.lines.length, 1);
+  assert.doesNotMatch(JSON.stringify(mine), /老師乙/);
+
+  backend.confirmPayroll_(teacherA, '2026-08', 'version-1');
+  assert.equal(summaries.values[1][9], '已確認');
+  backend.submitPayrollDispute_(teacherA, {
+    month: '2026-08', version: 'version-1', lineId: 'cal-1:老師甲', message: '堂數需要確認',
+  });
+  assert.equal(summaries.values[1][9], '有異議');
+  assert.equal(disputes.values[1][2], '老師甲');
 });

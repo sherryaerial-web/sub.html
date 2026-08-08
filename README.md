@@ -5,8 +5,9 @@ GitHub Pages 前端搭配 Google Apps Script、Google Sheets 與 Omcean Booking 
 ## 系統入口
 
 - `index.html`：GitHub Pages 前端，老師登入後可請假、領取代課及查看個人紀錄。
+- `vvip.html`：公開 VVIP 優先選課意願頁面。會員只輸入 Email，不需登入老師系統。
 - `Code.gs`：完整 Apps Script 後端。
-- 管理員以管理員帳號登入同一個前端後，可開啟邀請、OB 待辦、異動申請與核對後台。
+- 管理員以管理員帳號登入同一個前端後，可開啟邀請、OB 待辦、異動申請、核對與 VVIP 選課後台。
 - 正式網址：`https://sherryaerial-web.github.io/sub.html/`
 
 ## 試算表契約
@@ -61,10 +62,26 @@ A:J 固定欄位如下，K:U 由新版追加：
 - `操作紀錄`：取消、退出、核對與管理操作歷史。
 - `系統設定`：包含「暫停全部領取」。
 - `登入帳號`：只保存 Salt、PIN 雜湊、在職狀態、角色、登入保護與可教授類別。
+- `VVIP選課紀錄`：VVIP 的 Email、月份、OB Calendar ID、原課程快照、確認／取消狀態與操作者。此表只由 VVIP 公開 API 與管理員後台使用。
+- `VVIP選課設定`：`activeMonth`、`isOpen`、`openedAt`、`closedAt` 等本期開放設定。
 
 `ensureSystemStructure_()`、首次管理員初始化及密碼匯入都會將整張 `登入帳號` 設為保護範圍，只保留 Apps Script 實際執行帳號的編輯權，並關閉網域編輯。部署前必須另外確認整份試算表只分享給必要管理員；老師只使用 Web App，不可取得試算表檢視或編輯權。可到「資料 → 保護工作表與範圍」確認保護名稱為「系統保護：登入帳號」。
 
 `老師名單` 的 A1 必須是「指導者」，A2 以下姓名需與 OB 及登入姓名一致。老師選單從這張表讀取。
+
+### VVIP 優先選課
+
+VVIP 頁面只收集選課意願，**不代表正式保留 OB 名額**。同一個 Email 在當期最多可累積四堂不同的 `OB Calendar ID`；重複送出既有課程不會重複計算。會員若選錯，請聯絡管理員取消，會員端不提供自行取消。
+
+每期作業順序：
+
+1. 先以管理員帳號在 `index.html` 按「同步 OB 課表」，確認下個月的 `CourseList` 都有 `OB Calendar ID`。
+2. 在管理後台第七個「VVIP 選課」頁籤按「開放本期選課」。如果下個月沒有課或有缺少 Calendar ID 的課程，系統會拒絕開放。
+3. 將 GitHub Pages 的 `vvip.html` 網址傳給 VVIP。頁面會依日期顯示下個月全部有效課程，會員填 Email 後可分次累積最多四堂。
+4. 在「VVIP 選課」頁籤依 Email 查詢、確認 Email、取消單堂或依課程查看登記會員；匯出 CSV 只包含有效選課，並已防護公式注入字元。
+5. 截止時按「關閉本期選課」。關閉後會員不能再查詢或送出，管理員仍可查看與取消當期資料。
+
+不要將 `VVIP選課紀錄` 分享給老師或 VVIP。公開頁不會取得其他會員 Email，也不會把 Email 放進網址。
 
 ## 37 位老師密碼一次性匯入
 
@@ -114,7 +131,7 @@ A:J 固定欄位如下，K:U 由新版追加：
 12. 先以管理員登入並按「同步 OB 課表」，確認同步範圍為今天至下個月底，且 `CourseList` 筆數、日期及 OB Calendar ID 都合理。
 13. 首次同步成功後，再次手動執行 `ensureSystemStructure_()`，檢查回傳的 migration 計數 `assignedIds`、`linked`、`manualReview`。確認唯一完全相符的舊資料已安全連結，無法唯一判定者留在「待人工核對」。此步驟可安全重複執行，不會覆蓋既有 ID。
 14. 完成同步後 backfill，再用測試帳號測 Web App：登入、選日期、送出一堂測試請假、取消測試資料，最後檢查管理員後台。
-15. 將 `index.html` 發布到 GitHub Pages，等待 Pages 完成後再開正式網址測試桌機與手機。
+15. 將 `index.html` 與 `vvip.html` 一起發布到 GitHub Pages，等待 Pages 完成後再開正式網址測試桌機與手機。
 16. 以兩個老師帳號同時嘗試同一堂代課，確認只有第一位成功；再檢查邀請、改課、退出與 OB 核對流程。
 
 ## 必測情境
@@ -149,8 +166,11 @@ A:J 固定欄位如下，K:U 由新版追加：
 
 ```bash
 node --check tests/backend-core.test.js
-node --test tests/backend-core.test.js tests/frontend-contract.test.js
-node tests/visual-check.mjs
+node --test --test-name-pattern='VVIP' tests/backend-core.test.js
+node --test --test-name-pattern='VVIP' tests/vvip-frontend.test.js
+node tests/vvip-visual-check.mjs
 ```
+
+整個網站準備正式上線前，才依使用者確認執行完整系統測試與完整視覺檢查；日常開發只執行本次功能相關的測試。
 
 視覺測試會執行一條桌機與一條手機 viewport journey，在 11 個畫面節點各自截圖，共產生 22 個視覺狀態／截圖；它檢查非空白、水平溢出、控制項裁切及手機導覽遮擋。送出、權限、鎖定、取消／退出、邀請及核對等行為由 `backend-core.test.js` 與 `frontend-contract.test.js` 的單元／契約測試覆蓋，不能把 22 張截圖解讀為 22 條獨立端到端旅程。GAS 語法檢查可將 `Code.gs` 複製成暫存 `.js` 後執行 `node --check`；正式檔案仍以 `Code.gs` 為準。

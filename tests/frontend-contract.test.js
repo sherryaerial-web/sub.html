@@ -471,8 +471,8 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the six admin tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 6);
+test('keeps the seven admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 7);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /updateAdminTabCounts/);

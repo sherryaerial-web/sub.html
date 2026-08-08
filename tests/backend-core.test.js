@@ -83,6 +83,13 @@ const EXPECTED_COURSE_HEADERS = [
   'OB Calendar ID', 'OB Class ID', 'OB 老師 ID', '是否代課', '最後同步時間',
 ];
 
+const EXPECTED_VVIP_SELECTION_HEADERS = [
+  '登記時間', 'Email', '月份', 'OB Calendar ID', '日期', '時間', '課程', '老師',
+  '狀態', '確認時間', '取消時間', '取消原因', '操作者',
+];
+
+const EXPECTED_VVIP_SETTINGS_HEADERS = ['設定鍵', '設定值', '更新時間', '操作者'];
+
 function createSheetFixture(name, values) {
   const protections = [];
   return {
@@ -537,6 +544,62 @@ function createInvitationBackend(options = {}) {
     adminSession: { teacherName: '管理員甲', role: '管理員' },
     teacherASession: { teacherName: '老師甲', role: '老師' },
     teacherBSession: { teacherName: '老師乙', role: '老師' },
+  };
+}
+
+function createVvipBackend(options = {}) {
+  const services = createAuthServices();
+  let uuid = 0;
+  services.Utilities.getUuid = () => `vvip-${++uuid}`;
+  const bootstrap = loadBackend(services);
+  const accountSheet = createSheetFixture('登入帳號', [
+    EXPECTED_ACCOUNT_HEADERS,
+    createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }),
+    createAccount(bootstrap, '老師甲', '1234'),
+  ]);
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ...(options.courseRows || [
+      ['2026/09/02', '10:00', '空環基礎', '老師甲', 'vvip-cal-1', 'class-1', 'teacher-1', '否', ''],
+      ['2026/09/03', '11:00', '舞綢基礎', '老師乙', 'vvip-cal-2', 'class-2', 'teacher-2', '否', ''],
+      ['2026/09/04', '12:00', '空中瑜伽', '老師丙', 'vvip-cal-3', 'class-3', 'teacher-3', '否', ''],
+      ['2026/09/05', '13:00', '柔軟度', '老師丁', 'vvip-cal-4', 'class-4', 'teacher-4', '否', ''],
+      ['2026/09/06', '14:00', '綢吊基礎', '老師戊', 'vvip-cal-5', 'class-5', 'teacher-5', '否', ''],
+    ]),
+  ]);
+  const selectionSheet = createSheetFixture('VVIP選課紀錄', [
+    EXPECTED_VVIP_SELECTION_HEADERS,
+    ...(options.selectionRows || []),
+  ]);
+  const settingsSheet = createSheetFixture('VVIP選課設定', [
+    EXPECTED_VVIP_SETTINGS_HEADERS,
+    ['activeMonth', '2026-09', '', ''],
+    ['isOpen', options.open === false ? '否' : '是', '', ''],
+  ]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([
+    accountSheet, courseSheet, selectionSheet, settingsSheet, auditSheet,
+  ]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  backend.getNextMonthKey_ = () => '2026-09';
+  return {
+    backend,
+    services,
+    spreadsheet,
+    accountSheet,
+    courseSheet,
+    selectionSheet,
+    settingsSheet,
+    auditSheet,
+    adminToken: backend.authenticate_('管理員甲', '9999').sessionToken,
+    teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
+    adminSession: { teacherName: '管理員甲', role: '管理員' },
+    teacherSession: { teacherName: '老師甲', role: '老師' },
   };
 }
 
@@ -2771,4 +2834,92 @@ test('admin dashboard separates work queues without exposing account secrets', (
   assert.ok(Array.isArray(dashboard.exceptions));
   assert.ok(Array.isArray(dashboard.completed));
   assert.doesNotMatch(serialized, /PIN 雜湊|fixed-salt|Salt/);
+});
+
+test('VVIP structure creates isolated sheets idempotently without changing CourseList', () => {
+  const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensureVvipStructure_();
+  backend.ensureVvipStructure_();
+
+  assert.deepEqual(
+    spreadsheet.sheets.map((sheet) => sheet.getName()).sort(),
+    ['CourseList', 'VVIP選課紀錄', 'VVIP選課設定'].sort()
+  );
+  assert.deepEqual(spreadsheet.getSheetByName('VVIP選課紀錄').values[0], EXPECTED_VVIP_SELECTION_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('VVIP選課設定').values[0], EXPECTED_VVIP_SETTINGS_HEADERS);
+  assert.deepEqual(courseSheet.values[0], EXPECTED_COURSE_HEADERS);
+});
+
+test('VVIP public selection normalizes Email and accumulates unique Calendar IDs', () => {
+  const { backend, selectionSheet } = createVvipBackend();
+
+  const first = backend.submitVvipSelection_('  VVIP@Example.COM ', ['vvip-cal-1', 'vvip-cal-2']);
+  const second = backend.submitVvipSelection_('vvip@example.com', ['vvip-cal-2', 'vvip-cal-3']);
+
+  assert.equal(first.count, 2);
+  assert.equal(second.count, 3);
+  assert.deepEqual(second.selections.map((item) => item.calendarId), ['vvip-cal-1', 'vvip-cal-2', 'vvip-cal-3']);
+  assert.equal(selectionSheet.values.length, 4);
+  assert.equal(selectionSheet.values[1][1], 'vvip@example.com');
+  assert.equal(selectionSheet.values[3][8], '待人工確認');
+});
+
+test('VVIP selection rejects an over-limit batch without partial writes', () => {
+  const { backend, selectionSheet } = createVvipBackend();
+  backend.submitVvipSelection_('vvip@example.com', ['vvip-cal-1', 'vvip-cal-2', 'vvip-cal-3']);
+  const before = JSON.stringify(selectionSheet.getDataRange().getValues());
+
+  assert.throws(
+    () => backend.submitVvipSelection_('vvip@example.com', ['vvip-cal-4', 'vvip-cal-5']),
+    /最多.*4 堂|上限/
+  );
+  assert.equal(JSON.stringify(selectionSheet.getDataRange().getValues()), before);
+});
+
+test('VVIP public POST rejects closed periods, invalid Email, missing IDs, and stale courses', () => {
+  const { backend, selectionSheet, courseSheet } = createVvipBackend({ open: false });
+  assert.throws(() => backend.getVvipSelection_('vvip@example.com'), /尚未開放|截止/);
+  assert.throws(() => backend.submitVvipSelection_('not-an-email', ['vvip-cal-1']), /Email/);
+
+  courseSheet.values[1][4] = '';
+  assert.throws(() => backend.setVvipSelectionOpen_({ teacherName: '管理員甲', role: '管理員' }, true), /Calendar ID/);
+  assert.equal(selectionSheet.values.length, 1);
+});
+
+test('VVIP public routes use POST without a session and never accept Email in GET', () => {
+  const { backend } = createVvipBackend();
+  backend.console.error = () => {};
+  const response = JSON.parse(backend.doPost({ parameter: {
+    action: 'getVvipSelection', email: 'vvip@example.com',
+  } }).text);
+
+  assert.equal(response.status, 'success');
+  assert.equal(response.data.month, '2026-09');
+  const getResponse = JSON.parse(backend.doGet({ parameter: {
+    action: 'getVvipSelection', email: 'vvip@example.com',
+  } }).text);
+  assert.equal(getResponse.status, 'error');
+});
+
+test('VVIP admin opens, confirms, cancels, groups courses, and exports CSV safely', () => {
+  const { backend, adminSession, teacherSession, settingsSheet, auditSheet } = createVvipBackend({ open: false });
+  assert.throws(() => backend.setVvipSelectionOpen_(teacherSession, true), /管理權限/);
+  backend.setVvipSelectionOpen_(adminSession, true);
+  backend.submitVvipSelection_('vvip@example.com', ['vvip-cal-1', 'vvip-cal-2']);
+  const confirmation = backend.confirmVvipEmail_(adminSession, 'vvip@example.com');
+  assert.equal(confirmation.confirmed, 2);
+  const cancellation = backend.cancelVvipSelection_(adminSession, 'vvip@example.com', 'vvip-cal-2', '會員通知調整');
+  assert.equal(cancellation.cancelled, 1);
+
+  const dashboard = backend.getVvipAdminDashboard_(adminSession, 'vvip@example.com');
+  assert.equal(dashboard.metrics.activeSelections, 1);
+  assert.equal(dashboard.members[0].status, '已確認');
+  assert.equal(dashboard.courseView[0].calendarId, 'vvip-cal-1');
+  assert.equal(backend.csvSafeCell_('=danger'), "'=danger");
+  assert.match(backend.exportVvipSelectionsCsv_(adminSession).csv, /vvip@example\.com/);
+  assert.ok(settingsSheet.values.some((row) => row[0] === 'openedAt'));
+  assert.ok(auditSheet.values.some((row) => row[2] === 'VVIP 取消選課'));
 });

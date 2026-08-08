@@ -456,6 +456,8 @@ test('pending invitation queue shows courses before the responsive teacher picke
   assert.match(pendingBlock, /const pendingItems = data\.pendingInvitations \|\| \[\]/);
   assert.match(pendingBlock, /pendingItems\.length \? `/);
   assert.match(pendingBlock, /class="invite-teacher-panel"/);
+  assert.match(pendingBlock, /class="invite-teacher-placeholder"/);
+  assert.match(pendingBlock, /目前沒有待邀請課程/);
   assert.match(pendingBlock, /matchMedia\("\(min-width: 761px\)"\)/);
   assert.ok(
     pendingBlock.indexOf('renderAdminItems(pendingItems') < pendingBlock.indexOf('inviteTeacherPanel'),

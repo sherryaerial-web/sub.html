@@ -20,6 +20,9 @@ function payload(request) {
   const params = new URLSearchParams(request.postData() || '');
   const action = params.get('action');
   const existing = [{ ...courses[0], status: '待人工確認' }];
+  if (action === 'getVvipMembers') {
+    return [{ id: 'vvip-1', name: '測試會員' }];
+  }
   if (action === 'getVvipSelection') {
     return { email: 'vvip@example.com', month: '2026-09', limit: 4, count: 1, selections: existing, courses };
   }
@@ -54,7 +57,7 @@ async function runJourney(browser, viewport) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'success', data: payload(request) }) });
   });
   await page.setContent(html, { waitUntil: 'networkidle' });
-  await page.locator('#vvip-email').fill('vvip@example.com');
+  await page.locator('#vvip-member').fill('測試會員');
   await page.locator('#vvip-lookup').click();
   await page.locator('.vvip-course-checkbox').nth(1).check();
   await page.locator('.vvip-course-checkbox').nth(2).check();

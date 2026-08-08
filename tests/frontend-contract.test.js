@@ -473,11 +473,25 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the seven admin tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 7);
+test('keeps the eight capability-scoped admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 8);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
+  assert.match(html, /data-capability=["']course_admin["']/);
+  assert.match(html, /data-capability=["']payroll_admin["']/);
+  assert.match(html, /data-capability=["']vvip_admin["']/);
   assert.match(html, /updateAdminTabCounts/);
+});
+
+test('provides self-only payroll review and protected sync publish dispute controls', () => {
+  assert.match(html, /data-view=["']view-payroll["']/);
+  assert.match(html, /getMyPayroll/);
+  assert.match(html, /confirmPayroll/);
+  assert.match(html, /submitPayrollDispute/);
+  assert.match(html, /getPayrollAdminDashboard/);
+  assert.match(html, /syncPayrollMonth/);
+  assert.match(html, /publishPayroll/);
+  assert.match(html, /resolvePayrollDispute/);
 });
 
 test('admin queue rendering does not leak Array.map indexes into cards', () => {

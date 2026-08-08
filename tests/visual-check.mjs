@@ -115,6 +115,26 @@ const fixtures = {
       "備註": "改為可教授的空環課程", "異動狀態": "無", "可申請退出": true, "異動紀錄": []
     }
   ],
+  getMyPayroll: {
+    month: "2026-08",
+    summary: { month: "2026-08", teacherName: "Ariel Lu", subtotal: 26800, bonusRate: 0.04, bonusAmount: 1072, fixedAdjustment: 0, totalSalary: 27872, profit: 41200, version: "payroll-v1", status: "待確認", confirmedAt: "", updatedAt: "2026-09-01 10:00" },
+    lines: [
+      { month: "2026-08", lineId: "pay-1", version: "payroll-v1", calendarId: "cal-pay-1", teacherName: "Ariel Lu", date: "2026/08/05", time: "18:30", courseName: "空環 Lv.2", billingType: "人數階梯", attendanceCount: 5, courseIncome: "", ruleDetail: "5 人", amount: 1000, manualAdjustment: 0, adjustmentReason: "", status: "待確認" },
+      { month: "2026-08", lineId: "pay-2", version: "payroll-v1", calendarId: "cal-pay-2", teacherName: "Ariel Lu", date: "2026/08/08", time: "19:30", courseName: "空環 Flare 特別課", billingType: "特別課60%", attendanceCount: 8, courseIncome: 7430, ruleDetail: "課程收入 7430 × 60%", amount: 4458, manualAdjustment: 0, adjustmentReason: "", status: "待確認" }
+    ],
+    disputes: []
+  },
+  getPayrollAdminDashboard: {
+    month: "2026-08",
+    version: "payroll-v1",
+    summaries: [
+      { month: "2026-08", teacherName: "Ariel Lu", subtotal: 26800, bonusRate: 0.04, bonusAmount: 1072, fixedAdjustment: 0, totalSalary: 27872, profit: 41200, version: "payroll-v1", status: "草稿", confirmedAt: "", updatedAt: "2026-09-01 10:00" },
+      { month: "2026-08", teacherName: "Jina", subtotal: 18400, bonusRate: 0.03, bonusAmount: 552, fixedAdjustment: 0, totalSalary: 18952, profit: 28000, version: "payroll-v1", status: "草稿", confirmedAt: "", updatedAt: "2026-09-01 10:00" }
+    ],
+    lines: [],
+    disputes: [{ id: "dispute-1", teacherName: "Mina", lineId: "pay-3", message: "8/12 的出席人數需要確認", status: "待處理", reply: "", createdAt: "2026-09-01 11:00", handler: "", resolvedAt: "" }],
+    metrics: { teachers: 2, totalSalary: 46824, draft: 2, pendingConfirmations: 0, openDisputes: 1, errors: 0 }
+  },
   getAdminDashboard: {
     paused: false,
     teachers: ["Ivy", "Ariel Lu", "Jina", "Mina"],
@@ -136,7 +156,12 @@ function apiPayload(request) {
   const action = params.get("action");
   if (action === "login") {
     const teacherName = params.get("teacherName");
-    return { sessionToken: teacherName === "Ivy" ? "admin-token" : "teacher-token", teacherName, role: teacherName === "Ivy" ? "管理員" : "老師" };
+    return {
+      sessionToken: teacherName === "Ivy" ? "admin-token" : "teacher-token",
+      teacherName,
+      role: teacherName === "Ivy" ? "管理員" : "老師",
+      managementCapabilities: teacherName === "Ivy" ? ["course_admin", "payroll_admin", "vvip_admin"] : []
+    };
   }
   if (action === "logout") return { loggedOut: true };
   return fixtures[action] ?? { count: 1 };
@@ -268,6 +293,10 @@ try {
     await page.locator("#my-subs-list .list-item").first().waitFor();
     results.push(await capture(page, viewport.name, "05-substitute-history"));
 
+    await page.locator('.nav-item[data-view="view-payroll"]').click();
+    await page.locator(".payroll-hero").waitFor();
+    results.push(await capture(page, viewport.name, "06-payroll"));
+
     await page.locator("#logout-button").click();
     await page.locator("#auth-shell").waitFor({ state: "visible" });
     await login(page, "Ivy");
@@ -279,6 +308,9 @@ try {
       await page.locator(`[data-admin-tab="${tab}"]`).click();
       results.push(await capture(page, viewport.name, `admin-${index + 1}-${tab}`));
     }
+    await page.locator('[data-admin-tab="payroll"]').click();
+    await page.locator(".payroll-toolbar").waitFor();
+    results.push(await capture(page, viewport.name, "admin-7-payroll"));
 
     if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
     await page.close();

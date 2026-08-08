@@ -3204,4 +3204,7 @@ test('payroll publish is capability-scoped and teachers can only view confirm or
   });
   assert.equal(summaries.values[1][9], '有異議');
   assert.equal(disputes.values[1][2], '老師甲');
+  backend.resolvePayrollDispute_(ivy, { disputeId: disputes.values[1][0], reply: '已核對堂數正確' });
+  assert.equal(summaries.values[1][9], '待確認');
+  assert.equal(disputes.values[1][5], '已回覆');
 });

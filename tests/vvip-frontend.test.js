@@ -50,9 +50,10 @@ test('VVIP successful submission keeps the complete accumulated list visible', (
   assert.match(html, /displayed\.map\(\(course\)/);
 });
 
-test('VVIP admin workspace is the seventh protected tab with management actions', () => {
-  assert.equal((adminHtml.match(/role=["']tab["']/g) || []).length, 7);
+test('VVIP admin workspace remains a protected tab with management actions', () => {
+  assert.equal((adminHtml.match(/role=["']tab["']/g) || []).length, 8);
   assert.match(adminHtml, /data-admin-tab=["']vvip["']/);
+  assert.match(adminHtml, /data-capability=["']vvip_admin["']/);
   assert.match(adminHtml, /VVIP 選課/);
   assert.match(adminHtml, /getVvipAdminDashboard/);
   assert.match(adminHtml, /setVvipSelectionOpen/);

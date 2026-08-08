@@ -818,7 +818,35 @@ function ensurePayrollStructureUnlocked_(spreadsheet) {
   ].forEach(function(definition) {
     result[definition[0]] = ensureSupportingSheet_(spreadsheet, definition[1], definition[2]).getName();
   });
+  seedPayrollRulesUnlocked_(requireSheet_(spreadsheet, SHEETS.PAYROLL_RULES));
   return result;
+}
+
+function seedPayrollRulesUnlocked_(sheet) {
+  if (sheet.getLastRow() > 1) return { seeded: false, count: sheet.getLastRow() - 1 };
+  var rows = [
+    ['妙妙 簡', '綢吊', '標準時薪', 0, 1200],
+    ['Josty Lin', '(留空)', '標準時薪', 0, 1500],
+    ['卡拉 卡拉', '(留空)', '標準時薪', 0, 1000],
+    ['姝姝', '私人包班', '標準時薪', 0, 1000],
+    ['Tako', '勞健保扣除額', '固定扣項', 0, 1139],
+    ['Tako', '店長固定底薪', '固定加給', 0, 32000],
+    ['冠蓉', '(留空)', '固定月薪', 0, 30000],
+    ['預設值', '場地租借', '標準時薪', 0, 0],
+    ['預設值', '(留空)', '人數階梯', 2, 700],
+    ['預設值', '(留空)', '人數階梯', 3, 800],
+    ['預設值', '(留空)', '人數階梯', 4, 900],
+    ['預設值', '(留空)', '人數階梯', 5, 1000],
+    ['預設值', '(留空)', '人數階梯', 6, 1100],
+    ['預設值', '(留空)', '人數階梯', 7, 1100],
+    ['預設值', '(留空)', '人數階梯', 8, 1100],
+    ['預設值', '(留空)', '人數階梯', 9, 1200],
+    ['預設值', '(留空)', '人數階梯', 10, 1300],
+    ['芮錤 77', '私人包班', '標準時薪', 0, 1000],
+    ['Jina', '私人包班', '標準時薪', 0, 2000]
+  ];
+  sheet.getRange(2, 1, rows.length, SHEET_HEADERS.PAYROLL_RULES.length).setValues(rows);
+  return { seeded: true, count: rows.length };
 }
 
 function migrateLegacyLeaveLinksUnlocked_(leaveSheet, courseSheet) {
@@ -2681,6 +2709,20 @@ function resolvePayrollDispute_(session, payload) {
       sheet.getRange(index + 1, 7).setValue(reply);
       sheet.getRange(index + 1, 9).setValue(actor);
       sheet.getRange(index + 1, 10).setValue(now);
+      var month = cleanText_(values[index][1]);
+      var teacher = cleanText_(values[index][2]);
+      var summarySheet = requireSheet_(ss, SHEETS.PAYROLL_SUMMARIES);
+      var summaries = summarySheet.getDataRange().getValues();
+      for (var summaryIndex = summaries.length - 1; summaryIndex > 0; summaryIndex--) {
+        if (cleanText_(summaries[summaryIndex][0]) === month &&
+            cleanText_(summaries[summaryIndex][1]) === teacher &&
+            cleanText_(summaries[summaryIndex][9]) === CONFIG.PAYROLL_REVIEW_STATUS) {
+          summarySheet.getRange(summaryIndex + 1, 10).setValue(CONFIG.PAYROLL_PUBLISHED_STATUS);
+          summarySheet.getRange(summaryIndex + 1, 11).setValue('');
+          summarySheet.getRange(summaryIndex + 1, 12).setValue(now);
+          break;
+        }
+      }
       appendAuditEventsUnlocked_(requireSheet_(ss, SHEETS.AUDIT), [{
         actor: actor, action: '處理薪資異議', targetId: disputeId, before: '待處理', after: '已回覆', reason: reply
       }]);

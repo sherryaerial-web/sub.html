@@ -58,11 +58,32 @@
     .helper { margin:8px 0 0; color:var(--muted); font-size:12px; }
     [hidden] { display:none !important; }
     @media (max-width:620px) { .page { padding:22px 14px 38px; } h2 { font-size:23px; } .member-form { grid-template-columns:1fr; } .member-form .button { width:100%; } .toolbar { align-items:stretch; } .toolbar input { width:100%; } .course-item { grid-template-columns:auto minmax(0,1fr); } .course-badge { grid-column:2; max-width:none; text-align:left; } }
+    :root { --ink:#17211e; --muted:#53615c; --sea:#245546; --sea-dark:#173d33; --aqua:#e6eeea; --line:#d4dbd6; --soft:#f5f7f4; --coral:#8d3f4e; --coral-soft:#f7e9ec; --success:#2d644b; --shadow:0 18px 48px rgba(20,43,34,.11); }
+    body { background:#f3f5f2; }
+    .page { width:min(100%,1000px); }
+    .brand { position:relative; margin-bottom:34px; padding:19px 22px; border-bottom:2px solid #b18b4e; background:#173d33; color:#fff; }
+    .brand h1 { font-family:Georgia,"Noto Serif TC",serif; font-size:19px; font-weight:600; }
+    .brand p { color:#cedbd4; }
+    .headline { padding-bottom:26px; border-color:#c9d1cc; }
+    .eyebrow { color:#8a6a35; letter-spacing:0; }
+    h2 { font-family:Georgia,"Noto Serif TC",serif; font-size:31px; font-weight:600; }
+    .lead { color:#4f5e58; }
+    .panel { border-color:#cad4cd; border-top:3px solid #b18b4e; box-shadow:var(--shadow); }
+    .button { background:#173d33; border-color:#173d33; }
+    .button:hover:not(:disabled) { background:#245546; }
+    .button.secondary { border-color:#aebdb4; color:#173d33; }
+    input[type="text"],input[type="search"] { border-color:#b7c4bc; }
+    .counter { border-color:#bccac2; background:#e6eeea; color:#173d33; }
+    .course-item { padding:13px 4px; }
+    .course-time,.date-heading { color:#8a6a35; }
+    .course-name { color:#17211e; }
+    .state { border-color:#b8c5bd; color:#53615c; }
+    @media (max-width:620px) { .brand { margin-right:-14px; margin-left:-14px; padding-right:18px; padding-left:18px; } h2 { font-size:26px; } }
   </style>
 </head>
 <body>
   <main class="page">
-    <header class="brand"><span class="brand-mark" aria-hidden="true">S</span><div><h1>Sherry Aerial Studio</h1><p>VVIP 選課服務</p></div></header>
+    <header class="brand"><div><h1>Sherry Aerial Studio</h1><p>VVIP 選課服務</p></div></header>
     <section class="headline"><span class="eyebrow">VVIP Priority Selection</span><h2>VVIP 優先選課意願登記</h2><p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多四堂。此為選課意願登記，不代表正式保留名額。</p></section>
 
     <section class="panel">

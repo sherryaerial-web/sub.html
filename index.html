@@ -716,6 +716,88 @@
       .date-list { grid-template-columns: 1fr; }
       .admin-summary, .teacher-picker { grid-template-columns: 1fr; }
     }
+
+    /* Gallery editorial theme */
+    :root {
+      --ink: #17211e;
+      --muted: #53615c;
+      --subtle: #6d7974;
+      --line: #d8ddd9;
+      --line-strong: #b9c3bd;
+      --surface: #ffffff;
+      --page: #f3f5f2;
+      --soft: #f7f8f6;
+      --sea-800: #173d33;
+      --sea-700: #245546;
+      --sea-600: #3f7061;
+      --aqua-100: #e6eeea;
+      --aqua-50: #f1f5f2;
+      --coral-600: #8d3f4e;
+      --coral-100: #f7e9ec;
+      --amber-700: #8a6a35;
+      --amber-100: #f4edde;
+      --shadow-sm: 0 1px 2px rgba(20, 43, 34, .06);
+      --shadow-md: 0 18px 48px rgba(20, 43, 34, .12);
+    }
+    body { background: var(--page); }
+    .auth-shell { background: #e9eeea; }
+    .login-panel { border-color: #c7d0ca; box-shadow: 0 24px 70px rgba(20,43,34,.16); }
+    .login-brand { position: relative; padding: 32px 30px 27px; border-bottom-color: #b99150; background: #173d33; color: #fff; }
+    .login-brand::after { position: absolute; right: 30px; bottom: -1px; width: 72px; height: 2px; background: #c8a76f; content: ""; }
+    .login-brand h1, .brand-name, .section-heading, .login-title { font-family: Georgia, "Noto Serif TC", serif; font-weight: 600; }
+    .login-brand h1 { font-size: 25px; }
+    .login-brand p { color: #d4dfd9; box-shadow: none; }
+    .login-form-body { padding: 28px 30px 32px; }
+    .topbar { border-bottom-color: #b99150; background: #173d33; color: #fff; }
+    .brand-name { color: #fff; font-size: 17px; }
+    .brand-subtitle { color: #cbd9d2; }
+    .current-user { border-color: rgba(255,255,255,.2); background: rgba(255,255,255,.08); color: #fff; }
+    .topbar .icon-button { border-color: rgba(255,255,255,.2); background: transparent; color: #fff; }
+    .sidebar { border-right-color: #d2d9d4; background: #eef2ef; }
+    .primary-nav { padding: 22px 12px; }
+    .nav-item { border-color: transparent; border-radius: 4px; color: #4b5a54; }
+    .nav-item:hover { background: #fff; color: #173d33; }
+    .nav-item.active { border-color: #c8d2cc; background: #fff; color: #173d33; box-shadow: var(--shadow-sm); }
+    .nav-item.active::after { position: absolute; right: -1px; width: 3px; height: 24px; background: #a47b3e; content: ""; }
+    .nav-item { position: relative; }
+    .workspace { max-width: 1320px; }
+    .view-header { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: #8a6a35; text-transform: uppercase; }
+    .section-heading { font-size: 29px; }
+    .section-copy, .item-meta, .action-copy, .login-copy { color: var(--muted); }
+    .home-welcome { border-left: 3px solid #a47b3e; background: #fff; }
+    .action-button, .list-item, .admin-control, .confirmation, .toolbar, .admin-workspace { border-color: #d1d8d3; background: #fff; box-shadow: none; }
+    .action-button:hover { border-color: #9fb1a7; box-shadow: 0 10px 26px rgba(20,43,34,.08); transform: translateY(-1px); }
+    .action-icon { background: #e7eeea; color: #214f41; }
+    .action-button:nth-child(3n+2) .action-icon { background: #f4edde; color: #87652d; }
+    .action-button:nth-child(3n) .action-icon { background: #f5e9ec; color: #8d3f4e; }
+    .primary-button { background: #173d33; }
+    .primary-button:hover:not(:disabled) { background: #245546; }
+    .compact-button { border-color: #b9c5be; color: #214f41; }
+    .admin-tab.active { border-color: #b7c4bc; background: #e7eeea; color: #173d33; }
+    .status-pill { display: inline-flex; width: fit-content; align-items: center; padding: 4px 8px; border: 1px solid #c7d2cb; border-radius: 999px; background: #eef3ef; color: #274e42; font-size: 12px; font-weight: 700; }
+    .money { color: #173d33; font-family: Georgia, serif; font-size: 18px; white-space: nowrap; }
+    .payroll-hero { display: grid; gap: 9px; margin-bottom: 18px; padding: 24px; border: 1px solid #cad4cd; border-top: 3px solid #a47b3e; border-radius: var(--radius); background: #fff; }
+    .payroll-hero > strong { color: #173d33; font-family: Georgia, serif; font-size: 36px; }
+    .payroll-breakdown { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 13px; }
+    .payroll-line, .payroll-admin-row { grid-template-columns: minmax(0,1fr) auto auto; }
+    .payroll-note { margin-top: 10px; padding: 12px 14px; border-left: 3px solid #8d3f4e; background: #f7e9ec; color: #66313c; font-size: 13px; }
+    .payroll-actions { margin-top: 18px; }
+    .payroll-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+    .month-input { width: 170px; }
+    .inline-button { width: auto; min-height: 40px; margin: 0; padding: 8px 14px; }
+    @media (max-width: 760px) {
+      .topbar { background: #173d33; }
+      .sidebar { border-bottom-color: #ccd4cf; background: #eef2ef; }
+      .primary-nav { padding: 6px 5px; background: #eef2ef; }
+      .nav-item.active { background: #fff; }
+      .nav-item.active::after { right: auto; bottom: 0; width: 24px; height: 2px; }
+      .section-heading { font-size: 25px; }
+      .payroll-line, .payroll-admin-row { grid-template-columns: minmax(0,1fr) auto; }
+      .payroll-line .icon-button, .payroll-admin-row .status-pill { grid-column: 1 / -1; justify-self: start; }
+      .payroll-hero { padding: 19px; }
+      .payroll-hero > strong { font-size: 31px; }
+    }
   </style>
 </head>
 <body>
@@ -724,7 +806,6 @@
   <section id="auth-shell" class="auth-shell">
     <div class="login-panel">
       <div class="login-brand">
-        <span class="brand-mark" aria-hidden="true"><i data-lucide="wind"></i></span>
         <div>
           <h1>Sherry Aerial Studio</h1>
           <p>教室管理系統</p>
@@ -775,7 +856,6 @@
   <div id="app-shell" class="app-shell" hidden>
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true"><i data-lucide="wind"></i></span>
         <div>
           <h1 class="brand-name">Sherry Aerial Studio</h1>
           <div class="brand-subtitle">教室管理</div>
@@ -796,6 +876,7 @@
           <button class="nav-item" type="button" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>請假紀錄</span></button>
           <button class="nav-item" type="button" data-view="view-claim"><i data-lucide="hand"></i><span>領取代課</span></button>
           <button class="nav-item" type="button" data-view="view-mysubs"><i data-lucide="badge-check"></i><span>代課紀錄</span></button>
+          <button class="nav-item" type="button" data-view="view-payroll"><i data-lucide="receipt-text"></i><span>我的薪資</span></button>
           <button id="admin-entry" class="nav-item" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
         </nav>
       </aside>
@@ -831,6 +912,11 @@
             <button class="action-button" type="button" data-view="view-mysubs">
               <span class="action-icon"><i data-lucide="badge-check"></i></span>
               <span><span class="action-title">查看我的代課紀錄</span><span class="action-copy">確認課程與改課內容</span></span>
+              <i class="action-arrow" data-lucide="chevron-right"></i>
+            </button>
+            <button class="action-button" type="button" data-view="view-payroll">
+              <span class="action-icon"><i data-lucide="receipt-text"></i></span>
+              <span><span class="action-title">查看我的薪資</span><span class="action-copy">核對明細與確認薪資</span></span>
               <i class="action-arrow" data-lucide="chevron-right"></i>
             </button>
           </div>
@@ -874,9 +960,17 @@
           <div id="my-subs-list" class="list"><div class="state">載入中...</div></div>
         </section>
 
+        <section id="view-payroll" class="view">
+          <div class="view-header">
+            <div><span class="eyebrow">Payroll</span><h2 class="section-heading">我的薪資</h2><p class="section-copy">逐堂核對已發布的薪資明細</p></div>
+            <div class="admin-header-actions"><input id="payroll-month" class="text-input month-input" type="month"><button id="payroll-refresh" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>查詢</button></div>
+          </div>
+          <div id="my-payroll-content"><div class="state">選擇月份後查詢</div></div>
+        </section>
+
         <section id="view-admin" class="view">
           <div class="view-header">
-            <div><span class="eyebrow">Operations</span><h2 class="section-heading">代課管理工作台</h2><p class="section-copy">邀請、異動與 OB 處理狀態</p></div>
+            <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
             <div class="admin-header-actions">
               <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
               <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
@@ -885,13 +979,14 @@
           <div id="admin-summary" class="admin-summary"></div>
           <div class="admin-workspace">
             <div class="admin-tabs" role="tablist" aria-label="管理工作區">
-              <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">0</span></button>
+              <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資<span class="admin-tab-count" data-admin-count="payroll">0</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip" data-capability="vvip_admin"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">0</span></button>
             </div>
             <div id="admin-tab-content" class="admin-tab-content"><div class="state">載入中...</div></div>
           </div>
@@ -926,6 +1021,7 @@
     let selectedLeaveCourses = new Set();
     let adminDashboard = null;
     let vvipDashboard = null;
+    let payrollDashboard = null;
     let activeAdminTab = "pendingInvitations";
     let requestDialogState = null;
 
@@ -1099,6 +1195,13 @@
       byId("current-user").textContent = authState.teacherName;
       byId("home-greeting").textContent = `${authState.teacherName}，您好。`;
       byId("admin-entry").hidden = !authState.managementCapabilities.length;
+      document.querySelectorAll(".admin-tab[data-capability]").forEach((button) => {
+        button.hidden = !authState.managementCapabilities.includes(button.dataset.capability);
+      });
+      const firstAdminTab = document.querySelector(".admin-tab[data-capability]:not([hidden])");
+      if (firstAdminTab) activeAdminTab = firstAdminTab.dataset.adminTab;
+      const month = new Date().toISOString().slice(0, 7);
+      byId("payroll-month").value = month;
       switchView("view-home");
       refreshIcons();
     }
@@ -1114,6 +1217,7 @@
       selectedLeaveCourses = new Set();
       adminDashboard = null;
       vvipDashboard = null;
+      payrollDashboard = null;
       byId("admin-entry").hidden = true;
       byId("app-shell").hidden = true;
       byId("auth-shell").hidden = false;
@@ -1195,6 +1299,7 @@
       if (viewId === "view-myleaves") fetchMyLeaves();
       if (viewId === "view-claim") fetchAvailableSubstitutes();
       if (viewId === "view-mysubs") fetchMySubs();
+      if (viewId === "view-payroll") fetchMyPayroll();
       if (viewId === "view-admin") fetchAdminDashboard();
       refreshIcons();
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1808,6 +1913,14 @@
           await resolveAdminChangeRequest(state.substituteId, state.decision, reason);
         } else if (state.action === "cancel-vvip") {
           await cancelVvipSelection(state.email, state.calendarId, reason);
+        } else if (state.action === "payroll-dispute") {
+          await callPostApi("submitPayrollDispute", {
+            month: state.month, version: state.version, lineId: state.lineId, message: reason
+          });
+          setNotice("薪資問題已送出。");
+          await fetchMyPayroll();
+        } else if (state.action === "resolve-payroll-dispute") {
+          await resolvePayrollDispute(state.disputeId, reason);
         }
         closeRequestDialog();
       } catch (error) {
@@ -1817,7 +1930,49 @@
       }
     }
 
+    function formatMoney(value) {
+      return new Intl.NumberFormat("zh-TW", { style: "currency", currency: "TWD", maximumFractionDigits: 0 }).format(Number(value) || 0);
+    }
+
+    async function fetchMyPayroll() {
+      const content = byId("my-payroll-content");
+      content.innerHTML = '<div class="state">載入薪資中...</div>';
+      try {
+        const data = await callApi("getMyPayroll", { month: byId("payroll-month").value });
+        if (!data.summary) {
+          content.innerHTML = '<div class="state">這個月份尚未發布薪資</div>';
+          return;
+        }
+        const summary = data.summary;
+        const lines = (data.lines || []).map((line) => `<article class="list-item payroll-line"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(line.date)} ${escapeHtml(line.time)}</div><div class="item-course">${escapeHtml(line.courseName)}</div><div class="item-meta">${escapeHtml(line.ruleDetail)}${line.attendanceCount !== "" ? `｜出席 ${escapeHtml(line.attendanceCount)} 人` : ""}</div></div><strong class="money">${formatMoney(line.amount + line.manualAdjustment)}</strong><button class="icon-button" type="button" data-payroll-dispute="${escapeHtml(line.lineId)}" title="回報這筆明細" aria-label="回報這筆明細"><i data-lucide="message-circle-warning"></i></button></article>`).join("");
+        const disputes = (data.disputes || []).map((item) => `<div class="payroll-note"><strong>${escapeHtml(item.status)}</strong> ${escapeHtml(item.message)}${item.reply ? `<br>回覆：${escapeHtml(item.reply)}` : ""}</div>`).join("");
+        content.innerHTML = `<div class="payroll-hero"><span>${escapeHtml(summary.month)} 應領薪資</span><strong>${formatMoney(summary.totalSalary)}</strong><div class="payroll-breakdown"><span>鐘點費 ${formatMoney(summary.subtotal)}</span><span>獎金 ${formatMoney(summary.bonusAmount)}</span><span>固定加扣 ${formatMoney(summary.fixedAdjustment)}</span></div><span class="status-pill">${escapeHtml(summary.status)}</span></div><div class="list">${lines || '<div class="state">沒有薪資明細</div>'}</div>${disputes}<div class="payroll-actions">${summary.status === "待確認" ? `<button class="primary-button" type="button" data-payroll-confirm="${escapeHtml(summary.version)}"><i data-lucide="badge-check"></i>我已核對，確認薪資</button>` : ""}</div>`;
+        refreshIcons();
+      } catch (error) {
+        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function confirmMyPayroll(version) {
+      await callPostApi("confirmPayroll", { month: byId("payroll-month").value, version });
+      setNotice("薪資已確認。");
+      await fetchMyPayroll();
+    }
+
+    async function fetchPayrollAdminDashboard() {
+      const content = byId("admin-tab-content");
+      content.innerHTML = '<div class="state">載入薪資後台中...</div>';
+      try {
+        payrollDashboard = await callApi("getPayrollAdminDashboard", { month: byId("payroll-admin-month")?.value || new Date().toISOString().slice(0, 7) });
+        renderAdminDashboard();
+      } catch (error) {
+        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
     async function fetchAdminDashboard() {
+      if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard();
+      if (activeAdminTab === "vvip") return fetchVvipAdminDashboard();
       const content = byId("admin-tab-content");
       content.innerHTML = '<div class="state">載入中...</div>';
       try {
@@ -1841,6 +1996,9 @@
 
     function renderAdminDashboard() {
       const data = adminDashboard || {};
+      byId("admin-summary").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
+      byId("admin-sync").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
+      byId("admin-reconcile").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-summary").innerHTML = [
         ["待領取", (data.pendingInvitations || []).length],
         ["待處理 OB", (data.obWork || []).length],
@@ -1862,6 +2020,10 @@
           badge.textContent = String((vvipDashboard && vvipDashboard.metrics && vvipDashboard.metrics.activeSelections) || 0);
           return;
         }
+        if (badge.dataset.adminCount === "payroll") {
+          badge.textContent = String((payrollDashboard && payrollDashboard.metrics && payrollDashboard.metrics.pendingConfirmations) || 0);
+          return;
+        }
         const items = data[badge.dataset.adminCount];
         badge.textContent = Array.isArray(items) ? String(items.length) : "0";
       });
@@ -1872,6 +2034,8 @@
       const content = byId("admin-tab-content");
       if (activeAdminTab === "vvip") {
         renderVvipAdminTab();
+      } else if (activeAdminTab === "payroll") {
+        renderPayrollAdminTab();
       } else if (activeAdminTab === "pendingInvitations") {
         const activeNames = new Set((data.activeInvitees || []).map((item) => item.teacherName));
         const teachers = (data.teachers || []).filter((name) => !activeNames.has(name));
@@ -1919,6 +2083,20 @@
       const courseView = (data.courseView || []).map((course) => `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(course.date)} ${escapeHtml(course.time)}</div><div class="item-course">${escapeHtml(course.courseName)}</div><div class="item-meta">${escapeHtml(course.teacherName)}｜${course.emails.length} 人：${escapeHtml(course.emails.join("、"))}</div></div></article>`).join("") || '<div class="state">目前沒有有效登記</div>';
       const whitelist = (data.whitelist || []).map((member) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(member.name)}</div><div class="item-meta">${escapeHtml(member.email)}${member.note ? `｜${escapeHtml(member.note)}` : ""}</div><div class="admin-item-actions"><button class="${member.active ? "danger-button" : "compact-button"}" type="button" data-admin-action="toggle-vvip-member" data-vvip-id="${escapeHtml(member.id)}" data-vvip-active="${member.active ? "false" : "true"}">${member.active ? "停用" : "啟用"}</button></div></div></article>`).join("") || '<div class="state">尚未建立 VVIP 名單</div>';
       content.innerHTML = `<div class="admin-control"><strong>${escapeHtml(data.month)} VVIP 選課：${data.isOpen ? "開放中" : "已關閉"}</strong><div class="item-meta">登記會員：${data.metrics.members}｜有效選課：${data.metrics.activeSelections}</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-vvip" data-vvip-open="${data.isOpen ? "false" : "true"}"><i data-lucide="${data.isOpen ? "lock" : "unlock"}"></i>${data.isOpen ? "關閉本期選課" : "開放本期選課"}</button><button class="compact-button" type="button" data-admin-action="export-vvip"><i data-lucide="download"></i>匯出 CSV</button></div></div><form id="vvip-member-form" class="admin-control"><strong>新增 VVIP 名單</strong><div class="admin-item-actions"><input id="vvip-member-name" class="text-input" type="text" placeholder="OB 名稱" required><input id="vvip-member-email" class="text-input" type="email" placeholder="Email" required><input id="vvip-member-note" class="text-input" type="text" placeholder="備註（選填）"><button class="compact-button" type="submit"><i data-lucide="user-plus"></i>新增</button></div></form>${whitelist}<form id="vvip-admin-search-form" class="admin-control"><label for="vvip-admin-search">依 Email 查詢登記</label><div class="admin-item-actions"><input id="vvip-admin-search" class="text-input" type="email" value="" placeholder="name@example.com"><button class="compact-button" type="submit"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="clear-vvip-search"><i data-lucide="rotate-ccw"></i>顯示全部</button></div></form><div class="admin-control"><strong>會員登記</strong></div>${members}<div class="admin-control"><strong>依課程查看</strong></div>${courseView}`;
+      refreshIcons();
+    }
+
+    function renderPayrollAdminTab() {
+      const content = byId("admin-tab-content");
+      const data = payrollDashboard;
+      if (!data) {
+        content.innerHTML = '<div class="state">載入薪資資料中...</div>';
+        return;
+      }
+      const summaries = (data.summaries || []).map((item) => `<article class="list-item payroll-admin-row"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">鐘點費 ${formatMoney(item.subtotal)}｜獎金 ${formatMoney(item.bonusAmount)}｜固定加扣 ${formatMoney(item.fixedAdjustment)}</div></div><strong class="money">${formatMoney(item.totalSalary)}</strong><span class="status-pill">${escapeHtml(item.status)}</span></article>`).join("") || '<div class="state">此月份尚無薪資草稿</div>';
+      const disputes = (data.disputes || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}｜${escapeHtml(item.status)}</div><div class="item-meta">${escapeHtml(item.message)}</div>${item.reply ? `<div class="item-meta">回覆：${escapeHtml(item.reply)}</div>` : ""}${item.status === "待處理" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve-payroll-dispute" data-dispute-id="${escapeHtml(item.id)}"><i data-lucide="message-square-reply"></i>回覆異議</button></div>` : ""}</div></article>`).join("") || '<div class="state">目前沒有薪資異議</div>';
+      const status = data.summaries && data.summaries[0] ? data.summaries[0].status : "";
+      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><input id="payroll-admin-month" class="text-input month-input" type="month" value="${escapeHtml(data.month)}"><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && status === "草稿" && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}</div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div>${summaries}<div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
       refreshIcons();
     }
 
@@ -2023,6 +2201,27 @@
       URL.revokeObjectURL(url);
     }
 
+    async function syncPayrollMonth() {
+      const month = byId("payroll-admin-month").value;
+      const result = await callPostApi("syncPayrollMonth", { month });
+      if (result.publishable) setNotice(`薪資草稿完成：${result.summaryCount} 位老師。`);
+      else setNotice(`薪資草稿有 ${result.errors.length} 筆待補資料。`, "error");
+      await fetchPayrollAdminDashboard();
+    }
+
+    async function publishPayroll(version) {
+      const month = byId("payroll-admin-month").value;
+      const result = await callPostApi("publishPayroll", { month, version });
+      setNotice(`已發布 ${result.teachers} 位老師的薪資。`);
+      await fetchPayrollAdminDashboard();
+    }
+
+    async function resolvePayrollDispute(disputeId, reply) {
+      await callPostApi("resolvePayrollDispute", { disputeId, reply });
+      setNotice("薪資異議已回覆。");
+      await fetchPayrollAdminDashboard();
+    }
+
     async function copyInvitationMessage() {
       const text = "您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。";
       await navigator.clipboard.writeText(text);
@@ -2068,6 +2267,7 @@
       button.addEventListener("click", () => {
         activeAdminTab = button.dataset.adminTab;
         if (activeAdminTab === "vvip") fetchVvipAdminDashboard();
+        else if (activeAdminTab === "payroll") fetchPayrollAdminDashboard();
         else renderAdminDashboard();
       });
     });
@@ -2085,6 +2285,17 @@
         if (action === "confirm-vvip") await confirmVvipEmail(button.dataset.vvipEmail);
         if (action === "export-vvip") await exportVvipSelectionsCsv();
         if (action === "clear-vvip-search") await fetchVvipAdminDashboard();
+        if (action === "refresh-payroll") await fetchPayrollAdminDashboard();
+        if (action === "sync-payroll") await syncPayrollMonth();
+        if (action === "publish-payroll") await publishPayroll(button.dataset.version);
+        if (action === "resolve-payroll-dispute") {
+          openRequestDialog({
+            action: "resolve-payroll-dispute",
+            disputeId: button.dataset.disputeId,
+            title: "回覆薪資異議",
+            copy: "回覆會顯示在老師的薪資頁面。"
+          });
+        }
         if (action === "cancel-vvip") {
           openRequestDialog({
             action: "cancel-vvip",
@@ -2125,6 +2336,25 @@
     });
     byId("admin-reconcile").addEventListener("click", async () => {
       try { await reconcileAdminObChanges(); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("payroll-refresh").addEventListener("click", fetchMyPayroll);
+    byId("my-payroll-content").addEventListener("click", async (event) => {
+      const confirmButton = event.target.closest ? event.target.closest("[data-payroll-confirm]") : null;
+      const disputeButton = event.target.closest ? event.target.closest("[data-payroll-dispute]") : null;
+      try {
+        if (confirmButton) await confirmMyPayroll(confirmButton.dataset.payrollConfirm);
+        if (disputeButton && payrollDashboard !== false) {
+          const data = await callApi("getMyPayroll", { month: byId("payroll-month").value });
+          openRequestDialog({
+            action: "payroll-dispute",
+            month: data.summary.month,
+            version: data.summary.version,
+            lineId: disputeButton.dataset.payrollDispute,
+            title: "回報薪資問題",
+            copy: "請說明這筆課程需要核對的地方。"
+          });
+        }
+      } catch (error) { setNotice(error.message, "error"); }
     });
     function handleClaimEditorChange(event) {
       const card = event.target.closest ? event.target.closest(".claim-card") : null;

@@ -1096,6 +1096,10 @@ function doPost(e) {
       getPayrollAdminDashboard: function() {
         return getPayrollAdminDashboard_(session, parameters.month);
       },
+      setupSystemStructure: function() {
+        assertCapabilitySession_(session, 'course_admin');
+        return ensureSystemStructure_();
+      },
       getVvipAdminDashboard: function() {
         return getVvipAdminDashboard_(session, parameters.email);
       },

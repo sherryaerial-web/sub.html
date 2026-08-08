@@ -1439,6 +1439,35 @@ test('doGet exposes only public read-only actions and never accepts session toke
   assert.equal(structureCalls, 0);
 });
 
+test('login teacher list comes from active password accounts instead of the legacy teacher sheet', () => {
+  const services = createAuthServices();
+  const bootstrap = loadBackend(services);
+  const noPassword = createAccount(bootstrap, '尚未設密碼', '2468');
+  noPassword[1] = '';
+  noPassword[2] = '';
+  const accountSheet = createSheetFixture('登入帳號', [
+    EXPECTED_ACCOUNT_HEADERS,
+    createAccount(bootstrap, 'IVY', '0912', { role: '管理員' }),
+    createAccount(bootstrap, '老師甲', '1234'),
+    createAccount(bootstrap, '已停用老師', '5678', { active: '否' }),
+    noPassword,
+  ]);
+  const teacherSheet = createSheetFixture('老師名單', [
+    ['指導者'],
+    ['舊名單老師'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, teacherSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+
+  assert.deepEqual(
+    backend.getTeachers_().map((item) => item['指導者']),
+    ['IVY', '老師甲']
+  );
+});
+
 test('renames the legacy leave sheet and preserves fixed headers', () => {
   const legacyLeaveSheet = createSheetFixture('工作表1', [
     EXPECTED_LEAVE_HEADERS,

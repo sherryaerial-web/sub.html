@@ -74,7 +74,6 @@ var SHEET_HEADERS = {
 var CONFIG = {
   COURSE_SHEET: SHEETS.COURSE_LIST,
   LEAVE_SHEET: SHEETS.LEAVES,
-  TEACHER_SHEET: '老師名單',
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
   PAGE_SIZE: 100,
@@ -1508,16 +1507,20 @@ function runStateTransitionUnlocked_(businessSheets, callback) {
 }
 
 function getTeachers_() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = requireSheet_(ss, CONFIG.TEACHER_SHEET);
+  var sheet = getAccountsSheet_();
+  var headers = getHeaderMap_(sheet);
   var values = sheet.getDataRange().getValues();
-  if (!values.length || cleanText_(values[0][0]) !== '指導者') {
-    throw new Error('老師名單 A1 標題應為「指導者」。');
-  }
   return values.slice(1).map(function(row) {
-    return { '指導者': cleanText_(row[0]) };
+    return {
+      teacherName: cleanText_(row[headers['指導者'] - 1]),
+      salt: cleanText_(row[headers['Salt'] - 1]),
+      pinHash: cleanText_(row[headers['PIN 雜湊'] - 1]),
+      active: row[headers['是否在職'] - 1]
+    };
   }).filter(function(item) {
-    return item['指導者'];
+    return item.teacherName && item.salt && item.pinHash && isAccountActive_(item.active);
+  }).map(function(item) {
+    return { '指導者': item.teacherName };
   });
 }
 
@@ -4204,7 +4207,7 @@ function assertTeacherExists_(teacherName) {
     return item['指導者'];
   });
   if (teachers.indexOf(cleanText_(teacherName)) === -1) {
-    throw new Error('老師姓名不在老師名單中。');
+    throw new Error('老師帳號未啟用或尚未設定密碼。');
   }
 }
 

@@ -61,6 +61,10 @@ var CONFIG = {
   VVIP_CANCELLED_STATUS: '已取消'
 };
 
+function setupSystemStructure() {
+  return ensureSystemStructure_();
+}
+
 function hashPin_(pin, salt) {
   var pinText = cleanText_(pin);
   var saltText = cleanText_(salt);
@@ -680,10 +684,6 @@ function ensureSystemStructure_() {
       migration: migrateLegacyLeaveLinksUnlocked_(leaveSheet, courseSheet)
     };
   });
-}
-
-function setupSystemStructure() {
-  return ensureSystemStructure_();
 }
 
 function ensureVvipStructure_() {

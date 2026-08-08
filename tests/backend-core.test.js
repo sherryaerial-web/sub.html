@@ -1525,8 +1525,10 @@ test('creates supporting sheets and does not change the structure when rerun', (
   assert.deepEqual(
     spreadsheet.sheets.map((sheet) => sheet.name).sort(),
     [
-      'CourseList', 'VVIP選課紀錄', 'VVIP選課設定',
-      '代課邀請', '操作紀錄', '登入帳號', '系統設定', '請假代課紀錄'
+      'CourseList', 'VVIP名單', 'VVIP選課紀錄', 'VVIP選課設定',
+      '代課邀請', '操作紀錄', '登入帳號', '系統設定',
+      '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
+      '薪資異議', '薪資付款設定', '請假代課紀錄'
     ].sort()
   );
 });

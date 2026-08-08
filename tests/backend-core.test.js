@@ -150,6 +150,10 @@ function createSheetFixture(name, values) {
         getValue() { return this.getValues()[0][0]; },
         setValue(value) { return this.setValues([[value]]); },
         setValues(nextValues) {
+          assert.equal(nextValues.length, numRows, 'setValues row count must match range height');
+          nextValues.forEach((nextRow) => {
+            assert.equal(nextRow.length, numColumns, 'setValues column count must match range width');
+          });
           nextValues.forEach((nextRow, rowOffset) => {
             const targetRow = row - 1 + rowOffset;
             while (sheet.values.length <= targetRow) sheet.values.push([]);
@@ -1265,6 +1269,8 @@ test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact 
   assert.equal(leaveSheet.values[25][1], '老師甲');
   assert.equal(leaveSheet.values[1][10], 'calendar-1');
   assert.equal(leaveSheet.values[25][10], 'calendar-25');
+  const expectedWidth = EXPECTED_LEAVE_HEADERS.length + EXPECTED_LEAVE_EXTENSION_HEADERS.length;
+  assert.ok(leaveSheet.values.slice(1).every((row) => row.length === expectedWidth));
 });
 
 test('retrying a successful leave batch reports duplicates without appending rows again', () => {
@@ -1463,7 +1469,10 @@ test('creates supporting sheets and does not change the structure when rerun', (
   );
   assert.deepEqual(
     spreadsheet.sheets.map((sheet) => sheet.name).sort(),
-    ['CourseList', '代課邀請', '操作紀錄', '登入帳號', '系統設定', '請假代課紀錄'].sort()
+    [
+      'CourseList', 'VVIP選課紀錄', 'VVIP選課設定',
+      '代課邀請', '操作紀錄', '登入帳號', '系統設定', '請假代課紀錄'
+    ].sort()
   );
 });
 
@@ -2761,6 +2770,31 @@ test('replacement calendar linking preserves the original ID and can then reconc
   assert.equal(leaveSheet.values[1][15], '已核對');
 });
 
+test('reclaim preserves a verified replacement Calendar ID for later reconciliation', () => {
+  const { backend, leaveSheet, teacherBSession } = createInvitationBackend({
+    courseRows: [[
+      '2026/08/15', '13:00', '空環入門', '老師乙', 'calendar-new', 'class-new', 'teacher-b', '是', '',
+    ]],
+    leaveRows: [[
+      '時間', '老師甲', '2026/08/15', '13:00', '空環入門', '確認中', '', '', '',
+      'leave-reopened', 'calendar-old', '', '', '', '', '', '', '', '', '空環', 'calendar-new',
+    ]],
+    invitationRows: [['invite-b', '老師乙', '時間', '', '開放中', '']],
+  });
+
+  backend.claimSubstitute_(teacherBSession, [{
+    substituteId: 'leave-reopened',
+    handlingType: 'original',
+    actualCourseName: '空環入門',
+    category: '空環',
+    difficulty: '',
+    note: '',
+  }]);
+
+  assert.equal(leaveSheet.values[1][10], 'calendar-old');
+  assert.equal(leaveSheet.values[1][20], 'calendar-new');
+});
+
 test('legacy manual-review leave stays unavailable until admin links its original OB course', () => {
   const { backend, leaveSheet, auditSheet, adminSession, teacherBSession } = createInvitationBackend({
     leaveRows: [[
@@ -2919,6 +2953,8 @@ test('VVIP admin opens, confirms, cancels, groups courses, and exports CSV safel
   assert.equal(dashboard.members[0].status, '已確認');
   assert.equal(dashboard.courseView[0].calendarId, 'vvip-cal-1');
   assert.equal(backend.csvSafeCell_('=danger'), "'=danger");
+  assert.equal(backend.csvSafeCell_('\tdanger'), "'danger");
+  assert.equal(backend.csvSafeCell_('\rdanger'), "'danger");
   assert.match(backend.exportVvipSelectionsCsv_(adminSession).csv, /vvip@example\.com/);
   assert.ok(settingsSheet.values.some((row) => row[0] === 'openedAt'));
   assert.ok(auditSheet.values.some((row) => row[2] === 'VVIP 取消選課'));

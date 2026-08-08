@@ -1743,8 +1743,9 @@ function cancelVvipSelection_(session, emailValue, calendarIdValue, reasonValue)
 }
 
 function csvSafeCell_(value) {
-  var text = cleanText_(value);
-  return /^[=+\-@]/.test(text) ? "'" + text : text;
+  var raw = value == null ? '' : String(value);
+  var text = cleanText_(raw);
+  return /^[=+\-@\t\r]/.test(raw) || /^[=+\-@]/.test(text) ? "'" + text : text;
 }
 
 function csvEscape_(value) {
@@ -2313,7 +2314,7 @@ function submitLeave_(session, items) {
 
     var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
     var rowsToAppend = validated.map(function(item) {
-      return [
+      var row = [
         now,
         teacher,
         item['日期'],
@@ -2334,6 +2335,8 @@ function submitLeave_(session, items) {
         '',
         ''
       ];
+      while (row.length < SHEET_HEADERS.LEAVES.length) row.push('');
+      return row;
     });
     var result = {
       requested: items.length,
@@ -2440,7 +2443,6 @@ function claimSubstitute_(session, items) {
       nextRow[17] = '';
       nextRow[18] = '';
       nextRow[19] = change.category;
-      nextRow[20] = '';
       return {
         sheetRow: dataIndex + 1,
         rowValues: nextRow,

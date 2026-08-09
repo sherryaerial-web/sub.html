@@ -242,6 +242,7 @@ const browser = await chromium.launch({
 });
 const results = [];
 const payrollOnly = process.env.VISUAL_SCOPE === "payroll";
+const adminHeaderOnly = process.env.VISUAL_SCOPE === "admin-header";
 
 try {
   for (const viewport of [
@@ -265,6 +266,15 @@ try {
     });
 
     await page.setContent(html, { waitUntil: "networkidle", timeout: 10000 });
+    if (adminHeaderOnly) {
+      await login(page, "Ivy");
+      await page.locator("#admin-entry").click();
+      await page.locator("#admin-summary .summary-item").first().waitFor();
+      results.push(await capture(page, viewport.name, "admin-header"));
+      if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
+      await page.close();
+      continue;
+    }
     if (payrollOnly) {
       await login(page, "Ivy");
       await page.locator("#admin-entry").click();

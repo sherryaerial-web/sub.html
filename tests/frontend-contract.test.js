@@ -479,7 +479,13 @@ test('payroll admin can adjust salaries and finalize teacher-confirmed results',
 
 test('course admin can pause leave registration separately from substitute claims', () => {
   assert.match(html, /callPostApi\(["']pauseLeaves["']/);
-  assert.match(html, /data-admin-action=["']toggle-leave-pause["']/);
+  const adminHeaderStart = html.indexOf('id="view-admin"');
+  const adminHeaderEnd = html.indexOf('id="admin-summary"', adminHeaderStart);
+  const adminHeader = html.slice(adminHeaderStart, adminHeaderEnd);
+
+  assert.match(adminHeader, /id=["']admin-leave-pause["']/);
+  assert.match(html, /byId\(["']admin-leave-pause["']\)\.addEventListener\(["']click["']/);
+  assert.match(html, /#view-admin\s+\.admin-header-actions\s*\{[^}]*flex-wrap:\s*nowrap/s);
   assert.match(html, /暫停請假登記/);
 });
 

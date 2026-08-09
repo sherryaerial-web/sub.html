@@ -560,6 +560,7 @@ function createInvitationBackend(options = {}) {
     ...services,
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
+  backend.getNextMonthKey_ = () => options.nextMonth || '2026-08';
   const adminToken = backend.authenticate_('管理員甲', '9999').sessionToken;
   const teacherAToken = backend.authenticate_('老師甲', '1234').sessionToken;
   const teacherBToken = backend.authenticate_('老師乙', '5678').sessionToken;
@@ -2840,6 +2841,36 @@ test('reconcile ignores already verified history after it leaves the current OB 
 
   assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 0, matched: 0, exceptions: 0 });
   assert.equal(JSON.stringify(leaveSheet.values[1]), before);
+});
+
+test('reconcile and dashboard exceptions only include next-month leave records', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [],
+    leaveRows: [
+      [
+        '時間', '老師甲', '2026/07/10', '09:00', '空環 Lv.1', '已領取', '老師乙', '', '待處理',
+        'leave-old-exception', 'calendar-old', 'class-ring-1', '空環 Lv.1', '', '沿用原課程',
+        '核對異常', '舊核對時間', '舊月份異常', '', '空環', '',
+      ],
+      [
+        '時間', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '已領取', '老師乙', '', '待處理',
+        'leave-next-exception', 'calendar-next', 'class-ring-1', '空環 Lv.1', '', '沿用原課程',
+        '核對異常', '', '', '', '空環', '',
+      ],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+  const dashboard = backend.getAdminDashboard_(adminSession);
+  const oldRow = leaveSheet.values.find((row) => row[9] === 'leave-old-exception');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 0, exceptions: 1 });
+  assert.equal(oldRow[16], '舊核對時間');
+  assert.equal(oldRow[17], '舊月份異常');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(dashboard.exceptions.map((item) => item.substituteId))),
+    ['leave-next-exception']
+  );
 });
 
 test('reconciliation rolls back every checked row when its audit batch fails', () => {

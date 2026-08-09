@@ -698,6 +698,8 @@
       .brand-name { font-size: 13px; }
       .brand-subtitle { font-size: 10px; }
       .current-user { max-width: 102px; padding: 5px 7px; }
+      #view-admin .admin-header-actions { width: 100%; flex-wrap: nowrap; gap: 6px; }
+      #view-admin .admin-header-actions .compact-button { min-width: 0; gap: 4px; padding: 6px; font-size: 11px; white-space: nowrap; }
       .app-layout { display: block; min-height: calc(100vh - 58px); }
       .sidebar { border: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
       .primary-nav {
@@ -1011,6 +1013,7 @@
             <div class="admin-header-actions">
               <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
               <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
+              <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
             </div>
           </div>
           <div id="admin-summary" class="admin-summary"></div>
@@ -2047,6 +2050,9 @@
       byId("admin-summary").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-sync").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-reconcile").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
+      const leavePauseButton = byId("admin-leave-pause");
+      leavePauseButton.hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
+      leavePauseButton.innerHTML = `<i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}`;
       byId("admin-summary").innerHTML = [
         ["待領取", (data.pendingInvitations || []).length],
         ["待處理 OB", (data.obWork || []).length],
@@ -2110,7 +2116,6 @@
             <span>目前無課程可開放</span>
           </div>`;
         content.innerHTML = `
-          <div class="admin-control"><strong>請假登記：${data.leavePaused ? "已暫停" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-leave-pause"><i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}</button></div></div>
           <div class="queue-section-heading"><strong>待領取課程</strong><span>${pendingItems.length} 堂</span></div>
           ${pendingCourseList}
           ${inviteTeacherPanel}`;
@@ -2450,6 +2455,9 @@
     });
     byId("admin-reconcile").addEventListener("click", async () => {
       try { await reconcileAdminObChanges(); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("admin-leave-pause").addEventListener("click", async () => {
+      try { await toggleAdminLeavePause(); } catch (error) { setNotice(error.message, "error"); }
     });
     byId("payroll-refresh").addEventListener("click", fetchMyPayroll);
     byId("my-payroll-content").addEventListener("click", async (event) => {

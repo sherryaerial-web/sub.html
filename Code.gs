@@ -3967,6 +3967,7 @@ function reconcileObChanges_(session) {
     var leaveRows = leaveSheet.getDataRange().getValues();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
     var courseByCalendarId = {};
+    var targetMonth = getNextMonthKey_();
     courseRows.forEach(function(row) {
       var calendarId = cleanText_(row[4]);
       if (calendarId) courseByCalendarId[calendarId] = row;
@@ -3977,7 +3978,7 @@ function reconcileObChanges_(session) {
     var audits = [];
     for (var rowIndex = 1; rowIndex < leaveRows.length; rowIndex++) {
       var row = leaveRows[rowIndex];
-      if (!isActiveObWorkRow_(row)) continue;
+      if (!isLeaveRowInMonth_(row, targetMonth) || !isActiveObWorkRow_(row)) continue;
       result.checked += 1;
       var effectiveCalendarId = cleanText_(row[20]) || cleanText_(row[10]);
       var obRow = courseByCalendarId[effectiveCalendarId];
@@ -4062,6 +4063,12 @@ function reconcileObChanges_(session) {
       return result;
     });
   });
+}
+
+function isLeaveRowInMonth_(row, month) {
+  var date = formatMyDate(row[2]);
+  var match = /^(\d{4})\/(\d{2})\//.exec(date);
+  return Boolean(match) && match[1] + '-' + match[2] === cleanText_(month);
 }
 
 function isActiveObWorkRow_(row) {
@@ -4162,6 +4169,7 @@ function getAdminDashboard_(session) {
     var leaveSourceRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
       return cleanText_(row[9]);
     });
+    var targetMonth = getNextMonthKey_();
     var leaves = leaveSourceRows.map(function(row) {
       return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || []);
     });
@@ -4206,8 +4214,9 @@ function getAdminDashboard_(session) {
             ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
       }),
       changeRequests: leaves.filter(function(item) { return ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1; }),
-      exceptions: leaves.filter(function(item) {
-        return ['核對異常', '待人工核對'].indexOf(item.verificationStatus) !== -1;
+      exceptions: leaves.filter(function(item, index) {
+        return isLeaveRowInMonth_(leaveSourceRows[index], targetMonth) &&
+          ['核對異常', '待人工核對'].indexOf(item.verificationStatus) !== -1;
       }),
       completed: leaves.filter(function(item) {
         return (item.status === '已取消' && item.changeStatus !== '取消後待回復 OB') ||

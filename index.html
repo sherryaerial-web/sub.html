@@ -1018,6 +1018,7 @@
             <div class="admin-header-tools">
               <div class="admin-header-actions">
                 <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
+                <button id="admin-refresh" class="icon-button" type="button" aria-label="重新整理資料" title="重新整理資料"><i data-lucide="rotate-cw"></i></button>
                 <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
                 <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
               </div>
@@ -1064,6 +1065,7 @@
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
     const LAST_TEACHER_KEY = "sherry-substitute-last-teacher";
+    const AUTH_SESSION_KEY = "sherry-substitute-auth-session";
 
     const authState = { sessionToken: "", teacherName: "", role: "", managementCapabilities: [] };
     let globalCourseList = [];
@@ -1241,6 +1243,41 @@
       try { return window.localStorage.getItem(LAST_TEACHER_KEY) || ""; } catch (error) { return ""; }
     }
 
+    function saveSession() {
+      try {
+        window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
+          sessionToken: authState.sessionToken,
+          teacherName: authState.teacherName,
+          role: authState.role,
+          managementCapabilities: authState.managementCapabilities
+        }));
+      } catch (error) { /* Storage may be disabled. */ }
+    }
+
+    function readSavedSession() {
+      try {
+        const session = JSON.parse(window.localStorage.getItem(AUTH_SESSION_KEY) || "null");
+        if (!session || !session.sessionToken || !session.teacherName) return null;
+        return session;
+      } catch (error) {
+        clearSavedSession();
+        return null;
+      }
+    }
+
+    function clearSavedSession() {
+      try { window.localStorage.removeItem(AUTH_SESSION_KEY); } catch (error) { /* Storage may be disabled. */ }
+    }
+
+    function applySession(session, sessionToken = "") {
+      authState.sessionToken = sessionToken || session.sessionToken || authState.sessionToken;
+      authState.teacherName = session.teacherName || "";
+      authState.role = session.role || "";
+      authState.managementCapabilities = Array.isArray(session.managementCapabilities)
+        ? session.managementCapabilities
+        : [];
+    }
+
     function showLoggedInApp() {
       byId("auth-shell").hidden = true;
       byId("app-shell").hidden = false;
@@ -1259,6 +1296,7 @@
     }
 
     function clearSession() {
+      clearSavedSession();
       authState.sessionToken = "";
       authState.teacherName = "";
       authState.role = "";
@@ -1290,6 +1328,19 @@
       } catch (error) {
         setNotice(error.message, "error");
       }
+
+      const savedSession = readSavedSession();
+      if (!savedSession) return;
+      applySession(savedSession, savedSession.sessionToken);
+      try {
+        const currentSession = await callPostApi("getSession");
+        applySession(currentSession, savedSession.sessionToken);
+        saveSession();
+        showLoggedInApp();
+      } catch (error) {
+        clearSession();
+        setNotice("登入已逾期，請重新登入。", "error");
+      }
     }
 
     async function login(event) {
@@ -1304,13 +1355,9 @@
       setButtonBusy(button, true, "登入中...");
       try {
         const session = await callPostApi("login", { teacherName, pin });
-        authState.sessionToken = session.sessionToken;
-        authState.teacherName = session.teacherName;
-        authState.role = session.role;
-        authState.managementCapabilities = Array.isArray(session.managementCapabilities)
-          ? session.managementCapabilities
-          : [];
+        applySession(session, session.sessionToken);
         rememberTeacher(session.teacherName);
+        saveSession();
         byId("login-pin").value = "";
         showLoggedInApp();
       } catch (error) {
@@ -2018,7 +2065,7 @@
       await fetchMyPayroll();
     }
 
-    async function fetchPayrollAdminDashboard() {
+    async function fetchPayrollAdminDashboard(rethrow = false) {
       const content = byId("admin-tab-content");
       content.innerHTML = '<div class="state">載入薪資後台中...</div>';
       try {
@@ -2026,12 +2073,13 @@
         renderAdminDashboard();
       } catch (error) {
         content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (rethrow) throw error;
       }
     }
 
-    async function fetchAdminDashboard() {
-      if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard();
-      if (activeAdminTab === "vvip") return fetchVvipAdminDashboard();
+    async function fetchAdminDashboard(rethrow = false) {
+      if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
+      if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       const content = byId("admin-tab-content");
       content.innerHTML = '<div class="state">載入中...</div>';
       try {
@@ -2039,10 +2087,11 @@
         renderAdminDashboard();
       } catch (error) {
         content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (rethrow) throw error;
       }
     }
 
-    async function fetchVvipAdminDashboard(email = "") {
+    async function fetchVvipAdminDashboard(email = "", rethrow = false) {
       const content = byId("admin-tab-content");
       content.innerHTML = '<div class="state">載入 VVIP 選課資料中...</div>';
       try {
@@ -2050,6 +2099,18 @@
         renderAdminDashboard();
       } catch (error) {
         content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (rethrow) throw error;
+      }
+    }
+
+    async function refreshAdminData() {
+      const button = byId("admin-refresh");
+      setButtonBusy(button, true, "");
+      try {
+        await fetchAdminDashboard(true);
+        setNotice("管理資料已重新整理。");
+      } finally {
+        setButtonBusy(button, false, "");
       }
     }
 
@@ -2480,6 +2541,9 @@
     });
     byId("admin-sync").addEventListener("click", async () => {
       try { await syncObCalendar(); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("admin-refresh").addEventListener("click", async () => {
+      try { await refreshAdminData(); } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-reconcile").addEventListener("click", async () => {
       try { await reconcileAdminObChanges(); } catch (error) { setNotice(error.message, "error"); }

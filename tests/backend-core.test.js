@@ -661,6 +661,16 @@ test('login returns an opaque session without exposing credentials', () => {
   assert.equal('expiresAt' in response, false);
 });
 
+test('login sessions remain valid for thirty days on a personal device', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend, services } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
+  const before = Date.now();
+  const response = backend.authenticate_('老師甲', '1234');
+  const stored = JSON.parse(services.__properties.get(backend.getSessionKey_(response.sessionToken)));
+
+  assert.ok(stored.expiresAt >= before + (30 * 24 * 60 * 60 * 1000) - 1000);
+});
+
 test('functional capabilities are independent from teaching categories and enforced server-side', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([
@@ -2615,7 +2625,8 @@ test('cancel request after a claim requires a reason and admin can approve it', 
   assert.equal(leaveSheet.values[1][18], '取消後已回復 OB');
   const afterRestore = backend.getAdminDashboard_(adminSession);
   assert.ok(!afterRestore.obWork.some((item) => item.substituteId === 'leave-cancel-request'));
-  assert.ok(afterRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
+  assert.ok(afterRestore.changeRequests.some((item) => item.substituteId === 'leave-cancel-request'));
+  assert.ok(!afterRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
 });
 
 test('rejected cancellation restores an OB-started pending leave to list and claim while audit keeps rejection', () => {
@@ -3019,6 +3030,22 @@ test('admin dashboard separates work queues without exposing account secrets', (
   assert.ok(Array.isArray(dashboard.exceptions));
   assert.ok(Array.isArray(dashboard.completed));
   assert.doesNotMatch(serialized, /PIN 雜湊|fixed-salt|Salt/);
+});
+
+test('admin dashboard keeps cancelled leaves in cancellation history instead of completed', () => {
+  const { backend, adminSession } = createInvitationBackend({
+    leaveRows: [[
+      '2026-08-10 00:25:41', '嗨底 Heidi', '2026/09/07', '20:00', 'D－空瑜 Lv.0',
+      '已取消', '', '', '', 'leave-cancelled', 'calendar-cancelled', '', '', '', '', '', '', '',
+      '已自行取消', '', '',
+    ]],
+    nextMonth: '2026-09',
+  });
+
+  const dashboard = backend.getAdminDashboard_(adminSession);
+
+  assert.deepEqual(dashboard.changeRequests.map((item) => item.substituteId), ['leave-cancelled']);
+  assert.deepEqual(dashboard.completed, []);
 });
 
 test('VVIP structure creates isolated sheets idempotently without changing CourseList', () => {

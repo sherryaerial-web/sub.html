@@ -80,7 +80,8 @@ var CONFIG = {
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
   PAGE_SIZE: 100,
   LOCK_TIMEOUT_MS: 30000,
-  AUTH_SESSION_DURATION_SECONDS: 21600,
+  AUTH_SESSION_DURATION_SECONDS: 30 * 24 * 60 * 60,
+  AUTH_CACHE_DURATION_SECONDS: 21600,
   AUTH_MAX_FAILED_ATTEMPTS: 5,
   AUTH_LOCK_DURATION_MS: 15 * 60 * 1000,
   AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_',
@@ -685,7 +686,10 @@ function storeSession_(token, session) {
     properties.setProperty(key, payload);
   }
   if (cache) {
-    cache.put(key, payload, CONFIG.AUTH_SESSION_DURATION_SECONDS);
+    cache.put(key, payload, Math.min(
+      CONFIG.AUTH_SESSION_DURATION_SECONDS,
+      CONFIG.AUTH_CACHE_DURATION_SECONDS
+    ));
   }
 }
 
@@ -1073,6 +1077,13 @@ function doPost(e) {
     }
 
     var handlers = {
+      getSession: function() {
+        return {
+          teacherName: session.teacherName,
+          role: session.role,
+          managementCapabilities: session.managementCapabilities || []
+        };
+      },
       getAvailableSubstitutes: function() {
         var available = getAvailableSubstitutes_(session);
         recordInvitationFirstView_(session);
@@ -4213,13 +4224,17 @@ function getAdminDashboard_(session) {
           (item.status === '已領取' &&
             ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
       }),
-      changeRequests: leaves.filter(function(item) { return ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1; }),
+      changeRequests: leaves.filter(function(item) {
+        return item.status === '已取消' ||
+          ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1 ||
+          /取消|退出/.test(item.changeStatus);
+      }),
       exceptions: leaves.filter(function(item, index) {
         return isLeaveRowInMonth_(leaveSourceRows[index], targetMonth) &&
           ['核對異常', '待人工核對'].indexOf(item.verificationStatus) !== -1;
       }),
       completed: leaves.filter(function(item) {
-        return (item.status === '已取消' && item.changeStatus !== '取消後待回復 OB') ||
+        return item.status !== '已取消' &&
           ['已核對', '已回復核對'].indexOf(item.verificationStatus) !== -1;
       }),
       replacementOptions: replacementOptions

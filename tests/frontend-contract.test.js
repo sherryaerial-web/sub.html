@@ -498,6 +498,22 @@ test('OB sync button shows progress and keeps the completed row count visible', 
   assert.match(html, /finally\s*\{[^}]*adminSyncButton\.disabled\s*=\s*false/s);
 });
 
+test('admin can refresh the active dashboard without reloading or losing login state', () => {
+  assert.match(html, /id=["']admin-refresh["']/);
+  assert.match(html, /function\s+refreshAdminData\s*\(/);
+  assert.match(html, /byId\(["']admin-refresh["']\)\.addEventListener\(["']click["']/);
+  assert.doesNotMatch(html, /window\.location\.reload\s*\(/);
+});
+
+test('persists and validates the authenticated session for every user device', () => {
+  assert.match(html, /const\s+AUTH_SESSION_KEY\s*=/);
+  assert.match(html, /function\s+saveSession\s*\(/);
+  assert.match(html, /function\s+readSavedSession\s*\(/);
+  assert.match(html, /function\s+clearSavedSession\s*\(/);
+  assert.match(html, /callPostApi\(["']getSession["']/);
+  assert.match(html, /window\.localStorage\.removeItem\(AUTH_SESSION_KEY\)/);
+});
+
 test('management entry stays hidden without capabilities and is enabled by authenticated capabilities', () => {
   assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
   assert.match(html, /managementCapabilities/);

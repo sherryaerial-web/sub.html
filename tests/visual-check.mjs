@@ -270,6 +270,8 @@ try {
       await login(page, "Ivy");
       await page.locator("#admin-entry").click();
       await page.locator("#admin-summary .summary-item").first().waitFor();
+      await page.locator("#admin-sync").click();
+      await page.locator("#admin-sync-status").getByText("已同步 1 筆").waitFor();
       results.push(await capture(page, viewport.name, "admin-header"));
       if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
       await page.close();

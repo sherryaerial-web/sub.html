@@ -489,6 +489,15 @@ test('course admin can pause leave registration separately from substitute claim
   assert.match(html, /暫停請假登記/);
 });
 
+test('OB sync button shows progress and keeps the completed row count visible', () => {
+  assert.match(html, /id=["']admin-sync-status["'][^>]*aria-live=["']polite["']/);
+  assert.match(html, /adminSyncButton\.disabled\s*=\s*true/);
+  assert.match(html, /同步中/);
+  assert.match(html, /已同步\s*\$\{result\.count\}\s*筆/);
+  assert.match(html, /同步失敗/);
+  assert.match(html, /finally\s*\{[^}]*adminSyncButton\.disabled\s*=\s*false/s);
+});
+
 test('management entry stays hidden without capabilities and is enabled by authenticated capabilities', () => {
   assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
   assert.match(html, /managementCapabilities/);

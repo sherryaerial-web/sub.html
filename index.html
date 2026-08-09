@@ -388,6 +388,10 @@
     }
 
     .admin-header-actions { justify-content: flex-end; margin: 0; }
+    .admin-header-tools { display: grid; justify-items: end; gap: 6px; }
+    .admin-sync-status { min-height: 18px; color: var(--success); font-size: 12px; font-weight: 700; text-align: right; }
+    .admin-sync-status.working { color: var(--muted); }
+    .admin-sync-status.error { color: var(--danger); }
     .record-actions, .admin-item-actions { margin-top: 12px; }
 
     .date-list {
@@ -689,6 +693,7 @@
       .date-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .view-header { flex-direction: column; }
       .admin-header-actions { justify-content: flex-start; }
+      .admin-header-tools { width: 100%; justify-items: start; }
     }
 
     @media (max-width: 760px) {
@@ -1010,10 +1015,13 @@
         <section id="view-admin" class="view">
           <div class="view-header">
             <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
-            <div class="admin-header-actions">
-              <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
-              <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
-              <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
+            <div class="admin-header-tools">
+              <div class="admin-header-actions">
+                <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
+                <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
+                <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
+              </div>
+              <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
             </div>
           </div>
           <div id="admin-summary" class="admin-summary"></div>
@@ -2216,9 +2224,29 @@
     }
 
     async function syncObCalendar() {
-      const result = await callPostApi("syncObCalendar");
-      setNotice(`OB 課表同步完成：${result.count} 筆。`);
-      await fetchAdminDashboard();
+      const adminSyncButton = byId("admin-sync");
+      const adminSyncStatus = byId("admin-sync-status");
+      adminSyncButton.disabled = true;
+      adminSyncButton.innerHTML = '<i class="spin" data-lucide="loader-circle"></i>同步中...';
+      adminSyncStatus.className = "admin-sync-status working";
+      adminSyncStatus.textContent = "正在同步 OB 課表，請稍候...";
+      refreshIcons();
+      try {
+        const result = await callPostApi("syncObCalendar");
+        await fetchAdminDashboard();
+        adminSyncStatus.className = "admin-sync-status";
+        adminSyncStatus.textContent = `已同步 ${result.count} 筆`;
+        setNotice(`OB 課表同步完成：${result.count} 筆。`);
+        return result;
+      } catch (error) {
+        adminSyncStatus.className = "admin-sync-status error";
+        adminSyncStatus.textContent = "同步失敗，請查看錯誤訊息";
+        throw error;
+      } finally {
+        adminSyncButton.disabled = false;
+        adminSyncButton.innerHTML = '<i data-lucide="refresh-cw"></i>同步 OB 課表';
+        refreshIcons();
+      }
     }
 
     async function reconcileAdminObChanges() {

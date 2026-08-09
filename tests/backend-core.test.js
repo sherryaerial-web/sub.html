@@ -110,6 +110,7 @@ const EXPECTED_PAYROLL_LINE_HEADERS = [
 const EXPECTED_PAYROLL_SUMMARY_HEADERS = [
   '月份', '老師', '鐘點費小計', '獎金比例', '獎金金額', '固定津貼/扣項',
   '應領總薪資', '盈利', '發布版本', '狀態', '確認時間', '最後更新時間',
+  '管理員加扣', '管理員調整原因', '管理員確認時間', '管理員確認者',
 ];
 const EXPECTED_PAYROLL_DISPUTE_HEADERS = [
   '異議 ID', '月份', '老師', '明細 ID', '問題說明', '狀態', '管理員回覆',
@@ -478,13 +479,17 @@ function createLeaveBackend(options = {}) {
   const auditSheet = createSheetFixture('操作紀錄', [[
     '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
   ]]);
+  const settingsSheet = createSheetFixture('系統設定', [[
+    '設定名稱', '設定值', '更新時間', '備註',
+  ]]);
   const spreadsheet = createSpreadsheetFixture([
-    accountSheet, teacherSheet, courseSheet, leaveSheet, auditSheet,
+    accountSheet, teacherSheet, courseSheet, leaveSheet, auditSheet, settingsSheet,
   ]);
   const backend = loadBackend({
     ...services,
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
+  backend.getNextMonthKey_ = () => '2026-08';
   return {
     backend,
     courseSheet,
@@ -1234,15 +1239,18 @@ test('available substitutes POST route rejects requests without a session', () =
 test('getMyCourses returns only the logged-in teacher courses with stable OB IDs', () => {
   const { backend } = createLeaveBackend({
     courseRows: [
-      ['2026/08/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-a', 'class-a', 'teacher-a', '否', ''],
-      ['2026/08/10', '19:30', '舞綢 Lv.1', '老師乙', 'calendar-b', 'class-b', 'teacher-b', '否', ''],
+      ['2026/08/31', '18:30', '空環 Lv.0', '老師甲', 'calendar-old', 'class-old', 'teacher-a', '否', ''],
+      ['2026/09/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-a', 'class-a', 'teacher-a', '否', ''],
+      ['2026/09/10', '19:30', '舞綢 Lv.1', '老師乙', 'calendar-b', 'class-b', 'teacher-b', '否', ''],
+      ['2026/10/01', '18:30', '空環 Lv.2', '老師甲', 'calendar-future', 'class-future', 'teacher-a', '否', ''],
     ],
   });
+  backend.getNextMonthKey_ = () => '2026-09';
 
   const result = backend.getMyCourses_({ teacherName: '老師甲', role: '老師' });
 
   assert.deepEqual(JSON.parse(JSON.stringify(result)), [{
-    '日期': '2026/08/10',
+    '日期': '2026/09/10',
     '時間': '18:30',
     '課程': '空環 Lv.1',
     '課程大類': '空環',
@@ -1253,14 +1261,15 @@ test('getMyCourses returns only the logged-in teacher courses with stable OB IDs
 test('getMyCourses hides active leave IDs but keeps cancelled leave courses available', () => {
   const { backend } = createLeaveBackend({
     courseRows: [
-      ['2026/08/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-active', 'class-a', 'teacher-a', '否', ''],
-      ['2026/08/11', '19:30', '空環 Lv.2', '老師甲', 'calendar-cancelled', 'class-b', 'teacher-a', '否', ''],
+      ['2026/09/10', '18:30', '空環 Lv.1', '老師甲', 'calendar-active', 'class-a', 'teacher-a', '否', ''],
+      ['2026/09/11', '19:30', '空環 Lv.2', '老師甲', 'calendar-cancelled', 'class-b', 'teacher-a', '否', ''],
     ],
     leaveRows: [
-      ['時間', '老師甲', '2026/08/10', '18:30', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-active'],
-      ['時間', '老師甲', '2026/08/11', '19:30', '空環 Lv.2', '已取消', '', '', '', 'leave-b', 'calendar-cancelled'],
+      ['時間', '老師甲', '2026/09/10', '18:30', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-active'],
+      ['時間', '老師甲', '2026/09/11', '19:30', '空環 Lv.2', '已取消', '', '', '', 'leave-b', 'calendar-cancelled'],
     ],
   });
+  backend.getNextMonthKey_ = () => '2026-09';
 
   const result = backend.getMyCourses_({ teacherName: '老師甲', role: '老師' });
 
@@ -2160,6 +2169,31 @@ test('global pause hides substitutes and blocks claims until admin resumes manua
   );
 });
 
+test('admin can pause new leave requests without changing existing leave records', () => {
+  const {
+    backend,
+    adminSession,
+    teacherASession,
+    leaveSheet,
+    settingsSheet,
+  } = createInvitationBackend({ leaveRows: [] });
+  backend.getNextMonthKey_ = () => '2026-08';
+  const before = JSON.stringify(leaveSheet.values);
+  const leaveItem = {
+    日期: '2026/08/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a',
+  };
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.pauseLeaves_(adminSession, true))), { paused: true });
+  assert.throws(() => backend.getMyCourses_(teacherASession), /暫停請假/);
+  assert.throws(() => backend.submitLeave_(teacherASession, [leaveItem]), /暫停請假/);
+  assert.equal(JSON.stringify(leaveSheet.values), before);
+  assert.equal(settingsSheet.values[1][0], '暫停全部請假');
+  assert.equal(backend.getAdminDashboard_(adminSession).leavePaused, true);
+
+  backend.pauseLeaves_(adminSession, false);
+  assert.equal(backend.submitLeave_(teacherASession, [leaveItem]).created, 1);
+});
+
 test('admin manually closes an invitation and records the close timestamp', () => {
   const { backend, invitationSheet, auditSheet, adminSession, teacherASession } = createInvitationBackend();
   backend.openInvitations_(adminSession, ['老師甲']);
@@ -2974,6 +3008,14 @@ test('VVIP structure creates isolated sheets idempotently without changing Cours
   assert.deepEqual(courseSheet.values[0], EXPECTED_COURSE_HEADERS);
 });
 
+test('VVIP always targets next month and treats stale open settings as closed', () => {
+  const { backend } = createVvipBackend();
+
+  assert.equal(backend.getVvipActiveMonth_({ activeMonth: '2026-08' }), '2026-09');
+  assert.equal(backend.isVvipSelectionOpen_({ activeMonth: '2026-08', isOpen: '是' }), false);
+  assert.equal(backend.isVvipSelectionOpen_({ activeMonth: '2026-09', isOpen: '是' }), true);
+});
+
 test('VVIP administrator maintains unique active OB names and private Email mappings', () => {
   const { backend, adminSession, memberSheet } = createVvipBackend();
 
@@ -3168,6 +3210,24 @@ test('payroll structure creates append-only operational sheets idempotently', ()
   assert.equal(spreadsheet.sheets.filter((sheet) => sheet.name === '薪資明細').length, 1);
 });
 
+test('payroll draft writes complete summary rows after append-only admin columns', () => {
+  const snapshot = createSheetFixture('薪資同步快照', [EXPECTED_PAYROLL_SNAPSHOT_HEADERS]);
+  const lines = createSheetFixture('薪資明細', [EXPECTED_PAYROLL_LINE_HEADERS]);
+  const summaries = createSheetFixture('薪資結算', [EXPECTED_PAYROLL_SUMMARY_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([snapshot, lines, summaries]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.writePayrollDraftUnlocked_(spreadsheet, 'version-1', 'now', [], {
+    month: '2026-08', errors: [], lines: [], summaries: [{
+      teacherName: '老師甲', subtotal: 900, bonusRate: 0, bonusAmount: 0,
+      fixedAdjustment: 0, totalSalary: 900, profit: 1200,
+    }],
+  });
+
+  assert.equal(summaries.values[1].length, EXPECTED_PAYROLL_SUMMARY_HEADERS.length);
+  assert.deepEqual(summaries.values[1].slice(12), [0, '', '', '']);
+});
+
 test('payroll draft blocks missing special-course income and keeps complete instructor lists', () => {
   const backend = loadBackend();
   const rules = [
@@ -3238,4 +3298,76 @@ test('payroll publish is capability-scoped and teachers can only view confirm or
   backend.resolvePayrollDispute_(ivy, { disputeId: disputes.values[1][0], reply: '已核對堂數正確' });
   assert.equal(summaries.values[1][9], '待確認');
   assert.equal(disputes.values[1][5], '已回覆');
+});
+
+test('payroll manager adjustments require teacher reconfirmation and finalization updates Sherry bank format', () => {
+  const lines = createSheetFixture('薪資明細', [
+    EXPECTED_PAYROLL_LINE_HEADERS,
+    ['2026-08', 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '待確認', 'now'],
+    ['2026-08', 'cal-2:老師乙', 'version-1', 'cal-2', '老師乙', '2026/08/02', '11:00', '舞綢', '人數階梯', 5, '', '人數階梯', '5 人', 1000, 0, '', '待確認', 'now'],
+  ]);
+  const summaries = createSheetFixture('薪資結算', [
+    EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    ['2026-08', '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '已確認', 'teacher-time', 'now', 0, '', '', ''],
+    ['2026-08', '老師乙', 1000, 0, 0, 0, 1000, 1300, 'version-1', '有異議', '', 'now', 0, '', '', ''],
+  ]);
+  const disputes = createSheetFixture('薪資異議', [
+    EXPECTED_PAYROLL_DISPUTE_HEADERS,
+    ['dispute-1', '2026-08', '老師乙', 'cal-2:老師乙', '金額不符', '待處理', '', 'now', '', ''],
+  ]);
+  const audit = createSheetFixture('操作紀錄', [['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因']]);
+  const rules = createSheetFixture('薪項設定', [EXPECTED_PAYROLL_RULE_HEADERS, ['預設值', '', '人數階梯', 4, 900]]);
+  const source = createSheetFixture('薪資來源資料', [EXPECTED_PAYROLL_SOURCE_HEADERS]);
+  const snapshot = createSheetFixture('薪資同步快照', [EXPECTED_PAYROLL_SNAPSHOT_HEADERS]);
+  const payments = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
+  const sherryFormat = createSheetFixture('給雪莉的格式', [
+    ['中國信託銀行', '金額', '備註'],
+    ['老師甲', '', ''],
+    ['老師乙', '', ''],
+    ['', '', ''],
+    ['台新銀行', '金額', '備註'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([
+    lines, summaries, disputes, audit, rules, source, snapshot, payments, sherryFormat,
+  ]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  const ivy = { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['payroll_admin'] };
+  const courseAdmin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+  const teacherA = { teacherName: '老師甲', role: '老師', managementCapabilities: [] };
+
+  assert.throws(
+    () => backend.adjustPayrollSummary_(courseAdmin, {
+      month: '2026-08', version: 'version-1', teacherName: '老師甲', adjustment: 100, reason: '補發課程',
+    }),
+    /薪資管理權限/
+  );
+
+  const adjusted = backend.adjustPayrollSummary_(ivy, {
+    month: '2026-08', version: 'version-1', teacherName: '老師甲', adjustment: 100, reason: '補發課程',
+  });
+  assert.equal(adjusted.totalSalary, 1000);
+  assert.equal(summaries.values[1][5], 0);
+  assert.equal(summaries.values[1][6], 1000);
+  assert.equal(summaries.values[1][9], '待確認');
+  assert.equal(summaries.values[1][10], '');
+  assert.equal(summaries.values[1][12], 100);
+  assert.equal(summaries.values[1][13], '補發課程');
+
+  backend.confirmPayroll_(teacherA, '2026-08', 'version-1');
+  assert.equal(summaries.values[1][9], '已確認');
+  const finalized = backend.finalizePayroll_(ivy, '2026-08', 'version-1', []);
+  assert.equal(finalized.finalized, 1);
+  assert.equal(finalized.skipped, 1);
+  assert.equal(summaries.values[1][9], '管理員已確認');
+  assert.equal(summaries.values[1][15], '冠蓉');
+  assert.equal(summaries.values[2][9], '有異議');
+  assert.equal(sherryFormat.values[1][1], 1000);
+  assert.equal(sherryFormat.values[2][1], '');
+  assert.equal(sherryFormat.values[4][1], '金額');
+  assert.throws(
+    () => backend.adjustPayrollSummary_(ivy, {
+      month: '2026-08', version: 'version-1', teacherName: '老師甲', adjustment: 200, reason: '再次調整',
+    }),
+    /已完成管理員確認/
+  );
 });

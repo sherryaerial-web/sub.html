@@ -806,6 +806,18 @@
     .payroll-note { margin-top: 10px; padding: 12px 14px; border-left: 3px solid #9b6d77; background: #f4e6e8; color: #70454f; font-size: 13px; }
     .payroll-actions { margin-top: 18px; }
     .payroll-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+    .payroll-admin-list { display: grid; gap: 10px; }
+    .payroll-admin-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 17px 18px; }
+    .payroll-admin-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; }
+    .payroll-admin-breakdown { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 5px; color: var(--muted); font-size: 12px; }
+    .payroll-admin-note { padding: 9px 11px; border-left: 3px solid #ad8175; background: #f7eeeb; color: #6f514b; font-size: 12px; }
+    .payroll-detail { border-top: 1px solid var(--line); }
+    .payroll-detail summary { padding-top: 12px; color: #665851; cursor: pointer; font-size: 12px; font-weight: 700; }
+    .payroll-detail-list { display: grid; gap: 8px; margin-top: 10px; }
+    .payroll-detail-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; color: var(--muted); font-size: 12px; }
+    .payroll-final-meta { color: var(--muted); font-size: 12px; }
+    .dialog-field { display: grid; gap: 7px; margin-top: 14px; }
+    .dialog-field label { color: var(--ink); font-size: 13px; font-weight: 700; }
     .month-input { width: 170px; }
     .inline-button { width: auto; min-height: 40px; margin: 0; padding: 8px 14px; }
     @media (max-width: 760px) {
@@ -817,6 +829,9 @@
       .section-heading { font-size: 25px; }
       .payroll-line, .payroll-admin-row { grid-template-columns: minmax(0,1fr) auto; }
       .payroll-line .icon-button, .payroll-admin-row .status-pill { grid-column: 1 / -1; justify-self: start; }
+      .payroll-admin-head { grid-template-columns: minmax(0, 1fr) auto; }
+      .payroll-admin-head .status-pill { grid-column: 1 / -1; }
+      .payroll-admin-actions .compact-button, .payroll-admin-actions .primary-button { flex: 1 1 150px; }
       .payroll-hero { padding: 19px; }
       .payroll-hero > strong { font-size: 31px; }
     }
@@ -1021,6 +1036,10 @@
     <form id="request-form" class="dialog-body" method="dialog">
       <h3 id="request-dialog-title">填寫原因</h3>
       <p id="request-dialog-copy" class="section-copy"></p>
+      <div id="request-amount-field" class="dialog-field" hidden>
+        <label for="request-amount">管理員加扣金額</label>
+        <input id="request-amount" class="text-input" type="number" step="1" inputmode="numeric">
+      </div>
       <textarea id="request-reason" class="claim-control" maxlength="240" placeholder="請填寫原因"></textarea>
       <div class="dialog-actions">
         <button id="request-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
@@ -1904,6 +1923,8 @@
       requestDialogState = options;
       byId("request-dialog-title").textContent = options.title;
       byId("request-dialog-copy").textContent = options.copy || "";
+      byId("request-amount-field").hidden = !options.showAmount;
+      byId("request-amount").value = options.showAmount ? String(options.amount ?? 0) : "";
       byId("request-reason").value = "";
       byId("request-reason").required = options.reasonRequired !== false;
       const dialog = byId("request-dialog");
@@ -1924,6 +1945,8 @@
       const state = requestDialogState;
       const reason = byId("request-reason").value.trim();
       if (state.reasonRequired !== false && !reason) return setNotice("請填寫原因。", "error");
+      const adjustment = Number(byId("request-amount").value);
+      if (state.showAmount && !Number.isFinite(adjustment)) return setNotice("請填寫正確的加扣金額。", "error");
       const button = byId("request-confirm");
       setButtonBusy(button, true, "處理中...");
       try {
@@ -1943,6 +1966,8 @@
           await fetchMyPayroll();
         } else if (state.action === "resolve-payroll-dispute") {
           await resolvePayrollDispute(state.disputeId, reason);
+        } else if (state.action === "adjust-payroll") {
+          await adjustPayrollSummary(state.teacherName, state.version, adjustment, reason);
         }
         closeRequestDialog();
       } catch (error) {
@@ -1966,9 +1991,10 @@
           return;
         }
         const summary = data.summary;
-        const lines = (data.lines || []).map((line) => `<article class="list-item payroll-line"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(line.date)} ${escapeHtml(line.time)}</div><div class="item-course">${escapeHtml(line.courseName)}</div><div class="item-meta">${escapeHtml(line.ruleDetail)}${line.attendanceCount !== "" ? `｜出席 ${escapeHtml(line.attendanceCount)} 人` : ""}</div></div><strong class="money">${formatMoney(line.amount + line.manualAdjustment)}</strong><button class="icon-button" type="button" data-payroll-dispute="${escapeHtml(line.lineId)}" title="回報這筆明細" aria-label="回報這筆明細"><i data-lucide="message-circle-warning"></i></button></article>`).join("");
+        const canDispute = summary.status !== "管理員已確認";
+        const lines = (data.lines || []).map((line) => `<article class="list-item payroll-line"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(line.date)} ${escapeHtml(line.time)}</div><div class="item-course">${escapeHtml(line.courseName)}</div><div class="item-meta">${escapeHtml(line.ruleDetail)}${line.attendanceCount !== "" ? `｜出席 ${escapeHtml(line.attendanceCount)} 人` : ""}</div></div><strong class="money">${formatMoney(line.amount + line.manualAdjustment)}</strong>${canDispute ? `<button class="icon-button" type="button" data-payroll-dispute="${escapeHtml(line.lineId)}" title="回報這筆明細" aria-label="回報這筆明細"><i data-lucide="message-circle-warning"></i></button>` : ""}</article>`).join("");
         const disputes = (data.disputes || []).map((item) => `<div class="payroll-note"><strong>${escapeHtml(item.status)}</strong> ${escapeHtml(item.message)}${item.reply ? `<br>回覆：${escapeHtml(item.reply)}` : ""}</div>`).join("");
-        content.innerHTML = `<div class="payroll-hero"><span>${escapeHtml(summary.month)} 應領薪資</span><strong>${formatMoney(summary.totalSalary)}</strong><div class="payroll-breakdown"><span>鐘點費 ${formatMoney(summary.subtotal)}</span><span>獎金 ${formatMoney(summary.bonusAmount)}</span><span>固定加扣 ${formatMoney(summary.fixedAdjustment)}</span></div><span class="status-pill">${escapeHtml(summary.status)}</span></div><div class="list">${lines || '<div class="state">沒有薪資明細</div>'}</div>${disputes}<div class="payroll-actions">${summary.status === "待確認" ? `<button class="primary-button" type="button" data-payroll-confirm="${escapeHtml(summary.version)}"><i data-lucide="badge-check"></i>我已核對，確認薪資</button>` : ""}</div>`;
+        content.innerHTML = `<div class="payroll-hero"><span>${escapeHtml(summary.month)} 應領薪資</span><strong>${formatMoney(summary.totalSalary)}</strong><div class="payroll-breakdown"><span>鐘點費 ${formatMoney(summary.subtotal)}</span><span>獎金 ${formatMoney(summary.bonusAmount)}</span><span>固定加扣 ${formatMoney(summary.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(summary.adminAdjustment)}</span></div>${summary.adjustmentReason ? `<div class="payroll-note">調整原因：${escapeHtml(summary.adjustmentReason)}</div>` : ""}<span class="status-pill">${escapeHtml(summary.status)}</span>${summary.status === "管理員已確認" ? `<span class="payroll-final-meta">管理員已確認${summary.adminConfirmedAt ? `｜${escapeHtml(summary.adminConfirmedAt)}` : ""}</span>` : ""}</div><div class="list">${lines || '<div class="state">沒有薪資明細</div>'}</div>${disputes}<div class="payroll-actions">${summary.status === "待確認" ? `<button class="primary-button" type="button" data-payroll-confirm="${escapeHtml(summary.version)}"><i data-lucide="badge-check"></i>我已核對，確認薪資</button>` : ""}</div>`;
         refreshIcons();
       } catch (error) {
         content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
@@ -2084,6 +2110,7 @@
             <span>目前無課程可開放</span>
           </div>`;
         content.innerHTML = `
+          <div class="admin-control"><strong>請假登記：${data.leavePaused ? "已暫停" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-leave-pause"><i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}</button></div></div>
           <div class="queue-section-heading"><strong>待領取課程</strong><span>${pendingItems.length} 堂</span></div>
           ${pendingCourseList}
           ${inviteTeacherPanel}`;
@@ -2131,10 +2158,18 @@
         content.innerHTML = '<div class="state">載入薪資資料中...</div>';
         return;
       }
-      const summaries = (data.summaries || []).map((item) => `<article class="list-item payroll-admin-row"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">鐘點費 ${formatMoney(item.subtotal)}｜獎金 ${formatMoney(item.bonusAmount)}｜固定加扣 ${formatMoney(item.fixedAdjustment)}</div></div><strong class="money">${formatMoney(item.totalSalary)}</strong><span class="status-pill">${escapeHtml(item.status)}</span></article>`).join("") || '<div class="state">此月份尚無薪資草稿</div>';
+      const linesByTeacher = {};
+      (data.lines || []).forEach((line) => (linesByTeacher[line.teacherName] ||= []).push(line));
+      const summaries = (data.summaries || []).map((item) => {
+        const teacherLines = linesByTeacher[item.teacherName] || [];
+        const details = teacherLines.map((line) => `<div class="payroll-detail-row"><span>${escapeHtml(line.date)} ${escapeHtml(line.time)}｜${escapeHtml(line.courseName)}</span><strong>${formatMoney(line.amount + line.manualAdjustment)}</strong></div>`).join("") || '<div class="item-meta">沒有薪資明細</div>';
+        const canAdjust = item.status !== "管理員已確認" && item.status !== "有異議";
+        const actions = `${canAdjust ? `<button class="compact-button" type="button" data-admin-action="adjust-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}" data-adjustment="${escapeHtml(item.adminAdjustment)}"><i data-lucide="calculator"></i>調整薪資</button>` : ""}${item.status === "已確認" ? `<button class="primary-button inline-button" type="button" data-admin-action="finalize-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}"><i data-lucide="badge-check"></i>管理員確認</button>` : ""}`;
+        return `<article class="list-item payroll-admin-card"><div class="payroll-admin-head"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="payroll-admin-breakdown"><span>鐘點費 ${formatMoney(item.subtotal)}</span><span>獎金 ${formatMoney(item.bonusAmount)}</span><span>固定加扣 ${formatMoney(item.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(item.adminAdjustment)}</span></div></div><strong class="money">${formatMoney(item.totalSalary)}</strong><span class="status-pill">${escapeHtml(item.status)}</span></div>${item.adjustmentReason ? `<div class="payroll-admin-note">調整原因：${escapeHtml(item.adjustmentReason)}</div>` : ""}${item.status === "管理員已確認" ? `<div class="payroll-final-meta">由 ${escapeHtml(item.adminConfirmedBy || "管理員")} 於 ${escapeHtml(item.adminConfirmedAt || "已確認")} 完成確認</div>` : ""}<details class="payroll-detail"><summary>查看課程明細（${teacherLines.length}）</summary><div class="payroll-detail-list">${details}</div></details>${actions ? `<div class="admin-item-actions payroll-admin-actions">${actions}</div>` : ""}</article>`;
+      }).join("") || '<div class="state">此月份尚無薪資草稿</div>';
       const disputes = (data.disputes || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}｜${escapeHtml(item.status)}</div><div class="item-meta">${escapeHtml(item.message)}</div>${item.reply ? `<div class="item-meta">回覆：${escapeHtml(item.reply)}</div>` : ""}${item.status === "待處理" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve-payroll-dispute" data-dispute-id="${escapeHtml(item.id)}"><i data-lucide="message-square-reply"></i>回覆異議</button></div>` : ""}</div></article>`).join("") || '<div class="state">目前沒有薪資異議</div>';
-      const status = data.summaries && data.summaries[0] ? data.summaries[0].status : "";
-      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><input id="payroll-admin-month" class="text-input month-input" type="month" value="${escapeHtml(data.month)}"><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && status === "草稿" && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}</div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div>${summaries}<div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
+      const allDraft = (data.summaries || []).length > 0 && data.summaries.every((item) => item.status === "草稿");
+      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><input id="payroll-admin-month" class="text-input month-input" type="month" value="${escapeHtml(data.month)}"><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && allDraft && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}${data.version && (data.metrics.teacherConfirmed || 0) > 0 ? `<button class="primary-button inline-button" type="button" data-admin-action="finalize-payroll-batch" data-version="${escapeHtml(data.version)}"><i data-lucide="list-checks"></i>確認全部已核對</button>` : ""}</div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待老師確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>待管理確認</span><strong>${data.metrics.teacherConfirmed || 0}</strong></div><div class="summary-item"><span>已結案</span><strong>${data.metrics.finalized || 0}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div><div class="payroll-admin-list">${summaries}</div><div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
       refreshIcons();
     }
 
@@ -2167,6 +2202,11 @@
 
     async function toggleAdminPause() {
       await callPostApi("pauseClaims", { paused: !(adminDashboard && adminDashboard.paused) });
+      await fetchAdminDashboard();
+    }
+
+    async function toggleAdminLeavePause() {
+      await callPostApi("pauseLeaves", { paused: !(adminDashboard && adminDashboard.leavePaused) });
       await fetchAdminDashboard();
     }
 
@@ -2254,6 +2294,20 @@
       await fetchPayrollAdminDashboard();
     }
 
+    async function adjustPayrollSummary(teacherName, version, adjustment, reason) {
+      const month = byId("payroll-admin-month").value;
+      await callPostApi("adjustPayrollSummary", { month, version, teacherName, adjustment, reason });
+      setNotice(`${teacherName} 的薪資已調整，需由老師重新確認。`);
+      await fetchPayrollAdminDashboard();
+    }
+
+    async function finalizePayroll(version, teacherNames = []) {
+      const month = byId("payroll-admin-month").value;
+      const result = await callPostApi("finalizePayroll", { month, version, teacherNames });
+      setNotice(`已完成 ${result.finalized} 位老師的管理員確認。`);
+      await fetchPayrollAdminDashboard();
+    }
+
     async function resolvePayrollDispute(disputeId, reply) {
       await callPostApi("resolvePayrollDispute", { disputeId, reply });
       setNotice("薪資異議已回覆。");
@@ -2318,6 +2372,7 @@
         if (action === "copy-invitation") await copyInvitationMessage();
         if (action === "close-invitation") await closeAdminInvitation(button.dataset.teacherName);
         if (action === "toggle-pause") await toggleAdminPause();
+        if (action === "toggle-leave-pause") await toggleAdminLeavePause();
         if (action === "toggle-vvip") await setVvipSelectionOpen(button.dataset.vvipOpen === "true");
         if (action === "toggle-vvip-member") await setVvipMemberActive(button.dataset.vvipId, button.dataset.vvipActive === "true");
         if (action === "confirm-vvip") await confirmVvipEmail(button.dataset.vvipEmail);
@@ -2326,6 +2381,27 @@
         if (action === "refresh-payroll") await fetchPayrollAdminDashboard();
         if (action === "sync-payroll") await syncPayrollMonth();
         if (action === "publish-payroll") await publishPayroll(button.dataset.version);
+        if (action === "adjust-payroll") {
+          openRequestDialog({
+            action: "adjust-payroll",
+            teacherName: button.dataset.teacherName,
+            version: button.dataset.version,
+            amount: Number(button.dataset.adjustment) || 0,
+            showAmount: true,
+            title: `調整 ${button.dataset.teacherName} 的薪資`,
+            copy: "正數為補發，負數為扣除；調整後會請老師重新確認。"
+          });
+        }
+        if (action === "finalize-payroll") {
+          if (window.confirm(`確認 ${button.dataset.teacherName} 的薪資已核對完成？`)) {
+            await finalizePayroll(button.dataset.version, [button.dataset.teacherName]);
+          }
+        }
+        if (action === "finalize-payroll-batch") {
+          if (window.confirm("確認所有已由老師核對的薪資，並更新給雪莉的格式？")) {
+            await finalizePayroll(button.dataset.version, []);
+          }
+        }
         if (action === "resolve-payroll-dispute") {
           openRequestDialog({
             action: "resolve-payroll-dispute",

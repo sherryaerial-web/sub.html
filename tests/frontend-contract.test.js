@@ -465,6 +465,24 @@ test('pending invitation queue shows courses before the responsive teacher picke
   );
 });
 
+test('payroll admin can adjust salaries and finalize teacher-confirmed results', () => {
+  assert.match(html, /callPostApi\(["']adjustPayrollSummary["']/);
+  assert.match(html, /callPostApi\(["']finalizePayroll["']/);
+  assert.match(html, /調整薪資/);
+  assert.match(html, /管理員確認/);
+  assert.match(html, /確認全部已核對/);
+  assert.match(html, /管理員已確認/);
+  assert.match(html, /\.payroll-admin-card\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+  assert.match(html, /data\.metrics\.teacherConfirmed\s*\|\|\s*0/);
+  assert.match(html, /data\.metrics\.finalized\s*\|\|\s*0/);
+});
+
+test('course admin can pause leave registration separately from substitute claims', () => {
+  assert.match(html, /callPostApi\(["']pauseLeaves["']/);
+  assert.match(html, /data-admin-action=["']toggle-leave-pause["']/);
+  assert.match(html, /暫停請假登記/);
+});
+
 test('management entry stays hidden without capabilities and is enabled by authenticated capabilities', () => {
   assert.match(html, /id=["']admin-entry["'][^>]*hidden/);
   assert.match(html, /managementCapabilities/);

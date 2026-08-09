@@ -128,15 +128,16 @@ const fixtures = {
     month: "2026-08",
     version: "payroll-v1",
     summaries: [
-      { month: "2026-08", teacherName: "Ariel Lu", subtotal: 26800, bonusRate: 0.04, bonusAmount: 1072, fixedAdjustment: 0, totalSalary: 27872, profit: 41200, version: "payroll-v1", status: "草稿", confirmedAt: "", updatedAt: "2026-09-01 10:00" },
-      { month: "2026-08", teacherName: "Jina", subtotal: 18400, bonusRate: 0.03, bonusAmount: 552, fixedAdjustment: 0, totalSalary: 18952, profit: 28000, version: "payroll-v1", status: "草稿", confirmedAt: "", updatedAt: "2026-09-01 10:00" }
+      { month: "2026-08", teacherName: "Ariel Lu", subtotal: 26800, bonusRate: 0.04, bonusAmount: 1072, fixedAdjustment: 0, adminAdjustment: 100, adjustmentReason: "補發一堂課", totalSalary: 27972, profit: 41200, version: "payroll-v1", status: "已確認", confirmedAt: "2026-09-01 12:00", updatedAt: "2026-09-01 10:00" },
+      { month: "2026-08", teacherName: "Jina", subtotal: 18400, bonusRate: 0.03, bonusAmount: 552, fixedAdjustment: 0, adminAdjustment: 0, adjustmentReason: "", totalSalary: 18952, profit: 28000, version: "payroll-v1", status: "管理員已確認", confirmedAt: "2026-09-01 12:00", updatedAt: "2026-09-01 13:00", adminConfirmedAt: "2026-09-01 13:00", adminConfirmedBy: "Ivy" }
     ],
     lines: [],
     disputes: [{ id: "dispute-1", teacherName: "Mina", lineId: "pay-3", message: "8/12 的出席人數需要確認", status: "待處理", reply: "", createdAt: "2026-09-01 11:00", handler: "", resolvedAt: "" }],
-    metrics: { teachers: 2, totalSalary: 46824, draft: 2, pendingConfirmations: 0, openDisputes: 1, errors: 0 }
+    metrics: { teachers: 2, totalSalary: 46924, draft: 0, pendingConfirmations: 0, teacherConfirmed: 1, finalized: 1, openDisputes: 1, errors: 0 }
   },
   getAdminDashboard: {
     paused: false,
+    leavePaused: false,
     teachers: ["Ivy", "Ariel Lu", "Jina", "Mina"],
     pendingInvitations: [leavePending],
     activeInvitees: [{ invitationId: "invite-1", teacherName: "Jina", openedAt: "2026-08-05 09:00", viewedAt: "2026-08-05 09:12" }],
@@ -240,6 +241,7 @@ const browser = await chromium.launch({
   executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 });
 const results = [];
+const payrollOnly = process.env.VISUAL_SCOPE === "payroll";
 
 try {
   for (const viewport of [
@@ -263,6 +265,16 @@ try {
     });
 
     await page.setContent(html, { waitUntil: "networkidle", timeout: 10000 });
+    if (payrollOnly) {
+      await login(page, "Ivy");
+      await page.locator("#admin-entry").click();
+      await page.locator('[data-admin-tab="payroll"]').click();
+      await page.locator(".payroll-toolbar").waitFor();
+      results.push(await capture(page, viewport.name, "admin-7-payroll"));
+      if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
+      await page.close();
+      continue;
+    }
     results.push(await capture(page, viewport.name, "01-login"));
     await login(page, "Ariel Lu");
 

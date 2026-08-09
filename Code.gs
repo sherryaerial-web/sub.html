@@ -16,7 +16,8 @@ var SHEETS = {
   PAYROLL_LINES: '薪資明細',
   PAYROLL_SUMMARIES: '薪資結算',
   PAYROLL_DISPUTES: '薪資異議',
-  PAYROLL_PAYMENT_SETTINGS: '薪資付款設定'
+  PAYROLL_PAYMENT_SETTINGS: '薪資付款設定',
+  SHERRY_PAYROLL_FORMAT: '給雪莉的格式'
 };
 
 var SHEET_HEADERS = {
@@ -62,7 +63,8 @@ var SHEET_HEADERS = {
   ],
   PAYROLL_SUMMARIES: [
     '月份', '老師', '鐘點費小計', '獎金比例', '獎金金額', '固定津貼/扣項',
-    '應領總薪資', '盈利', '發布版本', '狀態', '確認時間', '最後更新時間'
+    '應領總薪資', '盈利', '發布版本', '狀態', '確認時間', '最後更新時間',
+    '管理員加扣', '管理員調整原因', '管理員確認時間', '管理員確認者'
   ],
   PAYROLL_DISPUTES: [
     '異議 ID', '月份', '老師', '明細 ID', '問題說明', '狀態', '管理員回覆',
@@ -88,6 +90,7 @@ var CONFIG = {
   INVITATION_OPEN_STATUS: '開放中',
   INVITATION_CLOSED_STATUS: '已關閉',
   CLAIMS_PAUSED_SETTING: '暫停全部領取',
+  LEAVES_PAUSED_SETTING: '暫停全部請假',
   VVIP_MAX_SELECTIONS: 4,
   VVIP_PENDING_STATUS: '待人工確認',
   VVIP_CONFIRMED_STATUS: '已確認',
@@ -95,6 +98,7 @@ var CONFIG = {
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
+  PAYROLL_FINALIZED_STATUS: '管理員已確認',
   PAYROLL_REVIEW_STATUS: '有異議'
 };
 
@@ -1133,6 +1137,9 @@ function doPost(e) {
       pauseClaims: function() {
         return pauseClaims_(session, parseBoolean_(parameters.paused, '暫停設定'));
       },
+      pauseLeaves: function() {
+        return pauseLeaves_(session, parseBoolean_(parameters.paused, '暫停請假設定'));
+      },
       cancelLeave: function() {
         return cancelLeave_(session, parameters.substituteId);
       },
@@ -1186,6 +1193,23 @@ function doPost(e) {
           disputeId: parameters.disputeId,
           reply: parameters.reply
         });
+      },
+      adjustPayrollSummary: function() {
+        return adjustPayrollSummary_(session, {
+          month: parameters.month,
+          version: parameters.version,
+          teacherName: parameters.teacherName,
+          adjustment: parameters.adjustment,
+          reason: parameters.reason
+        });
+      },
+      finalizePayroll: function() {
+        return finalizePayroll_(
+          session,
+          parameters.month,
+          parameters.version,
+          parseTeacherNames_(parameters)
+        );
       },
       setVvipSelectionOpen: function() {
         return setVvipSelectionOpen_(session, parseBoolean_(parameters.open, 'VVIP 開放設定'));
@@ -1701,13 +1725,12 @@ function getVvipSettings_(sheet) {
 }
 
 function getVvipActiveMonth_(settings) {
-  var configured = cleanText_(settings && settings.activeMonth);
-  if (/^\d{4}-\d{2}$/.test(configured)) return configured;
   return getNextMonthKey_();
 }
 
 function isVvipSelectionOpen_(settings) {
-  return isTruthySheetValue_(settings && settings.isOpen);
+  return isTruthySheetValue_(settings && settings.isOpen) &&
+    cleanText_(settings && settings.activeMonth) === getNextMonthKey_();
 }
 
 function getVvipCourseRows_(month, requireCalendarIds) {
@@ -2527,7 +2550,7 @@ function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
     return [
       draft.month, summary.teacherName, summary.subtotal, summary.bonusRate, summary.bonusAmount,
       summary.fixedAdjustment, summary.totalSalary, summary.profit, version,
-      CONFIG.PAYROLL_DRAFT_STATUS, '', now
+      CONFIG.PAYROLL_DRAFT_STATUS, '', now, 0, '', '', ''
     ];
   });
   if (summaryRows.length) summarySheet.getRange(summarySheet.getLastRow() + 1, 1, summaryRows.length, SHEET_HEADERS.PAYROLL_SUMMARIES.length).setValues(summaryRows);
@@ -2593,7 +2616,9 @@ function getPayrollSummaryObject_(row) {
     bonusRate: Number(row[3]) || 0, bonusAmount: Number(row[4]) || 0,
     fixedAdjustment: Number(row[5]) || 0, totalSalary: Number(row[6]) || 0,
     profit: Number(row[7]) || 0, version: cleanText_(row[8]), status: cleanText_(row[9]),
-    confirmedAt: cleanText_(row[10]), updatedAt: cleanText_(row[11])
+    confirmedAt: cleanText_(row[10]), updatedAt: cleanText_(row[11]),
+    adminAdjustment: Number(row[12]) || 0, adjustmentReason: cleanText_(row[13]),
+    adminConfirmedAt: cleanText_(row[14]), adminConfirmedBy: cleanText_(row[15])
   };
 }
 
@@ -2645,6 +2670,7 @@ function confirmPayroll_(session, monthValue, versionValue) {
         var status = cleanText_(row[9]);
         if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('薪資異議尚未處理，暫時不能確認。');
         if (status === CONFIG.PAYROLL_DRAFT_STATUS) throw new Error('薪資尚未發布。');
+        if (status === CONFIG.PAYROLL_FINALIZED_STATUS) throw new Error('薪資已完成管理員確認。');
         var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
         sheet.getRange(index + 1, 10).setValue(CONFIG.PAYROLL_CONFIRMED_STATUS);
         sheet.getRange(index + 1, 11).setValue(now);
@@ -2672,6 +2698,20 @@ function submitPayrollDispute_(session, payload) {
     var lineSheet = requireSheet_(ss, SHEETS.PAYROLL_LINES);
     var summarySheet = requireSheet_(ss, SHEETS.PAYROLL_SUMMARIES);
     var disputeSheet = requireSheet_(ss, SHEETS.PAYROLL_DISPUTES);
+    var summaryValues = summarySheet.getDataRange().getValues();
+    var summaryRow = null;
+    for (var summaryIndex = summaryValues.length - 1; summaryIndex > 0; summaryIndex--) {
+      if (cleanText_(summaryValues[summaryIndex][0]) === month &&
+          cleanText_(summaryValues[summaryIndex][1]) === teacher &&
+          cleanText_(summaryValues[summaryIndex][8]) === version) {
+        summaryRow = summaryValues[summaryIndex];
+        break;
+      }
+    }
+    if (!summaryRow) throw new Error('找不到您的薪資結算資料。');
+    if (cleanText_(summaryRow[9]) === CONFIG.PAYROLL_FINALIZED_STATUS) {
+      throw new Error('薪資已完成管理員確認，請直接聯絡管理員。');
+    }
     var lineExists = lineSheet.getDataRange().getValues().slice(1).some(function(row) {
       return cleanText_(row[0]) === month && cleanText_(row[1]) === lineId &&
         cleanText_(row[2]) === version && cleanText_(row[4]) === teacher &&
@@ -2739,6 +2779,180 @@ function resolvePayrollDispute_(session, payload) {
   });
 }
 
+function adjustPayrollSummary_(session, payload) {
+  var actor = assertCapabilitySession_(session, 'payroll_admin');
+  var item = payload || {};
+  var month = getPayrollMonthRange_(item.month).month;
+  var version = cleanText_(item.version);
+  var teacher = cleanText_(item.teacherName);
+  var reason = cleanText_(item.reason);
+  var adjustment = Number(item.adjustment);
+  if (!version || !teacher) throw new Error('薪資調整資料不完整。');
+  if (!isFinite(adjustment)) throw new Error('薪資加扣金額格式錯誤。');
+  adjustment = Math.round(adjustment);
+  if (!reason) throw new Error('請填寫薪資調整原因。');
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensurePayrollStructureUnlocked_(ss);
+    var summarySheet = requireSheet_(ss, SHEETS.PAYROLL_SUMMARIES);
+    var values = summarySheet.getDataRange().getValues();
+    for (var index = values.length - 1; index > 0; index--) {
+      var row = values[index];
+      if (cleanText_(row[0]) !== month || cleanText_(row[1]) !== teacher || cleanText_(row[8]) !== version) continue;
+      var status = cleanText_(row[9]);
+      if (status === CONFIG.PAYROLL_FINALIZED_STATUS) throw new Error('薪資已完成管理員確認，不能再調整。');
+      if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('請先處理這位老師尚未完成的薪資異議。');
+      while (row.length < SHEET_HEADERS.PAYROLL_SUMMARIES.length) row.push('');
+      var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+      var nextStatus = status === CONFIG.PAYROLL_DRAFT_STATUS
+        ? CONFIG.PAYROLL_DRAFT_STATUS
+        : CONFIG.PAYROLL_PUBLISHED_STATUS;
+      row[6] = (Number(row[2]) || 0) + (Number(row[4]) || 0) +
+        (Number(row[5]) || 0) + adjustment;
+      row[9] = nextStatus;
+      row[10] = '';
+      row[11] = now;
+      row[12] = adjustment;
+      row[13] = reason;
+      row[14] = '';
+      row[15] = '';
+      return runStateTransitionUnlocked_([summarySheet], function(appendAudits) {
+        summarySheet.getRange(index + 1, 7, 1, 10).setValues([row.slice(6, 16)]);
+        appendAudits([{
+          actor: actor,
+          action: '管理員調整薪資',
+          targetId: [month, teacher].join('|'),
+          before: status,
+          after: nextStatus,
+          reason: '管理員加扣 ' + adjustment + '；' + reason
+        }]);
+        return getPayrollSummaryObject_(row);
+      });
+    }
+    throw new Error('找不到指定的薪資結算資料。');
+  });
+}
+
+function finalizePayroll_(session, monthValue, versionValue, teacherNames) {
+  var actor = assertCapabilitySession_(session, 'payroll_admin');
+  var month = getPayrollMonthRange_(monthValue).month;
+  var version = cleanText_(versionValue);
+  var requestedTeachers = [];
+  var requestedMap = {};
+  (Array.isArray(teacherNames) ? teacherNames : []).forEach(function(value) {
+    var teacher = cleanText_(value);
+    if (!teacher || requestedMap[teacher]) return;
+    requestedMap[teacher] = true;
+    requestedTeachers.push(teacher);
+  });
+  if (!version) throw new Error('缺少薪資版本。');
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensurePayrollStructureUnlocked_(ss);
+    var summarySheet = requireSheet_(ss, SHEETS.PAYROLL_SUMMARIES);
+    var lineSheet = requireSheet_(ss, SHEETS.PAYROLL_LINES);
+    var disputeSheet = requireSheet_(ss, SHEETS.PAYROLL_DISPUTES);
+    var formatSheet = ss.getSheetByName(SHEETS.SHERRY_PAYROLL_FORMAT);
+    var summaryValues = summarySheet.getDataRange().getValues();
+    var lineValues = lineSheet.getDataRange().getValues();
+    var disputeValues = disputeSheet.getDataRange().getValues();
+    var openDisputes = {};
+    disputeValues.slice(1).forEach(function(row) {
+      if (cleanText_(row[1]) === month && cleanText_(row[5]) === '待處理') {
+        openDisputes[cleanText_(row[2])] = true;
+      }
+    });
+
+    var candidates = [];
+    summaryValues.slice(1).forEach(function(row, index) {
+      if (cleanText_(row[0]) !== month || cleanText_(row[8]) !== version) return;
+      var teacher = cleanText_(row[1]);
+      if (requestedTeachers.length && !requestedMap[teacher]) return;
+      candidates.push({ rowNumber: index + 2, row: row, teacher: teacher });
+    });
+    if (requestedTeachers.length) {
+      var foundMap = {};
+      candidates.forEach(function(item) { foundMap[item.teacher] = true; });
+      var missing = requestedTeachers.filter(function(teacher) { return !foundMap[teacher]; });
+      if (missing.length) throw new Error('找不到薪資資料：' + missing.join('、'));
+    }
+    var eligible = candidates.filter(function(item) {
+      return cleanText_(item.row[9]) === CONFIG.PAYROLL_CONFIRMED_STATUS && !openDisputes[item.teacher];
+    });
+    if (requestedTeachers.length && eligible.length !== candidates.length) {
+      throw new Error('選取的薪資尚未完成老師確認，或仍有待處理異議。');
+    }
+    if (!eligible.length) throw new Error('目前沒有老師已確認且可結案的薪資。');
+
+    var finalizedTeachers = {};
+    eligible.forEach(function(item) { finalizedTeachers[item.teacher] = true; });
+    var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    var businessSheets = [summarySheet, lineSheet];
+    if (formatSheet) businessSheets.push(formatSheet);
+    return runStateTransitionUnlocked_(businessSheets, function(appendAudits) {
+      eligible.forEach(function(item) {
+        var row = item.row.slice();
+        while (row.length < SHEET_HEADERS.PAYROLL_SUMMARIES.length) row.push('');
+        row[9] = CONFIG.PAYROLL_FINALIZED_STATUS;
+        row[11] = now;
+        row[14] = now;
+        row[15] = actor;
+        summarySheet.getRange(item.rowNumber, 10, 1, 7).setValues([row.slice(9, 16)]);
+      });
+      lineValues.slice(1).forEach(function(row, index) {
+        if (cleanText_(row[0]) === month && cleanText_(row[2]) === version && finalizedTeachers[cleanText_(row[4])]) {
+          lineSheet.getRange(index + 2, 17).setValue(CONFIG.PAYROLL_FINALIZED_STATUS);
+        }
+      });
+      var formatResult = refreshSherryPayrollFormatUnlocked_(ss, month, version);
+      appendAudits(eligible.map(function(item) {
+        return {
+          actor: actor,
+          action: '管理員確認薪資',
+          targetId: [month, item.teacher].join('|'),
+          before: CONFIG.PAYROLL_CONFIRMED_STATUS,
+          after: CONFIG.PAYROLL_FINALIZED_STATUS,
+          reason: '版本 ' + version
+        };
+      }));
+      return {
+        month: month,
+        version: version,
+        finalized: eligible.length,
+        skipped: candidates.length - eligible.length,
+        formatUpdated: formatResult.updated
+      };
+    });
+  });
+}
+
+function refreshSherryPayrollFormatUnlocked_(spreadsheet, month, version) {
+  var formatSheet = spreadsheet.getSheetByName(SHEETS.SHERRY_PAYROLL_FORMAT);
+  if (!formatSheet || formatSheet.getLastRow() < 2) return { updated: 0 };
+  var summarySheet = requireSheet_(spreadsheet, SHEETS.PAYROLL_SUMMARIES);
+  var finalizedByTeacher = {};
+  summarySheet.getDataRange().getValues().slice(1).forEach(function(row) {
+    if (cleanText_(row[0]) === month && cleanText_(row[8]) === version &&
+        cleanText_(row[9]) === CONFIG.PAYROLL_FINALIZED_STATUS) {
+      finalizedByTeacher[cleanText_(row[1])] = Number(row[6]) || 0;
+    }
+  });
+  var values = formatSheet.getRange(1, 1, formatSheet.getLastRow(), 3).getValues();
+  var sectionNames = ['中國信託銀行', '台新銀行', 'Linepay', '國泰銀行'];
+  var amountValues = values.slice(1).map(function(row) {
+    var name = cleanText_(row[0]);
+    if (Object.prototype.hasOwnProperty.call(finalizedByTeacher, name)) {
+      return [finalizedByTeacher[name]];
+    }
+    if (sectionNames.indexOf(name) !== -1) return [row[1]];
+    return [''];
+  });
+  formatSheet.getRange(2, 2, amountValues.length, 1).setValues(amountValues);
+  return { updated: Object.keys(finalizedByTeacher).length };
+}
+
 function getPayrollAdminDashboard_(session, monthValue) {
   assertCapabilitySession_(session, 'payroll_admin');
   var month = monthValue ? getPayrollMonthRange_(monthValue).month : '';
@@ -2780,6 +2994,8 @@ function getPayrollAdminDashboard_(session, monthValue) {
       totalSalary: summaries.reduce(function(total, item) { return total + item.totalSalary; }, 0),
       draft: summaries.filter(function(item) { return item.status === CONFIG.PAYROLL_DRAFT_STATUS; }).length,
       pendingConfirmations: summaries.filter(function(item) { return item.status === CONFIG.PAYROLL_PUBLISHED_STATUS; }).length,
+      teacherConfirmed: summaries.filter(function(item) { return item.status === CONFIG.PAYROLL_CONFIRMED_STATUS; }).length,
+      finalized: summaries.filter(function(item) { return item.status === CONFIG.PAYROLL_FINALIZED_STATUS; }).length,
       openDisputes: disputes.filter(function(item) { return item.status === '待處理'; }).length,
       errors: snapshotRows.filter(function(row) { return cleanText_(row[14]).indexOf('錯誤：') === 0; }).length
     }
@@ -2788,6 +3004,8 @@ function getPayrollAdminDashboard_(session, monthValue) {
 
 function getMyCourses_(session) {
   var teacher = getSessionTeacherName_(session);
+  if (areLeavesPaused_()) throw new Error('目前已暫停請假登記，請稍後再試。');
+  var targetMonth = getNextMonthKey_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
   var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
@@ -2803,7 +3021,8 @@ function getMyCourses_(session) {
 
   return sheet.getDataRange().getValues().slice(1).filter(function(r) {
     var calendarId = cleanText_(r[4]);
-    return cleanText_(r[3]) === teacher && calendarId && !activeLeaveIds[calendarId];
+    return cleanText_(r[3]) === teacher && calendarId && !activeLeaveIds[calendarId] &&
+      getVvipMonthFromDate_(r[0]) === targetMonth;
   }).map(function(r) {
     return {
       '日期': formatMyDate(r[0]),
@@ -3049,6 +3268,50 @@ function pauseClaims_(session, paused) {
   });
 }
 
+function pauseLeaves_(session, paused) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var shouldPause = paused === true;
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.SETTINGS);
+    assertHeaders_(sheet, SHEET_HEADERS.SETTINGS);
+    var values = sheet.getDataRange().getValues();
+    var rowNumber = 0;
+    var previous = false;
+    for (var index = 1; index < values.length; index++) {
+      if (cleanText_(values[index][0]) === CONFIG.LEAVES_PAUSED_SETTING) {
+        rowNumber = index + 1;
+        previous = isTruthySheetValue_(values[index][1]);
+        break;
+      }
+    }
+
+    var nextValues = [[
+      CONFIG.LEAVES_PAUSED_SETTING,
+      shouldPause ? '是' : '否',
+      getTimestamp_(),
+      '由管理員手動控制'
+    ]];
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      if (rowNumber) {
+        sheet.getRange(rowNumber, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
+      } else {
+        sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.SETTINGS.length).setValues(nextValues);
+      }
+      appendAudits([{
+        actor: actor,
+        action: shouldPause ? '暫停全部請假' : '恢復全部請假',
+        targetId: CONFIG.LEAVES_PAUSED_SETTING,
+        before: previous ? '是' : '否',
+        after: shouldPause ? '是' : '否',
+        reason: ''
+      }]);
+      return { paused: shouldPause };
+    });
+  });
+}
+
 function getAvailableSubstitutes_(session) {
   var teacher = getSessionTeacherName_(session);
   assertTeacherExists_(teacher);
@@ -3217,6 +3480,19 @@ function areClaimsPaused_() {
   return false;
 }
 
+function areLeavesPaused_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, SHEETS.SETTINGS);
+  assertHeaders_(sheet, SHEET_HEADERS.SETTINGS);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][0]) === CONFIG.LEAVES_PAUSED_SETTING) {
+      return isTruthySheetValue_(values[index][1]);
+    }
+  }
+  return false;
+}
+
 function hasActiveInvitation_(teacherName) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
@@ -3309,6 +3585,7 @@ function submitLeave_(session, items) {
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
+    if (areLeavesPaused_()) throw new Error('目前已暫停請假登記，請稍後再試。');
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
@@ -3340,6 +3617,9 @@ function submitLeave_(session, items) {
         if (!courseRow || formatMyDate(courseRow[0]) !== item['日期'] ||
             formatMyTime(courseRow[1]) !== item['時間'] || cleanText_(courseRow[2]) !== item['課程']) {
           throw new Error('找不到 ' + item['日期'] + ' ' + item['時間'] + ' 的有效課程，請重新整理。');
+        }
+        if (getVvipMonthFromDate_(courseRow[0]) !== getNextMonthKey_()) {
+          throw new Error('請假只開放登記下個月課程。');
         }
         if (isDuplicateLeave_(leaveRows, teacher, item)) {
           duplicates += 1;
@@ -3914,6 +4194,7 @@ function getAdminDashboard_(session) {
 
     return {
       paused: areClaimsPaused_(),
+      leavePaused: areLeavesPaused_(),
       teachers: teachers,
       pendingInvitations: leaves.filter(function(item, index) {
         return isOrdinaryOpenLeaveRow_(leaveSourceRows[index]);

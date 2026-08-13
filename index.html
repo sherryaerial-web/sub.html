@@ -1149,6 +1149,25 @@
         .replaceAll("'", "&#39;");
     }
 
+    function formatDateWithWeekday(dateValue) {
+      const original = String(dateValue || "").trim();
+      const match = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/.exec(original);
+      if (!match) return original;
+
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (date.getUTCFullYear() !== year ||
+          date.getUTCMonth() !== month - 1 ||
+          date.getUTCDate() !== day) {
+        return original;
+      }
+
+      const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getUTCDay()];
+      return `${year}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}（${weekday}）`;
+    }
+
     function normalizeCourseName(value) {
       return String(value || "").replace(/\s+/g, "").toLowerCase();
     }
@@ -1438,7 +1457,7 @@
       list.innerHTML = dates.map((date) => `
         <label class="date-option">
           <input type="checkbox" class="leave-date-checkbox" data-date="${escapeHtml(date)}" ${selectedLeaveDates.has(date) ? "checked" : ""}>
-          <span>${escapeHtml(date)}</span>
+          <span>${escapeHtml(formatDateWithWeekday(date))}</span>
         </label>
       `).join("");
 
@@ -1497,7 +1516,7 @@
           <label class="list-item">
             <input type="checkbox" class="leave-course-checkbox" data-calendar-id="${escapeHtml(calendarId)}" ${selectedLeaveCourses.has(calendarId) ? "checked" : ""}>
             <span>
-              <span class="item-date"><i data-lucide="clock-3"></i>${escapeHtml(item["日期"])} ${escapeHtml(item["時間"])}</span>
+              <span class="item-date"><i data-lucide="clock-3"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時間"])}</span>
               <span class="item-course">${escapeHtml(item["課程"])}</span>
               <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
             </span>
@@ -1530,7 +1549,7 @@
       byId("leave-confirmation-count").textContent = `已選 ${selectedLeaveCourses.length} 堂`;
       byId("leave-confirmation-list").innerHTML = selectedLeaveCourses.map((item) => `
         <div class="confirmation-row">
-          <span>${escapeHtml(item["日期"])} ${escapeHtml(item["時間"])}</span>
+          <span>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時間"])}</span>
           <strong>${escapeHtml(item["課程"])}</strong>
         </div>
       `).join("");
@@ -1673,7 +1692,7 @@
           return `
             <article class="list-item single-column">
               <div>
-                <div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
+                <div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div>
                 <div class="item-course">${escapeHtml(item["課程"])}</div>
                 <span class="status-tag ${statusClass(item["狀態"])}">${escapeHtml(item["狀態"] || "未設定")}</span>
                 <div class="item-meta">代課老師：${escapeHtml(item["代課老師"] || "尚未領取")}</div>
@@ -1754,7 +1773,7 @@
       list.innerHTML = [...groups.entries()].map(([date, items]) => `
         <section class="claim-date-group" data-claim-date="${escapeHtml(date)}">
           <div class="claim-date-heading">
-            <h3><i data-lucide="calendar-days"></i>${escapeHtml(date)}</h3>
+            <h3><i data-lucide="calendar-days"></i>${escapeHtml(formatDateWithWeekday(date))}</h3>
             <span class="claim-date-count">${items.length} 堂待領</span>
           </div>
           <div class="list">
@@ -1939,7 +1958,7 @@
         list.innerHTML = items.map((item) => `
           <article class="list-item single-column">
             <div>
-              <div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item["日期"])} ${escapeHtml(item["時段"])}</div>
+              <div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div>
               <div class="item-course">${escapeHtml(item["課程"])}</div>
               <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
               <div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div>

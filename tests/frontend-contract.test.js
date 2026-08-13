@@ -219,6 +219,69 @@ test('implements date-first leave selection with select-all-visible and clear co
   assert.match(html, /renderLeaveCourses/);
 });
 
+test('formats teacher-facing dates with a Traditional Chinese weekday', () => {
+  const { context } = createFrontendRuntime();
+
+  assert.equal(context.formatDateWithWeekday('2026/09/24'), '2026/09/24（四）');
+  assert.equal(context.formatDateWithWeekday('2026-09-24'), '2026/09/24（四）');
+  assert.equal(context.formatDateWithWeekday('2026/02/30'), '2026/02/30');
+  assert.equal(context.formatDateWithWeekday('日期未設定'), '日期未設定');
+});
+
+test('renders weekdays in leave and substitute lists', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getMyCourses: [{
+      '日期': '2026/09/24',
+      '時間': '18:30',
+      '課程': 'A－舞綢 Lv.2',
+      'OB Calendar ID': 'calendar-weekday',
+    }],
+    getMyLeaves: [{
+      '代課編號': 'leave-weekday',
+      '日期': '2026/09/24',
+      '時段': '18:30',
+      '課程': 'A－舞綢 Lv.2',
+      '狀態': '確認中',
+    }],
+    getAvailableSubstitutes: [{
+      '代課編號': 'sub-weekday',
+      '原老師': '老師甲',
+      '日期': '2026/09/24',
+      '時段': '18:30',
+      '課程': 'A－舞綢 Lv.2',
+      '課程大類': '舞綢',
+      '可沿用原課程': true,
+    }],
+    getClaimOptions: {
+      capabilities: ['舞綢'],
+      classes: [],
+    },
+    getMySubs: [{
+      '代課編號': 'my-sub-weekday',
+      '原老師': '老師乙',
+      '日期': '2026/09/24',
+      '時段': '20:00',
+      '課程': 'A－舞綢 Lv.1',
+    }],
+  });
+
+  await context.loadMyCourses();
+  vm.runInContext('selectedLeaveDates.add("2026/09/24")', context);
+  context.renderLeaveCourses();
+  vm.runInContext('selectedLeaveCourses.add("calendar-weekday")', context);
+  context.updateLeaveConfirmation();
+  await context.fetchMyLeaves();
+  await context.fetchAvailableSubstitutes();
+  await context.fetchMySubs();
+
+  assert.match(getElement('leave-date-list').innerHTML, /2026\/09\/24（四）/);
+  assert.match(getElement('leave-course-list').innerHTML, /2026\/09\/24（四） 18:30/);
+  assert.match(getElement('leave-confirmation-list').innerHTML, /2026\/09\/24（四） 18:30/);
+  assert.match(getElement('my-leaves-list').innerHTML, /2026\/09\/24（四） 18:30/);
+  assert.match(getElement('pending-leaves-list').innerHTML, /2026\/09\/24（四）/);
+  assert.match(getElement('my-subs-list').innerHTML, /2026\/09\/24（四） 20:00/);
+});
+
 test('shows an exact confirmation count and full selected course list', () => {
   assert.match(html, /id=["']leave-confirmation-count["']/);
   assert.match(html, /id=["']leave-confirmation-list["']/);

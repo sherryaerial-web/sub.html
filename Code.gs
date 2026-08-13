@@ -30,7 +30,8 @@ var SHEET_HEADERS = {
     '狀態', '代課老師', '備註', '入系統', '代課編號',
     'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
     '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
-    '實際課程類別', '替代 OB Calendar ID'
+    '實際課程類別', '替代 OB Calendar ID',
+    '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間'
   ],
   INVITATIONS: ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
   AUDIT: ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'],
@@ -1141,6 +1142,9 @@ function doPost(e) {
       },
       claimSubstitute: function() {
         return claimSubstitute_(session, parseJsonArray_(parameters.items, '代課課程'));
+      },
+      claimSpecialCourse: function() {
+        return claimSpecialCourse_(session, parseJsonObject_(parameters.specialCourse, '特別課'));
       },
       openInvitations: function() {
         return openInvitations_(session, parseTeacherNames_(parameters));
@@ -3422,13 +3426,17 @@ function getClaimOptions_(session) {
   var capabilities = getTeacherCapabilities_(teacher);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+  var courseRows = courseSheet.getDataRange().getValues().slice(1);
+  var pendingRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return isOrdinaryOpenLeaveRow_(row);
+  });
   return {
     capabilities: capabilities,
-    classes: buildRecurringClaimCourseOptions_(
-      courseSheet.getDataRange().getValues().slice(1),
-      capabilities
-    )
+    classes: buildRecurringClaimCourseOptions_(courseRows, capabilities),
+    specialAvailability: getSpecialCourseAvailability_(pendingRows, courseRows)
   };
 }
 
@@ -3565,6 +3573,69 @@ function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
   }).sort(function(a, b) {
     return [a.category, a.courseName].join('|').localeCompare([b.category, b.courseName].join('|'));
   });
+}
+
+function timeTextToMinutes_(timeValue) {
+  var match = /^(\d{1,2}):(\d{2})$/.exec(formatMyTime(timeValue));
+  if (!match) return -1;
+  var hours = Number(match[1]);
+  var minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return -1;
+  return hours * 60 + minutes;
+}
+
+function minutesToTimeText_(minutesValue) {
+  var minutes = Number(minutesValue);
+  if (!isFinite(minutes) || minutes < 0 || minutes >= 24 * 60) return '';
+  var hours = Math.floor(minutes / 60);
+  var remainder = Math.floor(minutes % 60);
+  return String(hours).padStart(2, '0') + ':' + String(remainder).padStart(2, '0');
+}
+
+function getSpecialCourseAvailability_(pendingRows, courseRows) {
+  var openByCalendarId = {};
+  (pendingRows || []).forEach(function(row) {
+    var id = cleanText_(row && row[9]);
+    var calendarId = cleanText_(row && row[10]);
+    if (id && calendarId && isOrdinaryOpenLeaveRow_(row)) openByCalendarId[calendarId] = id;
+  });
+
+  var availability = {};
+  (pendingRows || []).forEach(function(row) {
+    if (!isOrdinaryOpenLeaveRow_(row)) return;
+    var substituteId = cleanText_(row[9]);
+    var date = formatMyDate(row[2]);
+    var startTime = formatMyTime(row[3]);
+    var startMinutes = timeTextToMinutes_(startTime);
+    var room = getCourseRoom_(row[4]);
+    if (!substituteId || !date || !room || startMinutes < 0) return;
+
+    var following = (courseRows || []).map(function(courseRow) {
+      var courseTime = formatMyTime(courseRow && courseRow[1]);
+      return {
+        date: formatMyDate(courseRow && courseRow[0]),
+        room: getCourseRoom_(courseRow && courseRow[2]),
+        time: courseTime,
+        minutes: timeTextToMinutes_(courseTime),
+        calendarId: cleanText_(courseRow && courseRow[4])
+      };
+    }).filter(function(course) {
+      return course.date === date && course.room === room && course.minutes > startMinutes;
+    }).sort(function(a, b) { return a.minutes - b.minutes; });
+
+    var next = following[0] || null;
+    var partnerId = next ? cleanText_(openByCalendarId[next.calendarId]) : '';
+    availability[substituteId] = {
+      room: room,
+      date: date,
+      startTime: startTime,
+      nextCourseTime: next ? next.time : '',
+      maxDurationMinutes: next ? Math.max(0, next.minutes - startMinutes - 15) : 240,
+      mergePartnerIds: partnerId ? [partnerId] : [],
+      requiresClosingTimeConfirmation: !next
+    };
+  });
+  return availability;
 }
 
 function fetchObClassPages_(token) {
@@ -3806,6 +3877,10 @@ function getMySubs_(teacherName) {
       '預計難度': cleanText_(r[13]),
       '處理類型': cleanText_(r[14]),
       '實際課程類別': cleanText_(r[19]),
+      '特別課群組 ID': cleanText_(r[21]),
+      '特別課模式': cleanText_(r[22]),
+      '特別課分鐘數': Number(r[23]) || 0,
+      '特別課結束時間': formatMyTime(r[24]),
       '異動狀態': cleanText_(r[18]),
       '可申請退出': cleanText_(r[18]) !== '申請退出中',
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
@@ -3927,6 +4002,201 @@ function submitLeave_(session, items) {
         };
       }));
       return result;
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function claimSpecialCourse_(session, payload) {
+  var teacher = getSessionTeacherName_(session);
+  assertTeacherExists_(teacher);
+  var source = payload || {};
+  var mode = cleanText_(source.mode);
+  var ids = Array.isArray(source.substituteIds) ? source.substituteIds.map(cleanText_).filter(Boolean) : [];
+  var courseName = cleanText_(source.courseName);
+  var difficulty = cleanText_(source.difficulty);
+  var note = cleanText_(source.note);
+  var durationMinutes = Number(source.durationMinutes);
+
+  if (['vacancy', 'merge'].indexOf(mode) === -1) throw new Error('請選擇特別課安排方式。');
+  if ((mode === 'vacancy' && ids.length !== 1) || (mode === 'merge' && ids.length !== 2)) {
+    throw new Error(mode === 'merge' ? '合併特別課必須選擇兩堂課。' : '使用後方空堂必須選擇一堂課。');
+  }
+  if (ids.some(function(id, index) { return ids.indexOf(id) !== index; })) {
+    throw new Error('特別課代課編號重複。');
+  }
+  if (!courseName) throw new Error('請填寫特別課名稱（概述即可）。');
+  if (!note) throw new Error('安排特別課時，請填寫備註。');
+  if (!isFinite(durationMinutes) || Math.floor(durationMinutes) !== durationMinutes ||
+      durationMinutes < 30 || durationMinutes > 240) {
+    throw new Error('特別課時長必須是 30 至 240 分鐘的整數。');
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  try {
+    if (areClaimsPaused_()) throw new Error('目前暫停全部代課領取。');
+    var invitationId = getActiveInvitationId_(teacher);
+    if (!invitationId) throw new Error('目前尚未開放代課領取。');
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    var leaveValues = leaveSheet.getDataRange().getValues();
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var rowById = {};
+    for (var rowIndex = 1; rowIndex < leaveValues.length; rowIndex++) {
+      var currentId = cleanText_(leaveValues[rowIndex][9]);
+      if (currentId) rowById[currentId] = rowIndex;
+    }
+
+    var selected = ids.map(function(id) {
+      if (rowById[id] == null) throw new Error('找不到指定的代課課程，請重新整理。');
+      var dataIndex = rowById[id];
+      var row = leaveValues[dataIndex];
+      if (cleanText_(row[5]) !== '確認中' || cleanText_(row[6])) {
+        throw new Error('此課程剛被其他老師領取，請重新整理。');
+      }
+      if (!cleanText_(row[10])) {
+        throw new Error('此課程尚未連結 OB Calendar ID，請通知管理員先完成核對。');
+      }
+      if (!isOrdinaryOpenLeaveRow_(row)) {
+        throw new Error('此課程尚待管理員完成 OB 核對或回復，暫時不能領取。');
+      }
+      if (cleanText_(row[1]) === teacher) throw new Error('不能領取自己原本的課程。');
+      var date = formatMyDate(row[2]);
+      var time = formatMyTime(row[3]);
+      var room = getCourseRoom_(row[4]);
+      var minutes = timeTextToMinutes_(time);
+      if (!date || !room || minutes < 0) throw new Error('特別課的日期、時間或教室資料不完整。');
+      return {
+        id: id,
+        dataIndex: dataIndex,
+        row: row,
+        date: date,
+        time: time,
+        room: room,
+        minutes: minutes,
+        calendarId: cleanText_(row[10])
+      };
+    }).sort(function(a, b) { return a.minutes - b.minutes; });
+
+    var first = selected[0];
+    if (selected.some(function(item) { return item.date !== first.date; })) {
+      throw new Error('合併特別課必須是同一天。');
+    }
+    if (selected.some(function(item) { return item.room !== first.room; })) {
+      throw new Error('合併特別課必須是同一間教室。');
+    }
+
+    if (mode === 'merge') {
+      var openRows = leaveValues.slice(1).filter(function(row) { return isOrdinaryOpenLeaveRow_(row); });
+      var availability = getSpecialCourseAvailability_(openRows, courseRows);
+      var allowedPartners = availability[first.id] ? availability[first.id].mergePartnerIds : [];
+      if (allowedPartners.indexOf(selected[1].id) === -1) {
+        throw new Error('只能合併同教室時間緊接的下一堂代課。');
+      }
+    }
+
+    var endMinutes = first.minutes + durationMinutes;
+    if (endMinutes >= 24 * 60) throw new Error('特別課不可跨日，請縮短時長。');
+    if (mode === 'merge' && endMinutes + 15 <= selected[1].minutes) {
+      throw new Error('此時長不需要占用第二堂，請改用後方空堂模式。');
+    }
+
+    var consumedCalendarIds = {};
+    selected.forEach(function(item) { consumedCalendarIds[item.calendarId] = true; });
+    var nextCourses = courseRows.map(function(row) {
+      var time = formatMyTime(row && row[1]);
+      return {
+        date: formatMyDate(row && row[0]),
+        room: getCourseRoom_(row && row[2]),
+        time: time,
+        minutes: timeTextToMinutes_(time),
+        calendarId: cleanText_(row && row[4])
+      };
+    }).filter(function(course) {
+      return course.date === first.date && course.room === first.room &&
+        course.minutes > first.minutes && !consumedCalendarIds[course.calendarId];
+    }).sort(function(a, b) { return a.minutes - b.minutes; });
+    var nextCourse = nextCourses[0] || null;
+    if (nextCourse && endMinutes + 15 > nextCourse.minutes) {
+      throw new Error(
+        '特別課結束後需保留 15 分鐘換場；下一堂 ' + nextCourse.time +
+        ' 開始，最晚只能上到 ' + minutesToTimeText_(nextCourse.minutes - 15) + '。'
+      );
+    }
+
+    var specialGroupId = Utilities.getUuid();
+    var specialMode = mode === 'merge' ? '合併兩堂' : '使用後方空堂';
+    var endTime = minutesToTimeText_(endMinutes);
+    var updates = selected.map(function(item) {
+      var change = validateClaimChange_({
+        teacher: teacher,
+        targetCourseName: cleanText_(item.row[4]),
+        targetCalendarId: item.calendarId,
+        handlingType: 'special',
+        actualCourseName: courseName,
+        difficulty: difficulty,
+        note: note
+      });
+      var nextRow = item.row.slice();
+      while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
+      nextRow[5] = '已領取';
+      nextRow[6] = teacher;
+      nextRow[7] = [change.summary, '模式：' + specialMode, '時長：' + durationMinutes + ' 分鐘']
+        .join('；');
+      nextRow[8] = '待處理';
+      nextRow[11] = '';
+      nextRow[12] = change.actualCourseName;
+      nextRow[13] = change.difficulty;
+      nextRow[14] = change.handlingType;
+      nextRow[15] = '待核對';
+      nextRow[16] = '';
+      nextRow[17] = '';
+      nextRow[18] = '';
+      nextRow[19] = change.category;
+      nextRow[21] = specialGroupId;
+      nextRow[22] = specialMode;
+      nextRow[23] = durationMinutes;
+      nextRow[24] = endTime;
+      return { item: item, rowValues: nextRow };
+    });
+
+    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+      updates.forEach(function(update) {
+        leaveSheet.getRange(
+          update.item.dataIndex + 1,
+          6,
+          1,
+          SHEET_HEADERS.LEAVES.length - 5
+        ).setValues([update.rowValues.slice(5, SHEET_HEADERS.LEAVES.length)]);
+      });
+      appendAudits(updates.map(function(update) {
+        return {
+          actor: teacher,
+          action: '領取特別課',
+          targetId: update.item.id,
+          before: '確認中',
+          after: '已領取',
+          reason: [
+            '群組：' + specialGroupId,
+            courseName,
+            specialMode,
+            durationMinutes + ' 分鐘',
+            '邀請編號：' + invitationId
+          ].join('；')
+        };
+      }));
+      return {
+        count: updates.length,
+        specialGroupId: specialGroupId,
+        endTime: endTime,
+        requiresClosingTimeConfirmation: !nextCourse
+      };
     });
   } finally {
     lock.releaseLock();
@@ -4491,6 +4761,10 @@ function toAdminLeaveItem_(row, auditHistory) {
     differenceReason: cleanText_(row[17]),
     originalCalendarId: cleanText_(row[10]),
     replacementCalendarId: cleanText_(row[20]),
+    specialGroupId: cleanText_(row[21]),
+    specialMode: cleanText_(row[22]),
+    specialDurationMinutes: Number(row[23]) || 0,
+    specialEndTime: formatMyTime(row[24]),
     auditHistory: auditHistory
   };
 }
@@ -4799,6 +5073,19 @@ function parseJsonArray_(value, fieldName) {
     throw new Error(fieldName + '資料格式錯誤。');
   }
   if (!Array.isArray(parsed)) throw new Error(fieldName + '必須是陣列。');
+  return parsed;
+}
+
+function parseJsonObject_(value, fieldName) {
+  var parsed;
+  try {
+    parsed = JSON.parse(value || '{}');
+  } catch (error) {
+    throw new Error(fieldName + '資料格式錯誤。');
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error(fieldName + '必須是物件。');
+  }
   return parsed;
 }
 

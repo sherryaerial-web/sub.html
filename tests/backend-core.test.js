@@ -1696,6 +1696,55 @@ test('deduplicates OB course items across rooms for teacher selection', () => {
   assert.equal(resolved.actualCourseName, 'B－皮拉提斯');
 });
 
+test('recurring claim catalog excludes one-off long and special courses but keeps recurring 90-minute courses', () => {
+  const backend = loadBackend();
+  const rows = [
+    ['2026/08/01', '10:00', 'A－原始瑜伽', '老師甲', 'cal-yoga-1', 'class-yoga-a'],
+    ['2026/08/08', '10:00', 'A－原始瑜伽', '老師甲', 'cal-yoga-2', 'class-yoga-a'],
+    ['2026/08/02', '13:15', 'B－綢吊 Lv.0-2（90分）', '老師乙', 'cal-sling-1', 'class-sling-b'],
+    ['2026/08/09', '13:15', 'B－綢吊 Lv.0-2（90分）', '老師乙', 'cal-sling-2', 'class-sling-b'],
+    ['2026/08/03', '18:30', 'B－椅子瑜伽（90min）', '老師丙', 'cal-chair', 'class-chair-b'],
+    ['2026/08/04', '19:00', 'A－原始瑜伽特別課', '老師丙', 'cal-special', 'class-special-a'],
+  ];
+
+  const options = backend.buildRecurringClaimCourseOptions_(rows, ['地板課程', '綢吊']);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(options)), [
+    { courseKey: '原始瑜伽', courseName: '原始瑜伽', category: '地板課程', durationMinutes: 0 },
+    { courseKey: '綢吊 Lv.0-2（90分）', courseName: '綢吊 Lv.0-2（90分）', category: '綢吊', durationMinutes: 90 },
+  ]);
+});
+
+test('parses only explicit course duration markers', () => {
+  const backend = loadBackend();
+
+  assert.equal(backend.parseExplicitCourseMinutes_('椅子瑜伽（90min）'), 90);
+  assert.equal(backend.parseExplicitCourseMinutes_('綢吊 90 分鐘'), 90);
+  assert.equal(backend.parseExplicitCourseMinutes_('綢吊 1.5小時'), 90);
+  assert.equal(backend.parseExplicitCourseMinutes_('空環 Lv.1'), 0);
+});
+
+test('claim options use recurring CourseList courses instead of the unfiltered OB class catalog', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    teacherACapabilities: '地板課程',
+    courseRows: [
+      ['2026/08/01', '10:00', 'A－原始瑜伽', '老師乙', 'cal-yoga-1', 'class-yoga-a', 'teacher-b', '否', ''],
+      ['2026/08/08', '10:00', 'A－原始瑜伽', '老師乙', 'cal-yoga-2', 'class-yoga-a', 'teacher-b', '否', ''],
+      ['2026/08/03', '18:30', 'B－椅子瑜伽（90min）', '老師丙', 'cal-chair', 'class-chair-b', 'teacher-c', '否', ''],
+    ],
+  });
+  backend.getObClassCatalog_ = () => {
+    throw new Error('ordinary claim options must not read the unfiltered classes catalog');
+  };
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const options = backend.getClaimOptions_(teacherASession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
+    { courseKey: '原始瑜伽', courseName: '原始瑜伽', category: '地板課程', durationMinutes: 0 },
+  ]);
+});
+
 test('re-normalizes cached OB course items before teacher selection', () => {
   const services = createAuthServices();
   services.__cache.set('OB_ACTIVE_CLASS_CATALOG_V1', JSON.stringify([
@@ -2518,6 +2567,11 @@ test('same-apparatus change keeps difficulty and note optional', () => {
 test('claim options return only invited teacher capabilities and authorised OB classes', () => {
   const { backend, adminSession, teacherASession } = createInvitationBackend({
     teacherACapabilities: '空環、瑜伽',
+    courseRows: [
+      ['2026/08/01', '09:00', 'A－空環 Lv.1', '老師乙', 'calendar-ring-1', 'class-ring-1', 'teacher-b', '否', ''],
+      ['2026/08/08', '09:00', 'A－空環 Lv.1', '老師乙', 'calendar-ring-2', 'class-ring-1', 'teacher-b', '否', ''],
+      ['2026/08/02', '12:00', 'A－原始瑜伽特別課', '老師丙', 'calendar-special', 'class-special', 'teacher-c', '否', ''],
+    ],
   });
   backend.openInvitations_(adminSession, ['老師甲']);
 
@@ -2525,7 +2579,7 @@ test('claim options return only invited teacher capabilities and authorised OB c
 
   assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空環', '地板課程']);
   assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
-    { courseKey: '空環 Lv.1', courseName: '空環 Lv.1', category: '空環' },
+    { courseKey: '空環 Lv.1', courseName: '空環 Lv.1', category: '空環', durationMinutes: 0 },
   ]);
   assert.equal(options.pinHash, undefined);
   assert.equal(options.role, undefined);

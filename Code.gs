@@ -3420,10 +3420,15 @@ function getClaimOptions_(session) {
     return { capabilities: [], classes: [] };
   }
   var capabilities = getTeacherCapabilities_(teacher);
-  var catalog = getObClassCatalog_();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
   return {
     capabilities: capabilities,
-    classes: buildClaimCourseOptions_(catalog, capabilities)
+    classes: buildRecurringClaimCourseOptions_(
+      courseSheet.getDataRange().getValues().slice(1),
+      capabilities
+    )
   };
 }
 
@@ -3490,6 +3495,74 @@ function buildClaimCourseOptions_(catalog, capabilities) {
       category: item.category
     };
   }).filter(Boolean).sort(function(a, b) {
+    return [a.category, a.courseName].join('|').localeCompare([b.category, b.courseName].join('|'));
+  });
+}
+
+function parseExplicitCourseMinutes_(courseName) {
+  var name = cleanText_(courseName).toLowerCase();
+  var hourMatch = /(\d+(?:\.\d+)?)\s*(?:小時|hours?|hrs?)/i.exec(name);
+  if (hourMatch) {
+    var hourMinutes = Number(hourMatch[1]) * 60;
+    return isFinite(hourMinutes) && hourMinutes > 0 ? Math.round(hourMinutes) : 0;
+  }
+  var minuteMatch = /(\d+)\s*(?:分鐘|分|min(?:ute)?s?)/i.exec(name);
+  if (!minuteMatch) return 0;
+  var minutes = Number(minuteMatch[1]);
+  return isFinite(minutes) && minutes > 0 ? minutes : 0;
+}
+
+function getCourseWeekdayNumber_(dateValue) {
+  var match = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/.exec(formatMyDate(dateValue));
+  if (!match) return '';
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).getUTCDay();
+}
+
+function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
+  var allowed = {};
+  (capabilities || []).forEach(function(category) {
+    allowed[cleanText_(category)] = true;
+  });
+  var recurrenceCounts = {};
+  var candidates = [];
+  (courseRows || []).forEach(function(row) {
+    var fullCourseName = cleanText_(row && row[2]);
+    var courseName = stripCourseRoom_(fullCourseName);
+    var courseKey = normalizeCourseCatalogKey_(courseName);
+    var room = getCourseRoom_(fullCourseName);
+    var time = formatMyTime(row && row[1]);
+    var weekday = getCourseWeekdayNumber_(row && row[0]);
+    var category = getCourseCategory_(courseName);
+    if (!courseName || !courseKey || !room || time === '' || weekday === '' ||
+        !allowed[category] || /特別課|場地租借/.test(courseName)) {
+      return;
+    }
+    var recurrenceKey = [room, courseKey, weekday, time].join('|');
+    recurrenceCounts[recurrenceKey] = (recurrenceCounts[recurrenceKey] || 0) + 1;
+    candidates.push({
+      recurrenceKey: recurrenceKey,
+      courseKey: courseKey,
+      courseName: courseName,
+      category: category,
+      durationMinutes: parseExplicitCourseMinutes_(courseName)
+    });
+  });
+
+  var seen = {};
+  return candidates.filter(function(item) {
+    if (recurrenceCounts[item.recurrenceKey] < 2) return false;
+    var key = item.category + '|' + item.courseKey;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).map(function(item) {
+    return {
+      courseKey: item.courseKey,
+      courseName: item.courseName,
+      category: item.category,
+      durationMinutes: item.durationMinutes
+    };
+  }).sort(function(a, b) {
     return [a.category, a.courseName].join('|').localeCompare([b.category, b.courseName].join('|'));
   });
 }

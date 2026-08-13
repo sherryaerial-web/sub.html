@@ -77,7 +77,10 @@ var CONFIG = {
   COURSE_SHEET: SHEETS.COURSE_LIST,
   LEAVE_SHEET: SHEETS.LEAVES,
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
+  CLASSES_API_URL: 'https://api.omceanbooking.com/v1/classes',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
+  OB_CLASS_CACHE_KEY: 'OB_ACTIVE_CLASS_CATALOG_V1',
+  OB_CLASS_CACHE_SECONDS: 21600,
   PAGE_SIZE: 100,
   LOCK_TIMEOUT_MS: 30000,
   AUTH_SESSION_DURATION_SECONDS: 30 * 24 * 60 * 60,
@@ -1275,9 +1278,8 @@ function getCourseCategory_(courseName) {
   if (/空中?瑜伽|空瑜/.test(name)) return '空瑜';
   if (/空環/.test(name)) return '空環';
   if (/舞綢/.test(name)) return '舞綢';
-  if (/柔軟度|柔軟開發/.test(name)) return '柔軟度';
   if (/綢吊/.test(name)) return '綢吊';
-  if (/瑜伽/.test(name)) return '瑜伽';
+  if (/瑜伽|皮拉提斯|現代小品|柔軟度|柔軟開發|後彎|開髖/.test(name)) return '地板課程';
   return '其他';
 }
 
@@ -3418,11 +3420,155 @@ function getClaimOptions_(session) {
     return { capabilities: [], classes: [] };
   }
   var capabilities = getTeacherCapabilities_(teacher);
+  var catalog = getObClassCatalog_();
   return {
     capabilities: capabilities,
-    classes: getObClassOptions_().filter(function(item) {
-      return capabilities.indexOf(item.category) !== -1;
-    })
+    classes: buildClaimCourseOptions_(catalog, capabilities)
+  };
+}
+
+function getCourseRoom_(courseName) {
+  var match = /^\s*([A-D])\s*[－—–-]\s*/i.exec(String(courseName || ''));
+  return match ? match[1].toUpperCase() : '';
+}
+
+function stripCourseRoom_(courseName) {
+  return cleanText_(String(courseName || '').replace(/^\s*[A-D]\s*[－—–-]\s*/i, ''));
+}
+
+function normalizeCourseCatalogKey_(courseName) {
+  return stripCourseRoom_(courseName).replace(/\s+/g, ' ').trim();
+}
+
+function normalizeObClassCatalog_(rawClasses) {
+  var seen = {};
+  return (rawClasses || []).map(function(item) {
+    var classId = cleanText_(item && (item.id || item.classId));
+    var fullCourseName = cleanText_(item && (
+      item.nameZhHant || item.nameEn || item.name || item.fullCourseName || item.courseName
+    ));
+    var courseName = stripCourseRoom_(fullCourseName);
+    var courseKey = normalizeCourseCatalogKey_(courseName);
+    if (!classId || !courseName || !courseKey || seen[classId]) return null;
+    seen[classId] = true;
+    return {
+      classId: classId,
+      fullCourseName: fullCourseName,
+      courseName: courseName,
+      courseKey: courseKey,
+      room: getCourseRoom_(fullCourseName),
+      category: getCourseCategory_(courseName)
+    };
+  }).filter(Boolean).sort(function(a, b) {
+    return [a.category, a.courseName, a.room, a.classId].join('|')
+      .localeCompare([b.category, b.courseName, b.room, b.classId].join('|'));
+  });
+}
+
+function buildClaimCourseOptions_(catalog, capabilities) {
+  var allowed = {};
+  (capabilities || []).forEach(function(category) { allowed[cleanText_(category)] = true; });
+  var seen = {};
+  return (catalog || []).filter(function(item) {
+    return allowed[item.category];
+  }).map(function(item) {
+    var dedupeKey = item.category + '|' + item.courseKey;
+    if (seen[dedupeKey]) return null;
+    seen[dedupeKey] = true;
+    return {
+      courseKey: item.courseKey,
+      courseName: item.courseName,
+      category: item.category
+    };
+  }).filter(Boolean).sort(function(a, b) {
+    return [a.category, a.courseName].join('|').localeCompare([b.category, b.courseName].join('|'));
+  });
+}
+
+function fetchObClassPages_(token) {
+  var allClasses = [];
+  var start = 0;
+  while (true) {
+    var response = UrlFetchApp.fetch(CONFIG.CLASSES_API_URL + '?start=' + start, {
+      method: 'get',
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    var statusCode = response.getResponseCode();
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error('Omcean Classes API 回傳 HTTP ' + statusCode + '。');
+    }
+    var page;
+    try {
+      page = JSON.parse(response.getContentText());
+    } catch (error) {
+      throw new Error('Omcean Classes API 回傳格式錯誤。');
+    }
+    if (!Array.isArray(page)) throw new Error('Omcean Classes API 回傳格式錯誤。');
+    allClasses = allClasses.concat(page);
+    if (page.length < CONFIG.PAGE_SIZE) break;
+    start += CONFIG.PAGE_SIZE;
+  }
+  return allClasses;
+}
+
+function getCourseListClassCatalogFallback_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
+  return normalizeObClassCatalog_(sheet.getDataRange().getValues().slice(1).map(function(row) {
+    return { id: cleanText_(row[5]), nameZhHant: cleanText_(row[2]) };
+  }));
+}
+
+function getObClassCatalog_() {
+  var cache = typeof CacheService !== 'undefined' ? CacheService.getScriptCache() : null;
+  var cached = cache ? cache.get(CONFIG.OB_CLASS_CACHE_KEY) : '';
+  if (cached) {
+    try {
+      var parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch (error) {
+      if (console && console.warn) console.warn('OB 課程快取格式錯誤，將重新讀取。');
+    }
+  }
+
+  try {
+    var properties = typeof PropertiesService !== 'undefined'
+      ? PropertiesService.getScriptProperties()
+      : null;
+    var token = properties ? properties.getProperty(CONFIG.API_TOKEN_PROPERTY) : '';
+    if (token && typeof UrlFetchApp !== 'undefined') {
+      var catalog = normalizeObClassCatalog_(fetchObClassPages_(token));
+      if (catalog.length) {
+        if (cache) {
+          try {
+            cache.put(CONFIG.OB_CLASS_CACHE_KEY, JSON.stringify(catalog), CONFIG.OB_CLASS_CACHE_SECONDS);
+          } catch (cacheError) {
+            if (console && console.warn) console.warn('OB 課程快取寫入失敗，本次仍使用即時資料。');
+          }
+        }
+        return catalog;
+      }
+    }
+  } catch (error) {
+    if (console && console.warn) console.warn('OB 課程項目讀取失敗，暫用 CourseList：' + getErrorMessage_(error));
+  }
+  return getCourseListClassCatalogFallback_();
+}
+
+function resolveCatalogCourseForRoom_(catalog, courseKey, targetCourseName) {
+  var wantedKey = normalizeCourseCatalogKey_(courseKey);
+  var matches = (catalog || []).filter(function(item) { return item.courseKey === wantedKey; });
+  if (!matches.length) return null;
+  var targetRoom = getCourseRoom_(targetCourseName);
+  var exactRoom = matches.filter(function(item) { return item.room === targetRoom; })[0] || null;
+  var selected = exactRoom || matches[0];
+  return {
+    actualClassId: exactRoom ? exactRoom.classId : '',
+    actualCourseName: targetRoom ? targetRoom + '－' + selected.courseName : selected.courseName,
+    category: selected.category,
+    needsCreation: !exactRoom
   };
 }
 
@@ -3759,6 +3905,7 @@ function claimSubstitute_(session, items) {
         targetCourseName: cleanText_(row[4]),
         targetCalendarId: cleanText_(row[10]),
         handlingType: item.handlingType,
+        courseKey: item.courseKey,
         actualClassId: item.actualClassId,
         actualCourseName: item.actualCourseName,
         category: item.category,
@@ -4343,6 +4490,7 @@ function validateClaimChange_(claim) {
   var targetCourseName = cleanText_(item.targetCourseName);
   var targetCategory = getCourseCategory_(targetCourseName);
   var handlingKey = cleanText_(item.handlingType) || 'original';
+  var selectedCourseKey = cleanText_(item.courseKey);
   var difficulty = cleanText_(item.difficulty);
   var note = cleanText_(item.note);
   var actualClassId = '';
@@ -4362,13 +4510,26 @@ function validateClaimChange_(claim) {
     actualCategory = targetCategory;
     handlingType = '沿用原課程';
   } else if (handlingKey === 'existing') {
-    actualClassId = cleanText_(item.actualClassId);
-    if (!actualClassId) throw new Error('請選擇要改用的 OB 現有課程。');
-    var existingCourse = findObCourseByClassId_(actualClassId);
-    if (!existingCourse) throw new Error('找不到選擇的 OB 現有課程，請重新整理。');
-    actualCourseName = existingCourse.courseName;
-    actualCategory = existingCourse.category;
-    handlingType = '改用既有 OB 課程';
+    if (selectedCourseKey) {
+      var resolvedCourse = resolveCatalogCourseForRoom_(
+        getObClassCatalog_(),
+        selectedCourseKey,
+        targetCourseName
+      );
+      if (!resolvedCourse) throw new Error('找不到選擇的 OB 課程項目，請重新整理。');
+      actualClassId = resolvedCourse.actualClassId;
+      actualCourseName = resolvedCourse.actualCourseName;
+      actualCategory = resolvedCourse.category;
+      handlingType = resolvedCourse.needsCreation ? '需要新增課程' : '改用既有 OB 課程';
+    } else {
+      actualClassId = cleanText_(item.actualClassId);
+      if (!actualClassId) throw new Error('請選擇要改用的 OB 現有課程。');
+      var existingCourse = findObCourseByClassId_(actualClassId);
+      if (!existingCourse) throw new Error('找不到選擇的 OB 現有課程，請重新整理。');
+      actualCourseName = existingCourse.courseName;
+      actualCategory = existingCourse.category;
+      handlingType = '改用既有 OB 課程';
+    }
   } else if (handlingKey === 'new') {
     actualCourseName = cleanText_(item.actualCourseName);
     actualCategory = normalizeTeacherCapabilities_([item.category])[0] || '';

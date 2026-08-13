@@ -840,7 +840,7 @@ test('existing session immediately follows current account role capabilities and
   accountSheet.values[1][7] = '舞綢、瑜伽';
   assert.deepEqual(
     JSON.parse(JSON.stringify(backend.requireSession_(response.sessionToken))),
-    { teacherName: '管理員', role: '老師', capabilities: ['舞綢', '瑜伽'], managementCapabilities: [] }
+    { teacherName: '管理員', role: '老師', capabilities: ['舞綢', '地板課程'], managementCapabilities: [] }
   );
   assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
 
@@ -1662,10 +1662,29 @@ test('classifies supported course categories', () => {
   assert.equal(backend.getCourseCategory_('B－空環 Lv.2'), '空環');
   assert.equal(backend.getCourseCategory_('C－舞綢 Lv.1'), '舞綢');
   assert.equal(backend.getCourseCategory_('空中瑜伽 Lv.1'), '空瑜');
-  assert.equal(backend.getCourseCategory_('原始瑜伽'), '瑜伽');
-  assert.equal(backend.getCourseCategory_('柔軟度開發'), '柔軟度');
+  assert.equal(backend.getCourseCategory_('原始瑜伽'), '地板課程');
+  assert.equal(backend.getCourseCategory_('皮拉提斯'), '地板課程');
+  assert.equal(backend.getCourseCategory_('現代小品'), '地板課程');
+  assert.equal(backend.getCourseCategory_('柔軟度開發'), '地板課程');
   assert.equal(backend.getCourseCategory_('綢吊'), '綢吊');
   assert.equal(backend.getCourseCategory_('未分類特別課'), '其他');
+});
+
+test('deduplicates OB course items across rooms for teacher selection', () => {
+  const backend = loadBackend();
+  const catalog = backend.normalizeObClassCatalog_([
+    { id: 101, nameZhHant: 'A－肩頸舒壓瑜伽' },
+    { id: 202, nameZhHant: 'B－肩頸舒壓瑜伽' },
+    { id: 303, nameZhHant: 'D－香氛瑜伽' },
+    { id: 404, nameZhHant: 'A－空環 Lv.1' },
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    backend.buildClaimCourseOptions_(catalog, ['地板課程'])
+  )), [
+    { courseKey: '肩頸舒壓瑜伽', courseName: '肩頸舒壓瑜伽', category: '地板課程' },
+    { courseKey: '香氛瑜伽', courseName: '香氛瑜伽', category: '地板課程' },
+  ]);
 });
 
 test('calculates today through the end of next month', () => {
@@ -2476,9 +2495,9 @@ test('claim options return only invited teacher capabilities and authorised OB c
 
   const options = backend.getClaimOptions_(teacherASession);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空環', '瑜伽']);
+  assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空環', '地板課程']);
   assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
-    { classId: 'class-ring-1', courseName: '空環 Lv.1', category: '空環' },
+    { courseKey: '空環 Lv.1', courseName: '空環 Lv.1', category: '空環' },
   ]);
   assert.equal(options.pinHash, undefined);
   assert.equal(options.role, undefined);
@@ -2541,6 +2560,51 @@ test('existing-course change resolves duplicate display names by the selected cl
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-duplicate-name');
   assert.equal(claimedRow[11], 'class-ring-2');
   assert.equal(claimedRow[12], '空環 Lv.1');
+});
+
+test('catalog course choice keeps the leave room and uses its matching OB class ID', () => {
+  const { backend } = createInvitationBackend({ teacherACapabilities: '地板課程' });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 101, nameZhHant: 'A－肩頸舒壓瑜伽' },
+    { id: 202, nameZhHant: 'B－肩頸舒壓瑜伽' },
+  ]);
+
+  const normalized = backend.validateClaimChange_({
+    teacher: '老師甲',
+    targetCourseName: 'B－舞綢 Lv.2',
+    handlingType: 'existing',
+    courseKey: '肩頸舒壓瑜伽',
+    actualCourseName: '肩頸舒壓瑜伽',
+    category: '地板課程',
+    note: '改為地板課程。',
+  });
+
+  assert.equal(normalized.actualClassId, '202');
+  assert.equal(normalized.actualCourseName, 'B－肩頸舒壓瑜伽');
+  assert.equal(normalized.category, '地板課程');
+  assert.equal(normalized.handlingType, '改用既有 OB 課程');
+});
+
+test('catalog course choice marks an absent room version for admin creation', () => {
+  const { backend } = createInvitationBackend({ teacherACapabilities: '地板課程' });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 101, nameZhHant: 'A－原始瑜伽' },
+    { id: 303, nameZhHant: 'D－原始瑜伽' },
+  ]);
+
+  const normalized = backend.validateClaimChange_({
+    teacher: '老師甲',
+    targetCourseName: 'B－舞綢 Lv.2',
+    handlingType: 'existing',
+    courseKey: '原始瑜伽',
+    actualCourseName: '原始瑜伽',
+    category: '地板課程',
+    note: '改為地板課程。',
+  });
+
+  assert.equal(normalized.actualClassId, '');
+  assert.equal(normalized.actualCourseName, 'B－原始瑜伽');
+  assert.equal(normalized.handlingType, '需要新增課程');
 });
 
 test('cancel leaves the original row and records a complete audit event', () => {

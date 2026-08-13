@@ -450,13 +450,12 @@ test('marks the note required as soon as a same-capability teacher chooses anoth
   assert.equal(context.claimNoteIsRequired(item, 'existing', '舞綢'), true);
 });
 
-test('keeps duplicate course names distinct by classId in the existing-class selector', async () => {
+test('submits the room-free OB course key selected by the teacher', async () => {
   const { context, claimCard, claimControls } = createFrontendRuntime({
     getClaimOptions: {
-      capabilities: ['空環'],
+      capabilities: ['地板課程'],
       classes: [
-        { classId: 'class-ring-1', courseName: '空環 Lv.1', category: '空環' },
-        { classId: 'class-ring-2', courseName: '空環 Lv.1', category: '空環' },
+        { courseKey: '肩頸舒壓瑜伽', courseName: '肩頸舒壓瑜伽', category: '地板課程' },
       ],
     },
     getAvailableSubstitutes: [],
@@ -465,25 +464,26 @@ test('keeps duplicate course names distinct by classId in the existing-class sel
 
   await context.fetchAvailableSubstitutes();
 
-  assert.equal(context.findSelectedClaimClass('class-ring-2').classId, 'class-ring-2');
+  assert.equal(context.findSelectedClaimClass('肩頸舒壓瑜伽').courseName, '肩頸舒壓瑜伽');
   claimControls['input[type="radio"]:checked'].value = 'existing';
-  claimControls['.existing-class-search'].value = 'class-ring-2';
+  claimControls['.existing-class-search'].value = '肩頸舒壓瑜伽';
   assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
     handlingType: 'existing',
-    actualClassId: 'class-ring-2',
-    actualCourseName: '空環 Lv.1',
-    category: '空環',
+    actualClassId: '',
+    actualCourseName: '肩頸舒壓瑜伽',
+    category: '地板課程',
     difficulty: '',
     note: '',
+    courseKey: '肩頸舒壓瑜伽',
   });
 });
 
 test('shows course names instead of OB class IDs in the existing-course selector', async () => {
   const { context, getElement } = createFrontendRuntime({
     getClaimOptions: {
-      capabilities: ['瑜伽'],
+      capabilities: ['地板課程'],
       classes: [
-        { classId: '389', courseName: '地板瑜伽', category: '瑜伽' },
+        { courseKey: '地板瑜伽', courseName: '地板瑜伽', category: '地板課程' },
       ],
     },
     getAvailableSubstitutes: [{
@@ -501,8 +501,9 @@ test('shows course names instead of OB class IDs in the existing-course selector
 
   const markup = getElement('pending-leaves-list').innerHTML;
   assert.match(markup, /<select class="claim-control existing-class-search">/);
-  assert.match(markup, /<option value="389">地板瑜伽｜瑜伽<\/option>/);
+  assert.match(markup, /<option value="地板瑜伽">地板瑜伽<\/option>/);
   assert.doesNotMatch(markup, />389<\/option>/);
+  assert.doesNotMatch(markup, /｜地板課程/);
   assert.doesNotMatch(markup, /課程代碼/);
 });
 

@@ -1158,9 +1158,8 @@
       if (/空中?瑜伽|空瑜/.test(name)) return "空瑜";
       if (/空環/.test(name)) return "空環";
       if (/舞綢/.test(name)) return "舞綢";
-      if (/柔軟度|柔軟開發/.test(name)) return "柔軟度";
       if (/綢吊/.test(name)) return "綢吊";
-      if (/瑜伽/.test(name)) return "瑜伽";
+      if (/瑜伽|皮拉提斯|現代小品|柔軟度|柔軟開發|後彎|開髖/.test(name)) return "地板課程";
       return "其他";
     }
 
@@ -1175,6 +1174,7 @@
       const change = draft || {};
       const target = item || {};
       const handlingType = String(change.handlingType || "original");
+      const courseKey = String(change.courseKey || "").trim();
       const actualClassId = String(change.actualClassId || "").trim();
       const actualCourseName = String(change.actualCourseName || "").trim();
       const category = String(change.category || "").trim();
@@ -1186,7 +1186,7 @@
       if (handlingType === "original" && !canReuseOriginal) {
         throw new Error("這堂課不在您的可教授類別中，不能沿用原課程。");
       }
-      if (handlingType === "existing" && !actualClassId) {
+      if (handlingType === "existing" && !courseKey && !actualClassId) {
         throw new Error("請選擇要改用的 OB 現有課程。");
       }
       if (handlingType === "new") {
@@ -1203,7 +1203,7 @@
         throw new Error("跨道具代課時，請填寫改課原因或補充備註。");
       }
 
-      return {
+      const normalized = {
         substituteId: String(target["代課編號"] || ""),
         handlingType,
         actualClassId,
@@ -1212,6 +1212,8 @@
         difficulty,
         note
       };
+      if (courseKey) normalized.courseKey = courseKey;
+      return normalized;
     }
 
     function setNotice(message, type = "success") {
@@ -1722,8 +1724,10 @@
     }
 
     function findSelectedClaimClass(value) {
-      const wantedClassId = String(value || "").trim();
-      return getTeachableClaimClasses().find((item) => item.classId === wantedClassId) || null;
+      const wantedCourseKey = String(value || "").trim();
+      return getTeachableClaimClasses().find((item) =>
+        (item.courseKey || item.classId) === wantedCourseKey
+      ) || null;
     }
 
     function groupAvailableSubstitutesByDate(items) {
@@ -1803,7 +1807,7 @@
                 <select class="claim-control existing-class-search">
                   <option value="">請選擇課程</option>
                   ${getTeachableClaimClasses().map((course) =>
-                    `<option value="${escapeHtml(course.classId)}">${escapeHtml(`${course.courseName}｜${course.category}`)}</option>`
+                    `<option value="${escapeHtml(course.courseKey || course.classId)}">${escapeHtml(course.courseName)}</option>`
                   ).join("")}
                 </select>
               </div>
@@ -1864,9 +1868,11 @@
     function readClaimDraft(card) {
       const handlingType = card.querySelector('input[type="radio"]:checked')?.value || "original";
       const existingClass = findSelectedClaimClass(card.querySelector(".existing-class-search").value);
-      return {
+      const draft = {
         handlingType,
-        actualClassId: handlingType === "existing" && existingClass ? existingClass.classId : "",
+        actualClassId: handlingType === "existing" && existingClass && !existingClass.courseKey
+          ? existingClass.classId
+          : "",
         actualCourseName: handlingType === "existing" && existingClass
           ? existingClass.courseName
           : card.querySelector(".new-course-name").value,
@@ -1876,6 +1882,10 @@
         difficulty: card.querySelector(".claim-difficulty").value,
         note: card.querySelector(".claim-note").value
       };
+      if (handlingType === "existing" && existingClass && existingClass.courseKey) {
+        draft.courseKey = existingClass.courseKey;
+      }
+      return draft;
     }
 
     async function submitClaim() {

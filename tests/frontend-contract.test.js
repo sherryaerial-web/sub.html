@@ -372,12 +372,12 @@ test('uses the protected capability result before deciding whether a course chan
   assert.doesNotMatch(getElement('pending-leaves-list').innerHTML, /需要改成可教授的課程/);
 });
 
-test('loads protected capability and searchable existing-class options for claims', () => {
+test('loads protected capability and existing-class options for claims', () => {
   assert.match(html, /callApi\(["']getClaimOptions["']/);
   assert.match(html, /claimOptions/);
   assert.match(html, /class-search/);
   assert.match(html, /existing-class/);
-  assert.match(html, /搜尋 OB 現有課程/);
+  assert.match(html, /選擇 OB 現有課程/);
 });
 
 test('renders all three handling types with difficulty and an always-available note', () => {
@@ -451,7 +451,7 @@ test('marks the note required as soon as a same-capability teacher chooses anoth
 });
 
 test('keeps duplicate course names distinct by classId in the existing-class selector', async () => {
-  const { context, getElement, claimCard, claimControls } = createFrontendRuntime({
+  const { context, claimCard, claimControls } = createFrontendRuntime({
     getClaimOptions: {
       capabilities: ['空環'],
       classes: [
@@ -466,8 +466,6 @@ test('keeps duplicate course names distinct by classId in the existing-class sel
   await context.fetchAvailableSubstitutes();
 
   assert.equal(context.findSelectedClaimClass('class-ring-2').classId, 'class-ring-2');
-  assert.match(getElement('existing-class-options').innerHTML, /value="class-ring-1"/);
-  assert.match(getElement('existing-class-options').innerHTML, /value="class-ring-2"/);
   claimControls['input[type="radio"]:checked'].value = 'existing';
   claimControls['.existing-class-search'].value = 'class-ring-2';
   assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
@@ -478,6 +476,34 @@ test('keeps duplicate course names distinct by classId in the existing-class sel
     difficulty: '',
     note: '',
   });
+});
+
+test('shows course names instead of OB class IDs in the existing-course selector', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['瑜伽'],
+      classes: [
+        { classId: '389', courseName: '地板瑜伽', category: '瑜伽' },
+      ],
+    },
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-yoga',
+      '日期': '2026/09/04',
+      '時段': '11:00',
+      '課程': '舞綢 Lv.2',
+      '課程大類': '舞綢',
+      '原老師': '老師甲',
+      '可沿用原課程': false,
+    }],
+  });
+
+  await context.fetchAvailableSubstitutes();
+
+  const markup = getElement('pending-leaves-list').innerHTML;
+  assert.match(markup, /<select class="claim-control existing-class-search">/);
+  assert.match(markup, /<option value="389">地板瑜伽｜瑜伽<\/option>/);
+  assert.doesNotMatch(markup, />389<\/option>/);
+  assert.doesNotMatch(markup, /課程代碼/);
 });
 
 test('teacher records expose cancel and withdraw request actions', () => {

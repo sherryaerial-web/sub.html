@@ -994,7 +994,6 @@
 
         <section id="view-claim" class="view">
           <div class="view-header"><div><span class="eyebrow">Substitute</span><h2 class="section-heading">領取代課</h2><p class="section-copy">目前開放的代課課程</p></div></div>
-          <datalist id="existing-class-options"></datalist>
           <div id="pending-leaves-list" class="list"><div class="state">載入中...</div></div>
           <button id="claim-submit" class="primary-button" type="button"><i data-lucide="hand"></i>確認領取勾選課程</button>
         </section>
@@ -1709,7 +1708,6 @@
         ]);
         pendingLeaves = availableSubstitutes;
         claimOptions = options || { capabilities: [], classes: [] };
-        renderClaimClassOptions();
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
         renderAvailableSubstitutes();
@@ -1721,12 +1719,6 @@
     function getTeachableClaimClasses() {
       const capabilities = new Set(claimOptions.capabilities || []);
       return (claimOptions.classes || []).filter((item) => capabilities.has(item.category));
-    }
-
-    function renderClaimClassOptions() {
-      byId("existing-class-options").innerHTML = getTeachableClaimClasses().map((item) =>
-        `<option value="${escapeHtml(item.classId)}" label="${escapeHtml(`${item.courseName}｜${item.category}｜${item.classId}`)}"></option>`
-      ).join("");
     }
 
     function findSelectedClaimClass(value) {
@@ -1807,9 +1799,13 @@
 
             <div class="claim-fields">
               <div class="claim-field full existing-class-panel" hidden>
-                <label>搜尋 OB 現有課程 <span class="claim-required">必填</span></label>
-                <input class="claim-control class-search existing-class-search" type="text"
-                  list="existing-class-options" autocomplete="off" placeholder="輸入課名或課程代碼搜尋">
+                <label>選擇 OB 現有課程 <span class="claim-required">必填</span></label>
+                <select class="claim-control existing-class-search">
+                  <option value="">請選擇課程</option>
+                  ${getTeachableClaimClasses().map((course) =>
+                    `<option value="${escapeHtml(course.classId)}">${escapeHtml(`${course.courseName}｜${course.category}`)}</option>`
+                  ).join("")}
+                </select>
               </div>
 
               <div class="claim-field new-course-panel" hidden>

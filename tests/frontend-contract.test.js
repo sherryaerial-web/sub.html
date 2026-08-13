@@ -507,6 +507,13 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
+test('copies the production classroom URL with the LINE substitute invitation', () => {
+  assert.match(
+    html,
+    /您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。\\nhttps:\/\/sherryaerial-web\.github\.io\/sub\.html\//
+  );
+});
+
 test('pending invitation queue shows courses before the responsive teacher picker', () => {
   const start = html.indexOf('activeAdminTab === "pendingInvitations"');
   const end = html.indexOf('activeAdminTab === "activeInvitees"', start);

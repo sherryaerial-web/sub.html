@@ -2429,7 +2429,7 @@
     }
 
     async function copyInvitationMessage() {
-      const text = "您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。";
+      const text = "您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。\nhttps://sherryaerial-web.github.io/sub.html/";
       await navigator.clipboard.writeText(text);
       setNotice("LINE 邀請文字已複製。");
     }

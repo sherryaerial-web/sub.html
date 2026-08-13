@@ -22,6 +22,8 @@ function createFrontendRuntime(fixtures = {}) {
         value: '',
         addEventListener() {},
         focus() {},
+        setAttribute() {},
+        removeAttribute() {},
         classList: { add() {}, remove() {}, toggle() {} },
       });
     }
@@ -133,6 +135,64 @@ test('keeps the three required workflows and mobile viewport', () => {
 test('shows backend errors instead of always claiming success', () => {
   assert.match(html, /throw new Error\(payload\.message/);
   assert.match(html, /catch\s*\(error\)/);
+});
+
+test('keeps dashboard rendering alive when the optional icon library throws', () => {
+  const { context } = createFrontendRuntime();
+  context.console = { warn() {} };
+  context.window.lucide = {
+    createIcons() {
+      throw new SyntaxError('The string did not match the expected pattern.');
+    },
+  };
+
+  assert.doesNotThrow(() => context.refreshIcons());
+});
+
+test('does not present unloaded admin counts as real zero values', () => {
+  assert.doesNotMatch(html, /data-admin-count="[^"]+">0<\/span>/);
+  assert.match(html, /function setAdminCountsUnavailable\(\)/);
+});
+
+test('locks the leave pause button until the mutation and dashboard refresh finish', async () => {
+  const { context, getElement } = createFrontendRuntime();
+  let finishPauseRequest;
+  context.fetch = (url, request = {}) => {
+    const action = new URLSearchParams(request.body || '').get('action');
+    if (action === 'pauseLeaves') {
+      return new Promise((resolve) => {
+        finishPauseRequest = () => resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ status: 'success', data: { paused: true } }),
+        });
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'success',
+        data: {
+          leavePaused: true,
+          pendingInvitations: [],
+          activeInvitees: [],
+          obWork: [],
+          changeRequests: [],
+          exceptions: [],
+          completed: [],
+          teachers: [],
+          replacementOptions: [],
+        },
+      }),
+    });
+  };
+
+  const pending = context.toggleAdminLeavePause();
+  assert.equal(getElement('admin-leave-pause').disabled, true);
+  finishPauseRequest();
+  await pending;
+  assert.equal(getElement('admin-leave-pause').disabled, false);
 });
 
 test('provides teacher login and sends credentials through form-encoded POST', () => {

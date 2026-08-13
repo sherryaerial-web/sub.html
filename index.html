@@ -1028,14 +1028,14 @@
           <div id="admin-summary" class="admin-summary"></div>
           <div class="admin-workspace">
             <div class="admin-tabs" role="tablist" aria-label="管理工作區">
-              <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資<span class="admin-tab-count" data-admin-count="payroll">0</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip" data-capability="vvip_admin"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">0</span></button>
+              <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資<span class="admin-tab-count" data-admin-count="payroll">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip" data-capability="vvip_admin"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">—</span></button>
             </div>
             <div id="admin-tab-content" class="admin-tab-content"><div class="state">載入中...</div></div>
           </div>
@@ -1083,7 +1083,11 @@
 
     function refreshIcons() {
       if (window.lucide && typeof window.lucide.createIcons === "function") {
-        window.lucide.createIcons({ attrs: { "aria-hidden": "true" } });
+        try {
+          window.lucide.createIcons({ attrs: { "aria-hidden": "true" } });
+        } catch (error) {
+          console.warn("圖示更新失敗，已保留文字與資料內容。", error);
+        }
       }
     }
 
@@ -2081,6 +2085,7 @@
       if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       const content = byId("admin-tab-content");
+      setAdminCountsUnavailable();
       content.innerHTML = '<div class="state">載入中...</div>';
       try {
         adminDashboard = await callApi("getAdminDashboard");
@@ -2089,6 +2094,12 @@
         content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
         if (rethrow) throw error;
       }
+    }
+
+    function setAdminCountsUnavailable() {
+      document.querySelectorAll("[data-admin-count]").forEach((badge) => {
+        badge.textContent = "—";
+      });
     }
 
     async function fetchVvipAdminDashboard(email = "", rethrow = false) {
@@ -2280,8 +2291,17 @@
     }
 
     async function toggleAdminLeavePause() {
-      await callPostApi("pauseLeaves", { paused: !(adminDashboard && adminDashboard.leavePaused) });
-      await fetchAdminDashboard();
+      const button = byId("admin-leave-pause");
+      if (button.disabled) return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      try {
+        await callPostApi("pauseLeaves", { paused: !(adminDashboard && adminDashboard.leavePaused) });
+        await fetchAdminDashboard(true);
+      } finally {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
     }
 
     async function syncObCalendar() {

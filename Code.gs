@@ -3432,8 +3432,17 @@ function getCourseRoom_(courseName) {
   return match ? match[1].toUpperCase() : '';
 }
 
+function stripNewTeacherMarker_(courseName) {
+  return cleanText_(String(courseName || '').replace(
+    /\s*(?:〈\s*新老師\s*〉|<\s*新老師\s*>|（\s*新老師\s*）|\(\s*新老師\s*\)|【\s*新老師\s*】)\s*$/,
+    ''
+  ));
+}
+
 function stripCourseRoom_(courseName) {
-  return cleanText_(String(courseName || '').replace(/^\s*[A-D]\s*[－—–-]\s*/i, ''));
+  return stripNewTeacherMarker_(
+    String(courseName || '').replace(/^\s*[A-D]\s*[－—–-]\s*/i, '')
+  );
 }
 
 function normalizeCourseCatalogKey_(courseName) {
@@ -3527,7 +3536,7 @@ function getObClassCatalog_() {
   if (cached) {
     try {
       var parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length) return parsed;
+      if (Array.isArray(parsed) && parsed.length) return normalizeObClassCatalog_(parsed);
     } catch (error) {
       if (console && console.warn) console.warn('OB 課程快取格式錯誤，將重新讀取。');
     }

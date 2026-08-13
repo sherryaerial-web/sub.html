@@ -1677,14 +1677,47 @@ test('deduplicates OB course items across rooms for teacher selection', () => {
     { id: 202, nameZhHant: 'B－肩頸舒壓瑜伽' },
     { id: 303, nameZhHant: 'D－香氛瑜伽' },
     { id: 404, nameZhHant: 'A－空環 Lv.1' },
+    { id: 505, nameZhHant: 'A－皮拉提斯' },
+    { id: 606, nameZhHant: 'B－皮拉提斯〈新老師〉' },
+    { id: 707, nameZhHant: 'C－柔軟度開發〈新老師〉' },
   ]);
 
   assert.deepEqual(JSON.parse(JSON.stringify(
     backend.buildClaimCourseOptions_(catalog, ['地板課程'])
   )), [
+    { courseKey: '柔軟度開發', courseName: '柔軟度開發', category: '地板課程' },
+    { courseKey: '皮拉提斯', courseName: '皮拉提斯', category: '地板課程' },
     { courseKey: '肩頸舒壓瑜伽', courseName: '肩頸舒壓瑜伽', category: '地板課程' },
     { courseKey: '香氛瑜伽', courseName: '香氛瑜伽', category: '地板課程' },
   ]);
+
+  const resolved = backend.resolveCatalogCourseForRoom_(catalog, '皮拉提斯', 'B－舞綢 Lv.2');
+  assert.equal(resolved.actualClassId, '606');
+  assert.equal(resolved.actualCourseName, 'B－皮拉提斯');
+});
+
+test('re-normalizes cached OB course items before teacher selection', () => {
+  const services = createAuthServices();
+  services.__cache.set('OB_ACTIVE_CLASS_CATALOG_V1', JSON.stringify([
+    {
+      classId: '606',
+      fullCourseName: 'B－皮拉提斯〈新老師〉',
+      courseName: '皮拉提斯〈新老師〉',
+      courseKey: '皮拉提斯〈新老師〉',
+      room: 'B',
+      category: '地板課程',
+    },
+  ]));
+  const backend = loadBackend(services);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getObClassCatalog_())), [{
+    classId: '606',
+    fullCourseName: 'B－皮拉提斯〈新老師〉',
+    courseName: '皮拉提斯',
+    courseKey: '皮拉提斯',
+    room: 'B',
+    category: '地板課程',
+  }]);
 });
 
 test('calculates today through the end of next month', () => {

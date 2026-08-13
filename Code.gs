@@ -4530,6 +4530,12 @@ function validateClaimChange_(claim) {
       actualCategory = existingCourse.category;
       handlingType = '改用既有 OB 課程';
     }
+  } else if (handlingKey === 'special') {
+    actualCourseName = cleanText_(item.actualCourseName);
+    actualCategory = '其他';
+    if (!actualCourseName) throw new Error('請填寫特別課的新課程名稱（概述即可）。');
+    if (!note) throw new Error('調整為特別課時，請填寫備註。');
+    handlingType = '需要新增課程';
   } else if (handlingKey === 'new') {
     actualCourseName = cleanText_(item.actualCourseName);
     actualCategory = normalizeTeacherCapabilities_([item.category])[0] || '';
@@ -4541,7 +4547,7 @@ function validateClaimChange_(claim) {
     throw new Error('課程處理方式無效，請重新選擇。');
   }
 
-  if (!teacherCanTeachCategory_(teacher, actualCategory)) {
+  if (handlingKey !== 'special' && !teacherCanTeachCategory_(teacher, actualCategory)) {
     throw new Error('所選課程類別不在可教授類別中。');
   }
 

@@ -2428,7 +2428,7 @@ test('existing-course change uses the server OB class and requires a cross-appar
   assert.doesNotMatch(claimedRow[7], /偽造課名/);
 });
 
-test('new-course change requires a teachable category, course, difficulty, and cross-apparatus note', () => {
+test('special-course change is universal and requires a summary and note while difficulty stays optional', () => {
   const crossLeave = [
     '2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '舞綢 Lv.1',
     '確認中', '', '', '', 'leave-new', 'calendar-silk',
@@ -2440,32 +2440,27 @@ test('new-course change requires a teachable category, course, difficulty, and c
   backend.openInvitations_(adminSession, ['老師甲']);
 
   assert.throws(() => backend.claimSubstitute_(teacherASession, [{
-    substituteId: 'leave-new', handlingType: 'new', actualCourseName: '',
-    category: '空環', difficulty: 'Lv.1', note: '需要新增',
+    substituteId: 'leave-new', handlingType: 'special', actualCourseName: '',
+    difficulty: '', note: '調整為特別課',
   }]), /課程名稱/);
   assert.throws(() => backend.claimSubstitute_(teacherASession, [{
-    substituteId: 'leave-new', handlingType: 'new', actualCourseName: '空環入門',
-    category: '綢吊', difficulty: 'Lv.1', note: '需要新增',
-  }]), /不在可教授類別/);
-  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
-    substituteId: 'leave-new', handlingType: 'new', actualCourseName: '空環入門',
-    category: '空環', difficulty: '', note: '需要新增',
-  }]), /難度/);
+    substituteId: 'leave-new', handlingType: 'special', actualCourseName: '主題編舞',
+    difficulty: '', note: '',
+  }]), /備註/);
 
   backend.claimSubstitute_(teacherASession, [{
     substituteId: 'leave-new',
-    handlingType: 'new',
+    handlingType: 'special',
     actualClassId: '',
-    actualCourseName: '空環入門',
-    category: '空環',
-    difficulty: 'Lv.1',
-    note: 'OB 需要新增這個課程。',
+    actualCourseName: '主題編舞',
+    difficulty: '',
+    note: '調整為特別課，內容見備註。',
   }]);
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-new');
-  assert.deepEqual(claimedRow.slice(11, 15), ['', '空環入門', 'Lv.1', '需要新增課程']);
-  assert.equal(claimedRow[19], '空環');
-  assert.match(claimedRow[7], /OB 需要新增這個課程/);
+  assert.deepEqual(claimedRow.slice(11, 15), ['', '主題編舞', '', '需要新增課程']);
+  assert.equal(claimedRow[19], '其他');
+  assert.match(claimedRow[7], /調整為特別課/);
 });
 
 test('same-apparatus change keeps difficulty and note optional', () => {

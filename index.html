@@ -1185,6 +1185,7 @@
     function claimNoteIsRequired(item, handlingType, actualCategory) {
       const target = item || {};
       const targetCategory = target["課程大類"] || getCourseCategory(target["課程"]);
+      if (handlingType === "special") return true;
       if (target["可沿用原課程"] !== true) return true;
       return handlingType !== "original" && !!actualCategory && actualCategory !== targetCategory;
     }
@@ -1208,18 +1209,25 @@
       if (handlingType === "existing" && !courseKey && !actualClassId) {
         throw new Error("請選擇要改用的 OB 現有課程。");
       }
+      if (handlingType === "special" && !actualCourseName) {
+        throw new Error("請填寫特別課的新課程名稱（概述即可）。");
+      }
       if (handlingType === "new") {
         if (!actualCourseName) throw new Error("請填寫需要新增的課程名稱。");
         if (!category) throw new Error("請選擇需要新增課程的類別。");
         if (!difficulty) throw new Error("需要新增課程時，請填寫難度。");
       }
-      if (!["original", "existing", "new"].includes(handlingType)) {
+      if (!["original", "existing", "special", "new"].includes(handlingType)) {
         throw new Error("課程處理方式無效，請重新選擇。");
       }
 
-      const actualCategory = handlingType === "original" ? targetCategory : category;
+      const actualCategory = handlingType === "original"
+        ? targetCategory
+        : (handlingType === "special" ? "其他" : category);
       if (claimNoteIsRequired(target, handlingType, actualCategory) && !note) {
-        throw new Error("跨道具代課時，請填寫改課原因或補充備註。");
+        throw new Error(handlingType === "special"
+          ? "調整為特別課時，請填寫備註。"
+          : "跨道具代課時，請填寫改課原因或補充備註。");
       }
 
       const normalized = {
@@ -1227,7 +1235,7 @@
         handlingType,
         actualClassId,
         actualCourseName,
-        category,
+        category: handlingType === "special" ? "其他" : category,
         difficulty,
         note
       };
@@ -1787,9 +1795,7 @@
     function renderAvailableSubstituteItem(item) {
       const substituteId = item["代課編號"];
       const canReuseOriginal = item["可沿用原課程"] === true;
-      const hasExistingClass = getTeachableClaimClasses().length > 0;
-      const defaultHandling = canReuseOriginal ? "original" : (hasExistingClass ? "existing" : "new");
-      const capabilities = claimOptions.capabilities || [];
+      const defaultHandling = canReuseOriginal ? "original" : "existing";
       return `
         <article class="list-item claim-card" data-claim-card-id="${escapeHtml(substituteId)}">
           <input type="checkbox" class="claim-checkbox" data-substitute-id="${escapeHtml(substituteId)}">
@@ -1810,13 +1816,8 @@
               </label>
               <label class="handling-option">
                 <input type="radio" name="handling-${escapeHtml(substituteId)}" value="existing"
-                  ${defaultHandling === "existing" ? "checked" : ""} ${hasExistingClass ? "" : "disabled"}>
+                  ${defaultHandling === "existing" ? "checked" : ""}>
                 改用既有 OB 課程
-              </label>
-              <label class="handling-option">
-                <input type="radio" name="handling-${escapeHtml(substituteId)}" value="new"
-                  ${defaultHandling === "new" ? "checked" : ""}>
-                需要新增課程
               </label>
             </div>
 
@@ -1828,24 +1829,17 @@
                   ${getTeachableClaimClasses().map((course) =>
                     `<option value="${escapeHtml(course.courseKey || course.classId)}">${escapeHtml(course.courseName)}</option>`
                   ).join("")}
+                  <option value="__SPECIAL__">調整為特別課</option>
                 </select>
               </div>
 
-              <div class="claim-field new-course-panel" hidden>
-                <label>新課程名稱 <span class="claim-required">必填</span></label>
-                <input class="claim-control new-course-name" type="text" maxlength="80" placeholder="例如：空環入門">
-              </div>
-
-              <div class="claim-field new-course-panel" hidden>
-                <label>課程類別 <span class="claim-required">必填</span></label>
-                <select class="claim-control new-course-category">
-                  <option value="">請選擇</option>
-                  ${capabilities.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("")}
-                </select>
+              <div class="claim-field full special-course-panel" hidden>
+                <label>新課程名稱（概述即可）</label>
+                <input class="claim-control new-course-name" type="text" maxlength="80" placeholder="例如：主題編舞、特別課內容概述">
               </div>
 
               <div class="claim-field">
-                <label>難度／等級 <span class="new-difficulty-required claim-required" hidden>必填</span></label>
+                <label>難度／等級</label>
                 <input class="claim-control claim-difficulty" type="text" maxlength="40" placeholder="例如：Lv.1、基礎">
               </div>
 
@@ -1867,26 +1861,27 @@
       if (!checked) return;
       const handling = card.querySelector('input[type="radio"]:checked')?.value || "original";
       card.querySelector(".existing-class-panel").hidden = handling !== "existing";
-      card.querySelectorAll(".new-course-panel").forEach((field) => {
-        field.hidden = handling !== "new";
-      });
-      card.querySelector(".new-difficulty-required").hidden = handling !== "new";
+      const selectedValue = card.querySelector(".existing-class-search").value;
+      const isSpecial = handling === "existing" && selectedValue === "__SPECIAL__";
+      card.querySelector(".special-course-panel").hidden = !isSpecial;
       const substituteId = card.dataset.claimCardId;
       const item = pendingLeaves.find((entry) => entry["代課編號"] === substituteId) || {};
       let actualCategory = item["課程大類"] || getCourseCategory(item["課程"]);
       if (handling === "existing") {
-        const selectedClass = findSelectedClaimClass(card.querySelector(".existing-class-search").value);
-        actualCategory = selectedClass ? selectedClass.category : "";
-      } else if (handling === "new") {
-        actualCategory = card.querySelector(".new-course-category").value;
+        const selectedClass = findSelectedClaimClass(selectedValue);
+        actualCategory = isSpecial ? "其他" : (selectedClass ? selectedClass.category : "");
       }
-      card.querySelector(".claim-note-required").hidden =
-        !claimNoteIsRequired(item, handling, actualCategory);
+      const noteRequired = card.querySelector(".claim-note-required");
+      noteRequired.textContent = isSpecial ? "必填" : "跨道具必填";
+      noteRequired.hidden = !claimNoteIsRequired(item, isSpecial ? "special" : handling, actualCategory);
     }
 
     function readClaimDraft(card) {
-      const handlingType = card.querySelector('input[type="radio"]:checked')?.value || "original";
-      const existingClass = findSelectedClaimClass(card.querySelector(".existing-class-search").value);
+      const selectedHandling = card.querySelector('input[type="radio"]:checked')?.value || "original";
+      const selectedValue = card.querySelector(".existing-class-search").value;
+      const isSpecial = selectedHandling === "existing" && selectedValue === "__SPECIAL__";
+      const handlingType = isSpecial ? "special" : selectedHandling;
+      const existingClass = isSpecial ? null : findSelectedClaimClass(selectedValue);
       const draft = {
         handlingType,
         actualClassId: handlingType === "existing" && existingClass && !existingClass.courseKey
@@ -1895,9 +1890,11 @@
         actualCourseName: handlingType === "existing" && existingClass
           ? existingClass.courseName
           : card.querySelector(".new-course-name").value,
-        category: handlingType === "existing" && existingClass
+        category: isSpecial
+          ? "其他"
+          : handlingType === "existing" && existingClass
           ? existingClass.category
-          : card.querySelector(".new-course-category").value,
+          : "",
         difficulty: card.querySelector(".claim-difficulty").value,
         note: card.querySelector(".claim-note").value
       };

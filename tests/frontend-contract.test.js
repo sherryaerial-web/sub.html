@@ -34,12 +34,12 @@ function createFrontendRuntime(fixtures = {}) {
     'input[type="radio"]:checked': { value: 'original' },
     '.claim-editor': { hidden: false },
     '.existing-class-panel': { hidden: true },
+    '.special-course-panel': { hidden: true },
     '.existing-class-search': { value: '' },
     '.new-course-name': { value: '' },
-    '.new-course-category': { value: '' },
     '.claim-difficulty': { value: '' },
     '.claim-note': { value: '' },
-    '.new-difficulty-required': { hidden: true },
+    '.claim-note-required': { hidden: true, textContent: '' },
   };
   const claimCard = {
     querySelector(selector) { return claimControls[selector] || null; },
@@ -443,13 +443,16 @@ test('loads protected capability and existing-class options for claims', () => {
   assert.match(html, /選擇 OB 現有課程/);
 });
 
-test('renders all three handling types with difficulty and an always-available note', () => {
+test('shows only original and existing handling choices with a universal special-course option', () => {
   assert.match(html, /value=["']original["']/);
   assert.match(html, /value=["']existing["']/);
-  assert.match(html, /value=["']new["']/);
   assert.match(html, /沿用原課程/);
   assert.match(html, /改用既有 OB 課程/);
-  assert.match(html, /需要新增課程/);
+  assert.doesNotMatch(html, /value=["']new["']/);
+  assert.match(html, /value=["']__SPECIAL__["']>調整為特別課/);
+  assert.match(html, /新課程名稱（概述即可）/);
+  assert.doesNotMatch(html, /新課程名稱\s*<span class="claim-required">必填/);
+  assert.doesNotMatch(html, /new-difficulty-required/);
   assert.match(html, /claim-difficulty/);
   assert.match(html, /claim-note/);
 });
@@ -497,8 +500,37 @@ test('cross-apparatus handling requires a structured course change and note', ()
     handlingType: 'existing', actualClassId: 'class-ring', category: '空環', note: '',
   }, item), /備註/);
   assert.throws(() => context.validateClaimDraft({
-    handlingType: 'new', actualCourseName: '', category: '空環', difficulty: 'Lv.1', note: '改課',
+    handlingType: 'special', actualCourseName: '', difficulty: '', note: '改課',
   }, item), /課程名稱/);
+});
+
+test('special-course handling requires a summary and note but keeps difficulty optional', () => {
+  const { context } = createFrontendRuntime();
+  const item = {
+    '代課編號': 'leave-special',
+    '課程': '舞綢 Lv.1',
+    '課程大類': '舞綢',
+    '可沿用原課程': false,
+  };
+
+  assert.throws(() => context.validateClaimDraft({
+    handlingType: 'special', actualCourseName: '', difficulty: '', note: '改為特別課',
+  }, item), /課程名稱/);
+  assert.throws(() => context.validateClaimDraft({
+    handlingType: 'special', actualCourseName: '主題編舞', difficulty: '', note: '',
+  }, item), /備註/);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.validateClaimDraft({
+    handlingType: 'special', actualCourseName: '主題編舞', difficulty: '', note: '調整為特別課。',
+  }, item))), {
+    substituteId: 'leave-special',
+    handlingType: 'special',
+    actualClassId: '',
+    actualCourseName: '主題編舞',
+    category: '其他',
+    difficulty: '',
+    note: '調整為特別課。',
+  });
 });
 
 test('marks the note required as soon as a same-capability teacher chooses another apparatus', () => {

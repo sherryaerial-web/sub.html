@@ -306,11 +306,10 @@ try {
     const crossCard = page.locator('[data-claim-card-id="sub-cross"]');
     await crossCard.waitFor();
     await crossCard.locator(".claim-checkbox").check();
-    await crossCard.locator(".handling-option", { hasText: "需要新增課程" }).click();
-    await crossCard.locator(".new-course-name").fill("空環基礎");
-    await crossCard.locator(".new-course-category").selectOption("空環");
-    await crossCard.locator(".claim-difficulty").fill("Lv.1");
-    await crossCard.locator(".claim-note").fill("改為可教授的空環課程");
+    await crossCard.locator(".handling-option", { hasText: "改用既有 OB 課程" }).click();
+    await crossCard.locator(".existing-class-search").selectOption("__SPECIAL__");
+    await crossCard.locator(".new-course-name").fill("主題編舞");
+    await crossCard.locator(".claim-note").fill("調整為特別課");
     results.push(await capture(page, viewport.name, "04-cross-apparatus-claim"));
 
     await page.locator('.nav-item[data-view="view-mysubs"]').click();

@@ -2630,7 +2630,7 @@ test('existing-course change uses the server OB class while the note stays optio
   assert.doesNotMatch(claimedRow[7], /偽造課名/);
 });
 
-test('special-course change is universal and requires a summary and note while difficulty stays optional', () => {
+test('special-course change is universal and requires a name while difficulty and note stay optional', () => {
   const crossLeave = [
     '2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '舞綢 Lv.1',
     '確認中', '', '', '', 'leave-new', 'calendar-silk',
@@ -2644,25 +2644,20 @@ test('special-course change is universal and requires a summary and note while d
   assert.throws(() => backend.claimSubstitute_(teacherASession, [{
     substituteId: 'leave-new', handlingType: 'special', actualCourseName: '',
     difficulty: '', note: '調整為特別課',
-  }]), /課程名稱/);
-  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
-    substituteId: 'leave-new', handlingType: 'special', actualCourseName: '主題編舞',
-    difficulty: '', note: '',
-  }]), /備註/);
-
+  }]), /特別課名稱/);
   backend.claimSubstitute_(teacherASession, [{
     substituteId: 'leave-new',
     handlingType: 'special',
     actualClassId: '',
     actualCourseName: '主題編舞',
     difficulty: '',
-    note: '調整為特別課，內容見備註。',
+    note: '',
   }]);
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-new');
   assert.deepEqual(claimedRow.slice(11, 15), ['', '主題編舞', '', '需要新增課程']);
   assert.equal(claimedRow[19], '其他');
-  assert.match(claimedRow[7], /調整為特別課/);
+  assert.doesNotMatch(claimedRow[7], /備註/);
 });
 
 test('special availability identifies only the immediately following same-room open leave', () => {
@@ -2740,9 +2735,14 @@ test('single-slot special claim stores one group and enforces a 15-minute turnov
     durationMinutes: 150, difficulty: '', note: '使用後方空堂。',
   }), /15 分鐘換場.*最晚.*20:45/);
 
+  assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', substituteIds: ['leave-special-1'], courseName: '空中特別編舞',
+    durationMinutes: 89, difficulty: '', note: '',
+  }), /90 至 240 分鐘/);
+
   const result = backend.claimSpecialCourse_(teacherASession, {
     mode: 'vacancy', substituteIds: ['leave-special-1'], courseName: '空中特別編舞',
-    durationMinutes: 120, difficulty: '', note: '使用後方空堂。',
+    durationMinutes: 120, difficulty: '', note: '',
   });
 
   const row = leaveSheet.values.find((item) => item[9] === 'leave-special-1');

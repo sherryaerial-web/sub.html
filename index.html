@@ -535,7 +535,7 @@
     .special-claim-panel { margin-bottom: 18px; padding: 16px; border: 1px solid #d3c1ba; border-radius: var(--radius); background: var(--aqua-50); }
     .special-claim-panel .handling-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .special-duration-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-    .special-claim-summary { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface); color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .special-claim-summary { margin: 10px 0 12px; padding: 11px 12px; border: 1px solid #d9c5a6; border-radius: var(--radius); background: var(--amber-100); color: var(--ink); font-size: 13px; font-weight: 750; line-height: 1.55; }
     .special-record-group { display: grid; gap: 8px; padding: 12px; border: 1px solid #d3c1ba; border-radius: var(--radius); background: var(--aqua-50); }
     .special-record-group + .special-record-group { margin-top: 10px; }
     .special-record-heading { color: var(--sea-800); font-size: 12px; font-weight: 750; line-height: 1.55; }
@@ -1017,18 +1017,18 @@
           </div>
           <section id="special-claim-panel" class="special-claim-panel" hidden>
             <div class="claim-editor-title"><i data-lucide="sparkles"></i>特別課安排</div>
+            <div id="special-claim-summary" class="special-claim-summary" role="status">請先勾選要使用的時段。</div>
             <div class="handling-options" role="group" aria-label="特別課使用時段">
               <label class="handling-option"><input type="radio" name="special-claim-mode" value="vacancy" checked>單堂延長</label>
               <label class="handling-option"><input type="radio" name="special-claim-mode" value="merge">合併連續兩堂</label>
             </div>
             <div class="claim-fields">
-              <div class="claim-field full"><label for="special-course-name">新課程名稱（概述即可） <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：主題編舞、特別課內容概述"></div>
-              <div class="claim-field"><label for="special-course-difficulty">難度／等級</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
+              <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：主題編舞、特別課內容概述"></div>
+              <div class="claim-field"><label for="special-course-difficulty">難度／等級（如有）</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
               <div class="claim-field"><label>課程長度 <span class="claim-required">必填</span></label><div class="special-duration-options"><label class="handling-option"><input type="radio" name="special-duration" value="90" checked>90 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="120">120 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="custom">自訂</label></div></div>
-              <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（30–240）</label><input id="special-custom-duration" class="claim-control" type="number" min="30" max="240" step="5" inputmode="numeric" placeholder="例如：105"></div>
-              <div class="claim-field full"><label for="special-course-note">備註 <span class="claim-required">必填</span></label><textarea id="special-course-note" class="claim-control" maxlength="240" placeholder="請說明特別課內容、合併原因或其他安排"></textarea></div>
+              <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（90–240）</label><input id="special-custom-duration" class="claim-control" type="number" min="90" max="240" step="5" inputmode="numeric" placeholder="例如：105"></div>
+              <div class="claim-field full"><label for="special-course-note">備註</label><textarea id="special-course-note" class="claim-control" maxlength="240" placeholder="可填寫特別課內容、合併原因或其他安排"></textarea></div>
             </div>
-            <div id="special-claim-summary" class="special-claim-summary">請先勾選要使用的時段。</div>
           </section>
           <div id="pending-leaves-list" class="list"><div class="state">載入中...</div></div>
           <button id="claim-submit" class="primary-button" type="button"><i data-lucide="hand"></i>確認領取勾選課程</button>
@@ -1284,7 +1284,7 @@
     }
 
     function claimNoteIsRequired(item, handlingType, actualCategory) {
-      return handlingType === "special";
+      return false;
     }
 
     function validateClaimDraft(draft, item) {
@@ -1308,7 +1308,7 @@
         throw new Error("請選擇課程類型。");
       }
       if (handlingType === "special" && !actualCourseName) {
-        throw new Error("請填寫特別課的新課程名稱（概述即可）。");
+        throw new Error("請填寫特別課名稱。");
       }
       if (handlingType === "new") {
         if (!actualCourseName) throw new Error("請填寫需要新增的課程名稱。");
@@ -1349,10 +1349,9 @@
       const note = String(change.note || "").trim();
       const availability = availabilityMap || {};
 
-      if (!courseName) throw new Error("請填寫特別課的新課程名稱（概述即可）。");
-      if (!note) throw new Error("安排特別課時，請填寫備註。");
-      if (!Number.isInteger(durationMinutes) || durationMinutes < 30 || durationMinutes > 240) {
-        throw new Error("特別課長度請填寫 30 到 240 分鐘的整數。");
+      if (!courseName) throw new Error("請填寫特別課名稱。");
+      if (!Number.isInteger(durationMinutes) || durationMinutes < 90 || durationMinutes > 240) {
+        throw new Error("特別課長度請填寫 90 到 240 分鐘的整數。");
       }
       if (mode === "vacancy") {
         if (substituteIds.length !== 1) throw new Error("單堂延長只能勾選一堂課程。");

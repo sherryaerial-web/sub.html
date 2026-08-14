@@ -4100,11 +4100,10 @@ function claimSpecialCourse_(session, payload) {
   if (ids.some(function(id, index) { return ids.indexOf(id) !== index; })) {
     throw new Error('特別課代課編號重複。');
   }
-  if (!courseName) throw new Error('請填寫特別課名稱（概述即可）。');
-  if (!note) throw new Error('安排特別課時，請填寫備註。');
+  if (!courseName) throw new Error('請填寫特別課名稱。');
   if (!isFinite(durationMinutes) || Math.floor(durationMinutes) !== durationMinutes ||
-      durationMinutes < 30 || durationMinutes > 240) {
-    throw new Error('特別課時長必須是 30 至 240 分鐘的整數。');
+      durationMinutes < 90 || durationMinutes > 240) {
+    throw new Error('特別課時長必須是 90 至 240 分鐘的整數。');
   }
 
   var lock = LockService.getScriptLock();
@@ -4991,8 +4990,7 @@ function validateClaimChange_(claim) {
   } else if (handlingKey === 'special') {
     actualCourseName = cleanText_(item.actualCourseName);
     actualCategory = '其他';
-    if (!actualCourseName) throw new Error('請填寫特別課的新課程名稱（概述即可）。');
-    if (!note) throw new Error('調整為特別課時，請填寫備註。');
+    if (!actualCourseName) throw new Error('請填寫特別課名稱。');
     handlingType = '需要新增課程';
   } else if (handlingKey === 'new') {
     actualCourseName = cleanText_(item.actualCourseName);

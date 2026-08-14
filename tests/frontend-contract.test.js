@@ -660,15 +660,19 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /安排特別課/);
   assert.match(html, /單堂延長/);
   assert.match(html, /合併連續兩堂/);
-  assert.match(html, /新課程名稱（概述即可）/);
-  assert.doesNotMatch(html, /新課程名稱\s*<span class="claim-required">必填/);
+  assert.match(html, /特別課名稱/);
+  assert.match(html, /難度／等級（如有）/);
+  assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
+  assert.match(html, /自訂分鐘數（90–240）/);
+  assert.match(html, /id="special-custom-duration"[^>]*min="90"[^>]*max="240"/);
+  assert.doesNotMatch(html, /備註\s*<span class="claim-required">必填/);
   assert.doesNotMatch(html, /new-difficulty-required/);
   assert.match(html, /claim-course-type/);
   assert.match(html, /claim-difficulty-select/);
   assert.match(html, /claim-note/);
 });
 
-test('special-course draft requires one slot or an allowed consecutive pair and a required note', () => {
+test('special-course draft requires an allowed slot selection and 90 to 240 minutes while note stays optional', () => {
   const { context } = createFrontendRuntime();
   const availability = {
     'leave-a': { mergePartnerIds: ['leave-b'], maxDurationMinutes: 105 },
@@ -686,18 +690,18 @@ test('special-course draft requires one slot or an allowed consecutive pair and 
     mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 120, note: '內容',
   }, availability), /最多只能安排 105 分鐘/);
   assert.throws(() => context.validateSpecialCourseDraft({
-    mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 90, note: '',
-  }, availability), /備註/);
+    mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 89, note: '',
+  }, availability), /90 到 240 分鐘/);
 
   assert.deepEqual(JSON.parse(JSON.stringify(context.validateSpecialCourseDraft({
-    mode: 'merge', substituteIds: ['leave-b', 'leave-a'], courseName: '主題課', difficulty: '', durationMinutes: 120, note: '兩堂合併',
+    mode: 'merge', substituteIds: ['leave-b', 'leave-a'], courseName: '主題課', difficulty: '', durationMinutes: 120, note: '',
   }, availability))), {
     mode: 'merge',
     substituteIds: ['leave-b', 'leave-a'],
     courseName: '主題課',
     difficulty: '',
     durationMinutes: 120,
-    note: '兩堂合併',
+    note: '',
   });
 });
 
@@ -758,10 +762,10 @@ test('ordinary adjustment requires a course type but keeps the note optional', (
   });
   assert.throws(() => context.validateClaimDraft({
     handlingType: 'special', actualCourseName: '', difficulty: '', note: '改課',
-  }, item), /課程名稱/);
+  }, item), /特別課名稱/);
 });
 
-test('special-course handling requires a summary and note but keeps difficulty optional', () => {
+test('special-course handling requires a name while difficulty and note stay optional', () => {
   const { context } = createFrontendRuntime();
   const item = {
     '代課編號': 'leave-special',
@@ -772,13 +776,9 @@ test('special-course handling requires a summary and note but keeps difficulty o
 
   assert.throws(() => context.validateClaimDraft({
     handlingType: 'special', actualCourseName: '', difficulty: '', note: '改為特別課',
-  }, item), /課程名稱/);
-  assert.throws(() => context.validateClaimDraft({
-    handlingType: 'special', actualCourseName: '主題編舞', difficulty: '', note: '',
-  }, item), /備註/);
-
+  }, item), /特別課名稱/);
   assert.deepEqual(JSON.parse(JSON.stringify(context.validateClaimDraft({
-    handlingType: 'special', actualCourseName: '主題編舞', difficulty: '', note: '調整為特別課。',
+    handlingType: 'special', actualCourseName: '主題編舞', difficulty: '', note: '',
   }, item))), {
     substituteId: 'leave-special',
     handlingType: 'special',
@@ -786,7 +786,7 @@ test('special-course handling requires a summary and note but keeps difficulty o
     actualCourseName: '主題編舞',
     category: '其他',
     difficulty: '',
-    note: '調整為特別課。',
+    note: '',
   });
 });
 
@@ -800,7 +800,7 @@ test('ordinary notes stay optional even when the apparatus changes', () => {
   assert.equal(context.claimNoteIsRequired(item, 'original', '空環'), false);
   assert.equal(context.claimNoteIsRequired(item, 'existing', '空環'), false);
   assert.equal(context.claimNoteIsRequired(item, 'existing', '舞綢'), false);
-  assert.equal(context.claimNoteIsRequired(item, 'special', '其他'), true);
+  assert.equal(context.claimNoteIsRequired(item, 'special', '其他'), false);
 });
 
 test('submits the OB course type and difficulty as independent choices', async () => {

@@ -661,6 +661,7 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /單堂延長/);
   assert.match(html, /合併連續兩堂/);
   assert.match(html, /特別課名稱/);
+  assert.match(html, /placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"/);
   assert.match(html, /難度／等級（如有）/);
   assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
   assert.match(html, /自訂分鐘數（90–240）/);

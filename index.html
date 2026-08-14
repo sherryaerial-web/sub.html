@@ -1356,6 +1356,8 @@
       if (mode === "vacancy") {
         if (substituteIds.length !== 1) throw new Error("單堂延長只能勾選一堂課程。");
         const option = availability[substituteIds[0]] || {};
+        const blockReason = getSingleSlotSpecialCourseBlockReason(option);
+        if (blockReason) throw new Error(blockReason);
         const maximum = Number(option.maxDurationMinutes);
         if (Number.isFinite(maximum) && durationMinutes > maximum) {
           throw new Error(`這個時段最多只能安排 ${maximum} 分鐘，需保留 15 分鐘換場。`);
@@ -1372,6 +1374,13 @@
       }
 
       return { mode, substituteIds, courseName, difficulty, durationMinutes, note };
+    }
+
+    function getSingleSlotSpecialCourseBlockReason(option) {
+      const maximum = Number(option?.maxDurationMinutes);
+      return Number.isFinite(maximum) && maximum < 90
+        ? "扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「合併連續兩堂」。"
+        : "";
     }
 
     function setNotice(message, type = "success") {
@@ -2024,7 +2033,7 @@
           </div>
         </section>
       `).join("");
-      refreshIcons();
+      updateClaimMode();
     }
 
     function renderAvailableSubstituteItem(item) {
@@ -2041,6 +2050,7 @@
             <div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>
             <span class="category-tag">${escapeHtml(item["課程大類"] || getCourseCategory(item["課程"]))}</span>
             ${canReuseOriginal ? "" : '<div class="claim-requirement"><i data-lucide="triangle-alert"></i>需要改成可教授的課程</div>'}
+            <div class="claim-requirement special-slot-warning" hidden></div>
           </div>
           <div class="claim-editor" hidden>
             <div class="claim-editor-title"><i data-lucide="sliders-horizontal"></i>實際授課安排</div>
@@ -2160,13 +2170,15 @@
     function updateSpecialClaimSummary() {
       const summary = byId("special-claim-summary");
       const ids = getSelectedClaimIds();
+      const mode = document.querySelector('input[name="special-claim-mode"]:checked')?.value || "vacancy";
       if (!ids.length) {
-        summary.textContent = "請先勾選要使用的時段。";
+        summary.textContent = mode === "vacancy"
+          ? "請勾選可安排至少 90 分鐘的時段；不足 90 分鐘的時段請改用「合併連續兩堂」。"
+          : "請先勾選要合併的第一堂課，再勾選同日、同教室且立即相連的下一堂。";
         return;
       }
       const items = ids.map((id) => pendingLeaves.find((item) => item["代課編號"] === id)).filter(Boolean);
       const details = items.map((item) => `${formatDateWithWeekday(item["日期"])} ${item["時段"]} ${item["課程"]}`).join("＋");
-      const mode = document.querySelector('input[name="special-claim-mode"]:checked')?.value || "vacancy";
       if (mode === "vacancy" && ids.length === 1) {
         const option = (claimOptions.specialAvailability || {})[ids[0]] || {};
         summary.textContent = option.nextCourseTime
@@ -2180,9 +2192,32 @@
     function updateSpecialSelectionConstraints(changedCheckbox) {
       const special = (document.querySelector('input[name="claim-mode"]:checked')?.value || "ordinary") === "special";
       const checkboxes = [...document.querySelectorAll(".claim-checkbox")];
-      checkboxes.forEach((checkbox) => { checkbox.disabled = false; });
+      checkboxes.forEach((checkbox) => {
+        checkbox.disabled = false;
+        checkbox.removeAttribute("title");
+        const warning = checkbox.closest(".claim-card")?.querySelector(".special-slot-warning");
+        if (warning) {
+          warning.hidden = true;
+          warning.textContent = "";
+        }
+      });
       if (!special) return;
       const mode = document.querySelector('input[name="special-claim-mode"]:checked')?.value || "vacancy";
+      const availability = claimOptions.specialAvailability || {};
+      if (mode === "vacancy") {
+        checkboxes.forEach((checkbox) => {
+          const reason = getSingleSlotSpecialCourseBlockReason(availability[checkbox.dataset.substituteId]);
+          if (!reason) return;
+          checkbox.checked = false;
+          checkbox.disabled = true;
+          checkbox.title = reason;
+          const warning = checkbox.closest(".claim-card")?.querySelector(".special-slot-warning");
+          if (warning) {
+            warning.hidden = false;
+            warning.textContent = "單堂不足 90 分鐘，可改用「合併連續兩堂」";
+          }
+        });
+      }
       if (mode === "vacancy" && changedCheckbox?.checked) {
         checkboxes.forEach((checkbox) => {
           if (checkbox !== changedCheckbox) checkbox.checked = false;
@@ -2190,7 +2225,6 @@
       }
       const selectedIds = getSelectedClaimIds();
       if (mode !== "merge" || !selectedIds.length) return;
-      const availability = claimOptions.specialAvailability || {};
       const allowed = new Set(selectedIds);
       if (selectedIds.length === 1) {
         const selectedId = selectedIds[0];

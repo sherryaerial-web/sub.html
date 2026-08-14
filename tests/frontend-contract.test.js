@@ -705,6 +705,22 @@ test('special-course draft requires an allowed slot selection and 90 to 240 minu
   });
 });
 
+test('single-slot special course blocks a gap shorter than 90 minutes after turnover', () => {
+  const { context } = createFrontendRuntime();
+  const availability = {
+    'leave-tight': { mergePartnerIds: ['leave-next'], maxDurationMinutes: 75 },
+  };
+
+  assert.equal(
+    context.getSingleSlotSpecialCourseBlockReason(availability['leave-tight']),
+    '扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「合併連續兩堂」。',
+  );
+  assert.equal(context.getSingleSlotSpecialCourseBlockReason({ maxDurationMinutes: 90 }), '');
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'vacancy', substituteIds: ['leave-tight'], courseName: '主題課', durationMinutes: 90, note: '',
+  }, availability), /不足 90 分鐘.*合併連續兩堂/);
+});
+
 test('direct claim strips every editable override from the submitted draft', () => {
   const { context } = createFrontendRuntime();
   const payload = context.validateClaimDraft({

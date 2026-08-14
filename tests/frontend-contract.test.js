@@ -371,6 +371,43 @@ test('ignores forged iframe relay messages before accepting the matching Google 
   assert.equal((await pending).teacherName, '老師甲');
 });
 
+test('accepts the hyphenated Apps Script sandbox origin used by Safari', async () => {
+  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  let settled = false;
+  const pending = context.callPostApi('getSession').then((value) => {
+    settled = true;
+    return value;
+  });
+  const submitted = submittedForms[0];
+
+  try {
+    emitWindowEvent('message', {
+      origin: 'https://n-example-0lu-script.googleusercontent.com',
+      source: {},
+      data: {
+        source: 'sherry-gas-relay',
+        requestId: submitted.fields.requestId,
+        payload: { status: 'success', data: { teacherName: '老師甲' } },
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true);
+  } finally {
+    if (!settled) {
+      emitWindowEvent('message', {
+        origin: 'https://script.googleusercontent.com',
+        source: {},
+        data: {
+          source: 'sherry-gas-relay',
+          requestId: submitted.fields.requestId,
+          payload: { status: 'success', data: { teacherName: '老師甲' } },
+        },
+      });
+    }
+    await pending;
+  }
+});
+
 test('keeps session tokens out of URLs by routing every authenticated read through POST', () => {
   assert.match(html, /const PUBLIC_GET_ACTIONS\s*=\s*new Set\(\["getTeachers"\]\)/);
   assert.match(html, /if \(!PUBLIC_GET_ACTIONS\.has\(action\)\) return callPostApi\(action, params\)/);

@@ -518,6 +518,12 @@
     .handling-option:has(input:disabled) { cursor: not-allowed; opacity: 0.45; }
     .handling-option input { position: absolute; opacity: 0; pointer-events: none; }
     .claim-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .claim-adjustment-panel {
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
     .claim-field { min-width: 0; }
     .claim-field.full { grid-column: 1 / -1; }
     .claim-field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 750; }
@@ -738,6 +744,7 @@
       .date-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .handling-options { grid-template-columns: 1fr; }
       .claim-fields { grid-template-columns: 1fr; }
+      .claim-adjustment-panel { grid-template-columns: 1fr; }
       .claim-field.full { grid-column: auto; }
       .confirmation-row { grid-template-columns: 105px minmax(0, 1fr); }
       .admin-summary, .teacher-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1212,17 +1219,14 @@
     }
 
     function claimNoteIsRequired(item, handlingType, actualCategory) {
-      const target = item || {};
-      const targetCategory = target["課程大類"] || getCourseCategory(target["課程"]);
-      if (handlingType === "special") return true;
-      if (target["可沿用原課程"] !== true) return true;
-      return handlingType !== "original" && !!actualCategory && actualCategory !== targetCategory;
+      return handlingType === "special";
     }
 
     function validateClaimDraft(draft, item) {
       const change = draft || {};
       const target = item || {};
       const handlingType = String(change.handlingType || "original");
+      const courseTypeKey = String(change.courseTypeKey || "").trim();
       const courseKey = String(change.courseKey || "").trim();
       const actualClassId = String(change.actualClassId || "").trim();
       const actualCourseName = String(change.actualCourseName || "").trim();
@@ -1235,8 +1239,8 @@
       if (handlingType === "original" && !canReuseOriginal) {
         throw new Error("這堂課不在您的可教授類別中，不能沿用原課程。");
       }
-      if (handlingType === "existing" && !courseKey && !actualClassId) {
-        throw new Error("請選擇要改用的 OB 現有課程。");
+      if (handlingType === "existing" && !courseTypeKey) {
+        throw new Error("請選擇課程類型。");
       }
       if (handlingType === "special" && !actualCourseName) {
         throw new Error("請填寫特別課的新課程名稱（概述即可）。");
@@ -1250,25 +1254,21 @@
         throw new Error("課程處理方式無效，請重新選擇。");
       }
 
-      const actualCategory = handlingType === "original"
-        ? targetCategory
-        : (handlingType === "special" ? "其他" : category);
-      if (claimNoteIsRequired(target, handlingType, actualCategory) && !note) {
-        throw new Error(handlingType === "special"
-          ? "調整為特別課時，請填寫備註。"
-          : "跨道具代課時，請填寫改課原因或補充備註。");
+      if (claimNoteIsRequired(target, handlingType, category) && !note) {
+        throw new Error("調整為特別課時，請填寫備註。");
       }
 
       const normalized = {
         substituteId: String(target["代課編號"] || ""),
         handlingType,
-        actualClassId,
-        actualCourseName,
-        category: handlingType === "special" ? "其他" : category,
-        difficulty,
-        note
+        actualClassId: handlingType === "original" ? "" : actualClassId,
+        actualCourseName: handlingType === "original" ? "" : actualCourseName,
+        category: handlingType === "original" ? "" : (handlingType === "special" ? "其他" : category),
+        difficulty: handlingType === "original" ? "" : difficulty,
+        note: handlingType === "original" ? "" : note
       };
-      if (courseKey) normalized.courseKey = courseKey;
+      if (handlingType === "existing") normalized.courseTypeKey = courseTypeKey;
+      if (handlingType === "existing" && courseKey) normalized.courseKey = courseKey;
       return normalized;
     }
 
@@ -1817,11 +1817,100 @@
       return (claimOptions.classes || []).filter((item) => capabilities.has(item.category));
     }
 
-    function findSelectedClaimClass(value) {
-      const wantedCourseKey = String(value || "").trim();
+    function normalizeClaimDifficulty(value) {
+      return String(value || "").replace(/\s+/g, "").toLowerCase();
+    }
+
+    function parseClaimCourseOption(courseNameValue) {
+      let courseName = String(courseNameValue || "")
+        .replace(/^\s*[A-D]\s*[－—–-]\s*/i, "")
+        .replace(/\s*(?:〈\s*新老師\s*〉|<\s*新老師\s*>|（\s*新老師\s*）|\(\s*新老師\s*\)|【\s*新老師\s*】)\s*$/, "")
+        .trim();
+      let difficulty = "";
+      const match = /(?:^|\s)(Lv\.?\s*\d+(?:\s*[~\-–—]\s*\d+)?|Open\s*level)(?=\s|[（(〈]|$)/i.exec(courseName);
+      if (match) {
+        difficulty = match[1].trim();
+        difficulty = /^open/i.test(difficulty)
+          ? "Open level"
+          : difficulty.replace(/^lv\.?\s*/i, "Lv.").replace(/\s*([~\-–—])\s*/g, "$1");
+        courseName = courseName.replace(match[0], " ").trim().replace(/\s+([（(〈])/g, "$1");
+      }
+      return { courseTypeKey: courseName, courseTypeName: courseName, difficulty };
+    }
+
+    function getClaimOptionParts(option) {
+      const parsed = parseClaimCourseOption(option?.courseName || "");
+      return {
+        courseTypeKey: String(option?.courseTypeKey || parsed.courseTypeKey || "").trim(),
+        courseTypeName: String(option?.courseTypeName || parsed.courseTypeName || "").trim(),
+        difficulty: String(option?.difficulty ?? parsed.difficulty ?? "").trim()
+      };
+    }
+
+    function getClaimCourseTypes() {
+      const seen = new Set();
+      return getTeachableClaimClasses().map((option) => getClaimOptionParts(option))
+        .filter((parts) => parts.courseTypeKey && !seen.has(parts.courseTypeKey) && seen.add(parts.courseTypeKey))
+        .sort((a, b) => a.courseTypeName.localeCompare(b.courseTypeName, "zh-Hant"));
+    }
+
+    function getClaimDifficulties(courseTypeKey) {
+      const wantedType = String(courseTypeKey || "").trim();
+      const seen = new Set();
+      return getTeachableClaimClasses()
+        .map((option) => getClaimOptionParts(option))
+        .filter((parts) => parts.courseTypeKey === wantedType)
+        .map((parts) => parts.difficulty)
+        .filter((difficulty) => !seen.has(normalizeClaimDifficulty(difficulty)) && seen.add(normalizeClaimDifficulty(difficulty)))
+        .sort((a, b) => a.localeCompare(b, "zh-Hant", { numeric: true }));
+    }
+
+    function findSelectedClaimClass(courseTypeKey, difficulty) {
+      const wantedType = String(courseTypeKey || "").trim();
+      const wantedDifficulty = normalizeClaimDifficulty(difficulty);
       return getTeachableClaimClasses().find((item) =>
-        (item.courseKey || item.classId) === wantedCourseKey
+        getClaimOptionParts(item).courseTypeKey === wantedType &&
+        normalizeClaimDifficulty(getClaimOptionParts(item).difficulty) === wantedDifficulty
       ) || null;
+    }
+
+    function getDefaultClaimSelection(item) {
+      const courseTypes = getClaimCourseTypes();
+      const original = parseClaimCourseOption(item?.["課程"] || "");
+      const courseType = courseTypes.find((entry) => entry.courseTypeKey === original.courseTypeKey) || courseTypes[0] || {
+        courseTypeKey: "",
+        courseTypeName: ""
+      };
+      const difficulties = getClaimDifficulties(courseType.courseTypeKey);
+      const difficulty = difficulties.find((entry) =>
+        normalizeClaimDifficulty(entry) === normalizeClaimDifficulty(original.difficulty)
+      );
+      return {
+        courseTypeKey: courseType.courseTypeKey,
+        difficulty: difficulty == null ? (difficulties[0] || "") : difficulty
+      };
+    }
+
+    function renderClaimDifficultyOptions(courseTypeKey, selectedDifficulty) {
+      const wantedDifficulty = normalizeClaimDifficulty(selectedDifficulty);
+      return getClaimDifficulties(courseTypeKey).map((difficulty) => `
+        <option value="${escapeHtml(difficulty)}" ${normalizeClaimDifficulty(difficulty) === wantedDifficulty ? "selected" : ""}>
+          ${escapeHtml(difficulty || "無難度")}
+        </option>
+      `).join("");
+    }
+
+    function populateClaimDifficultyOptions(card, preserveValue = true) {
+      const courseTypeSelect = card.querySelector(".claim-course-type");
+      const difficultySelect = card.querySelector(".claim-difficulty-select");
+      if (!courseTypeSelect || !difficultySelect) return;
+      const previousValue = preserveValue ? difficultySelect.value : "";
+      const difficulties = getClaimDifficulties(courseTypeSelect.value);
+      const nextValue = difficulties.some((value) =>
+        normalizeClaimDifficulty(value) === normalizeClaimDifficulty(previousValue)
+      ) ? previousValue : (difficulties[0] || "");
+      difficultySelect.innerHTML = renderClaimDifficultyOptions(courseTypeSelect.value, nextValue);
+      difficultySelect.value = nextValue;
     }
 
     function groupAvailableSubstitutesByDate(items) {
@@ -1863,6 +1952,7 @@
       const substituteId = item["代課編號"];
       const canReuseOriginal = item["可沿用原課程"] === true;
       const defaultHandling = canReuseOriginal ? "original" : "existing";
+      const defaultSelection = getDefaultClaimSelection(item);
       return `
         <article class="list-item claim-card" data-claim-card-id="${escapeHtml(substituteId)}">
           <input type="checkbox" class="claim-checkbox" data-substitute-id="${escapeHtml(substituteId)}">
@@ -1879,34 +1969,37 @@
               <label class="handling-option">
                 <input type="radio" name="handling-${escapeHtml(substituteId)}" value="original"
                   ${defaultHandling === "original" ? "checked" : ""} ${canReuseOriginal ? "" : "disabled"}>
-                沿用原課程
+                直接認領
               </label>
               <label class="handling-option">
                 <input type="radio" name="handling-${escapeHtml(substituteId)}" value="existing"
                   ${defaultHandling === "existing" ? "checked" : ""}>
-                改用既有 OB 課程
+                調整課程類型或難度
               </label>
             </div>
 
-            <div class="claim-fields">
-              <div class="claim-field full existing-class-panel" hidden>
-                <label>選擇 OB 現有課程 <span class="claim-required">必填</span></label>
-                <select class="claim-control existing-class-search">
-                  <option value="">請選擇課程</option>
-                  ${getTeachableClaimClasses().map((course) =>
-                    `<option value="${escapeHtml(course.courseKey || course.classId)}">${escapeHtml(course.courseName)}</option>`
-                  ).join("")}
-                </select>
-              </div>
+            <div class="claim-fields" ${defaultHandling === "original" ? "hidden" : ""}>
+              <div class="claim-adjustment-panel" ${defaultHandling === "original" ? "hidden" : ""}>
+                <div class="claim-field full">
+                  <label>課程類型 <span class="claim-required">必填</span></label>
+                  <select class="claim-control claim-course-type">
+                    ${getClaimCourseTypes().map((course) =>
+                      `<option value="${escapeHtml(course.courseTypeKey)}" ${course.courseTypeKey === defaultSelection.courseTypeKey ? "selected" : ""}>${escapeHtml(course.courseTypeName)}</option>`
+                    ).join("")}
+                  </select>
+                </div>
 
-              <div class="claim-field">
-                <label>難度／等級</label>
-                <input class="claim-control claim-difficulty" type="text" maxlength="40" placeholder="例如：Lv.1、基礎">
-              </div>
+                <div class="claim-field full">
+                  <label>難度／等級</label>
+                  <select class="claim-control claim-difficulty-select">
+                    ${renderClaimDifficultyOptions(defaultSelection.courseTypeKey, defaultSelection.difficulty)}
+                  </select>
+                </div>
 
-              <div class="claim-field full">
-                <label>備註 <span class="claim-note-required claim-required" ${canReuseOriginal ? "hidden" : ""}>跨道具必填</span></label>
-                <textarea class="claim-control claim-note" maxlength="240" placeholder="可填改課原因、難度調整或其他事項"></textarea>
+                <div class="claim-field full">
+                  <label>備註（選填）</label>
+                  <textarea class="claim-control claim-note" maxlength="240" placeholder="可填改課原因、難度調整或其他事項"></textarea>
+                </div>
               </div>
             </div>
           </div>
@@ -1922,40 +2015,44 @@
       editor.hidden = !checked || claimMode === "special";
       if (!checked) return;
       const handling = card.querySelector('input[type="radio"]:checked')?.value || "original";
-      card.querySelector(".existing-class-panel").hidden = handling !== "existing";
-      const selectedValue = card.querySelector(".existing-class-search").value;
-      const substituteId = card.dataset.claimCardId;
-      const item = pendingLeaves.find((entry) => entry["代課編號"] === substituteId) || {};
-      let actualCategory = item["課程大類"] || getCourseCategory(item["課程"]);
-      if (handling === "existing") {
-        const selectedClass = findSelectedClaimClass(selectedValue);
-        actualCategory = selectedClass ? selectedClass.category : "";
-      }
-      const noteRequired = card.querySelector(".claim-note-required");
-      noteRequired.textContent = "跨道具必填";
-      noteRequired.hidden = !claimNoteIsRequired(item, handling, actualCategory);
+      const showAdjustment = handling === "existing";
+      card.querySelector(".claim-fields").hidden = !showAdjustment;
+      card.querySelector(".claim-adjustment-panel").hidden = !showAdjustment;
+      if (showAdjustment) populateClaimDifficultyOptions(card, true);
     }
 
     function readClaimDraft(card) {
       const selectedHandling = card.querySelector('input[type="radio"]:checked')?.value || "original";
-      const selectedValue = card.querySelector(".existing-class-search").value;
       const handlingType = selectedHandling;
-      const existingClass = findSelectedClaimClass(selectedValue);
+      if (handlingType === "original") {
+        return {
+          handlingType,
+          actualClassId: "",
+          actualCourseName: "",
+          category: "",
+          difficulty: "",
+          note: ""
+        };
+      }
+      const courseTypeKey = card.querySelector(".claim-course-type").value;
+      const difficulty = card.querySelector(".claim-difficulty-select").value;
+      const existingClass = findSelectedClaimClass(courseTypeKey, difficulty);
       const draft = {
         handlingType,
-        actualClassId: handlingType === "existing" && existingClass && !existingClass.courseKey
+        actualClassId: existingClass && !existingClass.courseKey
           ? existingClass.classId
           : "",
-        actualCourseName: handlingType === "existing" && existingClass
+        actualCourseName: existingClass
           ? existingClass.courseName
           : "",
-        category: handlingType === "existing" && existingClass
+        category: existingClass
           ? existingClass.category
           : "",
-        difficulty: card.querySelector(".claim-difficulty").value,
-        note: card.querySelector(".claim-note").value
+        difficulty,
+        note: card.querySelector(".claim-note").value,
+        courseTypeKey
       };
-      if (handlingType === "existing" && existingClass && existingClass.courseKey) {
+      if (existingClass && existingClass.courseKey) {
         draft.courseKey = existingClass.courseKey;
       }
       return draft;

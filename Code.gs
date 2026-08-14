@@ -3520,6 +3520,33 @@ function parseExplicitCourseMinutes_(courseName) {
   return isFinite(minutes) && minutes > 0 ? minutes : 0;
 }
 
+function normalizeClaimDifficulty_(value) {
+  return cleanText_(value).replace(/\s+/g, '').toLowerCase();
+}
+
+function parseClaimCourseOption_(courseNameValue) {
+  var courseName = stripCourseRoom_(cleanText_(courseNameValue));
+  var difficulty = '';
+  var difficultyMatch = /(?:^|\s)(Lv\.?\s*\d+(?:\s*[~\-–—]\s*\d+)?|Open\s*level)(?=\s|[（(〈]|$)/i.exec(courseName);
+  if (difficultyMatch) {
+    difficulty = cleanText_(difficultyMatch[1]);
+    if (/^open/i.test(difficulty)) {
+      difficulty = 'Open level';
+    } else {
+      difficulty = difficulty
+        .replace(/^lv\.?\s*/i, 'Lv.')
+        .replace(/\s*([~\-–—])\s*/g, '$1');
+    }
+    courseName = cleanText_(courseName.replace(difficultyMatch[0], ' '))
+      .replace(/\s+([（(〈])/g, '$1');
+  }
+  return {
+    courseTypeKey: normalizeCourseCatalogKey_(courseName),
+    courseTypeName: courseName,
+    difficulty: difficulty
+  };
+}
+
 function getCourseWeekdayNumber_(dateValue) {
   var match = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/.exec(formatMyDate(dateValue));
   if (!match) return '';
@@ -3546,11 +3573,15 @@ function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
       return;
     }
     var recurrenceKey = [room, courseKey, weekday, time].join('|');
+    var courseParts = parseClaimCourseOption_(courseName);
     recurrenceCounts[recurrenceKey] = (recurrenceCounts[recurrenceKey] || 0) + 1;
     candidates.push({
       recurrenceKey: recurrenceKey,
       courseKey: courseKey,
       courseName: courseName,
+      courseTypeKey: courseParts.courseTypeKey,
+      courseTypeName: courseParts.courseTypeName,
+      difficulty: courseParts.difficulty,
       category: category,
       durationMinutes: parseExplicitCourseMinutes_(courseName)
     });
@@ -3567,12 +3598,34 @@ function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
     return {
       courseKey: item.courseKey,
       courseName: item.courseName,
+      courseTypeKey: item.courseTypeKey,
+      courseTypeName: item.courseTypeName,
+      difficulty: item.difficulty,
       category: item.category,
       durationMinutes: item.durationMinutes
     };
   }).sort(function(a, b) {
     return [a.category, a.courseName].join('|').localeCompare([b.category, b.courseName].join('|'));
   });
+}
+
+function getRecurringClaimOptionsForTeacher_(teacher) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  return buildRecurringClaimCourseOptions_(
+    courseSheet.getDataRange().getValues().slice(1),
+    getTeacherCapabilities_(teacher)
+  );
+}
+
+function findRecurringClaimOptionForTeacher_(teacher, courseTypeKey, difficulty) {
+  var wantedType = normalizeCourseCatalogKey_(courseTypeKey);
+  var wantedDifficulty = normalizeClaimDifficulty_(difficulty);
+  return getRecurringClaimOptionsForTeacher_(teacher).filter(function(option) {
+    return normalizeCourseCatalogKey_(option.courseTypeKey) === wantedType &&
+      normalizeClaimDifficulty_(option.difficulty) === wantedDifficulty;
+  })[0] || null;
 }
 
 function timeTextToMinutes_(timeValue) {
@@ -4258,6 +4311,7 @@ function claimSubstitute_(session, items) {
         targetCourseName: cleanText_(row[4]),
         targetCalendarId: cleanText_(row[10]),
         handlingType: item.handlingType,
+        courseTypeKey: item.courseTypeKey,
         courseKey: item.courseKey,
         actualClassId: item.actualClassId,
         actualCourseName: item.actualCourseName,
@@ -4847,6 +4901,7 @@ function validateClaimChange_(claim) {
   var targetCourseName = cleanText_(item.targetCourseName);
   var targetCategory = getCourseCategory_(targetCourseName);
   var handlingKey = cleanText_(item.handlingType) || 'original';
+  var selectedCourseTypeKey = cleanText_(item.courseTypeKey);
   var selectedCourseKey = cleanText_(item.courseKey);
   var difficulty = cleanText_(item.difficulty);
   var note = cleanText_(item.note);
@@ -4865,9 +4920,33 @@ function validateClaimChange_(claim) {
     actualClassId = originalCourse ? originalCourse.classId : '';
     actualCourseName = targetCourseName;
     actualCategory = targetCategory;
+    difficulty = parseClaimCourseOption_(targetCourseName).difficulty;
+    note = '';
     handlingType = '沿用原課程';
   } else if (handlingKey === 'existing') {
-    if (selectedCourseKey) {
+    if (selectedCourseTypeKey) {
+      var recurringOption = findRecurringClaimOptionForTeacher_(
+        teacher,
+        selectedCourseTypeKey,
+        difficulty
+      );
+      if (!recurringOption) {
+        throw new Error('找不到選擇的固定課程類型與難度，請重新整理。');
+      }
+      var recurringResolvedCourse = resolveCatalogCourseForRoom_(
+        getObClassCatalog_(),
+        recurringOption.courseKey,
+        targetCourseName
+      );
+      if (!recurringResolvedCourse) {
+        throw new Error('找不到選擇的 OB 課程項目，請重新整理。');
+      }
+      actualClassId = recurringResolvedCourse.actualClassId;
+      actualCourseName = recurringResolvedCourse.actualCourseName;
+      actualCategory = recurringResolvedCourse.category;
+      difficulty = recurringOption.difficulty;
+      handlingType = recurringResolvedCourse.needsCreation ? '需要新增課程' : '改用既有 OB 課程';
+    } else if (selectedCourseKey) {
       var resolvedCourse = resolveCatalogCourseForRoom_(
         getObClassCatalog_(),
         selectedCourseKey,
@@ -4877,6 +4956,7 @@ function validateClaimChange_(claim) {
       actualClassId = resolvedCourse.actualClassId;
       actualCourseName = resolvedCourse.actualCourseName;
       actualCategory = resolvedCourse.category;
+      difficulty = parseClaimCourseOption_(actualCourseName).difficulty;
       handlingType = resolvedCourse.needsCreation ? '需要新增課程' : '改用既有 OB 課程';
     } else {
       actualClassId = cleanText_(item.actualClassId);
@@ -4885,6 +4965,7 @@ function validateClaimChange_(claim) {
       if (!existingCourse) throw new Error('找不到選擇的 OB 現有課程，請重新整理。');
       actualCourseName = existingCourse.courseName;
       actualCategory = existingCourse.category;
+      difficulty = parseClaimCourseOption_(actualCourseName).difficulty;
       handlingType = '改用既有 OB 課程';
     }
   } else if (handlingKey === 'special') {
@@ -4906,12 +4987,6 @@ function validateClaimChange_(claim) {
 
   if (handlingKey !== 'special' && !teacherCanTeachCategory_(teacher, actualCategory)) {
     throw new Error('所選課程類別不在可教授類別中。');
-  }
-
-  var isCrossApparatus = actualCategory !== targetCategory ||
-    !teacherCanTeachCategory_(teacher, targetCategory);
-  if (isCrossApparatus && !note) {
-    throw new Error('跨道具代課時，請填寫改課原因或補充備註。');
   }
 
   var normalized = {

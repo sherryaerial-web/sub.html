@@ -33,13 +33,13 @@ function createFrontendRuntime(fixtures = {}) {
     '.claim-checkbox': { checked: true },
     'input[type="radio"]:checked': { value: 'original' },
     '.claim-editor': { hidden: false },
-    '.existing-class-panel': { hidden: true },
+    '.claim-fields': { hidden: true },
+    '.claim-adjustment-panel': { hidden: true },
     '.special-course-panel': { hidden: true },
-    '.existing-class-search': { value: '' },
+    '.claim-course-type': { value: '' },
+    '.claim-difficulty-select': { value: '' },
     '.new-course-name': { value: '' },
-    '.claim-difficulty': { value: '' },
     '.claim-note': { value: '' },
-    '.claim-note-required': { hidden: true, textContent: '' },
   };
   const claimCard = {
     querySelector(selector) { return claimControls[selector] || null; },
@@ -435,19 +435,21 @@ test('uses the protected capability result before deciding whether a course chan
   assert.doesNotMatch(getElement('pending-leaves-list').innerHTML, /需要改成可教授的課程/);
 });
 
-test('loads protected capability and existing-class options for claims', () => {
+test('loads protected capability and independent course adjustment options for claims', () => {
   assert.match(html, /callApi\(["']getClaimOptions["']/);
   assert.match(html, /claimOptions/);
-  assert.match(html, /class-search/);
-  assert.match(html, /existing-class/);
-  assert.match(html, /選擇 OB 現有課程/);
+  assert.match(html, /claim-course-type/);
+  assert.match(html, /claim-difficulty-select/);
+  assert.match(html, /課程類型/);
 });
 
 test('separates ordinary substitute handling from the special-course flow', () => {
   assert.match(html, /value=["']original["']/);
   assert.match(html, /value=["']existing["']/);
-  assert.match(html, /沿用原課程/);
-  assert.match(html, /改用既有 OB 課程/);
+  assert.match(html, /直接認領/);
+  assert.match(html, /調整課程類型或難度/);
+  assert.doesNotMatch(html, />\s*沿用原課程\s*<\/label>/);
+  assert.doesNotMatch(html, />\s*改用既有 OB 課程\s*<\/label>/);
   assert.doesNotMatch(html, /value=["']new["']/);
   assert.doesNotMatch(html, /value=["']__SPECIAL__["']/);
   assert.match(html, /普通代課/);
@@ -457,7 +459,8 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /新課程名稱（概述即可）/);
   assert.doesNotMatch(html, /新課程名稱\s*<span class="claim-required">必填/);
   assert.doesNotMatch(html, /new-difficulty-required/);
-  assert.match(html, /claim-difficulty/);
+  assert.match(html, /claim-course-type/);
+  assert.match(html, /claim-difficulty-select/);
   assert.match(html, /claim-note/);
 });
 
@@ -494,15 +497,16 @@ test('special-course draft requires one slot or an allowed consecutive pair and 
   });
 });
 
-test('same-apparatus original handling allows optional difficulty and note', () => {
+test('direct claim strips every editable override from the submitted draft', () => {
   const { context } = createFrontendRuntime();
   const payload = context.validateClaimDraft({
     handlingType: 'original',
-    actualClassId: '',
-    actualCourseName: '',
-    category: '',
-    difficulty: '',
-    note: '',
+    courseTypeKey: '舞綢',
+    actualClassId: 'forged-class',
+    actualCourseName: '偽造課程',
+    category: '舞綢',
+    difficulty: 'Lv.9',
+    note: '不應寫入',
   }, {
     '代課編號': 'leave-a',
     '課程': '空環 Lv.1',
@@ -521,7 +525,7 @@ test('same-apparatus original handling allows optional difficulty and note', () 
   });
 });
 
-test('cross-apparatus handling requires a structured course change and note', () => {
+test('ordinary adjustment requires a course type but keeps the note optional', () => {
   const { context } = createFrontendRuntime();
   const item = {
     '代課編號': 'leave-cross',
@@ -534,8 +538,20 @@ test('cross-apparatus handling requires a structured course change and note', ()
     handlingType: 'original', note: '',
   }, item), /不能沿用原課程/);
   assert.throws(() => context.validateClaimDraft({
-    handlingType: 'existing', actualClassId: 'class-ring', category: '空環', note: '',
-  }, item), /備註/);
+    handlingType: 'existing', courseTypeKey: '', difficulty: 'Lv.1', note: '',
+  }, item), /課程類型/);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.validateClaimDraft({
+    handlingType: 'existing', courseTypeKey: '空環', difficulty: 'Lv.1', note: '',
+  }, item))), {
+    substituteId: 'leave-cross',
+    handlingType: 'existing',
+    actualClassId: '',
+    actualCourseName: '',
+    category: '',
+    difficulty: 'Lv.1',
+    note: '',
+    courseTypeKey: '空環',
+  });
   assert.throws(() => context.validateClaimDraft({
     handlingType: 'special', actualCourseName: '', difficulty: '', note: '改課',
   }, item), /課程名稱/);
@@ -570,7 +586,7 @@ test('special-course handling requires a summary and note but keeps difficulty o
   });
 });
 
-test('marks the note required as soon as a same-capability teacher chooses another apparatus', () => {
+test('ordinary notes stay optional even when the apparatus changes', () => {
   const { context } = createFrontendRuntime();
   const item = {
     '課程大類': '空環',
@@ -579,15 +595,20 @@ test('marks the note required as soon as a same-capability teacher chooses anoth
 
   assert.equal(context.claimNoteIsRequired(item, 'original', '空環'), false);
   assert.equal(context.claimNoteIsRequired(item, 'existing', '空環'), false);
-  assert.equal(context.claimNoteIsRequired(item, 'existing', '舞綢'), true);
+  assert.equal(context.claimNoteIsRequired(item, 'existing', '舞綢'), false);
+  assert.equal(context.claimNoteIsRequired(item, 'special', '其他'), true);
 });
 
-test('submits the room-free OB course key selected by the teacher', async () => {
+test('submits the OB course type and difficulty as independent choices', async () => {
   const { context, claimCard, claimControls } = createFrontendRuntime({
     getClaimOptions: {
       capabilities: ['地板課程'],
       classes: [
-        { courseKey: '肩頸舒壓瑜伽', courseName: '肩頸舒壓瑜伽', category: '地板課程' },
+        {
+          courseKey: '肩頸舒壓瑜伽 Lv.1', courseName: '肩頸舒壓瑜伽 Lv.1',
+          courseTypeKey: '肩頸舒壓瑜伽', courseTypeName: '肩頸舒壓瑜伽',
+          difficulty: 'Lv.1', category: '地板課程',
+        },
       ],
     },
     getAvailableSubstitutes: [],
@@ -596,26 +617,37 @@ test('submits the room-free OB course key selected by the teacher', async () => 
 
   await context.fetchAvailableSubstitutes();
 
-  assert.equal(context.findSelectedClaimClass('肩頸舒壓瑜伽').courseName, '肩頸舒壓瑜伽');
+  assert.equal(context.findSelectedClaimClass('肩頸舒壓瑜伽', 'Lv.1').courseName, '肩頸舒壓瑜伽 Lv.1');
   claimControls['input[type="radio"]:checked'].value = 'existing';
-  claimControls['.existing-class-search'].value = '肩頸舒壓瑜伽';
+  claimControls['.claim-course-type'].value = '肩頸舒壓瑜伽';
+  claimControls['.claim-difficulty-select'].value = 'Lv.1';
   assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
     handlingType: 'existing',
     actualClassId: '',
-    actualCourseName: '肩頸舒壓瑜伽',
+    actualCourseName: '肩頸舒壓瑜伽 Lv.1',
     category: '地板課程',
-    difficulty: '',
+    difficulty: 'Lv.1',
     note: '',
-    courseKey: '肩頸舒壓瑜伽',
+    courseKey: '肩頸舒壓瑜伽 Lv.1',
+    courseTypeKey: '肩頸舒壓瑜伽',
   });
 });
 
-test('shows course names instead of OB class IDs in the existing-course selector', async () => {
+test('renders separate course type and difficulty selectors instead of class IDs', async () => {
   const { context, getElement } = createFrontendRuntime({
     getClaimOptions: {
       capabilities: ['地板課程'],
       classes: [
-        { courseKey: '地板瑜伽', courseName: '地板瑜伽', category: '地板課程' },
+        {
+          courseKey: '地板瑜伽 Lv.1', courseName: '地板瑜伽 Lv.1',
+          courseTypeKey: '地板瑜伽', courseTypeName: '地板瑜伽', difficulty: 'Lv.1',
+          category: '地板課程',
+        },
+        {
+          courseKey: '地板瑜伽 Lv.2', courseName: '地板瑜伽 Lv.2',
+          courseTypeKey: '地板瑜伽', courseTypeName: '地板瑜伽', difficulty: 'Lv.2',
+          category: '地板課程',
+        },
       ],
     },
     getAvailableSubstitutes: [{
@@ -632,11 +664,25 @@ test('shows course names instead of OB class IDs in the existing-course selector
   await context.fetchAvailableSubstitutes();
 
   const markup = getElement('pending-leaves-list').innerHTML;
-  assert.match(markup, /<select class="claim-control existing-class-search">/);
-  assert.match(markup, /<option value="地板瑜伽">地板瑜伽<\/option>/);
+  assert.match(markup, /<select class="claim-control claim-course-type">/);
+  assert.match(markup, /<option value="地板瑜伽"[^>]*>地板瑜伽<\/option>/);
+  assert.match(markup, /<select class="claim-control claim-difficulty-select">/);
   assert.doesNotMatch(markup, />389<\/option>/);
-  assert.doesNotMatch(markup, /｜地板課程/);
   assert.doesNotMatch(markup, /課程代碼/);
+});
+
+test('direct claim hides all fields while adjustment shows independent selectors', () => {
+  const { context, claimCard, claimControls } = createFrontendRuntime();
+
+  claimControls['input[type="radio"]:checked'].value = 'original';
+  context.updateClaimCardState(claimCard);
+  assert.equal(claimControls['.claim-fields'].hidden, true);
+  assert.equal(claimControls['.claim-adjustment-panel'].hidden, true);
+
+  claimControls['input[type="radio"]:checked'].value = 'existing';
+  context.updateClaimCardState(claimCard);
+  assert.equal(claimControls['.claim-fields'].hidden, false);
+  assert.equal(claimControls['.claim-adjustment-panel'].hidden, false);
 });
 
 test('teacher records expose cancel and withdraw request actions', () => {

@@ -1719,9 +1719,34 @@ test('recurring claim catalog excludes one-off long and special courses but keep
   const options = backend.buildRecurringClaimCourseOptions_(rows, ['地板課程', '綢吊']);
 
   assert.deepEqual(JSON.parse(JSON.stringify(options)), [
-    { courseKey: '原始瑜伽', courseName: '原始瑜伽', category: '地板課程', durationMinutes: 0 },
-    { courseKey: '綢吊 Lv.0-2（90分）', courseName: '綢吊 Lv.0-2（90分）', category: '綢吊', durationMinutes: 90 },
+    {
+      courseKey: '原始瑜伽', courseName: '原始瑜伽',
+      courseTypeKey: '原始瑜伽', courseTypeName: '原始瑜伽', difficulty: '',
+      category: '地板課程', durationMinutes: 0,
+    },
+    {
+      courseKey: '綢吊 Lv.0-2（90分）', courseName: '綢吊 Lv.0-2（90分）',
+      courseTypeKey: '綢吊（90分）', courseTypeName: '綢吊（90分）', difficulty: 'Lv.0-2',
+      category: '綢吊', durationMinutes: 90,
+    },
   ]);
+});
+
+test('splits recurring OB course types from their difficulty labels', () => {
+  const backend = loadBackend();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.parseClaimCourseOption_('B－空環 Lv.1~2'))), {
+    courseTypeKey: '空環', courseTypeName: '空環', difficulty: 'Lv.1~2',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.parseClaimCourseOption_('綢吊 Lv.0-2（90分）'))), {
+    courseTypeKey: '綢吊（90分）', courseTypeName: '綢吊（90分）', difficulty: 'Lv.0-2',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.parseClaimCourseOption_('原始瑜伽 Open level'))), {
+    courseTypeKey: '原始瑜伽', courseTypeName: '原始瑜伽', difficulty: 'Open level',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.parseClaimCourseOption_('皮拉提斯'))), {
+    courseTypeKey: '皮拉提斯', courseTypeName: '皮拉提斯', difficulty: '',
+  });
 });
 
 test('parses only explicit course duration markers', () => {
@@ -1750,7 +1775,11 @@ test('claim options use recurring CourseList courses instead of the unfiltered O
   const options = backend.getClaimOptions_(teacherASession);
 
   assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
-    { courseKey: '原始瑜伽', courseName: '原始瑜伽', category: '地板課程', durationMinutes: 0 },
+    {
+      courseKey: '原始瑜伽', courseName: '原始瑜伽',
+      courseTypeKey: '原始瑜伽', courseTypeName: '原始瑜伽', difficulty: '',
+      category: '地板課程', durationMinutes: 0,
+    },
   ]);
 });
 
@@ -2455,7 +2484,7 @@ test('category capability validation reads only the protected account record', (
   assert.equal(backend.teacherCanTeachCategory_('不存在老師', '空環'), false);
 });
 
-test('original-course claim persists difficulty and structured values without requiring a note', () => {
+test('direct claim preserves the original difficulty and ignores forged editable values', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend();
   backend.openInvitations_(adminSession, ['老師甲']);
 
@@ -2465,20 +2494,21 @@ test('original-course claim persists difficulty and structured values without re
     actualClassId: '',
     actualCourseName: '',
     category: '',
-    difficulty: 'Lv.2',
-    note: '',
+    difficulty: 'Lv.9',
+    note: '不應寫入',
   }]);
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-b');
   assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1 });
   assert.equal(claimedRow[5], '已領取');
   assert.equal(claimedRow[6], '老師甲');
-  assert.equal(claimedRow[7], '沿用原課程；難度：Lv.2');
-  assert.deepEqual(claimedRow.slice(11, 15), ['class-ring-1', '空環 Lv.1', 'Lv.2', '沿用原課程']);
+  assert.equal(claimedRow[7], '沿用原課程；難度：Lv.1');
+  assert.deepEqual(claimedRow.slice(11, 15), ['class-ring-1', '空環 Lv.1', 'Lv.1', '沿用原課程']);
+  assert.doesNotMatch(claimedRow[7], /不應寫入|Lv\.9/);
   assert.equal(claimedRow[19], '空環');
 });
 
-test('existing-course change uses the server OB class and requires a cross-apparatus note', () => {
+test('existing-course change uses the server OB class while the note stays optional', () => {
   const crossLeave = [
     '2026-08-03 09:10:00', '老師丙', '2026/08/11', '11:00', '舞綢 Lv.1',
     '確認中', '', '', '', 'leave-cross', 'calendar-silk',
@@ -2489,16 +2519,6 @@ test('existing-course change uses the server OB class and requires a cross-appar
   });
   backend.openInvitations_(adminSession, ['老師甲']);
 
-  assert.throws(() => backend.claimSubstitute_(teacherASession, [{
-    substituteId: 'leave-cross',
-    handlingType: 'existing',
-    actualClassId: 'class-ring-1',
-    actualCourseName: '偽造課名',
-    category: '舞綢',
-    difficulty: 'Lv.1',
-    note: '',
-  }]), /跨道具.*備註/);
-
   backend.claimSubstitute_(teacherASession, [{
     substituteId: 'leave-cross',
     handlingType: 'existing',
@@ -2506,7 +2526,7 @@ test('existing-course change uses the server OB class and requires a cross-appar
     actualCourseName: '偽造課名',
     category: '舞綢',
     difficulty: 'Lv.1',
-    note: '原課程不是我的授課道具，請改成空環。',
+    note: '',
   }]);
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-cross');
@@ -2515,7 +2535,7 @@ test('existing-course change uses the server OB class and requires a cross-appar
   assert.equal(claimedRow[13], 'Lv.1');
   assert.equal(claimedRow[14], '改用既有 OB 課程');
   assert.equal(claimedRow[19], '空環');
-  assert.match(claimedRow[7], /請改成空環/);
+  assert.doesNotMatch(claimedRow[7], /備註/);
   assert.doesNotMatch(claimedRow[7], /偽造課名/);
 });
 
@@ -2714,7 +2734,7 @@ test('same-apparatus change keeps difficulty and note optional', () => {
   assert.equal(normalized.handlingType, '沿用原課程');
   assert.equal(normalized.actualCourseName, '空環 Lv.1');
   assert.equal(normalized.category, '空環');
-  assert.equal(normalized.difficulty, '');
+  assert.equal(normalized.difficulty, 'Lv.1');
   assert.equal(normalized.note, '');
 });
 
@@ -2733,7 +2753,11 @@ test('claim options return only invited teacher capabilities and authorised OB c
 
   assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空環', '地板課程']);
   assert.deepEqual(JSON.parse(JSON.stringify(options.classes)), [
-    { courseKey: '空環 Lv.1', courseName: '空環 Lv.1', category: '空環', durationMinutes: 0 },
+    {
+      courseKey: '空環 Lv.1', courseName: '空環 Lv.1',
+      courseTypeKey: '空環', courseTypeName: '空環', difficulty: 'Lv.1',
+      category: '空環', durationMinutes: 0,
+    },
   ]);
   assert.equal(options.pinHash, undefined);
   assert.equal(options.role, undefined);
@@ -2840,6 +2864,66 @@ test('catalog course choice marks an absent room version for admin creation', ()
 
   assert.equal(normalized.actualClassId, '');
   assert.equal(normalized.actualCourseName, 'B－原始瑜伽');
+  assert.equal(normalized.handlingType, '需要新增課程');
+});
+
+test('course type and difficulty resolve independently to the exact room OB class', () => {
+  const recurringRows = [
+    ['2026/08/01', '09:00', 'A－空環 Lv.1', '老師乙', 'cal-ring-1a', 'class-ring-1a'],
+    ['2026/08/08', '09:00', 'A－空環 Lv.1', '老師乙', 'cal-ring-1b', 'class-ring-1a'],
+    ['2026/08/01', '10:30', 'A－空環 Lv.2', '老師乙', 'cal-ring-2a', 'class-ring-2a'],
+    ['2026/08/08', '10:30', 'A－空環 Lv.2', '老師乙', 'cal-ring-2b', 'class-ring-2a'],
+  ];
+  const { backend } = createInvitationBackend({
+    teacherACapabilities: '空環',
+    courseRows: recurringRows,
+  });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 101, nameZhHant: 'A－空環 Lv.1' },
+    { id: 102, nameZhHant: 'A－空環 Lv.2' },
+    { id: 202, nameZhHant: 'B－空環 Lv.2' },
+  ]);
+
+  const normalized = backend.validateClaimChange_({
+    teacher: '老師甲',
+    targetCourseName: 'B－空環 Lv.1',
+    handlingType: 'existing',
+    courseTypeKey: '空環',
+    difficulty: 'Lv.2',
+    note: '',
+  });
+
+  assert.equal(normalized.actualClassId, '202');
+  assert.equal(normalized.actualCourseName, 'B－空環 Lv.2');
+  assert.equal(normalized.difficulty, 'Lv.2');
+  assert.equal(normalized.handlingType, '改用既有 OB 課程');
+  assert.equal(normalized.note, '');
+});
+
+test('independent course adjustment never borrows another room Class ID', () => {
+  const recurringRows = [
+    ['2026/08/01', '09:00', 'A－空環 Lv.2', '老師乙', 'cal-ring-2a', 'class-ring-2a'],
+    ['2026/08/08', '09:00', 'A－空環 Lv.2', '老師乙', 'cal-ring-2b', 'class-ring-2a'],
+  ];
+  const { backend } = createInvitationBackend({
+    teacherACapabilities: '空環',
+    courseRows: recurringRows,
+  });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 102, nameZhHant: 'A－空環 Lv.2' },
+  ]);
+
+  const normalized = backend.validateClaimChange_({
+    teacher: '老師甲',
+    targetCourseName: 'B－空環 Lv.1',
+    handlingType: 'existing',
+    courseTypeKey: '空環',
+    difficulty: 'Lv.2',
+    note: '',
+  });
+
+  assert.equal(normalized.actualClassId, '');
+  assert.equal(normalized.actualCourseName, 'B－空環 Lv.2');
   assert.equal(normalized.handlingType, '需要新增課程');
 });
 

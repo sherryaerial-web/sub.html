@@ -8,6 +8,7 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 function createFrontendRuntime(fixtures = {}) {
   const elements = new Map();
+  const requestActions = [];
   let claimSubmitted = false;
   const getElement = (id) => {
     if (!elements.has(id)) {
@@ -66,6 +67,7 @@ function createFrontendRuntime(fixtures = {}) {
     const action = isPost
       ? new URLSearchParams(request.body || '').get('action')
       : new URL(url).searchParams.get('action');
+    requestActions.push(action);
     if (isPost && action === 'claimSubstitute') claimSubmitted = true;
     if (isPost && action === 'getAvailableSubstitutes' && claimSubmitted) {
       return Promise.resolve({
@@ -77,7 +79,7 @@ function createFrontendRuntime(fixtures = {}) {
     }
     const authenticatedReads = new Set([
       'getAvailableSubstitutes', 'getClaimOptions', 'getMySubs',
-      'getMyCourses', 'getMyLeaves', 'getAdminDashboard',
+      'getMyCourses', 'getMyLeaves', 'getAdminDashboard', 'recordInvitationFirstView',
     ]);
     const data = isPost && !authenticatedReads.has(action)
       ? { count: 1 }
@@ -100,7 +102,7 @@ function createFrontendRuntime(fixtures = {}) {
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   vm.createContext(context);
   vm.runInContext(script, context, { filename: 'index.html' });
-  return { context, elements, getElement, claimCard, claimControls };
+  return { context, elements, getElement, claimCard, claimControls, requestActions };
 }
 
 test('keeps API secrets out of the public frontend', () => {
@@ -669,6 +671,32 @@ test('renders separate course type and difficulty selectors instead of class IDs
   assert.match(markup, /<select class="claim-control claim-difficulty-select">/);
   assert.doesNotMatch(markup, />389<\/option>/);
   assert.doesNotMatch(markup, /課程代碼/);
+});
+
+test('renders the substitute list without waiting for first-view tracking', async () => {
+  const neverFinishes = new Promise(() => {});
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-fast-list',
+      '日期': '2026/09/04',
+      '時段': '11:00',
+      '課程': 'B－舞綢 Lv.2',
+      '課程大類': '舞綢',
+      '原老師': '老師甲',
+      '可沿用原課程': true,
+    }],
+    getClaimOptions: { capabilities: ['舞綢'], classes: [] },
+    recordInvitationFirstView: neverFinishes,
+  });
+
+  const rendered = await Promise.race([
+    context.fetchAvailableSubstitutes().then(() => true),
+    new Promise((resolve) => setImmediate(() => resolve(false))),
+  ]);
+
+  assert.equal(rendered, true);
+  assert.match(getElement('pending-leaves-list').innerHTML, /B－舞綢 Lv\.2/);
+  assert.equal(requestActions.includes('recordInvitationFirstView'), true);
 });
 
 test('direct claim hides all fields while adjustment shows independent selectors', () => {

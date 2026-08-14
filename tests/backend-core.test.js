@@ -1251,6 +1251,30 @@ test('available substitutes POST route rejects requests without a session', () =
   assert.match(response.message, /請先登入/);
 });
 
+test('available substitutes route does not wait for first-view tracking', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')], services);
+  const sessionToken = backend.authenticate_('老師甲', '1234').sessionToken;
+  let trackingCalls = 0;
+  backend.getAvailableSubstitutes_ = () => [{ '原老師': '老師乙' }];
+  backend.recordInvitationFirstView_ = () => { trackingCalls += 1; };
+
+  const listResponse = JSON.parse(backend.doPost({ parameter: {
+    action: 'getAvailableSubstitutes', sessionToken,
+  } }).text);
+
+  assert.equal(listResponse.status, 'success');
+  assert.equal(trackingCalls, 0);
+
+  const trackingResponse = JSON.parse(backend.doPost({ parameter: {
+    action: 'recordInvitationFirstView', sessionToken,
+  } }).text);
+
+  assert.equal(trackingResponse.status, 'success');
+  assert.equal(trackingCalls, 1);
+});
+
 test('getMyCourses returns only the logged-in teacher courses with stable OB IDs', () => {
   const { backend } = createLeaveBackend({
     courseRows: [
@@ -2261,13 +2285,18 @@ test('invited list read is pure while the explicit POST route records first view
 
   const firstRows = backend.getAvailableSubstitutes_(teacherASession);
   assert.equal(invitationSheet.values[1][3], '');
-  const postResult = JSON.parse(backend.doPost({ parameter: {
+  const listResult = JSON.parse(backend.doPost({ parameter: {
     action: 'getAvailableSubstitutes',
+    sessionToken: teacherAToken,
+  } }).text);
+  assert.equal(invitationSheet.values[1][3], '');
+  const postResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'recordInvitationFirstView',
     sessionToken: teacherAToken,
   } }).text);
   const firstViewedAt = invitationSheet.values[1][3];
   const secondResult = JSON.parse(backend.doPost({ parameter: {
-    action: 'getAvailableSubstitutes',
+    action: 'recordInvitationFirstView',
     sessionToken: teacherAToken,
   } }).text);
 
@@ -2278,8 +2307,9 @@ test('invited list read is pure while the explicit POST route records first view
   assert.ok(firstRows.every((row) => row['其他受邀老師'] === undefined));
   assert.ok(firstViewedAt);
   assert.equal(invitationSheet.values[1][3], firstViewedAt);
-  assert.deepEqual(postResult.data.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
-  assert.deepEqual(secondResult.data.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
+  assert.deepEqual(listResult.data.map((row) => row['代課編號']), ['leave-b', 'leave-c']);
+  assert.equal(postResult.data.recorded, true);
+  assert.equal(secondResult.data.recorded, true);
 });
 
 test('available-substitute reads never invent missing legacy UUIDs', () => {

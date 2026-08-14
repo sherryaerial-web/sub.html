@@ -1089,9 +1089,11 @@ function doPost(e) {
         };
       },
       getAvailableSubstitutes: function() {
-        var available = getAvailableSubstitutes_(session);
+        return getAvailableSubstitutes_(session);
+      },
+      recordInvitationFirstView: function() {
         recordInvitationFirstView_(session);
-        return available;
+        return { recorded: true };
       },
       getClaimOptions: function() {
         return getClaimOptions_(session);

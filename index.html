@@ -1807,6 +1807,9 @@
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
         renderAvailableSubstitutes();
+        void callPostApi("recordInvitationFirstView").catch((error) => {
+          console.warn("首次查看時間記錄失敗，不影響代課清單使用。", error);
+        });
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }

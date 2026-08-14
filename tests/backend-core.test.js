@@ -1022,6 +1022,56 @@ test('teacher password bulk import preserves an imported first admin and its adm
   });
 });
 
+test('iframe POST transport relays the authenticated JSON result only to the production frontend', () => {
+  const services = createAuthServices();
+  services.Utilities.base64Encode = (value) => Buffer.from(value, 'utf8').toString('base64');
+  services.HtmlService = {
+    XFrameOptionsMode: { ALLOWALL: 'ALLOWALL' },
+    createHtmlOutput(text) {
+      return {
+        text,
+        xFrameOptionsMode: '',
+        setXFrameOptionsMode(mode) { this.xFrameOptionsMode = mode; return this; },
+      };
+    },
+  };
+  const bootstrap = loadBackend(services);
+  const account = createAccount(bootstrap, '老師甲', '1234', { active: '是', role: '老師' });
+  const { backend } = createAuthBackend([account], services);
+  const session = backend.authenticate_('老師甲', '1234');
+
+  const response = backend.doPost({ parameter: {
+    action: 'getSession',
+    sessionToken: session.sessionToken,
+    transport: 'iframe',
+    requestId: 'relay-request-123456',
+  } });
+  let relayed;
+  const relayScript = response.text.match(/<script>([\s\S]*?)<\/script>/)[1];
+  vm.runInNewContext(relayScript, {
+    JSON,
+    Uint8Array,
+    TextDecoder,
+    atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+    window: {
+      top: {
+        postMessage(message, targetOrigin) { relayed = { message, targetOrigin }; },
+      },
+    },
+  });
+
+  assert.equal(response.xFrameOptionsMode, 'ALLOWALL');
+  assert.equal(relayed.targetOrigin, 'https://sherryaerial-web.github.io');
+  assert.deepEqual(JSON.parse(JSON.stringify(relayed.message)), {
+    source: 'sherry-gas-relay',
+    requestId: 'relay-request-123456',
+    payload: {
+      status: 'success',
+      data: { teacherName: '老師甲', role: '老師', managementCapabilities: [] },
+    },
+  });
+});
+
 test('teacher password bulk import keeps every plaintext PIN when the account batch write fails', () => {
   const rows = createPasswordImportRows();
   const { backend, services, accountSheet, passwordSheet } = createPasswordImportBackend(rows);

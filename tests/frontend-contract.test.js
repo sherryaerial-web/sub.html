@@ -6,9 +6,12 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-function createFrontendRuntime(fixtures = {}) {
+function createFrontendRuntime(fixtures = {}, options = {}) {
   const elements = new Map();
   const requestActions = [];
+  const submittedForms = [];
+  const windowListeners = new Map();
+  const bodyChildren = [];
   let claimSubmitted = false;
   const getElement = (id) => {
     if (!elements.has(id)) {
@@ -52,6 +55,9 @@ function createFrontendRuntime(fixtures = {}) {
     checked: true,
     closest() { return claimCard; },
   };
+  const emitWindowEvent = (type, event) => {
+    (windowListeners.get(type) || []).slice().forEach((listener) => listener(event));
+  };
   const document = {
     getElementById: getElement,
     querySelectorAll(selector) {
@@ -60,6 +66,86 @@ function createFrontendRuntime(fixtures = {}) {
     },
     querySelector(selector) {
       return null;
+    },
+    createElement(tagName) {
+      const element = {
+        tagName: String(tagName).toUpperCase(),
+        children: [],
+        dataset: {},
+        style: {},
+        hidden: false,
+        name: '',
+        value: '',
+        type: '',
+        method: '',
+        action: '',
+        target: '',
+        parentNode: null,
+        appendChild(child) {
+          child.parentNode = this;
+          this.children.push(child);
+          return child;
+        },
+        setAttribute(name, value) { this[name] = value; },
+        remove() {
+          if (!this.parentNode) return;
+          const index = this.parentNode.children.indexOf(this);
+          if (index >= 0) this.parentNode.children.splice(index, 1);
+          this.parentNode = null;
+        },
+      };
+      if (element.tagName === 'IFRAME') element.contentWindow = {};
+      if (element.tagName === 'FORM') {
+        element.submit = function() {
+          const fields = Object.fromEntries(this.children.map((child) => [child.name, child.value]));
+          const targetFrame = bodyChildren.find((child) => child.tagName === 'IFRAME' && child.name === this.target);
+          submittedForms.push({
+            action: this.action,
+            method: this.method,
+            enctype: this.enctype,
+            target: this.target,
+            fields,
+            frameWindow: targetFrame && targetFrame.contentWindow,
+          });
+          const action = fields.action;
+          requestActions.push(action);
+          if (action === 'claimSubstitute') claimSubmitted = true;
+          if (options.autoRelay === false) return;
+
+          let data;
+          if (action === 'getAvailableSubstitutes' && claimSubmitted) {
+            data = [];
+          } else if (Object.prototype.hasOwnProperty.call(fixtures, action)) {
+            data = fixtures[action];
+          } else {
+            const authenticatedReads = new Set([
+              'getAvailableSubstitutes', 'getClaimOptions', 'getMySubs',
+              'getMyCourses', 'getMyLeaves', 'getAdminDashboard', 'recordInvitationFirstView',
+            ]);
+            data = authenticatedReads.has(action) ? [] : { count: 1 };
+          }
+          Promise.resolve(data).then((resolvedData) => {
+            emitWindowEvent('message', {
+              origin: 'https://script.googleusercontent.com',
+              source: targetFrame.contentWindow,
+              data: {
+                source: 'sherry-gas-relay',
+                requestId: fields.requestId,
+                payload: { status: 'success', data: resolvedData },
+              },
+            });
+          });
+        };
+      }
+      return element;
+    },
+    body: {
+      children: bodyChildren,
+      appendChild(child) {
+        child.parentNode = this;
+        bodyChildren.push(child);
+        return child;
+      },
     },
   };
   const responseFor = (url, request = {}) => {
@@ -91,18 +177,39 @@ function createFrontendRuntime(fixtures = {}) {
     console,
     document,
     fetch: responseFor,
+    URL,
     URLSearchParams,
     CSS: { escape: (value) => String(value) },
     window: {
       localStorage: { getItem() { return ''; }, setItem() {} },
       scrollTo() {},
-      setTimeout() {},
+      crypto: { randomUUID: () => 'test-request-uuid' },
+      setTimeout,
+      clearTimeout,
+      addEventListener(type, listener) {
+        if (!windowListeners.has(type)) windowListeners.set(type, []);
+        windowListeners.get(type).push(listener);
+      },
+      removeEventListener(type, listener) {
+        const listeners = windowListeners.get(type) || [];
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+      },
     },
   };
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   vm.createContext(context);
   vm.runInContext(script, context, { filename: 'index.html' });
-  return { context, elements, getElement, claimCard, claimControls, requestActions };
+  return {
+    context,
+    elements,
+    getElement,
+    claimCard,
+    claimControls,
+    requestActions,
+    submittedForms,
+    emitWindowEvent,
+  };
 }
 
 test('keeps API secrets out of the public frontend', () => {
@@ -157,38 +264,24 @@ test('does not present unloaded admin counts as real zero values', () => {
 });
 
 test('locks the leave pause button until the mutation and dashboard refresh finish', async () => {
-  const { context, getElement } = createFrontendRuntime();
   let finishPauseRequest;
-  context.fetch = (url, request = {}) => {
-    const action = new URLSearchParams(request.body || '').get('action');
-    if (action === 'pauseLeaves') {
-      return new Promise((resolve) => {
-        finishPauseRequest = () => resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({ status: 'success', data: { paused: true } }),
-        });
-      });
-    }
-    return Promise.resolve({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        status: 'success',
-        data: {
-          leavePaused: true,
-          pendingInvitations: [],
-          activeInvitees: [],
-          obWork: [],
-          changeRequests: [],
-          exceptions: [],
-          completed: [],
-          teachers: [],
-          replacementOptions: [],
-        },
-      }),
-    });
-  };
+  const pauseRequest = new Promise((resolve) => {
+    finishPauseRequest = () => resolve({ paused: true });
+  });
+  const { context, getElement } = createFrontendRuntime({
+    pauseLeaves: pauseRequest,
+    getAdminDashboard: {
+      leavePaused: true,
+      pendingInvitations: [],
+      activeInvitees: [],
+      obWork: [],
+      changeRequests: [],
+      exceptions: [],
+      completed: [],
+      teachers: [],
+      replacementOptions: [],
+    },
+  });
 
   const pending = context.toggleAdminLeavePause();
   assert.equal(getElement('admin-leave-pause').disabled, true);
@@ -197,13 +290,85 @@ test('locks the leave pause button until the mutation and dashboard refresh fini
   assert.equal(getElement('admin-leave-pause').disabled, false);
 });
 
-test('provides teacher login and sends credentials through form-encoded POST', () => {
+test('provides teacher login and sends credentials through form-encoded POST', async () => {
   assert.match(html, /id=["']login-form["']/);
   assert.match(html, /id=["']login-teacher["']/);
   assert.match(html, /id=["']login-pin["']/);
   assert.match(html, /callPostApi\(["']login["']/);
-  assert.match(html, /application\/x-www-form-urlencoded/);
-  assert.match(html, /method:\s*["']POST["']/);
+  const { context, submittedForms } = createFrontendRuntime({
+    login: { teacherName: '老師甲', role: '老師', managementCapabilities: [] },
+  });
+
+  await context.callPostApi('login', { teacherName: '老師甲', pin: '1234' });
+
+  assert.equal(submittedForms[0].method.toUpperCase(), 'POST');
+  assert.equal(submittedForms[0].enctype, 'application/x-www-form-urlencoded');
+  assert.equal(submittedForms[0].fields.teacherName, '老師甲');
+  assert.equal(submittedForms[0].fields.pin, '1234');
+  assert.equal(submittedForms[0].action.includes('1234'), false);
+});
+
+test('sends authenticated POST data through an iframe relay without exposing the session token in the URL', async () => {
+  const { context, submittedForms } = createFrontendRuntime({
+    getSession: { teacherName: '老師甲', role: '老師', managementCapabilities: [] },
+  });
+
+  const result = await context.callPostApi('getSession', { sessionToken: 'secret-session-token' });
+
+  assert.equal(result.teacherName, '老師甲');
+  assert.equal(submittedForms.length, 1);
+  assert.equal(submittedForms[0].method.toUpperCase(), 'POST');
+  assert.equal(submittedForms[0].action.includes('secret-session-token'), false);
+  assert.equal(submittedForms[0].fields.sessionToken, 'secret-session-token');
+  assert.equal(submittedForms[0].fields.transport, 'iframe');
+  assert.equal(submittedForms[0].fields.requestId, 'test-request-uuid');
+});
+
+test('ignores forged iframe relay messages before accepting the matching Google response', async () => {
+  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  let settled = false;
+  const pending = context.callPostApi('getSession').then((value) => {
+    settled = true;
+    return value;
+  });
+  assert.equal(submittedForms.length, 1);
+  const submitted = submittedForms[0];
+
+  emitWindowEvent('message', {
+    origin: 'https://attacker.example',
+    source: submitted.frameWindow,
+    data: {
+      source: 'sherry-gas-relay',
+      requestId: submitted.fields.requestId,
+      payload: { status: 'success', data: { teacherName: '偽造老師' } },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  emitWindowEvent('message', {
+    origin: 'https://relay.script.googleusercontent.com',
+    source: {},
+    data: {
+      source: 'sherry-gas-relay',
+      requestId: 'wrong-request-id',
+      payload: { status: 'success', data: { teacherName: '錯誤老師' } },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  emitWindowEvent('message', {
+    origin: 'https://relay.script.googleusercontent.com',
+    source: {},
+    data: {
+      source: 'sherry-gas-relay',
+      requestId: submitted.fields.requestId,
+      payload: { status: 'success', data: { teacherName: '老師甲' } },
+    },
+  });
+
+  assert.equal((await pending).teacherName, '老師甲');
 });
 
 test('keeps session tokens out of URLs by routing every authenticated read through POST', () => {

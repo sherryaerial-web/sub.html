@@ -1041,31 +1041,32 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  var parameters = {};
   try {
-    var parameters = getPostParameters_(e);
+    parameters = getPostParameters_(e);
     var action = cleanText_(parameters.action);
     if (!action) throw new Error('缺少操作名稱。');
 
     if (action === 'login') {
-      return createJsonResponse_({
+      return createPostResponse_(parameters, {
         status: 'success',
         data: authenticate_(parameters.teacherName, parameters.pin)
       });
     }
 
     if (action === 'getVvipSelection') {
-      return createJsonResponse_({
+      return createPostResponse_(parameters, {
         status: 'success',
         data: getVvipSelection_(parameters.vvipId)
       });
     }
 
     if (action === 'getVvipMembers') {
-      return createJsonResponse_({ status: 'success', data: getPublicVvipMembers_() });
+      return createPostResponse_(parameters, { status: 'success', data: getPublicVvipMembers_() });
     }
 
     if (action === 'submitVvipSelection') {
-      return createJsonResponse_({
+      return createPostResponse_(parameters, {
         status: 'success',
         data: submitVvipSelection_(
           parameters.vvipId,
@@ -1077,7 +1078,7 @@ function doPost(e) {
     var session = requireSession_(parameters.sessionToken);
     if (action === 'logout') {
       removeSession_(parameters.sessionToken);
-      return createJsonResponse_({ status: 'success', data: { loggedOut: true } });
+      return createPostResponse_(parameters, { status: 'success', data: { loggedOut: true } });
     }
 
     var handlers = {
@@ -1245,10 +1246,10 @@ function doPost(e) {
       }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
-    return createJsonResponse_({ status: 'success', data: handlers[action]() });
+    return createPostResponse_(parameters, { status: 'success', data: handlers[action]() });
   } catch (error) {
     console.error(error && error.stack ? error.stack : error);
-    return createJsonResponse_({
+    return createPostResponse_(parameters, {
       status: 'error',
       message: error && error.message ? error.message : String(error)
     });
@@ -5208,6 +5209,38 @@ function createJsonResponse_(data) {
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function createPostResponse_(parameters, data) {
+  if (cleanText_(parameters && parameters.transport) === 'iframe') {
+    return createIframeRelayResponse_(parameters.requestId, data);
+  }
+  return createJsonResponse_(data);
+}
+
+function createIframeRelayResponse_(requestIdValue, data) {
+  var requestId = cleanText_(requestIdValue);
+  if (!/^[A-Za-z0-9_-]{8,120}$/.test(requestId)) requestId = '';
+  var encodedPayload = Utilities.base64Encode(
+    JSON.stringify(data),
+    Utilities.Charset.UTF_8
+  );
+  var html = '<!doctype html><html><head><meta charset="utf-8"></head><body><script>' +
+    '(function(){' +
+    'var binary=atob(' + JSON.stringify(encodedPayload) + ');' +
+    'var bytes=new Uint8Array(binary.length);' +
+    'for(var i=0;i<binary.length;i++){bytes[i]=binary.charCodeAt(i);}' +
+    'var payload=JSON.parse(new TextDecoder("utf-8").decode(bytes));' +
+    'window.top.postMessage({' +
+      'source:"sherry-gas-relay",' +
+      'requestId:' + JSON.stringify(requestId) + ',' +
+      'payload:payload' +
+    '},"https://sherryaerial-web.github.io");' +
+    '})();' +
+    '<\/script></body></html>';
+  return HtmlService
+    .createHtmlOutput(html)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function formatMyDate(val) {

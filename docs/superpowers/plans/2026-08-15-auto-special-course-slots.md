@@ -1,14 +1,22 @@
-# 特別課自動占用連續時段實作計畫
+# 特別課自動占用連續時段與日期收合 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:test-driven-development to implement each task, then use superpowers:verification-before-completion before reporting completion.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 老師安排 90–240 分鐘特別課時只勾選起始堂，系統依課程長度與 15 分鐘換場，自動占用同日、同教室所有必要後續時段，並在任一必要時段不可用時整筆阻擋。
+**Goal:** 老師安排 90–240 分鐘特別課時只勾選起始堂，由系統自動占用必要後續時段；領取列表同時改為所有日期預設收合且可保留展開狀態。
 
-**Architecture:** 前端使用已載入的 availability chain 即時預覽占用範圍，但只送出起始代課 ID。Apps Script 在取得鎖後，重新以正式請假資料與 CourseList 計算必要時段，通過全部檢核才以同一 special group ID 原子更新精確列。後端回傳實際占用 ID，前端以回傳值更新畫面。
+**Architecture:** 前端使用已載入的 availability chain 即時預覽占用範圍，但只送出起始代課 ID；日期分組以頁面內 `Set` 保存展開狀態。Apps Script 在取得鎖後，重新以正式請假資料與 CourseList 計算必要時段，通過全部檢核才以同一 special group ID 原子更新精確列。後端回傳實際占用 ID，前端以回傳值更新畫面。
 
 **Tech Stack:** Google Apps Script (`Code.gs`)、單頁 HTML/CSS/JavaScript (`index.html`)、Node.js built-in test runner。
 
-**Safety constraints:** 不新增、搬動、清空或批次覆蓋任何正式 Sheet 欄位；不更動既有欄位索引。只有實際領取成功時，才更新系統計算出的必要代課列。正式 `clasp push --force` 必須另行取得使用者明確授權。
+## Global Constraints
+
+- 特別課長度必須是 90–240 分鐘整數，並保留 15 分鐘換場。
+- 老師只勾選特別課起始堂；前端提供預覽，後端在鎖內重新計算權威占用時段。
+- 後續課程開始時間嚴格早於 `特別課結束時間 + 15 分鐘` 才需占用；剛好等於邊界不占用。
+- 所有日期首次載入預設收合；切換模式或重新渲染時保留目前頁面工作階段的展開日期。
+- 不新增、搬動、清空或批次覆蓋任何正式 Sheet 欄位；不更動既有欄位索引。
+- 只有實際領取成功時，才更新系統計算出的必要代課列。
+- 正式 `clasp push --force` 必須另行取得使用者明確授權。
 
 ---
 
@@ -18,7 +26,7 @@
 - Modify: `tests/backend-core.test.js`
 - Modify: `Code.gs`
 
-### Step 1：先新增會失敗的後端測試
+- [ ] **Step 1：先新增會失敗的後端測試**
 
 在現有 special-course availability/claim 測試旁新增下列案例：
 
@@ -34,7 +42,7 @@ Run: `node --test --test-name-pattern='special course|特別課|continuous slots
 
 Expected: FAIL，因目前後端仍要求 merge 剛好兩個 ID，且只驗證 immediate partner。
 
-### Step 2：加入純計算 helper
+- [ ] **Step 2：加入純計算 helper**
 
 在 `Code.gs` 的 special-course helpers 區新增純函式，例如：
 
@@ -56,7 +64,7 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, pendingRows, cour
 - 找不到必要請假列時，錯誤必須指出 `YYYY/MM/DD、X 教室、HH:mm`。
 - helper 不寫 Sheet，方便獨立測試與重用。
 
-### Step 3：讓 availability 提供完整可追蹤鏈
+- [ ] **Step 3：讓 availability 提供完整可追蹤鏈**
 
 調整 `getSpecialCourseAvailability_()`，每個開放時段仍回傳自身日期、教室、時間與最大分鐘數，並提供前端沿同日同教室追蹤下一堂所需資訊。保留 `mergePartnerIds` 欄位亦可，但語意應是「下一個同教室且確實開放的候選」而不是最終權威結果。
 
@@ -64,7 +72,7 @@ Run: `node --test --test-name-pattern='availability|continuous slots' tests/back
 
 Expected: PASS。
 
-### Step 4：提交本任務
+- [ ] **Step 4：提交本任務**
 
 ```bash
 git add Code.gs tests/backend-core.test.js
@@ -79,7 +87,7 @@ git commit -m "test: define automatic special course slots"
 - Modify: `Code.gs`
 - Modify: `tests/backend-core.test.js`
 
-### Step 1：改寫 `claimSpecialCourse_()` 的 merge 輸入契約
+- [ ] **Step 1：改寫 `claimSpecialCourse_()` 的 merge 輸入契約**
 
 「單堂延長」與「使用連續時段」都只接受一個起始 ID：
 
@@ -92,7 +100,7 @@ if (!startId || (payload.substituteIds || []).length !== 1) {
 
 不要接受前端傳入的後續占用 IDs 作為權威資料。
 
-### Step 2：取得鎖後重算必要 IDs
+- [ ] **Step 2：取得鎖後重算必要 IDs**
 
 在既有 lock 範圍內重新讀取正式請假資料與 CourseList：
 
@@ -102,7 +110,7 @@ if (!startId || (payload.substituteIds || []).length !== 1) {
 - 對每個實際 ID 套用現有檢核：確認中、代課老師空白、已開放邀請、Calendar ID 存在、不是自己的原課程。
 - 任一檢核失敗時，在任何寫入前拋錯。
 
-### Step 3：一次完成精確列更新
+- [ ] **Step 3：一次完成精確列更新**
 
 沿用既有 `runStateTransitionUnlocked_()` 與欄位索引，以同一 `specialGroupId` 寫入全部必要列：
 
@@ -119,13 +127,13 @@ return {
 
 `specialMode` 改存「使用連續時段」，不得新增 Sheet 欄位或改動索引。
 
-### Step 4：執行後端回歸測試
+- [ ] **Step 4：執行後端回歸測試**
 
 Run: `node --test tests/backend-core.test.js`
 
 Expected: PASS；三堂成功案例的三列共用同一 group ID，失敗案例確認零列變更。
 
-### Step 5：提交本任務
+- [ ] **Step 5：提交本任務**
 
 ```bash
 git add Code.gs tests/backend-core.test.js
@@ -140,7 +148,7 @@ git commit -m "feat: auto-claim continuous special course slots"
 - Modify: `tests/frontend-contract.test.js`
 - Modify: `index.html`
 
-### Step 1：先新增會失敗的前端契約測試
+- [ ] **Step 1：先新增會失敗的前端契約測試**
 
 新增案例：
 
@@ -157,7 +165,7 @@ Run: `node --test --test-name-pattern='special course|continuous slots|自動占
 
 Expected: FAIL。
 
-### Step 2：新增前端純計算 helper
+- [ ] **Step 2：新增前端純計算 helper**
 
 在 `validateSpecialCourseDraft()` 前新增例如：
 
@@ -172,7 +180,7 @@ function buildSpecialCourseSlotPreview(startId, durationMinutes, availabilityMap
 
 `validateSpecialCourseDraft()` 在 merge 模式要求恰好一個起始 ID，呼叫 preview helper 驗證，並保留 90–240 整數檢核。
 
-### Step 3：改文案與選取行為
+- [ ] **Step 3：改文案與選取行為**
 
 - Radio 標題改為「使用連續時段」。
 - 在特別課表單醒目加入核准說明文字。
@@ -182,7 +190,7 @@ function buildSpecialCourseSlotPreview(startId, durationMinutes, availabilityMap
 - 自動占用的課卡加上狀態文字「系統自動占用」，但不要把其 checkbox 設為 checked，避免送出額外 IDs。
 - 不可安排時，顯示具體原因並停用送出按鈕。
 
-### Step 4：更新摘要與成功後移除邏輯
+- [ ] **Step 4：更新摘要與成功後移除邏輯**
 
 `updateSpecialClaimSummary()` 顯示：
 
@@ -202,13 +210,13 @@ removeClaimedSubstitutes(claimedIds);
 
 不得再用 `draft.substituteIds.length` 判斷成功筆數，因 draft 只有起始 ID。
 
-### Step 5：執行前端回歸測試
+- [ ] **Step 5：執行前端回歸測試**
 
 Run: `node --test tests/frontend-contract.test.js`
 
 Expected: PASS。
 
-### Step 6：提交本任務
+- [ ] **Step 6：提交本任務**
 
 ```bash
 git add index.html tests/frontend-contract.test.js
@@ -217,7 +225,143 @@ git commit -m "feat: preview automatic special course slots"
 
 ---
 
-## Task 4：整體驗證與正式部署前安全檢查
+## Task 4：日期分組預設收合並保留展開狀態
+
+**Files:**
+- Modify: `tests/frontend-contract.test.js`
+- Modify: `index.html:468-480`
+- Modify: `index.html:2013-2038`
+
+**Interfaces:**
+- Consumes: `groupAvailableSubstitutesByDate(items)`、`renderAvailableSubstitutes()`、`pendingLeaves`。
+- Produces: `expandedClaimDates: Set<string>`、`toggleClaimDateGroup(date: string): void`、日期標題的 `[data-claim-date-toggle]` 與內容的 `[data-claim-date-content]`。
+
+- [ ] **Step 1：新增會失敗的日期收合契約測試**
+
+在 `tests/frontend-contract.test.js` 的日期分組測試旁加入實際 runtime 測試，驗證以下 DOM 契約：
+
+```javascript
+test('keeps substitute date groups collapsed by default and preserves toggled dates across renders', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getAvailableSubstitutes: [
+      { '代課編號': 'leave-a', '日期': '2026/09/12', '時段': '13:30', '課程': '空環', '原老師': 'Liz', '課程大類': '空環', '可沿用原課程': true },
+      { '代課編號': 'leave-b', '日期': '2026/09/13', '時段': '17:30', '課程': '舞綢', '原老師': 'Lily', '課程大類': '舞綢', '可沿用原課程': true },
+    ],
+  });
+  await Promise.resolve();
+  const list = getElement('pending-leaves-list');
+  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="false"/);
+  assert.match(list.innerHTML, /data-claim-date-content="2026\/09\/12"[^>]*hidden/);
+
+  context.toggleClaimDateGroup('2026/09/12');
+  assert.equal(context.expandedClaimDates.has('2026/09/12'), true);
+  context.renderAvailableSubstitutes();
+  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="true"/);
+  assert.doesNotMatch(list.innerHTML, /data-claim-date-content="2026\/09\/12"[^>]*hidden/);
+
+  context.toggleClaimDateGroup('2026/09/12');
+  assert.equal(context.expandedClaimDates.has('2026/09/12'), false);
+});
+```
+
+另加靜態契約斷言：日期標題使用 `<button type="button">`、包含 `aria-controls`，內容容器具有唯一 `id`。
+
+Run: `node --test --test-name-pattern='date groups|日期收合' tests/frontend-contract.test.js`
+
+Expected: FAIL，因目前日期內容永遠展開且沒有 `expandedClaimDates`。
+
+- [ ] **Step 2：加入展開狀態與切換函式**
+
+在前端其他頁面狀態變數旁新增：
+
+```javascript
+    const expandedClaimDates = new Set();
+
+    function toggleClaimDateGroup(date) {
+      const normalizedDate = String(date || '');
+      if (!normalizedDate) return;
+      if (expandedClaimDates.has(normalizedDate)) {
+        expandedClaimDates.delete(normalizedDate);
+      } else {
+        expandedClaimDates.add(normalizedDate);
+      }
+      renderAvailableSubstitutes();
+    }
+```
+
+此 Set 只存在目前頁面工作階段，不寫 localStorage 或後端。
+
+- [ ] **Step 3：改寫日期分組 markup 與樣式**
+
+在 `renderAvailableSubstitutes()` 產生每組時使用：
+
+```javascript
+        const contentId = `claim-date-content-${date.replace(/[^0-9A-Za-z_-]/g, '-')}`;
+        const isExpanded = expandedClaimDates.has(date);
+        return `
+          <section class="claim-date-group" data-claim-date="${escapeHtml(date)}">
+            <button class="claim-date-heading" type="button"
+              data-claim-date-toggle="${escapeHtml(date)}"
+              aria-expanded="${isExpanded ? 'true' : 'false'}"
+              aria-controls="${escapeHtml(contentId)}">
+              <h3><i data-lucide="calendar-days"></i>${escapeHtml(formatDateWithWeekday(date))}</h3>
+              <span class="claim-date-heading-side">
+                <span class="claim-date-count">${items.length} 堂待領</span>
+                <i data-lucide="chevron-down" class="claim-date-chevron" aria-hidden="true"></i>
+              </span>
+            </button>
+            <div class="list" id="${escapeHtml(contentId)}"
+              data-claim-date-content="${escapeHtml(date)}" ${isExpanded ? '' : 'hidden'}>
+              ${items.map(renderAvailableSubstituteItem).join('')}
+            </div>
+          </section>`;
+```
+
+把 `.claim-date-heading` 重設成滿寬透明按鈕，補上 hover/focus-visible，並用 `[aria-expanded="true"] .claim-date-chevron` 旋轉 180 度。保留既有間距、底線及手機可點擊高度。
+
+- [ ] **Step 4：加入事件代理並清理失效日期狀態**
+
+在既有 document click handler 中加入：
+
+```javascript
+      const dateToggle = event.target.closest('[data-claim-date-toggle]');
+      if (dateToggle) {
+        toggleClaimDateGroup(dateToggle.dataset.claimDateToggle);
+        return;
+      }
+```
+
+每次 `renderAvailableSubstitutes()` 建立 groups 後，清掉已不存在的日期：
+
+```javascript
+      const validDates = new Set(groups.keys());
+      [...expandedClaimDates].forEach((date) => {
+        if (!validDates.has(date)) expandedClaimDates.delete(date);
+      });
+```
+
+這不會更動已勾選 checkbox 的資料來源；一般的 mode/re-render 只重建 DOM，日期是否展開由 Set 還原。
+
+- [ ] **Step 5：執行日期收合與完整前端測試**
+
+Run: `node --test --test-name-pattern='date groups|日期收合' tests/frontend-contract.test.js`
+
+Expected: PASS。
+
+Run: `node --test tests/frontend-contract.test.js`
+
+Expected: PASS。
+
+- [ ] **Step 6：提交本任務**
+
+```bash
+git add index.html tests/frontend-contract.test.js
+git commit -m "feat: collapse substitute dates by default"
+```
+
+---
+
+## Task 5：整體驗證與正式部署前安全檢查
 
 **Files:**
 - Verify: `Code.gs`
@@ -225,13 +369,13 @@ git commit -m "feat: preview automatic special course slots"
 - Verify: `tests/backend-core.test.js`
 - Verify: `tests/frontend-contract.test.js`
 
-### Step 1：執行完整測試
+- [ ] **Step 1：執行完整測試**
 
 Run: `node --test tests/*.test.js`
 
 Expected: 全部 PASS；若有既存且與本功能無關的 missing-file/ENOENT，必須分開記錄，不能冒充本次失敗。
 
-### Step 2：執行語法與差異檢查
+- [ ] **Step 2：執行語法與差異檢查**
 
 ```bash
 cp Code.gs /private/tmp/substitute-code-check.js
@@ -244,7 +388,7 @@ git status --short
 
 Expected: 語法與 diff check 通過；只包含本功能預期檔案。
 
-### Step 3：核對安全契約
+- [ ] **Step 3：核對安全契約**
 
 用 `git diff` 確認：
 
@@ -253,14 +397,14 @@ Expected: 語法與 diff check 通過；只包含本功能預期檔案。
 - 後端只在全部 required IDs 通過後寫入。
 - 回傳 actual IDs，前端不信任自己的後續占用預覽。
 
-### Step 4：提交整體修正
+- [ ] **Step 4：提交整體修正**
 
 ```bash
 git add Code.gs index.html tests/backend-core.test.js tests/frontend-contract.test.js
 git commit -m "feat: support multi-slot special courses"
 ```
 
-### Step 5：部署前停下取得授權
+- [ ] **Step 5：部署前停下取得授權**
 
 先回報測試數、變更摘要與正式 Sheet 影響為「無結構／既有資料變更；只有老師日後送出時精準更新必要代課列」。
 
@@ -269,4 +413,3 @@ git commit -m "feat: support multi-slot special courses"
 1. 推送／部署 GAS 新版本。
 2. 推送 `main` 觸發 GitHub Pages。
 3. 以正式網址核對文案與載入，不進行真實領取寫入。
-

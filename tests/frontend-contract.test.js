@@ -699,6 +699,33 @@ test('renders the substitute list without waiting for first-view tracking', asyn
   assert.equal(requestActions.includes('recordInvitationFirstView'), true);
 });
 
+test('waits for the substitute list before starting claim options', async () => {
+  let resolveSubstitutes;
+  const substitutes = new Promise((resolve) => {
+    resolveSubstitutes = resolve;
+  });
+  const { context, requestActions } = createFrontendRuntime({
+    getAvailableSubstitutes: substitutes,
+    getClaimOptions: { capabilities: [], classes: [] },
+  });
+
+  const loading = context.fetchAvailableSubstitutes();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    requestActions.filter((action) => action === 'getAvailableSubstitutes' || action === 'getClaimOptions'),
+    ['getAvailableSubstitutes'],
+  );
+
+  resolveSubstitutes([]);
+  await loading;
+
+  assert.deepEqual(
+    requestActions.filter((action) => action === 'getAvailableSubstitutes' || action === 'getClaimOptions'),
+    ['getAvailableSubstitutes', 'getClaimOptions'],
+  );
+});
+
 test('direct claim hides all fields while adjustment shows independent selectors', () => {
   const { context, claimCard, claimControls } = createFrontendRuntime();
 

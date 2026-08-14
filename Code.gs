@@ -3866,6 +3866,7 @@ function getMySubs_(teacherName) {
   }).map(function(r) {
     return {
       '代課編號': cleanText_(r[9]),
+      'OB Calendar ID': cleanText_(r[10]),
       '日期': formatMyDate(r[2]),
       '時段': formatMyTime(r[3]),
       '課程': cleanText_(r[4]),

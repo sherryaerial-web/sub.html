@@ -443,18 +443,55 @@ test('loads protected capability and existing-class options for claims', () => {
   assert.match(html, /選擇 OB 現有課程/);
 });
 
-test('shows only original and existing handling choices with a universal special-course option', () => {
+test('separates ordinary substitute handling from the special-course flow', () => {
   assert.match(html, /value=["']original["']/);
   assert.match(html, /value=["']existing["']/);
   assert.match(html, /沿用原課程/);
   assert.match(html, /改用既有 OB 課程/);
   assert.doesNotMatch(html, /value=["']new["']/);
-  assert.match(html, /value=["']__SPECIAL__["']>調整為特別課/);
+  assert.doesNotMatch(html, /value=["']__SPECIAL__["']/);
+  assert.match(html, /普通代課/);
+  assert.match(html, /安排特別課/);
+  assert.match(html, /單堂延長/);
+  assert.match(html, /合併連續兩堂/);
   assert.match(html, /新課程名稱（概述即可）/);
   assert.doesNotMatch(html, /新課程名稱\s*<span class="claim-required">必填/);
   assert.doesNotMatch(html, /new-difficulty-required/);
   assert.match(html, /claim-difficulty/);
   assert.match(html, /claim-note/);
+});
+
+test('special-course draft requires one slot or an allowed consecutive pair and a required note', () => {
+  const { context } = createFrontendRuntime();
+  const availability = {
+    'leave-a': { mergePartnerIds: ['leave-b'], maxDurationMinutes: 105 },
+    'leave-b': { mergePartnerIds: [], maxDurationMinutes: 240 },
+    'leave-c': { mergePartnerIds: [], maxDurationMinutes: 240 },
+  };
+
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'vacancy', substituteIds: ['leave-a', 'leave-b'], courseName: '主題課', durationMinutes: 90, note: '內容',
+  }, availability), /只能勾選一堂/);
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'merge', substituteIds: ['leave-a', 'leave-c'], courseName: '主題課', durationMinutes: 120, note: '內容',
+  }, availability), /不是可合併的連續課程/);
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 120, note: '內容',
+  }, availability), /最多只能安排 105 分鐘/);
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 90, note: '',
+  }, availability), /備註/);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.validateSpecialCourseDraft({
+    mode: 'merge', substituteIds: ['leave-b', 'leave-a'], courseName: '主題課', difficulty: '', durationMinutes: 120, note: '兩堂合併',
+  }, availability))), {
+    mode: 'merge',
+    substituteIds: ['leave-b', 'leave-a'],
+    courseName: '主題課',
+    difficulty: '',
+    durationMinutes: 120,
+    note: '兩堂合併',
+  });
 });
 
 test('same-apparatus original handling allows optional difficulty and note', () => {
@@ -610,6 +647,23 @@ test('teacher records expose cancel and withdraw request actions', () => {
   assert.match(html, /申請退出代課/);
 });
 
+test('groups the two source rows of one special course without losing their IDs', () => {
+  const { context } = createFrontendRuntime();
+  const groups = context.groupSpecialCourseItems([
+    { '代課編號': 'leave-a', 'OB Calendar ID': 'cal-a', '特別課群組 ID': 'group-1' },
+    { '代課編號': 'leave-b', 'OB Calendar ID': 'cal-b', '特別課群組 ID': 'group-1' },
+    { '代課編號': 'leave-c', 'OB Calendar ID': 'cal-c', '特別課群組 ID': '' },
+  ]);
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].specialGroupId, 'group-1');
+  assert.deepEqual(JSON.parse(JSON.stringify(groups[0].items.map((item) => item['代課編號']))), ['leave-a', 'leave-b']);
+  assert.deepEqual(JSON.parse(JSON.stringify(groups[0].items.map((item) => item['OB Calendar ID']))), ['cal-a', 'cal-b']);
+  assert.deepEqual(JSON.parse(JSON.stringify(groups[1].items.map((item) => item['代課編號']))), ['leave-c']);
+  assert.match(html, /特別課群組/);
+  assert.match(html, /OB Calendar ID/);
+});
+
 test('admin-only dashboard provides all work queues and required actions', () => {
   assert.match(html, /id=["']view-admin["']/);
   assert.match(html, /待邀請/);
@@ -752,7 +806,7 @@ test('provides self-only payroll review and protected sync publish dispute contr
 
 test('admin queue rendering does not leak Array.map indexes into cards', () => {
   assert.doesNotMatch(html, /\.map\(renderAdminItem\)/);
-  assert.match(html, /\.map\(\(item\)\s*=>\s*renderAdminItem\(item\)\)/);
+  assert.match(html, /rows\.map\(\(row\)\s*=>\s*renderRow\(row\)\)/);
 });
 
 test('optimizes login and navigation for the supplied four-digit PIN workflow', () => {

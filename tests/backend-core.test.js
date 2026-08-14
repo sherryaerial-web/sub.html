@@ -2684,6 +2684,33 @@ test('special availability identifies only the immediately following same-room o
   });
 });
 
+test('special availability formats each course row only once', () => {
+  const backend = loadBackend();
+  const originalFormatDate = backend.Utilities.formatDate;
+  let formatCalls = 0;
+  backend.Utilities.formatDate = (...args) => {
+    formatCalls += 1;
+    return originalFormatDate(...args);
+  };
+  const date = new Date('2026-08-10T00:00:00+08:00');
+  const at = (time) => new Date(`2026-08-10T${time}:00+08:00`);
+  const pendingRows = [
+    ['stamp', '原老師甲', date, at('18:30'), 'A－舞綢 Lv.1', '確認中', '', '', '', 'leave-1', 'cal-1'],
+    ['stamp', '原老師乙', date, at('20:00'), 'A－空環 Lv.1', '確認中', '', '', '', 'leave-2', 'cal-2'],
+    ['stamp', '原老師丙', date, at('20:00'), 'B－空環 Lv.1', '確認中', '', '', '', 'leave-b', 'cal-b'],
+  ];
+  const courseRows = [
+    [date, at('18:30'), 'A－舞綢 Lv.1', '原老師甲', 'cal-1'],
+    [date, at('20:00'), 'A－空環 Lv.1', '原老師乙', 'cal-2'],
+    [date, at('20:00'), 'B－空環 Lv.1', '原老師丙', 'cal-b'],
+    [date, at('21:30'), 'A－舞綢 Lv.2', '原老師丁', 'cal-3'],
+  ];
+
+  backend.getSpecialCourseAvailability_(pendingRows, courseRows);
+
+  assert.equal(formatCalls, 14);
+});
+
 test('single-slot special claim stores one group and enforces a 15-minute turnover', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
     courseRows: [

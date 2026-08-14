@@ -3656,6 +3656,25 @@ function getSpecialCourseAvailability_(pendingRows, courseRows) {
     if (id && calendarId && isOrdinaryOpenLeaveRow_(row)) openByCalendarId[calendarId] = id;
   });
 
+  var coursesByDateRoom = {};
+  (courseRows || []).forEach(function(courseRow) {
+    var courseTime = formatMyTime(courseRow && courseRow[1]);
+    var course = {
+      date: formatMyDate(courseRow && courseRow[0]),
+      room: getCourseRoom_(courseRow && courseRow[2]),
+      time: courseTime,
+      minutes: timeTextToMinutes_(courseTime),
+      calendarId: cleanText_(courseRow && courseRow[4])
+    };
+    if (!course.date || !course.room || course.minutes < 0) return;
+    var key = course.date + '|' + course.room;
+    if (!coursesByDateRoom[key]) coursesByDateRoom[key] = [];
+    coursesByDateRoom[key].push(course);
+  });
+  Object.keys(coursesByDateRoom).forEach(function(key) {
+    coursesByDateRoom[key].sort(function(a, b) { return a.minutes - b.minutes; });
+  });
+
   var availability = {};
   (pendingRows || []).forEach(function(row) {
     if (!isOrdinaryOpenLeaveRow_(row)) return;
@@ -3666,20 +3685,14 @@ function getSpecialCourseAvailability_(pendingRows, courseRows) {
     var room = getCourseRoom_(row[4]);
     if (!substituteId || !date || !room || startMinutes < 0) return;
 
-    var following = (courseRows || []).map(function(courseRow) {
-      var courseTime = formatMyTime(courseRow && courseRow[1]);
-      return {
-        date: formatMyDate(courseRow && courseRow[0]),
-        room: getCourseRoom_(courseRow && courseRow[2]),
-        time: courseTime,
-        minutes: timeTextToMinutes_(courseTime),
-        calendarId: cleanText_(courseRow && courseRow[4])
-      };
-    }).filter(function(course) {
-      return course.date === date && course.room === room && course.minutes > startMinutes;
-    }).sort(function(a, b) { return a.minutes - b.minutes; });
-
-    var next = following[0] || null;
+    var schedule = coursesByDateRoom[date + '|' + room] || [];
+    var next = null;
+    for (var courseIndex = 0; courseIndex < schedule.length; courseIndex++) {
+      if (schedule[courseIndex].minutes > startMinutes) {
+        next = schedule[courseIndex];
+        break;
+      }
+    }
     var partnerId = next ? cleanText_(openByCalendarId[next.calendarId]) : '';
     availability[substituteId] = {
       room: room,

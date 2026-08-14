@@ -901,6 +901,32 @@ test('renders the substitute list without waiting for first-view tracking', asyn
   assert.equal(requestActions.includes('recordInvitationFirstView'), true);
 });
 
+test('shows available substitutes while claim options are still loading', async () => {
+  const neverFinishes = new Promise(() => {});
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-visible-before-options',
+      '日期': '2026/09/04',
+      '時段': '11:00',
+      '課程': 'B－舞綢 Lv.2',
+      '課程大類': '舞綢',
+      '原老師': '老師甲',
+      '可沿用原課程': true,
+    }],
+    getClaimOptions: neverFinishes,
+  });
+
+  context.fetchAvailableSubstitutes();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(getElement('pending-leaves-list').innerHTML, /B－舞綢 Lv\.2/);
+  assert.equal(getElement('claim-submit').disabled, true);
+  assert.deepEqual(
+    requestActions.filter((action) => action === 'getAvailableSubstitutes' || action === 'getClaimOptions'),
+    ['getAvailableSubstitutes', 'getClaimOptions'],
+  );
+});
+
 test('waits for the substitute list before starting claim options', async () => {
   let resolveSubstitutes;
   const substitutes = new Promise((resolve) => {

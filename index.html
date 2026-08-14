@@ -1864,17 +1864,28 @@
       list.innerHTML = '<div class="state">載入中...</div>';
       try {
         const availableSubstitutes = await callApi("getAvailableSubstitutes");
-        const options = await callApi("getClaimOptions");
         pendingLeaves = availableSubstitutes;
-        claimOptions = options || { capabilities: [], classes: [] };
+        claimOptions = { capabilities: [], classes: [] };
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
         renderAvailableSubstitutes();
+        if (pendingLeaves.length) byId("claim-submit").disabled = true;
+      } catch (error) {
+        list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        return;
+      }
+
+      try {
+        const options = await callApi("getClaimOptions");
+        claimOptions = options || { capabilities: [], classes: [] };
+        renderAvailableSubstitutes();
+      } catch (error) {
+        byId("claim-submit").disabled = true;
+        setNotice(`課程選項載入失敗：${error.message}`, "error");
+      } finally {
         void callPostApi("recordInvitationFirstView").catch((error) => {
           console.warn("首次查看時間記錄失敗，不影響代課清單使用。", error);
         });
-      } catch (error) {
-        list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
     }
 

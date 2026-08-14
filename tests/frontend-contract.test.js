@@ -837,6 +837,17 @@ test('submits the OB course type and difficulty as independent choices', async (
   });
 });
 
+test('treats discounted and regular OB names as the same frontend course type', () => {
+  const { context } = createFrontendRuntime();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.parseClaimCourseOption('現代小品〈優惠〉'))), {
+    courseTypeKey: '現代小品', courseTypeName: '現代小品', difficulty: '',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.parseClaimCourseOption('A－空瑜 Lv.1-2〈優惠〉'))), {
+    courseTypeKey: '空瑜', courseTypeName: '空瑜', difficulty: 'Lv.1-2',
+  });
+});
+
 test('renders separate course type and difficulty selectors instead of class IDs', async () => {
   const { context, getElement } = createFrontendRuntime({
     getClaimOptions: {

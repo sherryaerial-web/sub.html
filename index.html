@@ -1912,6 +1912,9 @@
           : difficulty.replace(/^lv\.?\s*/i, "Lv.").replace(/\s*([~\-–—])\s*/g, "$1");
         courseName = courseName.replace(match[0], " ").trim().replace(/\s+([（(〈])/g, "$1");
       }
+      courseName = courseName
+        .replace(/\s*(?:〈\s*優惠\s*〉|<\s*優惠\s*>|（\s*優惠\s*）|\(\s*優惠\s*\)|【\s*優惠\s*】|\s+優惠)\s*$/, "")
+        .trim();
       return { courseTypeKey: courseName, courseTypeName: courseName, difficulty };
     }
 

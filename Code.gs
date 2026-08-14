@@ -3543,6 +3543,10 @@ function parseClaimCourseOption_(courseNameValue) {
     courseName = cleanText_(courseName.replace(difficultyMatch[0], ' '))
       .replace(/\s+([（(〈])/g, '$1');
   }
+  courseName = cleanText_(courseName.replace(
+    /\s*(?:〈\s*優惠\s*〉|<\s*優惠\s*>|（\s*優惠\s*）|\(\s*優惠\s*\)|【\s*優惠\s*】|\s+優惠)\s*$/,
+    ''
+  ));
   return {
     courseTypeKey: normalizeCourseCatalogKey_(courseName),
     courseTypeName: courseName,

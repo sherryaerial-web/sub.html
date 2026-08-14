@@ -1823,6 +1823,17 @@ test('splits recurring OB course types from their difficulty labels', () => {
   });
 });
 
+test('treats discounted and regular OB names as the same course type', () => {
+  const backend = loadBackend();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.parseClaimCourseOption_('現代小品〈優惠〉'))), {
+    courseTypeKey: '現代小品', courseTypeName: '現代小品', difficulty: '',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.parseClaimCourseOption_('A－空瑜 Lv.1-2〈優惠〉'))), {
+    courseTypeKey: '空瑜', courseTypeName: '空瑜', difficulty: 'Lv.1-2',
+  });
+});
+
 test('parses only explicit course duration markers', () => {
   const backend = loadBackend();
 

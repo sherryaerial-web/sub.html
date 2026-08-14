@@ -3711,6 +3711,84 @@ function getSpecialCourseAvailability_(pendingRows, courseRows) {
   return availability;
 }
 
+function buildSpecialCourseSlotPlan_(startId, durationMinutes, pendingRows, courseRows) {
+  var wantedId = cleanText_(startId);
+  var duration = Number(durationMinutes);
+  if (!wantedId) throw new Error('請只勾選特別課開始的第一堂。');
+  if (!isFinite(duration) || Math.floor(duration) !== duration || duration < 90 || duration > 240) {
+    throw new Error('特別課時長必須是 90 至 240 分鐘的整數。');
+  }
+
+  var startRow = null;
+  var leaveByCalendarId = {};
+  (pendingRows || []).forEach(function(row) {
+    var substituteId = cleanText_(row && row[9]);
+    var calendarId = cleanText_(row && row[10]);
+    if (substituteId === wantedId) startRow = row;
+    if (substituteId && calendarId) leaveByCalendarId[calendarId] = row;
+  });
+  if (!startRow) throw new Error('找不到指定的代課課程，請重新整理。');
+
+  var date = formatMyDate(startRow[2]);
+  var startTime = formatMyTime(startRow[3]);
+  var startMinutes = timeTextToMinutes_(startTime);
+  var room = getCourseRoom_(startRow[4]);
+  var startCalendarId = cleanText_(startRow[10]);
+  if (!date || !room || startMinutes < 0 || !startCalendarId) {
+    throw new Error('特別課的日期、時間、教室或 OB Calendar ID 資料不完整。');
+  }
+
+  var endMinutes = startMinutes + duration;
+  if (endMinutes >= 24 * 60) throw new Error('特別課不可跨日，請縮短時長。');
+  var turnoverEndMinutes = endMinutes + 15;
+  var schedule = (courseRows || []).map(function(row) {
+    var time = formatMyTime(row && row[1]);
+    return {
+      date: formatMyDate(row && row[0]),
+      room: getCourseRoom_(row && row[2]),
+      time: time,
+      minutes: timeTextToMinutes_(time),
+      calendarId: cleanText_(row && row[4])
+    };
+  }).filter(function(course) {
+    return course.date === date && course.room === room && course.minutes >= startMinutes;
+  }).sort(function(a, b) { return a.minutes - b.minutes; });
+
+  if (!schedule.some(function(course) { return course.calendarId === startCalendarId; })) {
+    throw new Error(date + ' ' + room + ' 教室 ' + startTime + ' 尚未出現在 OB 課表，請通知管理員重新同步。');
+  }
+
+  var requiredCourses = schedule.filter(function(course) {
+    return course.minutes < turnoverEndMinutes;
+  });
+  var requiredIds = requiredCourses.map(function(course) {
+    var leaveRow = leaveByCalendarId[course.calendarId];
+    var substituteId = cleanText_(leaveRow && leaveRow[9]);
+    if (!substituteId) {
+      throw new Error(
+        course.date + ' ' + course.room + ' 教室 ' + course.time +
+        ' 尚未開放代課，無法安排這堂特別課。'
+      );
+    }
+    return substituteId;
+  });
+  var nextCourse = schedule.filter(function(course) {
+    return course.minutes >= turnoverEndMinutes;
+  })[0] || null;
+
+  return {
+    orderedSubstituteIds: requiredIds,
+    occupiedTimes: requiredCourses.map(function(course) { return course.time; }),
+    room: room,
+    date: date,
+    startTime: startTime,
+    endMinutes: endMinutes,
+    endTime: minutesToTimeText_(endMinutes),
+    nextCourse: nextCourse,
+    requiresClosingTimeConfirmation: !nextCourse
+  };
+}
+
 function fetchObClassPages_(token) {
   var allClasses = [];
   var start = 0;
@@ -4094,8 +4172,8 @@ function claimSpecialCourse_(session, payload) {
   var durationMinutes = Number(source.durationMinutes);
 
   if (['vacancy', 'merge'].indexOf(mode) === -1) throw new Error('請選擇特別課安排方式。');
-  if ((mode === 'vacancy' && ids.length !== 1) || (mode === 'merge' && ids.length !== 2)) {
-    throw new Error(mode === 'merge' ? '合併特別課必須選擇兩堂課。' : '使用後方空堂必須選擇一堂課。');
+  if (ids.length !== 1) {
+    throw new Error('請只勾選特別課開始的第一堂。');
   }
   if (ids.some(function(id, index) { return ids.indexOf(id) !== index; })) {
     throw new Error('特別課代課編號重複。');
@@ -4120,13 +4198,20 @@ function claimSpecialCourse_(session, payload) {
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
     var leaveValues = leaveSheet.getDataRange().getValues();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var slotPlan = mode === 'merge'
+      ? buildSpecialCourseSlotPlan_(ids[0], durationMinutes, leaveValues.slice(1), courseRows)
+      : null;
+    var requiredIds = slotPlan ? slotPlan.orderedSubstituteIds : ids;
+    if (mode === 'merge' && requiredIds.length < 2) {
+      throw new Error('此時段不需使用後續時段，請改用單堂延長。');
+    }
     var rowById = {};
     for (var rowIndex = 1; rowIndex < leaveValues.length; rowIndex++) {
       var currentId = cleanText_(leaveValues[rowIndex][9]);
       if (currentId) rowById[currentId] = rowIndex;
     }
 
-    var selected = ids.map(function(id) {
+    var selected = requiredIds.map(function(id) {
       if (rowById[id] == null) throw new Error('找不到指定的代課課程，請重新整理。');
       var dataIndex = rowById[id];
       var row = leaveValues[dataIndex];
@@ -4165,38 +4250,26 @@ function claimSpecialCourse_(session, payload) {
       throw new Error('合併特別課必須是同一間教室。');
     }
 
-    if (mode === 'merge') {
-      var openRows = leaveValues.slice(1).filter(function(row) { return isOrdinaryOpenLeaveRow_(row); });
-      var availability = getSpecialCourseAvailability_(openRows, courseRows);
-      var allowedPartners = availability[first.id] ? availability[first.id].mergePartnerIds : [];
-      if (allowedPartners.indexOf(selected[1].id) === -1) {
-        throw new Error('只能合併同教室時間緊接的下一堂代課。');
-      }
-    }
-
-    var endMinutes = first.minutes + durationMinutes;
+    var endMinutes = slotPlan ? slotPlan.endMinutes : first.minutes + durationMinutes;
     if (endMinutes >= 24 * 60) throw new Error('特別課不可跨日，請縮短時長。');
-    if (mode === 'merge' && endMinutes + 15 <= selected[1].minutes) {
-      throw new Error('此時長不需要占用第二堂，請改用後方空堂模式。');
-    }
 
     var consumedCalendarIds = {};
     selected.forEach(function(item) { consumedCalendarIds[item.calendarId] = true; });
-    var nextCourses = courseRows.map(function(row) {
-      var time = formatMyTime(row && row[1]);
-      return {
-        date: formatMyDate(row && row[0]),
-        room: getCourseRoom_(row && row[2]),
-        time: time,
-        minutes: timeTextToMinutes_(time),
-        calendarId: cleanText_(row && row[4])
-      };
-    }).filter(function(course) {
-      return course.date === first.date && course.room === first.room &&
-        course.minutes > first.minutes && !consumedCalendarIds[course.calendarId];
-    }).sort(function(a, b) { return a.minutes - b.minutes; });
-    var nextCourse = nextCourses[0] || null;
-    if (nextCourse && endMinutes + 15 > nextCourse.minutes) {
+    var nextCourses = slotPlan ? [] : courseRows.map(function(row) {
+        var time = formatMyTime(row && row[1]);
+        return {
+          date: formatMyDate(row && row[0]),
+          room: getCourseRoom_(row && row[2]),
+          time: time,
+          minutes: timeTextToMinutes_(time),
+          calendarId: cleanText_(row && row[4])
+        };
+      }).filter(function(course) {
+        return course.date === first.date && course.room === first.room &&
+          course.minutes > first.minutes && !consumedCalendarIds[course.calendarId];
+      }).sort(function(a, b) { return a.minutes - b.minutes; });
+    var nextCourse = slotPlan ? slotPlan.nextCourse : (nextCourses[0] || null);
+    if (!slotPlan && nextCourse && endMinutes + 15 > nextCourse.minutes) {
       throw new Error(
         '特別課結束後需保留 15 分鐘換場；下一堂 ' + nextCourse.time +
         ' 開始，最晚只能上到 ' + minutesToTimeText_(nextCourse.minutes - 15) + '。'
@@ -4204,7 +4277,7 @@ function claimSpecialCourse_(session, payload) {
     }
 
     var specialGroupId = Utilities.getUuid();
-    var specialMode = mode === 'merge' ? '合併兩堂' : '使用後方空堂';
+    var specialMode = mode === 'merge' ? '使用連續時段' : '使用後方空堂';
     var endTime = minutesToTimeText_(endMinutes);
     var updates = selected.map(function(item) {
       var change = validateClaimChange_({
@@ -4266,8 +4339,10 @@ function claimSpecialCourse_(session, payload) {
       }));
       return {
         count: updates.length,
+        substituteIds: updates.map(function(update) { return update.item.id; }),
         specialGroupId: specialGroupId,
         endTime: endTime,
+        occupiedTimes: updates.map(function(update) { return update.item.time; }),
         requiresClosingTimeConfirmation: !nextCourse
       };
     });

@@ -2756,65 +2756,94 @@ test('single-slot special claim stores one group and enforces a 15-minute turnov
   assert.deepEqual(row.slice(22, 25), ['使用後方空堂', 120, '20:30']);
 });
 
-test('two-slot special claim atomically groups consecutive same-room leaves', () => {
+test('continuous special claim expands one starting id into every required same-room slot', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
     courseRows: [
-      ['2026/08/10', '18:30', 'A－舞綢 Lv.1', '老師乙', 'cal-merge-1', 'class-silk', 'teacher-b', '否', ''],
-      ['2026/08/10', '20:00', 'A－空環 Lv.1', '老師丙', 'cal-merge-2', 'class-ring', 'teacher-c', '否', ''],
-      ['2026/08/10', '21:30', 'A－舞綢 Lv.2', '老師乙', 'cal-after', 'class-silk-2', 'teacher-b', '否', ''],
+      ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-merge-1', 'class-ring-2', 'teacher-b', '否', ''],
+      ['2026/09/12', '14:30', 'D－舞綢 Lv.1', '老師丁', 'cal-other-1', 'class-silk-1', 'teacher-d', '否', ''],
+      ['2026/09/12', '15:00', 'B－空環 Lv.1', '老師丙', 'cal-merge-2', 'class-ring-1', 'teacher-c', '否', ''],
+      ['2026/09/12', '15:45', 'D－空瑜 Lv.0', '老師丁', 'cal-other-2', 'class-yoga-0', 'teacher-d', '否', ''],
+      ['2026/09/12', '16:30', 'B－空環 Lv.0', '老師戊', 'cal-merge-3', 'class-ring-0', 'teacher-e', '否', ''],
+      ['2026/09/12', '17:45', 'B－舞綢 Lv.2', '老師己', 'cal-boundary', 'class-silk-2', 'teacher-f', '否', ''],
     ],
     leaveRows: [
-      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－舞綢 Lv.1', '確認中', '', '', '', 'leave-merge-1', 'cal-merge-1'],
-      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-merge-2', 'cal-merge-2'],
+      ['stamp', '老師乙', '2026/09/12', '13:30', 'B－空環 Lv.2', '確認中', '', '', '', 'leave-merge-1', 'cal-merge-1'],
+      ['stamp', '老師丙', '2026/09/12', '15:00', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-merge-2', 'cal-merge-2'],
+      ['stamp', '老師戊', '2026/09/12', '16:30', 'B－空環 Lv.0', '確認中', '', '', '', 'leave-merge-3', 'cal-merge-3'],
     ],
   });
   backend.openInvitations_(adminSession, ['老師甲']);
 
   const result = backend.claimSpecialCourse_(teacherASession, {
-    mode: 'merge', substituteIds: ['leave-merge-1', 'leave-merge-2'],
-    courseName: '雙時段主題特別課', durationMinutes: 120, difficulty: 'Open level',
-    note: '兩堂合併安排。',
+    mode: 'merge', substituteIds: ['leave-merge-1'],
+    courseName: '空環主題特別課', durationMinutes: 240, difficulty: 'Open level',
+    note: '系統自動占用連續時段。',
   });
 
   const rows = leaveSheet.values.filter((row) => /^leave-merge-/.test(row[9]));
-  assert.equal(result.count, 2);
+  assert.equal(result.count, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.substituteIds)), [
+    'leave-merge-1', 'leave-merge-2', 'leave-merge-3',
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.occupiedTimes)), ['13:30', '15:00', '16:30']);
   assert.equal(rows[0][21], rows[1][21]);
+  assert.equal(rows[1][21], rows[2][21]);
   assert.equal(rows[0][21], result.specialGroupId);
   rows.forEach((row) => {
     assert.equal(row[5], '已領取');
     assert.equal(row[6], '老師甲');
-    assert.equal(row[22], '合併兩堂');
-    assert.equal(row[23], 120);
-    assert.equal(row[24], '20:30');
+    assert.equal(row[22], '使用連續時段');
+    assert.equal(row[23], 240);
+    assert.equal(row[24], '17:30');
   });
   const teacherRecords = backend.getMySubs_('老師甲').filter((item) => /^leave-merge-/.test(item['代課編號']));
-  assert.equal(teacherRecords.length, 2);
+  assert.equal(teacherRecords.length, 3);
   teacherRecords.forEach((item) => {
     assert.equal(item['特別課群組 ID'], result.specialGroupId);
-    assert.equal(item['特別課模式'], '合併兩堂');
-    assert.equal(item['特別課分鐘數'], 120);
-    assert.equal(item['特別課結束時間'], '20:30');
+    assert.equal(item['特別課模式'], '使用連續時段');
+    assert.equal(item['特別課分鐘數'], 240);
+    assert.equal(item['特別課結束時間'], '17:30');
   });
   const adminRecords = backend.getAdminDashboard_(adminSession).obWork
     .filter((item) => /^leave-merge-/.test(item.substituteId));
-  assert.equal(adminRecords.length, 2);
+  assert.equal(adminRecords.length, 3);
   adminRecords.forEach((item) => {
     assert.equal(item.specialGroupId, result.specialGroupId);
-    assert.equal(item.specialMode, '合併兩堂');
-    assert.equal(item.specialDurationMinutes, 120);
-    assert.equal(item.specialEndTime, '20:30');
+    assert.equal(item.specialMode, '使用連續時段');
+    assert.equal(item.specialDurationMinutes, 240);
+    assert.equal(item.specialEndTime, '17:30');
   });
 });
 
-test('two-slot special claim rejects a different room or stale partner without partial writes', () => {
+test('continuous special claim blocks a missing required slot without partial writes', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－舞綢 Lv.1', '老師乙', 'cal-safe-1', 'class-a', 'teacher-b', '否', ''],
+      ['2026/08/10', '20:00', 'A－空環 Lv.1', '老師丙', 'cal-safe-2', 'class-b', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－舞綢 Lv.1', '確認中', '', '', '', 'leave-safe-1', 'cal-safe-1'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const before = JSON.stringify(leaveSheet.values);
+
+  assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', substituteIds: ['leave-safe-1'],
+    courseName: '缺少時段', durationMinutes: 120, note: '',
+  }), /2026\/08\/10 A 教室 20:00.*尚未開放代課/);
+  assert.equal(JSON.stringify(leaveSheet.values), before);
+});
+
+test('continuous special claim blocks a stale required slot without partial writes', () => {
   const leaveRows = [
     ['stamp', '老師乙', '2026/08/10', '18:30', 'A－舞綢 Lv.1', '確認中', '', '', '', 'leave-safe-1', 'cal-safe-1'],
-    ['stamp', '老師丙', '2026/08/10', '20:00', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-safe-2', 'cal-safe-2'],
+    ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.1', '已領取', '老師丁', '', '', 'leave-safe-2', 'cal-safe-2'],
   ];
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
     courseRows: [
       ['2026/08/10', '18:30', 'A－舞綢 Lv.1', '老師乙', 'cal-safe-1', 'class-a', 'teacher-b', '否', ''],
-      ['2026/08/10', '20:00', 'B－空環 Lv.1', '老師丙', 'cal-safe-2', 'class-b', 'teacher-c', '否', ''],
+      ['2026/08/10', '20:00', 'A－空環 Lv.1', '老師丙', 'cal-safe-2', 'class-b', 'teacher-c', '否', ''],
     ],
     leaveRows,
   });
@@ -2822,19 +2851,10 @@ test('two-slot special claim rejects a different room or stale partner without p
   const before = JSON.stringify(leaveSheet.values);
 
   assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
-    mode: 'merge', substituteIds: ['leave-safe-1', 'leave-safe-2'],
-    courseName: '錯誤合併', durationMinutes: 120, note: '不同教室。',
-  }), /同一間教室/);
-  assert.equal(JSON.stringify(leaveSheet.values), before);
-
-  leaveSheet.values[2][5] = '已領取';
-  leaveSheet.values[2][6] = '老師乙';
-  const staleBefore = JSON.stringify(leaveSheet.values);
-  assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
-    mode: 'merge', substituteIds: ['leave-safe-1', 'leave-safe-2'],
-    courseName: '過期合併', durationMinutes: 120, note: '第二堂已被領取。',
+    mode: 'merge', substituteIds: ['leave-safe-1'],
+    courseName: '過期時段', durationMinutes: 120, note: '',
   }), /被其他老師領取/);
-  assert.equal(JSON.stringify(leaveSheet.values), staleBefore);
+  assert.equal(JSON.stringify(leaveSheet.values), before);
 });
 
 test('same-apparatus change keeps difficulty and note optional', () => {

@@ -584,6 +584,35 @@ test('groups available substitutes by date and keeps the uninvited state neutral
   assert.doesNotMatch(html, /你未受邀|未被邀請|梯次|序位|其他受邀/);
 });
 
+test('keeps substitute dates collapsed by default and preserves an expanded date across renders', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getAvailableSubstitutes: [
+      {
+        '代課編號': 'leave-fold-a', '原老師': '老師甲', '日期': '2026/09/12',
+        '時段': '13:30', '課程': 'B－空環 Lv.2', '課程大類': '空環', '可沿用原課程': true,
+      },
+      {
+        '代課編號': 'leave-fold-b', '原老師': '老師乙', '日期': '2026/09/13',
+        '時段': '15:00', '課程': 'A－舞綢 Lv.1', '課程大類': '舞綢', '可沿用原課程': true,
+      },
+    ],
+  });
+  await context.fetchAvailableSubstitutes();
+  const list = getElement('pending-leaves-list');
+
+  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="false"/);
+  assert.match(list.innerHTML, /data-claim-date-content="2026\/09\/12"[^>]*hidden/);
+
+  context.toggleClaimDateGroup('2026/09/12');
+  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="true"/);
+  assert.doesNotMatch(list.innerHTML, /data-claim-date-content="2026\/09\/12"[^>]*hidden/);
+
+  context.renderAvailableSubstitutes();
+  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="true"/);
+  context.toggleClaimDateGroup('2026/09/12');
+  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="false"/);
+});
+
 test('removes claimed courses immediately and refreshes after a concurrent conflict', () => {
   assert.match(html, /claimedIds/);
   assert.match(html, /pendingLeaves\s*=\s*pendingLeaves\.filter/);
@@ -659,7 +688,8 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /普通代課/);
   assert.match(html, /安排特別課/);
   assert.match(html, /單堂延長/);
-  assert.match(html, /合併連續兩堂/);
+  assert.match(html, /使用連續時段/);
+  assert.match(html, /只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。/);
   assert.match(html, /特別課名稱/);
   assert.match(html, /placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"/);
   assert.match(html, /難度／等級（如有）/);
@@ -673,36 +703,49 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /claim-note/);
 });
 
-test('special-course draft requires an allowed slot selection and 90 to 240 minutes while note stays optional', () => {
+test('special-course draft expands one starting slot into a three-slot preview while note stays optional', () => {
   const { context } = createFrontendRuntime();
   const availability = {
-    'leave-a': { mergePartnerIds: ['leave-b'], maxDurationMinutes: 105 },
-    'leave-b': { mergePartnerIds: [], maxDurationMinutes: 240 },
-    'leave-c': { mergePartnerIds: [], maxDurationMinutes: 240 },
+    'leave-a': {
+      room: 'B', date: '2026/09/12', startTime: '13:30', nextCourseTime: '15:00',
+      mergePartnerIds: ['leave-b'], maxDurationMinutes: 75,
+    },
+    'leave-b': {
+      room: 'B', date: '2026/09/12', startTime: '15:00', nextCourseTime: '16:30',
+      mergePartnerIds: ['leave-c'], maxDurationMinutes: 75,
+    },
+    'leave-c': {
+      room: 'B', date: '2026/09/12', startTime: '16:30', nextCourseTime: '17:45',
+      mergePartnerIds: [], maxDurationMinutes: 60,
+    },
   };
 
   assert.throws(() => context.validateSpecialCourseDraft({
     mode: 'vacancy', substituteIds: ['leave-a', 'leave-b'], courseName: '主題課', durationMinutes: 90, note: '內容',
   }, availability), /只能勾選一堂/);
   assert.throws(() => context.validateSpecialCourseDraft({
-    mode: 'merge', substituteIds: ['leave-a', 'leave-c'], courseName: '主題課', durationMinutes: 120, note: '內容',
-  }, availability), /不是可合併的連續課程/);
-  assert.throws(() => context.validateSpecialCourseDraft({
-    mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 120, note: '內容',
-  }, availability), /最多只能安排 105 分鐘/);
+    mode: 'merge', substituteIds: ['leave-a', 'leave-b'], courseName: '主題課', durationMinutes: 240, note: '內容',
+  }, availability), /只勾選特別課開始的第一堂/);
   assert.throws(() => context.validateSpecialCourseDraft({
     mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 89, note: '',
   }, availability), /90 到 240 分鐘/);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(context.validateSpecialCourseDraft({
-    mode: 'merge', substituteIds: ['leave-b', 'leave-a'], courseName: '主題課', difficulty: '', durationMinutes: 120, note: '',
-  }, availability))), {
+  const validated = context.validateSpecialCourseDraft({
+    mode: 'merge', substituteIds: ['leave-a'], courseName: '主題課', difficulty: '', durationMinutes: 240, note: '',
+  }, availability);
+  assert.deepEqual(JSON.parse(JSON.stringify(validated)), {
     mode: 'merge',
-    substituteIds: ['leave-b', 'leave-a'],
+    substituteIds: ['leave-a'],
     courseName: '主題課',
     difficulty: '',
-    durationMinutes: 120,
+    durationMinutes: 240,
     note: '',
+    slotPreview: {
+      ids: ['leave-a', 'leave-b', 'leave-c'],
+      room: 'B',
+      date: '2026/09/12',
+      times: ['13:30', '15:00', '16:30'],
+    },
   });
 });
 
@@ -714,12 +757,12 @@ test('single-slot special course blocks a gap shorter than 90 minutes after turn
 
   assert.equal(
     context.getSingleSlotSpecialCourseBlockReason(availability['leave-tight']),
-    '扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「合併連續兩堂」。',
+    '扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「使用連續時段」。',
   );
   assert.equal(context.getSingleSlotSpecialCourseBlockReason({ maxDurationMinutes: 90 }), '');
   assert.throws(() => context.validateSpecialCourseDraft({
     mode: 'vacancy', substituteIds: ['leave-tight'], courseName: '主題課', durationMinutes: 90, note: '',
-  }, availability), /不足 90 分鐘.*合併連續兩堂/);
+  }, availability), /不足 90 分鐘.*使用連續時段/);
 });
 
 test('direct claim strips every editable override from the submitted draft', () => {

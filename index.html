@@ -467,17 +467,30 @@
 
     .claim-date-group + .claim-date-group { margin-top: 26px; }
     .claim-date-heading {
+      width: 100%;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin: 0 0 10px;
-      padding-bottom: 9px;
+      margin: 0;
+      padding: 9px 0;
+      border: 0;
       border-bottom: 2px solid var(--line-strong);
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
     }
 
+    .claim-date-heading:hover { color: var(--sea-700); }
+    .claim-date-heading:focus-visible { outline: 2px solid var(--sea-500); outline-offset: 4px; }
     .claim-date-heading h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 15px; line-height: 1.4; }
+    .claim-date-heading-side { display: flex; align-items: center; gap: 8px; }
     .claim-date-count { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .claim-date-chevron { width: 16px; height: 16px; transition: transform 0.18s ease; }
+    .claim-date-heading[aria-expanded="true"] .claim-date-chevron { transform: rotate(180deg); }
+    .claim-date-content { margin-top: 10px; }
     .claim-card { grid-template-columns: 24px minmax(0, 1fr); padding: 0; overflow: hidden; }
     .claim-card > .claim-checkbox { margin: 17px 0 0 15px; }
     .claim-summary { min-width: 0; padding: 14px 15px 13px 0; }
@@ -1020,8 +1033,9 @@
             <div id="special-claim-summary" class="special-claim-summary" role="status">請先勾選要使用的時段。</div>
             <div class="handling-options" role="group" aria-label="特別課使用時段">
               <label class="handling-option"><input type="radio" name="special-claim-mode" value="vacancy" checked>單堂延長</label>
-              <label class="handling-option"><input type="radio" name="special-claim-mode" value="merge">合併連續兩堂</label>
+              <label class="handling-option"><input type="radio" name="special-claim-mode" value="merge">使用連續時段</label>
             </div>
+            <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。</p>
             <div class="claim-fields">
               <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"></div>
               <div class="claim-field"><label for="special-course-difficulty">難度／等級（如有）</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
@@ -1106,6 +1120,7 @@
     let globalCourseList = [];
     let pendingLeaves = [];
     let claimOptions = { capabilities: [], classes: [] };
+    const expandedClaimDates = new Set();
     let selectedLeaveDates = new Set();
     let selectedLeaveCourses = new Set();
     let adminDashboard = null;
@@ -1337,6 +1352,49 @@
       return normalized;
     }
 
+    function parseClaimTimeMinutes(value) {
+      const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+      if (!match) return NaN;
+      const hours = Number(match[1]);
+      const minutes = Number(match[2]);
+      if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return NaN;
+      return hours * 60 + minutes;
+    }
+
+    function buildSpecialCourseSlotPreview(startId, durationMinutes, availabilityMap) {
+      const availability = availabilityMap || {};
+      const first = availability[startId];
+      if (!first) throw new Error("找不到起始時段，請重新整理後再試。");
+      const startMinutes = parseClaimTimeMinutes(first.startTime);
+      if (!Number.isFinite(startMinutes)) throw new Error("起始時段資料不完整，請通知管理員。");
+      const turnoverEndMinutes = startMinutes + Number(durationMinutes) + 15;
+      const ids = [startId];
+      const times = [first.startTime];
+      const visited = new Set(ids);
+      let current = first;
+
+      while (current.nextCourseTime) {
+        const nextMinutes = parseClaimTimeMinutes(current.nextCourseTime);
+        if (!Number.isFinite(nextMinutes)) throw new Error("後續時段資料不完整，請通知管理員。");
+        if (nextMinutes >= turnoverEndMinutes) break;
+        const partnerId = (current.mergePartnerIds || []).find((id) => {
+          const option = availability[id];
+          return option && option.date === first.date && option.room === first.room &&
+            option.startTime === current.nextCourseTime;
+        });
+        if (!partnerId || visited.has(partnerId)) {
+          throw new Error(`${first.date} ${first.room} 教室 ${current.nextCourseTime} 尚未開放代課，無法安排這堂特別課。`);
+        }
+        visited.add(partnerId);
+        ids.push(partnerId);
+        current = availability[partnerId];
+        times.push(current.startTime);
+      }
+
+      if (ids.length < 2) throw new Error("此時段不需使用後續時段，請改用「單堂延長」。");
+      return { ids, room: first.room, date: first.date, times };
+    }
+
     function validateSpecialCourseDraft(draft, availabilityMap) {
       const change = draft || {};
       const mode = String(change.mode || "vacancy");
@@ -1363,12 +1421,9 @@
           throw new Error(`這個時段最多只能安排 ${maximum} 分鐘，需保留 15 分鐘換場。`);
         }
       } else if (mode === "merge") {
-        if (substituteIds.length !== 2) throw new Error("合併連續兩堂時，請剛好勾選兩堂課程。");
-        const firstPartners = availability[substituteIds[0]]?.mergePartnerIds || [];
-        const secondPartners = availability[substituteIds[1]]?.mergePartnerIds || [];
-        if (!firstPartners.includes(substituteIds[1]) && !secondPartners.includes(substituteIds[0])) {
-          throw new Error("這兩堂不是可合併的連續課程，請選擇同日、同教室且前後相連的兩堂。");
-        }
+        if (substituteIds.length !== 1) throw new Error("使用連續時段時，請只勾選特別課開始的第一堂。");
+        const slotPreview = buildSpecialCourseSlotPreview(substituteIds[0], durationMinutes, availability);
+        return { mode, substituteIds, courseName, difficulty, durationMinutes, note, slotPreview };
       } else {
         throw new Error("特別課安排方式無效，請重新選擇。");
       }
@@ -1379,7 +1434,7 @@
     function getSingleSlotSpecialCourseBlockReason(option) {
       const maximum = Number(option?.maxDurationMinutes);
       return Number.isFinite(maximum) && maximum < 90
-        ? "扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「合併連續兩堂」。"
+        ? "扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「使用連續時段」。"
         : "";
     }
 
@@ -2010,11 +2065,20 @@
       }, new Map());
     }
 
+    function toggleClaimDateGroup(date) {
+      const normalizedDate = String(date || "");
+      if (!normalizedDate) return;
+      if (expandedClaimDates.has(normalizedDate)) expandedClaimDates.delete(normalizedDate);
+      else expandedClaimDates.add(normalizedDate);
+      renderAvailableSubstitutes();
+    }
+
     function renderAvailableSubstitutes() {
       const list = byId("pending-leaves-list");
       const button = byId("claim-submit");
       const available = pendingLeaves;
       if (!available.length) {
+        expandedClaimDates.clear();
         list.innerHTML = '<div class="state">目前沒有可領取的代課</div>';
         button.disabled = true;
         return;
@@ -2022,17 +2086,31 @@
       button.disabled = false;
 
       const groups = groupAvailableSubstitutesByDate(available);
-      list.innerHTML = [...groups.entries()].map(([date, items]) => `
-        <section class="claim-date-group" data-claim-date="${escapeHtml(date)}">
-          <div class="claim-date-heading">
-            <h3><i data-lucide="calendar-days"></i>${escapeHtml(formatDateWithWeekday(date))}</h3>
-            <span class="claim-date-count">${items.length} 堂待領</span>
-          </div>
-          <div class="list">
-            ${items.map(renderAvailableSubstituteItem).join("")}
-          </div>
-        </section>
-      `).join("");
+      const availableDates = new Set(groups.keys());
+      [...expandedClaimDates].forEach((date) => {
+        if (!availableDates.has(date)) expandedClaimDates.delete(date);
+      });
+      list.innerHTML = [...groups.entries()].map(([date, items]) => {
+        const expanded = expandedClaimDates.has(date);
+        const contentId = `claim-date-content-${String(date).replace(/[^0-9A-Za-z_-]/g, "-")}`;
+        return `
+          <section class="claim-date-group" data-claim-date="${escapeHtml(date)}">
+            <button class="claim-date-heading" type="button"
+              data-claim-date-toggle="${escapeHtml(date)}" aria-expanded="${expanded}"
+              aria-controls="${escapeHtml(contentId)}">
+              <h3><i data-lucide="calendar-days"></i>${escapeHtml(formatDateWithWeekday(date))}</h3>
+              <span class="claim-date-heading-side">
+                <span class="claim-date-count">${items.length} 堂待領</span>
+                <i class="claim-date-chevron" data-lucide="chevron-down"></i>
+              </span>
+            </button>
+            <div class="list claim-date-content" id="${escapeHtml(contentId)}"
+              data-claim-date-content="${escapeHtml(date)}" ${expanded ? "" : "hidden"}>
+              ${items.map(renderAvailableSubstituteItem).join("")}
+            </div>
+          </section>
+        `;
+      }).join("");
       updateClaimMode();
     }
 
@@ -2173,8 +2251,8 @@
       const mode = document.querySelector('input[name="special-claim-mode"]:checked')?.value || "vacancy";
       if (!ids.length) {
         summary.textContent = mode === "vacancy"
-          ? "請勾選可安排至少 90 分鐘的時段；不足 90 分鐘的時段請改用「合併連續兩堂」。"
-          : "請先勾選要合併的第一堂課，再勾選同日、同教室且立即相連的下一堂。";
+          ? "請勾選可安排至少 90 分鐘的時段；不足 90 分鐘的時段請改用「使用連續時段」。"
+          : "請先勾選特別課開始的第一堂，後續時段會由系統自動占用。";
         return;
       }
       const items = ids.map((id) => pendingLeaves.find((item) => item["代課編號"] === id)).filter(Boolean);
@@ -2184,8 +2262,16 @@
         summary.textContent = option.nextCourseTime
           ? `${details}；下一堂 ${option.nextCourseTime}，含 15 分鐘換場，最多可排 ${option.maxDurationMinutes} 分鐘。`
           : `${details}；後面沒有課，送出後會提醒管理員確認閉館時間。`;
+      } else if (mode === "merge" && ids.length === 1) {
+        try {
+          const duration = readSpecialCourseDraft().durationMinutes;
+          const preview = buildSpecialCourseSlotPreview(ids[0], duration, claimOptions.specialAvailability || {});
+          summary.textContent = `將占用 ${preview.room} 教室 ${preview.times.join("、")}`;
+        } catch (error) {
+          summary.textContent = error.message;
+        }
       } else {
-        summary.textContent = `${details}；合併模式需為同日、同教室且立即相連的兩堂課。`;
+        summary.textContent = "使用連續時段時，請只勾選特別課開始的第一堂。";
       }
     }
 
@@ -2195,6 +2281,7 @@
       checkboxes.forEach((checkbox) => {
         checkbox.disabled = false;
         checkbox.removeAttribute("title");
+        checkbox.closest(".claim-card")?.classList.remove("special-auto-occupied");
         const warning = checkbox.closest(".claim-card")?.querySelector(".special-slot-warning");
         if (warning) {
           warning.hidden = true;
@@ -2214,28 +2301,37 @@
           const warning = checkbox.closest(".claim-card")?.querySelector(".special-slot-warning");
           if (warning) {
             warning.hidden = false;
-            warning.textContent = "單堂不足 90 分鐘，可改用「合併連續兩堂」";
+            warning.textContent = "單堂不足 90 分鐘，可改用「使用連續時段」";
           }
         });
       }
-      if (mode === "vacancy" && changedCheckbox?.checked) {
+      if ((mode === "vacancy" || mode === "merge") && changedCheckbox?.checked) {
         checkboxes.forEach((checkbox) => {
           if (checkbox !== changedCheckbox) checkbox.checked = false;
         });
       }
       const selectedIds = getSelectedClaimIds();
       if (mode !== "merge" || !selectedIds.length) return;
-      const allowed = new Set(selectedIds);
-      if (selectedIds.length === 1) {
-        const selectedId = selectedIds[0];
-        (availability[selectedId]?.mergePartnerIds || []).forEach((id) => allowed.add(id));
-        Object.entries(availability).forEach(([id, option]) => {
-          if ((option.mergePartnerIds || []).includes(selectedId)) allowed.add(id);
-        });
+      if (selectedIds.length > 1) {
+        checkboxes.forEach((checkbox) => { checkbox.checked = checkbox.dataset.substituteId === selectedIds[0]; });
       }
-      checkboxes.forEach((checkbox) => {
-        if (!allowed.has(checkbox.dataset.substituteId)) checkbox.disabled = true;
-      });
+      try {
+        const duration = readSpecialCourseDraft().durationMinutes;
+        const preview = buildSpecialCourseSlotPreview(selectedIds[0], duration, availability);
+        preview.ids.slice(1).forEach((id) => {
+          const checkbox = checkboxes.find((item) => item.dataset.substituteId === id);
+          const card = checkbox?.closest(".claim-card");
+          const warning = card?.querySelector(".special-slot-warning");
+          if (checkbox) checkbox.disabled = true;
+          card?.classList.add("special-auto-occupied");
+          if (warning) {
+            warning.hidden = false;
+            warning.textContent = "系統自動占用";
+          }
+        });
+      } catch (error) {
+        // 摘要會顯示具體阻擋原因；送出時會再次驗證。
+      }
     }
 
     function updateClaimMode() {
@@ -2266,11 +2362,13 @@
       clearNotice();
       setButtonBusy(button, true, "正在安排特別課...");
       try {
-        const result = await callPostApi("claimSpecialCourse", { specialCourse: draft });
-        if (!result || result.count !== draft.substituteIds.length) {
-          throw new Error("特別課領取結果與勾選堂數不一致，請重新整理確認。");
+        const { slotPreview, ...specialCourse } = draft;
+        const result = await callPostApi("claimSpecialCourse", { specialCourse });
+        const returnedIds = Array.isArray(result?.substituteIds) ? result.substituteIds : [];
+        if (!result || !returnedIds.length || result.count !== returnedIds.length) {
+          throw new Error("特別課領取結果不完整，請重新整理後確認。");
         }
-        const claimedIds = new Set(draft.substituteIds);
+        const claimedIds = new Set(returnedIds);
         pendingLeaves = pendingLeaves.filter((item) => !claimedIds.has(item["代課編號"]));
         renderAvailableSubstitutes();
         setNotice(result.requiresClosingTimeConfirmation
@@ -3030,9 +3128,16 @@
     }
     byId("pending-leaves-list").addEventListener("change", handleClaimEditorChange);
     byId("pending-leaves-list").addEventListener("input", handleClaimEditorChange);
+    byId("pending-leaves-list").addEventListener("click", (event) => {
+      const toggle = event.target.closest ? event.target.closest("[data-claim-date-toggle]") : null;
+      if (toggle) toggleClaimDateGroup(toggle.dataset.claimDateToggle);
+    });
     document.querySelectorAll('input[name="claim-mode"]').forEach((input) => input.addEventListener("change", updateClaimMode));
     byId("special-claim-panel").addEventListener("change", updateClaimMode);
-    byId("special-claim-panel").addEventListener("input", updateSpecialClaimSummary);
+    byId("special-claim-panel").addEventListener("input", () => {
+      updateSpecialSelectionConstraints();
+      updateSpecialClaimSummary();
+    });
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.view));
     });

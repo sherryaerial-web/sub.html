@@ -3703,7 +3703,8 @@ function buildSpecialCourseSlotsForTeacher_(teacherName, pendingRows, courseRows
     var time = formatMyTime(row && row[1]);
     var courseName = cleanText_(row && row[2]);
     var room = getCourseRoom_(courseName);
-    if (!calendarId || !date || !time || !room) return null;
+    if (!calendarId || !date || !time || !room ||
+        getVvipMonthFromDate_(date) !== getNextMonthKey_()) return null;
     return {
       slotKey: sourceType === 'own' ? 'own:' + calendarId : 'leave:' + substituteId,
       sourceType: sourceType,

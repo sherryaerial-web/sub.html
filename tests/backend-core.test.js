@@ -2745,8 +2745,32 @@ test('special claim options add the invited teacher own courses without exposing
   assert.equal(options.specialSlots.some((slot) => slot.calendarId === 'cal-private'), false);
 });
 
+test('special claim options only include courses from the next-month claim period', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/08/30', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-aug', 'class-a', 'teacher-a', '否', ''],
+      ['2026/09/06', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-sep', 'class-a', 'teacher-a', '否', ''],
+      ['2026/09/06', '10:30', 'A－舞綢 Lv.1', '老師乙', 'cal-leave-sep', 'class-b', 'teacher-b', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/06', '10:30', 'A－舞綢 Lv.1',
+      '確認中', '', '', '', 'leave-open-sep', 'cal-leave-sep',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const options = backend.getClaimOptions_(teacherASession);
+
+  assert.deepEqual(
+    options.specialSlots.map((slot) => slot.calendarId),
+    ['cal-own-sep', 'cal-leave-sep']
+  );
+});
+
 test('special availability uses generic slot keys for own and open substitute courses', () => {
   const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-08';
   const pendingRows = [[
     'stamp', '老師乙', '2026/08/10', '10:30', 'A－舞綢 Lv.1',
     '確認中', '', '', '', 'leave-open-1', 'cal-leave-1',
@@ -2775,6 +2799,7 @@ test('special availability uses generic slot keys for own and open substitute co
 
 test('own course special slot planning accepts consecutive own courses without creating substitute ids', () => {
   const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-08';
   const courseRows = [
     ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
     ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2'],
@@ -2795,6 +2820,7 @@ test('own course special slot planning accepts consecutive own courses without c
 
 test('mixed special slot planning accepts an own course followed by an open substitute and rejects private slots', () => {
   const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-08';
   const courseRows = [
     ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
     ['2026/08/10', '10:30', 'A－舞綢 Lv.1', '老師乙', 'cal-leave-1'],
@@ -2973,6 +2999,7 @@ test('single-slot special claim stores one group and enforces a 15-minute turnov
 
 test('continuous special claim expands one starting id into every required same-room slot', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
     courseRows: [
       ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-merge-1', 'class-ring-2', 'teacher-b', '否', ''],
       ['2026/09/12', '14:30', 'D－舞綢 Lv.1', '老師丁', 'cal-other-1', 'class-silk-1', 'teacher-d', '否', ''],
@@ -3032,6 +3059,7 @@ test('continuous special claim expands one starting id into every required same-
 
 test('special claim may start later than the occupied slot and still reserves every required slot', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
     courseRows: [
       ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-delayed-1', 'class-ring-2', 'teacher-b', '否', ''],
       ['2026/09/12', '15:00', 'B－空環 Lv.1', '老師丙', 'cal-delayed-2', 'class-ring-1', 'teacher-c', '否', ''],
@@ -3069,6 +3097,7 @@ test('special claim may start later than the occupied slot and still reserves ev
 test('special claim rejects an earlier, non-quarter-hour, or too-late actual start without writes', () => {
   ['13:15', '13:40', '14:50'].forEach((actualStartTime) => {
     const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+      nextMonth: '2026-09',
       courseRows: [
         ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-invalid-1', 'class-ring-2', 'teacher-b', '否', ''],
         ['2026/09/12', '15:00', 'B－空環 Lv.1', '老師丙', 'cal-invalid-2', 'class-ring-1', 'teacher-c', '否', ''],

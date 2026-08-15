@@ -1321,6 +1321,32 @@ test('treats discounted and regular OB names as the same frontend course type', 
   });
 });
 
+test('teacher claim course types exclude period courses from stale API options', async () => {
+  const { context } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [
+        {
+          courseKey: '空環 Lv.3~4', courseName: '空環 Lv.3~4',
+          courseTypeKey: '空環', courseTypeName: '空環', difficulty: 'Lv.3~4', category: '空環',
+        },
+        {
+          courseKey: '空環 Lv.3 技巧訓練期班', courseName: '空環 Lv.3 技巧訓練期班',
+          courseTypeKey: '空環 技巧訓練期班', courseTypeName: '空環 技巧訓練期班', difficulty: 'Lv.3', category: '空環',
+        },
+      ],
+    },
+    getAvailableSubstitutes: [],
+  });
+
+  await context.fetchAvailableSubstitutes();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getClaimCourseTypes())), [
+    { courseTypeKey: '空環', courseTypeName: '空環', difficulty: 'Lv.3~4' },
+  ]);
+  assert.equal(context.findSelectedClaimClass('空環 技巧訓練期班', 'Lv.3'), null);
+});
+
 test('renders separate course type and difficulty selectors instead of class IDs', async () => {
   const { context, getElement } = createFrontendRuntime({
     getClaimOptions: {

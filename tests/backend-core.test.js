@@ -1918,18 +1918,20 @@ test('deduplicates OB course items across rooms for teacher selection', () => {
   assert.equal(resolved.actualCourseName, 'B－皮拉提斯');
 });
 
-test('recurring claim catalog excludes one-off long and special courses but keeps recurring 90-minute courses', () => {
+test('recurring claim catalog excludes one-off long special and period courses but keeps recurring 90-minute courses', () => {
   const backend = loadBackend();
   const rows = [
     ['2026/08/01', '10:00', 'A－原始瑜伽', '老師甲', 'cal-yoga-1', 'class-yoga-a'],
     ['2026/08/08', '10:00', 'A－原始瑜伽', '老師甲', 'cal-yoga-2', 'class-yoga-a'],
+    ['2026/08/01', '14:00', 'C－空環 Lv.3 技巧訓練期班', '老師甲', 'cal-term-1', 'class-term-c'],
+    ['2026/08/08', '14:00', 'C－空環 Lv.3 技巧訓練期班', '老師甲', 'cal-term-2', 'class-term-c'],
     ['2026/08/02', '13:15', 'B－綢吊 Lv.0-2（90分）', '老師乙', 'cal-sling-1', 'class-sling-b'],
     ['2026/08/09', '13:15', 'B－綢吊 Lv.0-2（90分）', '老師乙', 'cal-sling-2', 'class-sling-b'],
     ['2026/08/03', '18:30', 'B－椅子瑜伽（90min）', '老師丙', 'cal-chair', 'class-chair-b'],
     ['2026/08/04', '19:00', 'A－原始瑜伽特別課', '老師丙', 'cal-special', 'class-special-a'],
   ];
 
-  const options = backend.buildRecurringClaimCourseOptions_(rows, ['地板課程', '綢吊']);
+  const options = backend.buildRecurringClaimCourseOptions_(rows, ['地板課程', '空環', '綢吊']);
 
   assert.deepEqual(JSON.parse(JSON.stringify(options)), [
     {

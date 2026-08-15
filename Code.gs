@@ -32,7 +32,8 @@ var SHEET_HEADERS = {
     'OB Calendar ID', '實際課程 ID', '實際課程名稱', '預計難度',
     '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
     '實際課程類別', '替代 OB Calendar ID',
-    '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間'
+    '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間',
+    '實際開始時間', '延後分鐘數', '延後占用來源代課編號'
   ],
   INVITATIONS: ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
   AUDIT: ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'],
@@ -3467,6 +3468,18 @@ function getClaimOptions_(session) {
 function getCourseRoom_(courseName) {
   var match = /^\s*([A-D])\s*[－—–-]\s*/i.exec(String(courseName || ''));
   return match ? match[1].toUpperCase() : '';
+}
+
+function getOrdinaryCourseDurationMinutes_(courseName) {
+  return cleanText_(courseName).indexOf('綢吊') !== -1 ? 90 : 60;
+}
+
+function normalizeOrdinaryDelayMinutes_(value) {
+  var delay = value == null || cleanText_(value) === '' ? 0 : Number(value);
+  if ([0, 15, 30].indexOf(delay) === -1) {
+    throw new Error('一般代課只能使用原時段、延後 15 分鐘或延後 30 分鐘。');
+  }
+  return delay;
 }
 
 function stripNewTeacherMarker_(courseName) {

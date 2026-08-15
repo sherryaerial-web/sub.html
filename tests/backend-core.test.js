@@ -77,6 +77,10 @@ const EXPECTED_SPECIAL_COURSE_HEADERS = [
   '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間',
 ];
 
+const EXPECTED_ORDINARY_DELAY_HEADERS = [
+  '實際開始時間', '延後分鐘數', '延後占用來源代課編號',
+];
+
 const EXPECTED_SPECIAL_REQUEST_HEADERS = [
   '申請時間', '特別課群組 ID', '老師', '日期', '教室', '來源時段 JSON',
   '代課編號 JSON', '實際開始時間', '特別課名稱', '預計難度', '分鐘數',
@@ -484,7 +488,11 @@ function createLeaveBackend(options = {}) {
   ]);
   const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, ...courseRows]);
   const leaveSheet = createSheetFixture('請假代課紀錄', [
-    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS),
+    EXPECTED_LEAVE_HEADERS.concat(
+      EXPECTED_LEAVE_EXTENSION_HEADERS,
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    ),
     ...(options.leaveRows || []),
   ]);
   const auditSheet = createSheetFixture('操作紀錄', [[
@@ -540,7 +548,11 @@ function createInvitationBackend(options = {}) {
     ]),
   ]);
   const leaveSheet = createSheetFixture('請假代課紀錄', [
-    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS),
+    EXPECTED_LEAVE_HEADERS.concat(
+      EXPECTED_LEAVE_EXTENSION_HEADERS,
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    ),
     ...(options.leaveRows || [
       ['2026-08-03 09:00:00', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-a'],
       ['2026-08-03 09:05:00', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-b', 'calendar-b'],
@@ -1437,7 +1449,8 @@ test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact 
   assert.equal(leaveSheet.values[25][10], 'calendar-25');
   const expectedWidth = EXPECTED_LEAVE_HEADERS.length
     + EXPECTED_LEAVE_EXTENSION_HEADERS.length
-    + EXPECTED_SPECIAL_COURSE_HEADERS.length;
+    + EXPECTED_SPECIAL_COURSE_HEADERS.length
+    + EXPECTED_ORDINARY_DELAY_HEADERS.length;
   assert.ok(leaveSheet.values.slice(1).every((row) => row.length === expectedWidth));
 });
 
@@ -1647,7 +1660,10 @@ test('appends the substitute and API headers without moving fixed columns', () =
   assert.deepEqual(leaveSheet.values[0].slice(0, 10), EXPECTED_LEAVE_HEADERS);
   assert.deepEqual(
     leaveSheet.values[0].slice(10),
-    EXPECTED_LEAVE_EXTENSION_HEADERS.concat(EXPECTED_SPECIAL_COURSE_HEADERS)
+    EXPECTED_LEAVE_EXTENSION_HEADERS.concat(
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    )
   );
 });
 
@@ -1754,6 +1770,32 @@ test('maps headers by their 1-based Sheet column and appends audit events', () =
   });
 
   assert.deepEqual(auditSheet.values[1].slice(1), ['Ivy', '開放代課', 'sub-1', '確認中', '已開放', '測試']);
+});
+
+test('ordinary delay fields append after every existing leave column', () => {
+  const backend = loadBackend();
+
+  assert.equal(backend.SHEET_HEADERS.LEAVES[9], '代課編號');
+  assert.equal(backend.SHEET_HEADERS.LEAVES[24], '特別課結束時間');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.SHEET_HEADERS.LEAVES.slice(25))),
+    EXPECTED_ORDINARY_DELAY_HEADERS
+  );
+});
+
+test('ordinary duration treats only 綢吊 as ninety minutes and limits delay choices', () => {
+  const backend = loadBackend();
+
+  assert.equal(backend.getOrdinaryCourseDurationMinutes_('A－綢吊 Lv.1'), 90);
+  assert.equal(backend.getOrdinaryCourseDurationMinutes_('B－舞綢 Lv.1'), 60);
+  assert.equal(backend.getOrdinaryCourseDurationMinutes_('A－空環 Lv.2'), 60);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_(undefined), 0);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_('15'), 15);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_(30), 30);
+  assert.throws(
+    () => backend.normalizeOrdinaryDelayMinutes_(45),
+    /原時段.*延後 15.*延後 30/
+  );
 });
 
 test('classifies supported course categories', () => {

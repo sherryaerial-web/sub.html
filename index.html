@@ -1350,6 +1350,7 @@
       const category = String(change.category || "").trim();
       const difficulty = String(change.difficulty || "").trim();
       const note = String(change.note || "").trim();
+      const startDelayMinutes = Number(change.startDelayMinutes || 0);
       const canReuseOriginal = target["可沿用原課程"] === true;
       const targetCategory = target["課程大類"] || getCourseCategory(target["課程"]);
 
@@ -1370,6 +1371,9 @@
       if (!["original", "existing", "special", "new"].includes(handlingType)) {
         throw new Error("課程處理方式無效，請重新選擇。");
       }
+      if (![0, 15, 30].includes(startDelayMinutes)) {
+        throw new Error("一般代課只能使用原時段、延後 15 分鐘或延後 30 分鐘。");
+      }
 
       if (claimNoteIsRequired(target, handlingType, category) && !note) {
         throw new Error("調整為特別課時，請填寫備註。");
@@ -1384,6 +1388,7 @@
         difficulty: handlingType === "original" ? "" : difficulty,
         note: handlingType === "original" ? "" : note
       };
+      if (["original", "existing"].includes(handlingType)) normalized.startDelayMinutes = startDelayMinutes;
       if (handlingType === "existing") normalized.courseTypeKey = courseTypeKey;
       if (handlingType === "existing" && courseKey) normalized.courseKey = courseKey;
       return normalized;
@@ -1402,6 +1407,46 @@
       const minutes = Number(totalMinutes);
       if (!Number.isInteger(minutes) || minutes < 0 || minutes >= 24 * 60) return "";
       return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    }
+
+    function getOrdinaryCourseDurationMinutes(courseName) {
+      return String(courseName || "").includes("綢吊") ? 90 : 60;
+    }
+
+    function buildOrdinaryDelayPreview(target, startDelayMinutes, availabilityMap, pendingItems) {
+      const delay = Number(startDelayMinutes || 0);
+      if (![0, 15, 30].includes(delay)) {
+        throw new Error("一般代課只能使用原時段、延後 15 分鐘或延後 30 分鐘。");
+      }
+      const originalStartMinutes = parseClaimTimeMinutes(target?.["時段"]);
+      if (!Number.isFinite(originalStartMinutes)) {
+        throw new Error("代課開始時間不完整，請重新整理。");
+      }
+      const durationMinutes = getOrdinaryCourseDurationMinutes(target?.["課程"]);
+      const actualStartMinutes = originalStartMinutes + delay;
+      const endMinutes = actualStartMinutes + durationMinutes;
+      if (actualStartMinutes >= 24 * 60 || endMinutes >= 24 * 60) {
+        throw new Error("延後後課程不可跨日。");
+      }
+      const availability = (availabilityMap || {})[target?.["代課編號"]] || {};
+      const nextCourseTime = String(availability.nextCourseTime || "");
+      const nextMinutes = parseClaimTimeMinutes(nextCourseTime);
+      let occupiedSubstituteId = "";
+      let blocked = false;
+      if (Number.isFinite(nextMinutes) && endMinutes + 15 > nextMinutes) {
+        occupiedSubstituteId = String((availability.mergePartnerIds || [])[0] || "")
+          .replace(/^leave:/, "");
+        blocked = !occupiedSubstituteId || !(pendingItems || []).some((item) =>
+          item["代課編號"] === occupiedSubstituteId
+        );
+      }
+      return {
+        actualStartTime: formatClaimTimeMinutes(actualStartMinutes),
+        endTime: formatClaimTimeMinutes(endMinutes),
+        nextCourseTime,
+        occupiedSubstituteId,
+        blocked
+      };
     }
 
     function getSpecialCourseStartTimeOptions(startId, durationMinutes, availabilityMap) {
@@ -2285,22 +2330,33 @@
               <label class="handling-option">
                 <input type="radio" name="handling-${escapeHtml(cardId)}" value="existing"
                   ${defaultHandling === "existing" ? "checked" : ""}>
-                調整課程類型或難度
+                調整課程或時間
               </label>
             </div>
 
             <div class="claim-fields" ${defaultHandling === "original" ? "hidden" : ""}>
               <div class="claim-adjustment-panel" ${defaultHandling === "original" ? "hidden" : ""}>
                 <div class="claim-field full">
+                  <label>上課時間</label>
+                  <select class="claim-control claim-start-delay">
+                    <option value="0">原時段</option>
+                    <option value="15">延後 15 分鐘</option>
+                    <option value="30">延後 30 分鐘</option>
+                  </select>
+                  <p class="hint claim-delay-summary" data-blocked="false">維持原時段</p>
+                </div>
+
+                <div class="claim-field full">
                   <label>課程類型 <span class="claim-required">必填</span></label>
                   <select class="claim-control claim-course-type">
+                    ${canReuseOriginal ? '<option value="__ORIGINAL__" selected>沿用原課程（只調整時間）</option>' : ""}
                     ${getClaimCourseTypes().map((course) =>
-                      `<option value="${escapeHtml(course.courseTypeKey)}" ${course.courseTypeKey === defaultSelection.courseTypeKey ? "selected" : ""}>${escapeHtml(course.courseTypeName)}</option>`
+                      `<option value="${escapeHtml(course.courseTypeKey)}" ${!canReuseOriginal && course.courseTypeKey === defaultSelection.courseTypeKey ? "selected" : ""}>${escapeHtml(course.courseTypeName)}</option>`
                     ).join("")}
                   </select>
                 </div>
 
-                <div class="claim-field full">
+                <div class="claim-field full claim-difficulty-field" ${canReuseOriginal ? "hidden" : ""}>
                   <label>難度／等級</label>
                   <select class="claim-control claim-difficulty-select">
                     ${renderClaimDifficultyOptions(defaultSelection.courseTypeKey, defaultSelection.difficulty)}
@@ -2318,6 +2374,50 @@
       `;
     }
 
+    function syncOrdinaryClaimSubmitState() {
+      const hasBlockedDelay = [...document.querySelectorAll(".claim-checkbox:checked")].some((checkbox) => {
+        const summary = checkbox.closest(".claim-card")?.querySelector(".claim-delay-summary");
+        return summary?.dataset.blocked === "true";
+      });
+      byId("claim-submit").disabled = getAvailableClaimItems().length === 0 || hasBlockedDelay;
+    }
+
+    function updateOrdinaryClaimDelaySummary(card) {
+      const summary = card?.querySelector(".claim-delay-summary");
+      if (!summary) return;
+      const handling = card.querySelector('input[type="radio"]:checked')?.value || "original";
+      if (handling !== "existing") {
+        summary.textContent = "維持原時段";
+        summary.dataset.blocked = "false";
+        syncOrdinaryClaimSubmitState();
+        return;
+      }
+      const substituteId = card.querySelector(".claim-checkbox")?.dataset?.substituteId || "";
+      const target = pendingLeaves.find((item) => item["代課編號"] === substituteId);
+      if (!target) {
+        summary.textContent = "維持原時段";
+        summary.dataset.blocked = "false";
+        syncOrdinaryClaimSubmitState();
+        return;
+      }
+      try {
+        const preview = buildOrdinaryDelayPreview(
+          target,
+          card.querySelector(".claim-start-delay")?.value || 0,
+          claimOptions.specialAvailability || {},
+          pendingLeaves
+        );
+        summary.dataset.blocked = String(preview.blocked);
+        summary.textContent = preview.blocked
+          ? "延後時間與下一堂課衝突，請聯絡管理員。"
+          : `${target["時段"]} → ${preview.actualStartTime}｜${preview.endTime} 結束｜${preview.occupiedSubstituteId ? `下一堂 ${preview.nextCourseTime} 需由管理員關閉 OB` : "不占用下一堂"}`;
+      } catch (error) {
+        summary.dataset.blocked = "true";
+        summary.textContent = error.message;
+      }
+      syncOrdinaryClaimSubmitState();
+    }
+
     function updateClaimCardState(card) {
       if (!card) return;
       const checked = card.querySelector(".claim-checkbox").checked;
@@ -2329,27 +2429,47 @@
       const showAdjustment = handling === "existing";
       card.querySelector(".claim-fields").hidden = !showAdjustment;
       card.querySelector(".claim-adjustment-panel").hidden = !showAdjustment;
-      if (showAdjustment) populateClaimDifficultyOptions(card, true);
+      if (showAdjustment) {
+        const useOriginalCourse = card.querySelector(".claim-course-type")?.value === "__ORIGINAL__";
+        const difficultyField = card.querySelector(".claim-difficulty-field");
+        if (difficultyField) difficultyField.hidden = useOriginalCourse;
+        if (!useOriginalCourse) populateClaimDifficultyOptions(card, true);
+        updateOrdinaryClaimDelaySummary(card);
+      }
     }
 
     function readClaimDraft(card) {
       const selectedHandling = card.querySelector('input[type="radio"]:checked')?.value || "original";
-      const handlingType = selectedHandling;
-      if (handlingType === "original") {
+      const startDelayMinutes = selectedHandling === "existing"
+        ? Number(card.querySelector(".claim-start-delay")?.value || 0)
+        : 0;
+      if (selectedHandling === "original") {
         return {
-          handlingType,
+          handlingType: "original",
           actualClassId: "",
           actualCourseName: "",
           category: "",
           difficulty: "",
-          note: ""
+          note: "",
+          startDelayMinutes: 0
         };
       }
       const courseTypeKey = card.querySelector(".claim-course-type").value;
+      if (courseTypeKey === "__ORIGINAL__") {
+        return {
+          handlingType: "original",
+          actualClassId: "",
+          actualCourseName: "",
+          category: "",
+          difficulty: "",
+          note: "",
+          startDelayMinutes
+        };
+      }
       const difficulty = card.querySelector(".claim-difficulty-select").value;
       const existingClass = findSelectedClaimClass(courseTypeKey, difficulty);
       const draft = {
-        handlingType,
+        handlingType: "existing",
         actualClassId: existingClass && !existingClass.courseKey
           ? existingClass.classId
           : "",
@@ -2361,7 +2481,8 @@
           : "",
         difficulty,
         note: card.querySelector(".claim-note").value,
-        courseTypeKey
+        courseTypeKey,
+        startDelayMinutes
       };
       if (existingClass && existingClass.courseKey) {
         draft.courseKey = existingClass.courseKey;
@@ -2601,7 +2722,17 @@
         const card = checkbox.closest(".claim-card");
         const target = pendingLeaves.find((item) => item["代課編號"] === substituteId);
         try {
-          items.push(validateClaimDraft(readClaimDraft(card), target));
+          const item = validateClaimDraft(readClaimDraft(card), target);
+          const preview = buildOrdinaryDelayPreview(
+            target,
+            item.startDelayMinutes,
+            claimOptions.specialAvailability || {},
+            pendingLeaves
+          );
+          if (preview.blocked) {
+            throw new Error("延後時間與下一堂課衝突，請聯絡管理員。");
+          }
+          items.push(item);
         } catch (error) {
           if (card && card.scrollIntoView) card.scrollIntoView({ behavior: "smooth", block: "center" });
           return setNotice(error.message, "error");
@@ -2616,7 +2747,10 @@
         if (!result || result.count !== items.length) {
           throw new Error("領取結果與勾選堂數不一致，請重新整理確認。");
         }
-        const claimedIds = new Set(items.map((item) => item.substituteId));
+        const claimedIds = new Set([
+          ...items.map((item) => item.substituteId),
+          ...((result && result.occupiedSubstituteIds) || [])
+        ]);
         pendingLeaves = pendingLeaves.filter((item) => !claimedIds.has(item["代課編號"]));
         renderAvailableSubstitutes();
         setNotice("代課領取成功。");
@@ -2653,7 +2787,10 @@
       const rows = group.items || [];
       const item = rows[0] || {};
       if (!group.specialGroupId) {
-        return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div><div class="item-course">${escapeHtml(item["課程"])}</div><div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div><div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div><div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>${renderAuditHistory(item["異動紀錄"])}<div class="record-actions">${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="log-out"></i>申請退出代課</button>` : ""}</div></div></article>`;
+        const timeChange = Number(item["延後分鐘數"]) > 0
+          ? `<div class="item-meta">調整開始時間：${escapeHtml(item["時段"])} → ${escapeHtml(item["實際開始時間"])}</div>`
+          : "";
+        return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div><div class="item-course">${escapeHtml(item["課程"])}</div><div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>${timeChange}<div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div><div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>${renderAuditHistory(item["異動紀錄"])}<div class="record-actions">${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="log-out"></i>申請退出代課</button>` : ""}</div></div></article>`;
       }
 
       const isOwnCourseRequest = item["紀錄類型"] === "特別課安排";
@@ -3340,12 +3477,22 @@
     }
 
     function renderAdminItem(item, extraHtml = "") {
-      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div><div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}${extraHtml}</div></article>`;
+      const timeChange = Number(item.startDelayMinutes) > 0
+        ? `<div class="item-meta">調整開始時間：${escapeHtml(item.time)} → ${escapeHtml(item.actualStartTime)}</div>`
+        : "";
+      const delayOccupancy = item.status === "延後占用"
+        ? `<div class="item-meta">${escapeHtml(item.changeStatus || "延後占用／待管理員關閉 OB")}｜來源代課編號：${escapeHtml(item.delaySourceSubstituteId)}｜來源老師：${escapeHtml(item.delaySourceTeacher || "待確認")}</div>`
+        : "";
+      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div>${timeChange}${delayOccupancy}<div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}${extraHtml}</div></article>`;
     }
 
     function renderAdminObItem(item, options) {
       if (item.recordType === "specialRequest") {
         const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-special-replacement-select="${escapeHtml(item.specialGroupId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-special-replacement" data-special-group-id="${escapeHtml(item.specialGroupId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+        return renderAdminItem(item, detail);
+      }
+      if (item.status === "延後占用") {
+        const detail = `<div class="ob-details"><div class="item-meta">請在 OB 關閉這堂課，再按「同步 OB 課表」與「重新核對 OB」。</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}</div>`;
         return renderAdminItem(item, detail);
       }
       const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;

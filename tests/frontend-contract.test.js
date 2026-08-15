@@ -35,7 +35,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     return elements.get(id);
   };
   const claimControls = {
-    '.claim-checkbox': { checked: true },
+    '.claim-checkbox': { checked: true, dataset: { substituteId: 'leave-c' } },
     'input[type="radio"]:checked': { value: 'original' },
     '.claim-editor': { hidden: false },
     '.claim-fields': { hidden: true },
@@ -43,10 +43,14 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     '.special-course-panel': { hidden: true },
     '.claim-course-type': { value: '' },
     '.claim-difficulty-select': { value: '' },
+    '.claim-difficulty-field': { hidden: false },
+    '.claim-start-delay': { value: '0' },
+    '.claim-delay-summary': { textContent: '', dataset: {}, hidden: false },
     '.new-course-name': { value: '' },
     '.claim-note': { value: '' },
   };
   const claimCard = {
+    dataset: { claimCardId: 'leave:leave-c' },
     querySelector(selector) { return claimControls[selector] || null; },
     querySelectorAll() { return []; },
     scrollIntoView() {},
@@ -130,7 +134,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
 
           let data;
           if (action === 'getAvailableSubstitutes' && claimSubmitted) {
-            data = [];
+            data = options.postClaimAvailable === undefined ? [] : options.postClaimAvailable;
           } else if (Object.prototype.hasOwnProperty.call(fixtures, action)) {
             data = fixtures[action];
           } else {
@@ -681,6 +685,46 @@ test('keeps the claim button disabled after the final available course is claime
   assert.equal(getElement('claim-submit').disabled, true);
 });
 
+test('delayed claim submits its minutes and immediately removes the occupied next course', async () => {
+  let finishRefresh;
+  const refresh = new Promise((resolve) => { finishRefresh = resolve; });
+  const { context, claimControls, submittedForms, getElement } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [],
+      specialAvailability: {
+        'leave-c': { startTime: '18:30', nextCourseTime: '20:00', mergePartnerIds: ['leave-next'] },
+      },
+    },
+    getAvailableSubstitutes: [
+      {
+        '代課編號': 'leave-c', '原老師': '老師乙', '日期': '2026/09/01',
+        '時段': '18:30', '課程': 'A－空環 Lv.1', '課程大類': '空環', '可沿用原課程': true,
+      },
+      {
+        '代課編號': 'leave-next', '原老師': '老師丙', '日期': '2026/09/01',
+        '時段': '20:00', '課程': 'A－空環 Lv.2', '課程大類': '空環', '可沿用原課程': true,
+      },
+    ],
+    claimSubstitute: { count: 1, occupiedSubstituteIds: ['leave-next'] },
+  }, { postClaimAvailable: refresh });
+  await Promise.resolve();
+  await context.fetchAvailableSubstitutes();
+  claimControls['input[type="radio"]:checked'].value = 'existing';
+  claimControls['.claim-course-type'].value = '__ORIGINAL__';
+  claimControls['.claim-start-delay'].value = '30';
+
+  const submitting = context.submitClaim();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const form = submittedForms.find((item) => item.fields.action === 'claimSubstitute');
+  assert.equal(JSON.parse(form.fields.items)[0].startDelayMinutes, 30);
+  assert.doesNotMatch(getElement('pending-leaves-list').innerHTML, /leave-c|leave-next/);
+
+  finishRefresh([]);
+  await submitting;
+});
+
 test('uses the protected capability result before deciding whether a course change is required', async () => {
   const { context, getElement } = createFrontendRuntime({
     getClaimOptions: {
@@ -717,7 +761,7 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /value=["']original["']/);
   assert.match(html, /value=["']existing["']/);
   assert.match(html, /直接認領/);
-  assert.match(html, /調整課程類型或難度/);
+  assert.match(html, /調整課程或時間/);
   assert.doesNotMatch(html, />\s*沿用原課程\s*<\/label>/);
   assert.doesNotMatch(html, />\s*改用既有 OB 課程\s*<\/label>/);
   assert.doesNotMatch(html, /value=["']new["']/);
@@ -829,6 +873,40 @@ test('renders own-course special requests as one teacher record and one admin wo
   assert.match(html, /linkAdminSpecialReplacement\(groupId, select\.value\)/);
 });
 
+test('renders delayed claim timing in teacher and admin records without replacement controls on occupancy', () => {
+  const { context } = createFrontendRuntime();
+  const teacherMarkup = context.renderMySubGroup({
+    specialGroupId: '',
+    items: [{
+      '代課編號': 'leave-a', '日期': '2026/09/01', '時段': '18:30',
+      '實際開始時間': '19:00', '延後分鐘數': 30, '課程': 'A－空環 Lv.1',
+      '原老師': '老師乙', '處理類型': '沿用原課程', '實際課程名稱': 'A－空環 Lv.1',
+      '異動狀態': '', '可申請退出': true, '異動紀錄': [],
+    }],
+  });
+  const primaryMarkup = context.renderAdminObItem({
+    substituteId: 'leave-a', date: '2026/09/01', time: '18:30',
+    actualStartTime: '19:00', startDelayMinutes: 30,
+    originalCourse: 'A－空環 Lv.1', actualCourse: 'A－空環 Lv.1',
+    originalTeacher: '老師乙', substituteTeacher: '老師甲', status: '已領取',
+    changeStatus: '', differenceReason: '', auditHistory: [],
+  }, []);
+  const occupiedMarkup = context.renderAdminObItem({
+    substituteId: 'leave-b', date: '2026/09/01', time: '20:00',
+    originalCourse: 'A－空環 Lv.2', actualCourse: 'A－空環 Lv.2',
+    originalTeacher: '老師丙', substituteTeacher: '', status: '延後占用',
+    changeStatus: '延後占用／待管理員關閉 OB', differenceReason: '',
+    delaySourceSubstituteId: 'leave-a', delaySourceTeacher: '老師甲', auditHistory: [],
+  }, []);
+
+  assert.match(teacherMarkup, /調整開始時間：18:30 → 19:00/);
+  assert.match(primaryMarkup, /調整開始時間：18:30 → 19:00/);
+  assert.match(occupiedMarkup, /延後占用／待管理員關閉 OB/);
+  assert.match(occupiedMarkup, /來源代課編號：leave-a/);
+  assert.match(occupiedMarkup, /來源老師：老師甲/);
+  assert.doesNotMatch(occupiedMarkup, /data-admin-action="link-replacement"/);
+});
+
 test('special-course draft delays the actual start while reserving every occupied slot', () => {
   const { context } = createFrontendRuntime();
   const availability = {
@@ -909,6 +987,76 @@ test('single-slot special course blocks a gap shorter than 90 minutes after turn
   }, availability), /不足 90 分鐘.*使用連續時段/);
 });
 
+test('ordinary start delay appears only inside the adjustment panel', () => {
+  const { context } = createFrontendRuntime();
+  const rendered = context.renderAvailableSubstituteItem({
+    '代課編號': 'leave-a',
+    '日期': '2026/09/01',
+    '時段': '18:30',
+    '課程': 'A－空環 Lv.1',
+    '原老師': '老師甲',
+    '課程大類': '空環',
+    '可沿用原課程': true,
+  });
+
+  assert.match(rendered, /調整課程或時間/);
+  assert.match(rendered, /class="claim-control claim-start-delay"/);
+  assert.match(rendered, /原時段/);
+  assert.match(rendered, /延後 15 分鐘/);
+  assert.match(rendered, /延後 30 分鐘/);
+  assert.match(rendered, /value="__ORIGINAL__"/);
+  assert.equal((rendered.match(/claim-start-delay/g) || []).length, 1);
+  assert.ok(rendered.indexOf('claim-start-delay') > rendered.indexOf('claim-adjustment-panel'));
+});
+
+test('ordinary delay preview distinguishes sixty-minute and 綢吊 claims', () => {
+  const { context } = createFrontendRuntime();
+  const availability = {
+    'leave-a': {
+      startTime: '18:30', nextCourseTime: '20:00', mergePartnerIds: ['leave-b'],
+    },
+  };
+  const pending = [{ '代課編號': 'leave-b', '時段': '20:00' }];
+  const target = { '代課編號': 'leave-a', '時段': '18:30', '課程': 'A－空環 Lv.1' };
+
+  assert.equal(context.getOrdinaryCourseDurationMinutes('A－舞綢 Lv.1'), 60);
+  assert.equal(context.getOrdinaryCourseDurationMinutes('A－綢吊 Lv.1'), 90);
+  assert.equal(context.buildOrdinaryDelayPreview(target, 15, availability, pending).occupiedSubstituteId, '');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildOrdinaryDelayPreview(target, 30, availability, pending))),
+    {
+      actualStartTime: '19:00',
+      endTime: '20:00',
+      nextCourseTime: '20:00',
+      occupiedSubstituteId: 'leave-b',
+      blocked: false,
+    }
+  );
+  assert.equal(context.buildOrdinaryDelayPreview(
+    target,
+    30,
+    { 'leave-a': { nextCourseTime: '20:00', mergePartnerIds: [] } },
+    pending
+  ).blocked, true);
+});
+
+test('time-only adjustment sends original handling with the selected delay', () => {
+  const { context, claimCard, claimControls } = createFrontendRuntime();
+  claimControls['input[type="radio"]:checked'].value = 'existing';
+  claimControls['.claim-course-type'].value = '__ORIGINAL__';
+  claimControls['.claim-start-delay'].value = '30';
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
+    handlingType: 'original',
+    actualClassId: '',
+    actualCourseName: '',
+    category: '',
+    difficulty: '',
+    note: '',
+    startDelayMinutes: 30,
+  });
+});
+
 test('direct claim strips every editable override from the submitted draft', () => {
   const { context } = createFrontendRuntime();
   const payload = context.validateClaimDraft({
@@ -934,6 +1082,7 @@ test('direct claim strips every editable override from the submitted draft', () 
     category: '',
     difficulty: '',
     note: '',
+    startDelayMinutes: 0,
   });
 });
 
@@ -962,6 +1111,7 @@ test('ordinary adjustment requires a course type but keeps the note optional', (
     category: '',
     difficulty: 'Lv.1',
     note: '',
+    startDelayMinutes: 0,
     courseTypeKey: '空環',
   });
   assert.throws(() => context.validateClaimDraft({
@@ -1036,6 +1186,7 @@ test('submits the OB course type and difficulty as independent choices', async (
     category: '地板課程',
     difficulty: 'Lv.1',
     note: '',
+    startDelayMinutes: 0,
     courseKey: '肩頸舒壓瑜伽 Lv.1',
     courseTypeKey: '肩頸舒壓瑜伽',
   });

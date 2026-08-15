@@ -45,7 +45,9 @@ const leaveOb = {
   originalTeacher: "Jina",
   substituteTeacher: "Mina",
   date: "2026/08/14",
-  time: "19:30",
+  time: "18:30",
+  actualStartTime: "19:00",
+  startDelayMinutes: 30,
   originalCourse: "舞綢 Lv.1",
   actualCourse: "空環基礎",
   difficulty: "Lv.1",
@@ -55,6 +57,24 @@ const leaveOb = {
   differenceReason: "",
   note: "改為可教授的空環課程",
   auditHistory: [{ time: "2026-08-05 10:20", action: "領取代課", reason: "改課" }]
+};
+const leaveOccupied = {
+  substituteId: "sub-ob-next",
+  originalTeacher: "Jina",
+  substituteTeacher: "",
+  date: "2026/08/14",
+  time: "20:00",
+  originalCourse: "空環 Lv.2",
+  actualCourse: "空環 Lv.2",
+  difficulty: "",
+  status: "延後占用",
+  changeStatus: "延後占用／待管理員關閉 OB",
+  verificationStatus: "待關閉 OB",
+  differenceReason: "",
+  delaySourceSubstituteId: "sub-ob",
+  delaySourceTeacher: "Mina",
+  note: "",
+  auditHistory: []
 };
 const leaveChange = {
   ...leaveOb,
@@ -102,19 +122,26 @@ const fixtures = {
     }
   ],
   getAvailableSubstitutes: [
-    { "代課編號": "sub-cross", "原老師": "Jina", "日期": "2026/08/11", "時段": "18:30", "課程": "舞綢 Lv.1", "課程大類": "舞綢", "可沿用原課程": false },
-    { "代課編號": "sub-same", "原老師": "Mina", "日期": "2026/08/13", "時段": "19:30", "課程": "空環 Lv.1", "課程大類": "空環", "可沿用原課程": true }
+    { "代課編號": "sub-delay", "原老師": "Jina", "日期": "2026/08/11", "時段": "18:30", "課程": "A－空環 Lv.1", "課程大類": "空環", "可沿用原課程": true },
+    { "代課編號": "sub-delay-next", "原老師": "Mina", "日期": "2026/08/11", "時段": "20:00", "課程": "A－空環 Lv.2", "課程大類": "空環", "可沿用原課程": true }
   ],
   getClaimOptions: {
     capabilities: ["空環", "空瑜"],
     classes: [
       { classId: "class-ring-1", courseName: "空環 Lv.1", category: "空環" },
       { classId: "class-yoga-1", courseName: "空中瑜伽", category: "空瑜" }
-    ]
+    ],
+    specialAvailability: {
+      "sub-delay": {
+        room: "A", date: "2026/08/11", startTime: "18:30", nextCourseTime: "20:00",
+        mergePartnerIds: ["sub-delay-next"], maxDurationMinutes: 75
+      }
+    }
   },
   getMySubs: [
     {
       "代課編號": "sub-history", "日期": "2026/08/08", "時段": "19:30", "課程": "舞綢 Lv.1",
+      "實際開始時間": "20:00", "延後分鐘數": 30,
       "原老師": "Jina", "處理類型": "需要新增課程", "實際課程名稱": "空環基礎", "預計難度": "Lv.1",
       "備註": "改為可教授的空環課程", "異動狀態": "無", "可申請退出": true, "異動紀錄": []
     }
@@ -160,7 +187,7 @@ const fixtures = {
         openedAt: "2026-08-05 09:00",
         viewedAt: index % 2 ? "" : "2026-08-05 09:12"
       })),
-    obWork: [leaveOb],
+    obWork: [leaveOb, leaveOccupied],
     changeRequests: [leaveChange],
     exceptions: [leaveException],
     completed: [leaveComplete],
@@ -331,14 +358,15 @@ try {
     results.push(await capture(page, viewport.name, "03-leave-history"));
 
     await page.locator('.nav-item[data-view="view-claim"]').click();
-    const crossCard = page.locator('[data-claim-card-id="sub-cross"]');
-    await crossCard.waitFor();
-    await crossCard.locator(".claim-checkbox").check();
-    await crossCard.locator(".handling-option", { hasText: "改用既有 OB 課程" }).click();
-    await crossCard.locator(".existing-class-search").selectOption("__SPECIAL__");
-    await crossCard.locator(".new-course-name").fill("主題編舞");
-    await crossCard.locator(".claim-note").fill("調整為特別課");
-    results.push(await capture(page, viewport.name, "04-cross-apparatus-claim"));
+    await page.locator('[data-claim-date-toggle="2026/08/11"]').click();
+    const delayedCard = page.locator('[data-claim-card-id="leave:sub-delay"]');
+    await delayedCard.waitFor();
+    await delayedCard.locator(".claim-checkbox").check();
+    await delayedCard.locator(".handling-option", { hasText: "調整課程或時間" }).click();
+    await delayedCard.locator(".claim-course-type").selectOption("__ORIGINAL__");
+    await delayedCard.locator(".claim-start-delay").selectOption("30");
+    await delayedCard.locator(".claim-delay-summary").filter({ hasText: "下一堂 20:00 需由管理員關閉 OB" }).waitFor();
+    results.push(await capture(page, viewport.name, "04-ordinary-delay-claim"));
 
     await page.locator('.nav-item[data-view="view-mysubs"]').click();
     await page.locator("#my-subs-list .list-item").first().waitFor();

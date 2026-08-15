@@ -77,6 +77,10 @@ const EXPECTED_SPECIAL_COURSE_HEADERS = [
   '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間',
 ];
 
+const EXPECTED_ORDINARY_DELAY_HEADERS = [
+  '實際開始時間', '延後分鐘數', '延後占用來源代課編號',
+];
+
 const EXPECTED_SPECIAL_REQUEST_HEADERS = [
   '申請時間', '特別課群組 ID', '老師', '日期', '教室', '來源時段 JSON',
   '代課編號 JSON', '實際開始時間', '特別課名稱', '預計難度', '分鐘數',
@@ -484,7 +488,11 @@ function createLeaveBackend(options = {}) {
   ]);
   const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, ...courseRows]);
   const leaveSheet = createSheetFixture('請假代課紀錄', [
-    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS),
+    EXPECTED_LEAVE_HEADERS.concat(
+      EXPECTED_LEAVE_EXTENSION_HEADERS,
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    ),
     ...(options.leaveRows || []),
   ]);
   const auditSheet = createSheetFixture('操作紀錄', [[
@@ -540,7 +548,11 @@ function createInvitationBackend(options = {}) {
     ]),
   ]);
   const leaveSheet = createSheetFixture('請假代課紀錄', [
-    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS),
+    EXPECTED_LEAVE_HEADERS.concat(
+      EXPECTED_LEAVE_EXTENSION_HEADERS,
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    ),
     ...(options.leaveRows || [
       ['2026-08-03 09:00:00', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-a'],
       ['2026-08-03 09:05:00', '老師乙', '2026/08/10', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-b', 'calendar-b'],
@@ -1437,7 +1449,8 @@ test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact 
   assert.equal(leaveSheet.values[25][10], 'calendar-25');
   const expectedWidth = EXPECTED_LEAVE_HEADERS.length
     + EXPECTED_LEAVE_EXTENSION_HEADERS.length
-    + EXPECTED_SPECIAL_COURSE_HEADERS.length;
+    + EXPECTED_SPECIAL_COURSE_HEADERS.length
+    + EXPECTED_ORDINARY_DELAY_HEADERS.length;
   assert.ok(leaveSheet.values.slice(1).every((row) => row.length === expectedWidth));
 });
 
@@ -1647,7 +1660,10 @@ test('appends the substitute and API headers without moving fixed columns', () =
   assert.deepEqual(leaveSheet.values[0].slice(0, 10), EXPECTED_LEAVE_HEADERS);
   assert.deepEqual(
     leaveSheet.values[0].slice(10),
-    EXPECTED_LEAVE_EXTENSION_HEADERS.concat(EXPECTED_SPECIAL_COURSE_HEADERS)
+    EXPECTED_LEAVE_EXTENSION_HEADERS.concat(
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    )
   );
 });
 
@@ -1754,6 +1770,112 @@ test('maps headers by their 1-based Sheet column and appends audit events', () =
   });
 
   assert.deepEqual(auditSheet.values[1].slice(1), ['Ivy', '開放代課', 'sub-1', '確認中', '已開放', '測試']);
+});
+
+test('ordinary delay fields append after every existing leave column', () => {
+  const backend = loadBackend();
+
+  assert.equal(backend.SHEET_HEADERS.LEAVES[9], '代課編號');
+  assert.equal(backend.SHEET_HEADERS.LEAVES[24], '特別課結束時間');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.SHEET_HEADERS.LEAVES.slice(25))),
+    EXPECTED_ORDINARY_DELAY_HEADERS
+  );
+});
+
+test('ordinary duration treats only 綢吊 as ninety minutes and limits delay choices', () => {
+  const backend = loadBackend();
+
+  assert.equal(backend.getOrdinaryCourseDurationMinutes_('A－綢吊 Lv.1'), 90);
+  assert.equal(backend.getOrdinaryCourseDurationMinutes_('B－舞綢 Lv.1'), 60);
+  assert.equal(backend.getOrdinaryCourseDurationMinutes_('A－空環 Lv.2'), 60);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_(undefined), 0);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_('15'), 15);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_(30), 30);
+  assert.throws(
+    () => backend.normalizeOrdinaryDelayMinutes_(45),
+    /原時段.*延後 15.*延後 30/
+  );
+});
+
+test('ordinary sixty-minute delay occupies only the conflicting next open leave', () => {
+  const backend = loadBackend();
+  const leaveRows = [
+    ['stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+    ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+  ];
+  const courseRows = [
+    ['2026/09/01', '18:30', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+    ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-b'],
+    ['2026/09/01', '21:30', 'A－瑜伽', '原老師丙', 'cal-c'],
+  ];
+
+  const fifteen = backend.buildOrdinaryClaimDelayPlan_(leaveRows[0], 15, leaveRows, courseRows);
+  const thirty = backend.buildOrdinaryClaimDelayPlan_(leaveRows[0], 30, leaveRows, courseRows);
+
+  assert.equal(fifteen.actualStartTime, '18:45');
+  assert.equal(fifteen.endTime, '19:45');
+  assert.equal(fifteen.occupiedSubstituteId, '');
+  assert.equal(thirty.actualStartTime, '19:00');
+  assert.equal(thirty.endTime, '20:00');
+  assert.equal(thirty.occupiedSubstituteId, 'leave-b');
+  assert.equal(thirty.occupiedRowIndex, 1);
+});
+
+test('ordinary planner treats 綢吊 as ninety minutes but 舞綢 as sixty minutes', () => {
+  const backend = loadBackend();
+  const next = ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'];
+  const cases = [
+    { course: 'A－綢吊 Lv.1', expected: 'leave-b' },
+    { course: 'A－舞綢 Lv.1', expected: '' },
+  ];
+
+  cases.forEach(({ course, expected }) => {
+    const source = ['stamp', '原老師甲', '2026/09/01', '18:30', course, '確認中', '', '', '', 'leave-a', 'cal-a'];
+    const courseRows = [
+      ['2026/09/01', '18:30', course, '原老師甲', 'cal-a'],
+      ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-b'],
+    ];
+    assert.equal(
+      backend.buildOrdinaryClaimDelayPlan_(source, 0, [source, next], courseRows).occupiedSubstituteId,
+      expected
+    );
+  });
+});
+
+test('ordinary planner rejects unavailable or multiple following slots without mutating input', () => {
+  const backend = loadBackend();
+  const source = ['stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'];
+  const next = ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '已領取', '別人', '', '', 'leave-b', 'cal-b'];
+  const courseRows = [
+    ['2026/09/01', '18:30', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+    ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-b'],
+  ];
+  const leaveSnapshot = JSON.stringify([source, next]);
+  const courseSnapshot = JSON.stringify(courseRows);
+
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, 30, [source], courseRows),
+    /下一堂課衝突/
+  );
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, 30, [source, next], courseRows),
+    /下一堂課衝突/
+  );
+  const noCalendar = source.slice();
+  noCalendar[10] = '';
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(noCalendar, 30, [noCalendar], courseRows),
+    /Calendar ID 不完整/
+  );
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, 30, [source], courseRows.concat([
+      ['2026/09/01', '20:10', 'A－瑜伽', '原老師丙', 'cal-c'],
+    ])),
+    /占用兩堂以上/
+  );
+  assert.equal(JSON.stringify([source, next]), leaveSnapshot);
+  assert.equal(JSON.stringify(courseRows), courseSnapshot);
 });
 
 test('classifies supported course categories', () => {
@@ -2495,10 +2617,139 @@ test('two invited teachers with stale lists produce exactly one claim winner', (
   );
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-c');
-  assert.deepEqual(JSON.parse(JSON.stringify(winner)), { count: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(winner)), { count: 1, occupiedSubstituteIds: [] });
   assert.equal(claimedRow[5], '已領取');
   assert.equal(claimedRow[6], '老師甲');
   assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-c').length, 1);
+});
+
+test('ordinary delay atomically claims the source and reserves the next open leave', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30,
+  }]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    count: 1,
+    occupiedSubstituteIds: ['leave-b'],
+  });
+  assert.equal(leaveSheet.values[1][5], '已領取');
+  assert.equal(leaveSheet.values[1][6], '老師甲');
+  assert.equal(leaveSheet.values[1][25], '19:00');
+  assert.equal(leaveSheet.values[1][26], 30);
+  assert.equal(leaveSheet.values[2][5], '延後占用');
+  assert.equal(leaveSheet.values[2][6], '');
+  assert.equal(leaveSheet.values[2][8], '待處理');
+  assert.equal(leaveSheet.values[2][15], '待關閉 OB');
+  assert.equal(leaveSheet.values[2][18], '延後占用／待管理員關閉 OB');
+  assert.equal(leaveSheet.values[2][27], 'leave-a');
+  assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-a').length, 1);
+  assert.equal(auditSheet.values.filter((row) => row[2] === '延後占用' && row[3] === 'leave-b').length, 1);
+});
+
+test('ordinary delay batch conflict rejects every write', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [
+      { substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30 },
+      { substituteId: 'leave-b', handlingType: 'original', startDelayMinutes: 0 },
+    ]),
+    /同時領取|重複/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
+test('ordinary delay rollback restores both leaves when the occupied write fails', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    leaveSheet,
+    ({ row, column }) => row === 3 && column === 6,
+    'injected occupied write failure'
+  );
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30,
+    }]),
+    /injected occupied write failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
+test('ordinary delay rollback restores both leaves when its audit append fails', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    auditSheet,
+    ({ row }) => row > 1,
+    'injected delayed audit failure'
+  );
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30,
+    }]),
+    /injected delayed audit failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
 });
 
 test('claim rolls back the business row when its audit append fails', () => {
@@ -2607,7 +2858,7 @@ test('direct claim preserves the original difficulty and ignores forged editable
   }]);
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-b');
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1, occupiedSubstituteIds: [] });
   assert.equal(claimedRow[5], '已領取');
   assert.equal(claimedRow[6], '老師甲');
   assert.equal(claimedRow[7], '沿用原課程；難度：Lv.1');
@@ -3506,7 +3757,7 @@ test('rejected cancellation restores an OB-started pending leave to list and cla
       substituteId: 'leave-cancel-rejected',
       changeNote: '',
     }]))),
-    { count: 1 }
+    { count: 1, occupiedSubstituteIds: [] }
   );
   assert.equal(row[5], '已領取');
   assert.equal(row[6], '老師甲');
@@ -3530,7 +3781,7 @@ test('terminal I and S history labels do not block an otherwise eligible pending
       substituteId: 'leave-terminal-history',
       changeNote: '',
     }]))),
-    { count: 1 }
+    { count: 1, occupiedSubstituteIds: [] }
   );
   assert.equal(leaveSheet.values[1][5], '已領取');
 });
@@ -3631,6 +3882,92 @@ test('stale claim cannot consume withdrawal restore work or clear its restore st
   assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
   assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
   assert.equal(leaveSheet.values[1][18], '退出後待回復 OB');
+});
+
+test('delayed primary claim verifies its actual OB start time', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/01', '18:30', 'A－空環 Lv.1', '老師甲',
+      'cal-a', 'class-ring-1', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1',
+      '已領取', '老師甲', '', '待處理', 'leave-a', 'cal-a',
+      'class-ring-1', 'A－空環 Lv.1', '', '沿用原課程', '待核對', '', '', '',
+      '空環', '', '', '', '', '', '19:00', 30, '',
+    ]],
+  });
+
+  fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(fixture.leaveSheet.values[1][15], '核對異常');
+  assert.match(fixture.leaveSheet.values[1][17], /時間不一致.*19:00.*18:30/);
+
+  fixture.courseSheet.values[1][1] = '19:00';
+  fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(fixture.leaveSheet.values[1][15], '已核對');
+  assert.equal(fixture.leaveSheet.values[1][17], '');
+});
+
+test('delay occupied row completes only after its OB calendar disappears', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙',
+      'cal-b', 'class-b', 'teacher-b', '否', '',
+    ]],
+    leaveRows: [[
+      'stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2',
+      '延後占用', '', '由代課編號 leave-a 延後占用', '待處理', 'leave-b', 'cal-b',
+      '', '', '', '', '待關閉 OB', '', '', '延後占用／待管理員關閉 OB',
+      '', '', '', '', '', '', '', '', 'leave-a',
+    ]],
+  });
+
+  const stillOpen = fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(stillOpen.exceptions, 1);
+  assert.equal(fixture.leaveSheet.values[1][15], '核對異常');
+  assert.match(fixture.leaveSheet.values[1][17], /OB 課程仍存在/);
+
+  fixture.courseSheet.values.splice(1, 1);
+  const closed = fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(closed.matched, 1);
+  assert.equal(fixture.leaveSheet.values[1][8], '已完成');
+  assert.equal(fixture.leaveSheet.values[1][15], '已關閉');
+  assert.equal(fixture.leaveSheet.values[1][18], '延後占用／OB 已關閉');
+});
+
+test('delay occupied admin work links its source while personal records keep only the claimed class', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [],
+    leaveRows: [
+      [
+        'stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1',
+        '已領取', '老師甲', '實際開始：19:00', '待處理', 'leave-a', 'cal-a',
+        'class-a', 'A－空環 Lv.1', '', '沿用原課程', '待核對', '', '', '',
+        '空環', '', '', '', '', '', '19:00', 30, '',
+      ],
+      [
+        'stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2',
+        '延後占用', '', '由代課編號 leave-a 延後占用', '待處理', 'leave-b', 'cal-b',
+        '', '', '', '', '待關閉 OB', '', '', '延後占用／待管理員關閉 OB',
+        '', '', '', '', '', '', '', '', 'leave-a',
+      ],
+    ],
+  });
+
+  const dashboard = fixture.backend.getAdminDashboard_(fixture.adminSession);
+  const occupied = dashboard.obWork.find((item) => item.substituteId === 'leave-b');
+  const personal = fixture.backend.getMySubs_('老師甲');
+
+  assert.ok(occupied);
+  assert.equal(occupied.delaySourceSubstituteId, 'leave-a');
+  assert.equal(occupied.delaySourceTeacher, '老師甲');
+  assert.ok(!dashboard.pendingInvitations.some((item) => item.substituteId === 'leave-b'));
+  assert.deepEqual(personal.map((item) => item['代課編號']), ['leave-a']);
+  assert.equal(personal[0]['實際開始時間'], '19:00');
+  assert.equal(personal[0]['延後分鐘數'], 30);
 });
 
 test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {

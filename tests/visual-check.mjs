@@ -14,7 +14,7 @@ const html = await fs.readFile(path.join(repoDir, "index.html"), "utf8");
 const lucidePath = path.resolve(path.dirname(require.resolve("lucide")), "../umd/lucide.js");
 const lucideScript = await fs.readFile(lucidePath);
 const visualHtml = html.replace(
-  '<script src="vendor/xlsx.full.min.js"></script>',
+  '<script src="assets/xlsx.full.min.js"></script>',
   '<script>window.XLSX = { utils: {} };</script>',
 );
 

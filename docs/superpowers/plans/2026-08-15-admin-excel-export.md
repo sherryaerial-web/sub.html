@@ -33,8 +33,8 @@
 
 **Files:**
 - Modify: `index.html`
-- Create: `vendor/xlsx.full.min.js`
-- Create: `vendor/README.md`
+- Create: `assets/xlsx.full.min.js`
+- Create: `assets/README.md`
 
 - [x] 加入管理者「匯出 Excel」按鈕與手機安全版面。
 - [x] 加入唯讀資料載入、權限分頁、標準欄位、去重與儲存格保護函式。
@@ -47,7 +47,7 @@
 **Files:**
 - Modify: `tests/frontend-contract.test.js`
 - Verify: `index.html`
-- Verify: `vendor/xlsx.full.min.js`
+- Verify: `assets/xlsx.full.min.js`
 
 - [x] 用固定版 SheetJS 建立測試活頁簿，重新讀取並核對工作表與代表資料。
 - [x] 執行 `node --test tests/frontend-contract.test.js`。

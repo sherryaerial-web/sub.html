@@ -1164,9 +1164,10 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
-test('admin Excel export exposes one action and a pinned local workbook writer', () => {
+test('admin Excel export exposes one action and a pinned publishable workbook writer', () => {
   assert.match(html, /id=["']admin-export["']/);
-  assert.match(html, /vendor\/xlsx\.full\.min\.js/);
+  assert.match(html, /assets\/xlsx\.full\.min\.js/);
+  assert.doesNotMatch(html, /src=["']vendor\//);
   assert.match(html, /匯出 Excel/);
 });
 
@@ -1269,7 +1270,7 @@ test('admin Excel export aborts the download when any authorized source fails', 
 });
 
 test('admin Excel export rows produce a readable xlsx workbook with the pinned writer', () => {
-  const XLSX = require('../vendor/xlsx.full.min.js');
+  const XLSX = require('../assets/xlsx.full.min.js');
   const { context } = createFrontendRuntime();
   const sheets = context.buildAdminExportSheets({
     capabilities: ['course_admin'],

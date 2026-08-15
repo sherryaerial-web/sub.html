@@ -660,7 +660,18 @@
     .queue-section-heading span { color: var(--muted); font-size: 12px; }
     .queue-empty-state { display: flex; min-height: 92px; align-items: center; justify-content: center; gap: 10px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); font-size: 13px; }
     .queue-empty-state svg { width: 20px; height: 20px; color: var(--green-700); }
-    .invite-teacher-panel { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .admin-date-group { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .admin-date-group + .admin-date-group { margin-top: 8px; }
+    .admin-date-group summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; color: var(--ink); cursor: pointer; font-size: 13px; font-weight: 750; list-style: none; }
+    .admin-date-group summary:hover { background: var(--soft); color: var(--sea-700); }
+    .admin-date-group summary::-webkit-details-marker { display: none; }
+    .admin-date-group summary::after { content: "+"; flex: 0 0 auto; color: var(--muted); font-size: 18px; font-weight: 400; }
+    .admin-date-group[open] summary::after { content: "−"; }
+    .admin-date-group-title { display: inline-flex; min-width: 0; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+    .admin-date-group-title svg { width: 17px; height: 17px; }
+    .admin-date-group-count { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 650; white-space: nowrap; }
+    .admin-date-group-body { display: grid; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: var(--soft); }
+    .invite-teacher-panel { margin: 0 0 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
     .invite-teacher-panel summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; color: var(--ink); cursor: pointer; font-size: 13px; font-weight: 750; list-style: none; }
     .invite-teacher-panel summary::-webkit-details-marker { display: none; }
     .invite-teacher-panel summary::after { content: "+"; flex: 0 0 auto; color: var(--muted); font-size: 18px; font-weight: 400; }
@@ -3024,10 +3035,10 @@
         const activeNames = new Set((data.activeInvitees || []).map((item) => item.teacherName));
         const teachers = (data.teachers || []).filter((name) => !activeNames.has(name));
         const pendingCourseList = pendingItems.length
-          ? renderAdminItems(pendingItems, "目前沒有待領取代課")
+          ? renderAdminPendingDateGroups(pendingItems)
           : `<div class="queue-empty-state"><i data-lucide="calendar-check-2"></i><strong>目前沒有待邀請課程</strong></div>`;
         const inviteTeacherPanel = pendingItems.length ? `
-          <details class="invite-teacher-panel"${window.matchMedia("(min-width: 761px)").matches ? " open" : ""}>
+          <details class="invite-teacher-panel" open>
             <summary>
               <span class="invite-teacher-title"><i data-lucide="users-round"></i>選擇本輪邀請老師</span>
               <span class="invite-teacher-count">${teachers.length} 位可邀請</span>
@@ -3045,9 +3056,9 @@
             <span>目前無課程可開放</span>
           </div>`;
         content.innerHTML = `
+          ${inviteTeacherPanel}
           <div class="queue-section-heading"><strong>待領取課程</strong><span>${pendingItems.length} 堂</span></div>
-          ${pendingCourseList}
-          ${inviteTeacherPanel}`;
+          ${pendingCourseList}`;
       } else if (activeAdminTab === "activeInvitees") {
         content.innerHTML = `
           <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>
@@ -3111,6 +3122,32 @@
 
     function renderAdminItems(items, emptyText) {
       return groupSpecialCourseItems(items).map((group) => renderAdminGroup(group, renderAdminItem)).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`;
+    }
+
+    function groupAdminPendingItemsByDate(items) {
+      const groups = [];
+      const groupsByDate = new Map();
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        const date = String((item && item.date) || "日期未設定");
+        if (!groupsByDate.has(date)) {
+          const group = { date, items: [] };
+          groupsByDate.set(date, group);
+          groups.push(group);
+        }
+        groupsByDate.get(date).items.push(item);
+      });
+      return groups;
+    }
+
+    function renderAdminPendingDateGroups(items) {
+      return groupAdminPendingItemsByDate(items).map((group) => `
+        <details class="admin-date-group">
+          <summary>
+            <span class="admin-date-group-title"><i data-lucide="calendar-days"></i>${escapeHtml(formatDateWithWeekday(group.date))}</span>
+            <span class="admin-date-group-count">${group.items.length} 堂</span>
+          </summary>
+          <div class="admin-date-group-body">${renderAdminItems(group.items, "")}</div>
+        </details>`).join("");
     }
 
     function renderAdminGroup(group, renderRow) {

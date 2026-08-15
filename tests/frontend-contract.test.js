@@ -1303,7 +1303,50 @@ test('copies the production classroom URL with the LINE substitute invitation', 
   );
 });
 
-test('pending invitation queue shows courses before the responsive teacher picker', () => {
+test('groups admin pending courses by first-seen date and preserves row order', () => {
+  const { context } = createFrontendRuntime();
+  const groups = context.groupAdminPendingItemsByDate([
+    { substituteId: 'a', date: '2026/09/05', time: '12:30' },
+    { substituteId: 'b', date: '2026/09/04', time: '11:00' },
+    { substituteId: 'c', date: '2026/09/05', time: '14:00' },
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(groups)), [
+    {
+      date: '2026/09/05',
+      items: [
+        { substituteId: 'a', date: '2026/09/05', time: '12:30' },
+        { substituteId: 'c', date: '2026/09/05', time: '14:00' },
+      ],
+    },
+    {
+      date: '2026/09/04',
+      items: [{ substituteId: 'b', date: '2026/09/04', time: '11:00' }],
+    },
+  ]);
+});
+
+test('renders admin pending dates collapsed with weekday and course count', () => {
+  const { context } = createFrontendRuntime();
+  const rendered = context.renderAdminPendingDateGroups([
+    {
+      substituteId: 'a', date: '2026/09/05', time: '12:30', originalCourse: 'A－空瑜 Lv.0~2',
+      originalTeacher: '芊芊', substituteTeacher: '', status: '確認中', changeStatus: '', auditHistory: [],
+    },
+    {
+      substituteId: 'b', date: '2026/09/05', time: '14:00', originalCourse: 'A－空環 Lv.2~4',
+      originalTeacher: '芊芊', substituteTeacher: '', status: '確認中', changeStatus: '', auditHistory: [],
+    },
+  ]);
+
+  assert.equal((rendered.match(/class="admin-date-group"/g) || []).length, 1);
+  assert.match(rendered, /2026\/09\/05（六）/);
+  assert.match(rendered, /2 堂/);
+  assert.doesNotMatch(rendered, /<details class="admin-date-group" open>/);
+  assert.ok(rendered.indexOf('12:30') < rendered.indexOf('14:00'));
+});
+
+test('pending invitation queue shows an open teacher picker before collapsed date groups', () => {
   const start = html.indexOf('activeAdminTab === "pendingInvitations"');
   const end = html.indexOf('activeAdminTab === "activeInvitees"', start);
   const pendingBlock = html.slice(start, end);
@@ -1314,10 +1357,12 @@ test('pending invitation queue shows courses before the responsive teacher picke
   assert.match(pendingBlock, /class="invite-teacher-panel"/);
   assert.match(pendingBlock, /class="invite-teacher-placeholder"/);
   assert.match(pendingBlock, /目前沒有待邀請課程/);
-  assert.match(pendingBlock, /matchMedia\("\(min-width: 761px\)"\)/);
+  assert.match(pendingBlock, /<details class="invite-teacher-panel" open>/);
+  assert.doesNotMatch(pendingBlock, /matchMedia\("\(min-width: 761px\)"\)/);
+  assert.match(pendingBlock, /renderAdminPendingDateGroups\(pendingItems\)/);
   assert.ok(
-    pendingBlock.indexOf('renderAdminItems(pendingItems') < pendingBlock.indexOf('inviteTeacherPanel'),
-    'course list should be assembled before the teacher picker'
+    pendingBlock.indexOf('${inviteTeacherPanel}') < pendingBlock.indexOf('${pendingCourseList}'),
+    'teacher picker should be rendered before the pending course list'
   );
 });
 

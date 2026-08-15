@@ -22,3 +22,13 @@ test('both pages use matching sans-serif Chinese and English fonts', () => {
     assert.doesNotMatch(html, /Georgia|Noto Serif TC|(?:^|[,\s"])serif(?:[,;\s"]|$)/im);
   });
 });
+
+test('admin pending dates use compact accessible disclosure rows', () => {
+  const html = pages[0];
+  assert.match(html, /\.admin-date-group\s*\{/);
+  assert.match(html, /\.admin-date-group\s+summary\s*\{[^}]*min-height:\s*48px/s);
+  assert.match(html, /\.admin-date-group\s+summary::-webkit-details-marker\s*\{[^}]*display:\s*none/s);
+  assert.match(html, /\.admin-date-group\s+summary::after\s*\{[^}]*content:\s*"\+"/s);
+  assert.match(html, /\.admin-date-group\[open\]\s+summary::after\s*\{[^}]*content:\s*"−"/s);
+  assert.match(html, /\.admin-date-group-body\s*\{/);
+});

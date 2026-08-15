@@ -4777,8 +4777,11 @@ function reconcileObChanges_(session) {
   });
 }
 
-function getObCourseDifferences_(effectiveCalendarId, obRow, expectation) {
+function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, courseNameNormalizer) {
   var differences = [];
+  var normalizeCourse = typeof courseNameNormalizer === 'function'
+    ? courseNameNormalizer
+    : normalizeCourseName_;
   if (!effectiveCalendarId) {
     differences.push('尚未連結 OB Calendar ID');
   } else if (!obRow) {
@@ -4791,11 +4794,20 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation) {
       if (cleanText_(obRow[5]) !== expectation.classId) {
         differences.push('課程不一致：預期 Class ID ' + expectation.classId + '，OB 為 ' + cleanText_(obRow[5]));
       }
-    } else if (normalizeCourseName_(obRow[2]) !== normalizeCourseName_(expectation.course)) {
+    } else if (normalizeCourse(obRow[2]) !== normalizeCourse(expectation.course)) {
       differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
     }
   }
   return differences;
+}
+
+function normalizeSpecialCourseReconciliationName_(value) {
+  return normalizeCourseName_(
+    stripCourseRoom_(value)
+      .replace(/[（(]\s*\d+\s*(?:min|分鐘)\s*[)）]\s*$/i, '')
+      .replace(/\s*特別課\s*$/, '')
+      .replace(/[＆﹠]/g, '&')
+  );
 }
 
 function getSpecialCourseGroupObOutcome_(groupRecords, courseByCalendarId) {
@@ -4831,7 +4843,8 @@ function getSpecialCourseGroupObOutcome_(groupRecords, courseByCalendarId) {
     differences: getObCourseDifferences_(
       effectiveCalendarId,
       courseByCalendarId[effectiveCalendarId],
-      expectation
+      expectation,
+      normalizeSpecialCourseReconciliationName_
     )
   };
 }

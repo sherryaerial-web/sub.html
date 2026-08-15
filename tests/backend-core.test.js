@@ -3444,6 +3444,53 @@ test('special-course group reconciliation accepts one surviving OB event for eve
   });
 });
 
+test('special-course group reconciliation accepts OB display formatting around the same main title', () => {
+  const leaveRows = createSpecialGroupReconciliationRows('special-group-ob-format');
+  leaveRows.forEach((row) => {
+    row[12] = '後彎主題十字墊瑜伽&頌缽充電';
+    row[23] = 150;
+  });
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [[
+      '2026/08/12', '14:00', 'B－後彎主題十字墊瑜伽＆頌缽充電特別課 (150min)', '老師甲',
+      'group-calendar-1', 'class-special', 'teacher-a', '是', '',
+    ]],
+    leaveRows,
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 3, matched: 3, exceptions: 0 });
+  leaveSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[8], '已完成');
+    assert.equal(row[15], '已核對');
+    assert.equal(row[17], '');
+  });
+});
+
+test('special-course group reconciliation still rejects a different main title after display normalization', () => {
+  const leaveRows = createSpecialGroupReconciliationRows('special-group-wrong-title');
+  leaveRows.forEach((row) => {
+    row[12] = '後彎主題十字墊瑜伽&頌缽充電';
+    row[23] = 150;
+  });
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [[
+      '2026/08/12', '14:00', 'B－椅子瑜伽特別課 (150min)', '老師甲',
+      'group-calendar-1', 'class-special', 'teacher-a', '是', '',
+    ]],
+    leaveRows,
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 3, matched: 0, exceptions: 3 });
+  leaveSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[15], '核對異常');
+    assert.match(row[17], /課程不一致/);
+  });
+});
+
 test('special-course group reconciliation rejects a group with no surviving OB event', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     courseRows: [],

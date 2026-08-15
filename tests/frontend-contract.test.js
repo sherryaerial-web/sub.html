@@ -1346,6 +1346,62 @@ test('renders admin pending dates collapsed with weekday and course count', () =
   assert.ok(rendered.indexOf('12:30') < rendered.indexOf('14:00'));
 });
 
+test('admin invitation rounds keep the fixed teaching roster and invited positions', () => {
+  const { context } = createFrontendRuntime();
+  const roster = [
+    '卡拉 卡拉', '芊芊♡', 'Tako', '@N.a🧘🏻♀️', '蜜莉 戴',
+    'Liz 🌰', 'Jina', 'Ariel Lu', '珍珍', '小mo(子涵）',
+    'Vicky Lee', '萱', 'Vivi', '小琪', 'Chloe Lee',
+    '芮錤 77', '巧', 'Carrie🐟', '嗨底 Heidi', '壹壹',
+    'wen', 'Chin', 'Melody Wang', 'Lily Yellow', '姝姝',
+    '妙妙 簡', '寧寧', 'Sherry❤雪莉', 'Josty Lin', 'XUAN',
+    '番茄🍅', 'Sue',
+  ];
+  const rounds = JSON.parse(JSON.stringify(context.buildAdminInvitationRounds(
+    [...roster, '冠蓉', '狗狗 陳', 'Lydia 慕恩', '尚昀 陳', 'Angela Chuang', '新老師'],
+    [{ teacherName: '卡拉 卡拉' }, { teacherName: 'Tako' }]
+  )));
+
+  assert.equal(rounds.length, 8);
+  assert.equal(rounds[0].label, '第 1 輪');
+  assert.deepEqual(rounds[0].teachers.map((teacher) => teacher.name), roster.slice(0, 5));
+  assert.deepEqual(rounds[6].teachers.map((teacher) => teacher.name), ['番茄🍅', 'Sue']);
+  assert.deepEqual(rounds[7].teachers.map((teacher) => teacher.name), ['新老師']);
+  assert.equal(rounds[7].label, '其他老師');
+  assert.equal(rounds[0].teachers[0].invited, true);
+  assert.equal(rounds[0].teachers[2].invited, true);
+  assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '冠蓉'), false);
+  assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === 'Angela Chuang'), false);
+});
+
+test('admin invitation rounds render invited teachers disabled and selectable by row', () => {
+  const { context } = createFrontendRuntime();
+  const rendered = context.renderAdminInvitationRounds(
+    ['卡拉 卡拉', '芊芊♡', 'Tako', '@N.a🧘🏻♀️', '蜜莉 戴'],
+    [{ teacherName: 'Tako' }]
+  );
+
+  assert.match(rendered, /class="teacher-round"/);
+  assert.match(rendered, /第 1 輪/);
+  assert.match(rendered, /data-admin-action="toggle-teacher-round"/);
+  assert.match(rendered, /value="Tako" disabled/);
+  assert.match(rendered, /Tako[\s\S]*邀請中/);
+
+  const inputs = [{ checked: false }, { checked: false }];
+  const button = {
+    textContent: '勾選本排',
+    closest() {
+      return { querySelectorAll: () => inputs };
+    },
+  };
+  context.toggleAdminTeacherRound(button);
+  assert.deepEqual(inputs.map((input) => input.checked), [true, true]);
+  assert.equal(button.textContent, '取消本排');
+  context.toggleAdminTeacherRound(button);
+  assert.deepEqual(inputs.map((input) => input.checked), [false, false]);
+  assert.equal(button.textContent, '勾選本排');
+});
+
 test('pending invitation queue shows an open teacher picker before collapsed date groups', () => {
   const start = html.indexOf('activeAdminTab === "pendingInvitations"');
   const end = html.indexOf('activeAdminTab === "activeInvitees"', start);
@@ -1360,6 +1416,7 @@ test('pending invitation queue shows an open teacher picker before collapsed dat
   assert.match(pendingBlock, /<details class="invite-teacher-panel" open>/);
   assert.doesNotMatch(pendingBlock, /matchMedia\("\(min-width: 761px\)"\)/);
   assert.match(pendingBlock, /renderAdminPendingDateGroups\(pendingItems\)/);
+  assert.match(pendingBlock, /renderAdminInvitationRounds\(data\.teachers, data\.activeInvitees\)/);
   assert.ok(
     pendingBlock.indexOf('${inviteTeacherPanel}') < pendingBlock.indexOf('${pendingCourseList}'),
     'teacher picker should be rendered before the pending course list'

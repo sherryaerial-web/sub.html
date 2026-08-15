@@ -142,9 +142,24 @@ const fixtures = {
   getAdminDashboard: {
     paused: false,
     leavePaused: false,
-    teachers: ["Ivy", "Ariel Lu", "Jina", "Mina"],
+    teachers: [
+      "卡拉 卡拉", "芊芊♡", "Tako", "@N.a🧘🏻♀️", "蜜莉 戴",
+      "Liz 🌰", "Jina", "Ariel Lu", "珍珍", "小mo(子涵）",
+      "Vicky Lee", "萱", "Vivi", "小琪", "Chloe Lee",
+      "芮錤 77", "巧", "Carrie🐟", "嗨底 Heidi", "壹壹",
+      "wen", "Chin", "Melody Wang", "Lily Yellow", "姝姝",
+      "妙妙 簡", "寧寧", "Sherry❤雪莉", "Josty Lin", "XUAN",
+      "番茄🍅", "Sue",
+      "冠蓉", "狗狗 陳", "Lydia 慕恩", "尚昀 陳", "Angela Chuang"
+    ],
     pendingInvitations: [leavePending],
-    activeInvitees: [{ invitationId: "invite-1", teacherName: "Jina", openedAt: "2026-08-05 09:00", viewedAt: "2026-08-05 09:12" }],
+    activeInvitees: ["卡拉 卡拉", "芊芊♡", "Tako", "@N.a🧘🏻♀️", "蜜莉 戴", "Liz 🌰", "Angela Chuang"]
+      .map((teacherName, index) => ({
+        invitationId: `invite-${index + 1}`,
+        teacherName,
+        openedAt: "2026-08-05 09:00",
+        viewedAt: index % 2 ? "" : "2026-08-05 09:12"
+      })),
     obWork: [leaveOb],
     changeRequests: [leaveChange],
     exceptions: [leaveException],

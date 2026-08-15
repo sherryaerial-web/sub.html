@@ -2104,9 +2104,16 @@
       }
     }
 
+    function isTermClaimCourse(option) {
+      const values = [option?.courseName, option?.courseTypeName, option?.courseTypeKey];
+      return values.some((value) => String(value || "").includes("期班"));
+    }
+
     function getTeachableClaimClasses() {
       const capabilities = new Set(claimOptions.capabilities || []);
-      return (claimOptions.classes || []).filter((item) => capabilities.has(item.category));
+      return (claimOptions.classes || []).filter((item) =>
+        capabilities.has(item.category) && !isTermClaimCourse(item)
+      );
     }
 
     function normalizeClaimDifficulty(value) {

@@ -3664,6 +3664,10 @@ function getCourseWeekdayNumber_(dateValue) {
   return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).getUTCDay();
 }
 
+function isTermCourseName_(courseName) {
+  return cleanText_(courseName).indexOf('期班') !== -1;
+}
+
 function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
   var allowed = {};
   (capabilities || []).forEach(function(category) {
@@ -3680,7 +3684,7 @@ function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
     var weekday = getCourseWeekdayNumber_(row && row[0]);
     var category = getCourseCategory_(courseName);
     if (!courseName || !courseKey || !room || time === '' || weekday === '' ||
-        !allowed[category] || /特別課|場地租借/.test(courseName)) {
+        !allowed[category] || /特別課|場地租借/.test(courseName) || isTermCourseName_(courseName)) {
       return;
     }
     var recurrenceKey = [room, courseKey, weekday, time].join('|');

@@ -767,6 +767,68 @@ test('custom special-course duration uses visible 15-minute controls on mobile',
   assert.equal(input.value, '240');
 });
 
+test('maps own and open substitute slots into the special-course picker without exposing fake substitute ids', () => {
+  const { context } = createFrontendRuntime();
+  const items = context.buildSpecialCourseDisplayItems([
+    {
+      slotKey: 'own:cal-own-1', sourceType: 'own', substituteId: '', calendarId: 'cal-own-1',
+      date: '2026/08/10', time: '09:00', room: 'A', courseName: 'A－空環 Lv.1',
+      originalTeacher: '老師甲',
+    },
+    {
+      slotKey: 'leave:leave-open-1', sourceType: 'leave', substituteId: 'leave-open-1',
+      calendarId: 'cal-leave-1', date: '2026/08/10', time: '10:30', room: 'A',
+      courseName: 'A－舞綢 Lv.1', originalTeacher: '老師乙',
+    },
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(items)), [
+    {
+      '代課編號': '', '時段鍵': 'own:cal-own-1', '來源類型': 'own', '來源標籤': '自己的正課',
+      'OB Calendar ID': 'cal-own-1', '日期': '2026/08/10', '時段': '09:00',
+      '課程': 'A－空環 Lv.1', '原老師': '老師甲', '課程大類': '空環', '可沿用原課程': true,
+    },
+    {
+      '代課編號': 'leave-open-1', '時段鍵': 'leave:leave-open-1', '來源類型': 'leave',
+      '來源標籤': '開放代課', 'OB Calendar ID': 'cal-leave-1', '日期': '2026/08/10',
+      '時段': '10:30', '課程': 'A－舞綢 Lv.1', '原老師': '老師乙',
+      '課程大類': '舞綢', '可沿用原課程': true,
+    },
+  ]);
+});
+
+test('renders own-course special requests as one teacher record and one admin work item', () => {
+  const { context } = createFrontendRuntime();
+  const sourceSlots = [
+    { slotKey: 'own:cal-1', sourceType: 'own', time: '09:00', courseName: 'A－空環 Lv.1', calendarId: 'cal-1', originalTeacher: '老師甲' },
+    { slotKey: 'own:cal-2', sourceType: 'own', time: '10:30', courseName: 'A－空環 Lv.2', calendarId: 'cal-2', originalTeacher: '老師甲' },
+  ];
+  const teacherMarkup = context.renderMySubGroup({
+    specialGroupId: 'special-1',
+    items: [{
+      '紀錄類型': '特別課安排', '特別課群組 ID': 'special-1', '日期': '2026/08/10',
+      '時段': '09:00', '實際課程名稱': '舞綢中軸特別課', '特別課模式': '使用連續時段',
+      '特別課分鐘數': 120, '特別課實際開始時間': '09:00', '特別課結束時間': '11:00',
+      '來源時段': sourceSlots, '可申請退出': false, '異動紀錄': [],
+    }],
+  });
+  assert.match(teacherMarkup, /舞綢中軸特別課/);
+  assert.match(teacherMarkup, /09:00.*A－空環 Lv\.1/);
+  assert.match(teacherMarkup, /10:30.*A－空環 Lv\.2/);
+  assert.doesNotMatch(teacherMarkup, /申請退出/);
+
+  const adminMarkup = context.renderAdminObItem({
+    recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/08/10', time: '09:00',
+    originalCourse: 'A－空環 Lv.1＋A－空環 Lv.2', originalTeacher: '老師甲',
+    substituteTeacher: '老師甲', actualCourse: '舞綢中軸特別課', difficulty: '',
+    status: '待處理', changeStatus: '', sourceSlots, auditHistory: [],
+  }, [{ calendarId: 'cal-special', date: '2026/08/10', time: '09:00', courseName: 'A－舞綢中軸特別課', teacherName: '老師甲' }]);
+  assert.match(adminMarkup, /data-special-replacement-select="special-1"/);
+  assert.match(adminMarkup, /data-admin-action="link-special-replacement"/);
+  assert.doesNotMatch(adminMarkup, /data-substitute-id=""/);
+  assert.match(html, /linkAdminSpecialReplacement\(groupId, select\.value\)/);
+});
+
 test('special-course draft delays the actual start while reserving every occupied slot', () => {
   const { context } = createFrontendRuntime();
   const availability = {
@@ -807,12 +869,13 @@ test('special-course draft delays the actual start while reserving every occupie
   });
 
   const validated = context.validateSpecialCourseDraft({
-    mode: 'merge', substituteIds: ['leave-a'], actualStartTime: '14:00',
+    mode: 'merge', startSlotKey: 'leave-a', actualStartTime: '14:00',
     courseName: '主題課', difficulty: '', durationMinutes: 90, note: '',
   }, availability);
   assert.deepEqual(JSON.parse(JSON.stringify(validated)), {
     mode: 'merge',
-    substituteIds: ['leave-a'],
+    startSlotKey: 'leave-a',
+    substituteIds: [],
     actualStartTime: '14:00',
     courseName: '主題課',
     difficulty: '',
@@ -1207,6 +1270,32 @@ test('admin Excel export builds capability-scoped worksheets with complete resul
   assert.equal(results.length, 4, 'header plus three unique claimed/completed rows');
   assert.equal(results[1][results[0].indexOf('備註')], '\'=HYPERLINK("bad")');
   assert.doesNotMatch(JSON.stringify(sheets), /1234|pin|salt|hash/i);
+});
+
+test('admin Excel export includes own-course special requests and their source slots', () => {
+  const { context } = createFrontendRuntime();
+  const specialRequest = {
+    recordType: 'specialRequest', specialGroupId: 'special-own-1', substituteId: '',
+    date: '2026/09/05', time: '12:30', originalCourse: 'A－空瑜 Lv.0~2＋A－舞綢 Lv.2',
+    originalTeacher: '蜜莉 戴', substituteTeacher: '蜜莉 戴', actualCourse: '舞綢中軸特別課',
+    status: '待處理', verificationStatus: '待核對', specialMode: '使用連續時段',
+    specialDurationMinutes: 120, specialActualStartTime: '12:30', specialEndTime: '14:30',
+    sourceSlots: [
+      { sourceType: 'own', time: '12:30', courseName: 'A－空瑜 Lv.0~2' },
+      { sourceType: 'leave', time: '14:00', courseName: 'A－舞綢 Lv.2' },
+    ],
+  };
+
+  const sheets = context.buildAdminExportSheets({
+    capabilities: ['course_admin'],
+    course: { pendingInvitations: [], activeInvitees: [], obWork: [specialRequest], changeRequests: [], exceptions: [], completed: [] },
+  });
+  const results = sheets.find((sheet) => sheet.name === '代課結果').rows;
+  assert.equal(results[1][results[0].indexOf('紀錄類型')], '特別課安排');
+  assert.equal(
+    results[1][results[0].indexOf('來源時段')],
+    '自己的正課 12:30 A－空瑜 Lv.0~2；開放代課 14:00 A－舞綢 Lv.2'
+  );
 });
 
 test('admin Excel export includes payroll and VVIP sheets only when authorized', () => {

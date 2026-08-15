@@ -77,6 +77,13 @@ const EXPECTED_SPECIAL_COURSE_HEADERS = [
   '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間',
 ];
 
+const EXPECTED_SPECIAL_REQUEST_HEADERS = [
+  '申請時間', '特別課群組 ID', '老師', '日期', '教室', '來源時段 JSON',
+  '代課編號 JSON', '實際開始時間', '特別課名稱', '預計難度', '分鐘數',
+  '結束時間', '模式', '備註', '狀態', 'OB 核對狀態', 'OB 核對時間',
+  '差異原因', '替代 OB Calendar ID',
+];
+
 const EXPECTED_ACCOUNT_HEADERS = [
   '指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至',
   '可教授類別', '功能權限',
@@ -551,6 +558,10 @@ function createInvitationBackend(options = {}) {
   const settingsSheet = createSheetFixture('系統設定', [[
     '設定名稱', '設定值', '更新時間', '備註',
   ]]);
+  const specialRequestSheet = createSheetFixture('特別課安排', [
+    EXPECTED_SPECIAL_REQUEST_HEADERS,
+    ...(options.specialRequestRows || []),
+  ]);
   const spreadsheet = createSpreadsheetFixture([
     accountSheet,
     teacherSheet,
@@ -559,6 +570,7 @@ function createInvitationBackend(options = {}) {
     invitationSheet,
     auditSheet,
     settingsSheet,
+    specialRequestSheet,
   ]);
   const backend = loadBackend({
     ...services,
@@ -579,6 +591,7 @@ function createInvitationBackend(options = {}) {
     invitationSheet,
     auditSheet,
     settingsSheet,
+    specialRequestSheet,
     adminToken,
     teacherAToken,
     teacherBToken,
@@ -1660,8 +1673,12 @@ test('creates supporting sheets and does not change the structure when rerun', (
       'CourseList', 'VVIP名單', 'VVIP選課紀錄', 'VVIP選課設定',
       '代課邀請', '操作紀錄', '登入帳號', '系統設定',
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
-      '薪資異議', '薪資付款設定', '請假代課紀錄'
+      '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排'
     ].sort()
+  );
+  assert.deepEqual(
+    spreadsheet.getSheetByName('特別課安排').values[0],
+    EXPECTED_SPECIAL_REQUEST_HEADERS
   );
 });
 
@@ -2688,6 +2705,204 @@ test('special availability identifies only the immediately following same-room o
     room: 'B', date: '2026/08/10', startTime: '20:00', nextCourseTime: '',
     maxDurationMinutes: 240, mergePartnerIds: [], requiresClosingTimeConfirmation: true,
   });
+});
+
+test('special claim options add the invited teacher own courses without exposing unopened courses from others', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2', 'class-b', 'teacher-a', '否', ''],
+      ['2026/08/10', '12:00', 'A－舞綢 Lv.1', '老師乙', 'cal-leave-1', 'class-c', 'teacher-b', '否', ''],
+      ['2026/08/10', '13:30', 'A－空環 Lv.3', '老師丙', 'cal-private', 'class-d', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [
+      [
+        'stamp', '老師乙', '2026/08/10', '12:00', 'A－舞綢 Lv.1',
+        '確認中', '', '', '', 'leave-open-1', 'cal-leave-1',
+      ],
+      [
+        'stamp', '老師甲', '2026/08/10', '10:30', 'A－空環 Lv.2',
+        '已領取', '老師丙', '', '', 'leave-claimed-own', 'cal-own-2',
+      ],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const options = backend.getClaimOptions_(teacherASession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(options.specialSlots)), [
+    {
+      slotKey: 'own:cal-own-1', sourceType: 'own', substituteId: '', calendarId: 'cal-own-1',
+      date: '2026/08/10', time: '09:00', room: 'A', courseName: 'A－空環 Lv.1',
+      originalTeacher: '老師甲',
+    },
+    {
+      slotKey: 'leave:leave-open-1', sourceType: 'leave', substituteId: 'leave-open-1',
+      calendarId: 'cal-leave-1', date: '2026/08/10', time: '12:00', room: 'A',
+      courseName: 'A－舞綢 Lv.1', originalTeacher: '老師乙',
+    },
+  ]);
+  assert.equal(options.specialSlots.some((slot) => slot.calendarId === 'cal-private'), false);
+});
+
+test('special availability uses generic slot keys for own and open substitute courses', () => {
+  const backend = loadBackend();
+  const pendingRows = [[
+    'stamp', '老師乙', '2026/08/10', '10:30', 'A－舞綢 Lv.1',
+    '確認中', '', '', '', 'leave-open-1', 'cal-leave-1',
+  ]];
+  const courseRows = [
+    ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
+    ['2026/08/10', '10:30', 'A－舞綢 Lv.1', '老師乙', 'cal-leave-1'],
+    ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師丙', 'cal-private'],
+  ];
+
+  const availability = backend.getTeacherSpecialCourseAvailability_(
+    '老師甲', pendingRows, courseRows
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(availability['own:cal-own-1'])), {
+    room: 'A', date: '2026/08/10', startTime: '09:00', nextCourseTime: '10:30',
+    maxDurationMinutes: 75, mergePartnerIds: ['leave:leave-open-1'],
+    requiresClosingTimeConfirmation: false,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(availability['leave:leave-open-1'])), {
+    room: 'A', date: '2026/08/10', startTime: '10:30', nextCourseTime: '12:00',
+    maxDurationMinutes: 75, mergePartnerIds: [], requiresClosingTimeConfirmation: false,
+  });
+  assert.equal(availability['own:cal-private'], undefined);
+});
+
+test('own course special slot planning accepts consecutive own courses without creating substitute ids', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
+    ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2'],
+    ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師丙', 'cal-private'],
+  ];
+
+  const plan = backend.buildTeacherSpecialCourseSlotPlan_(
+    '老師甲', 'own:cal-own-1', 120, '09:00', [], courseRows, 'merge'
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.orderedSlots)), [
+    { slotKey: 'own:cal-own-1', sourceType: 'own', substituteId: '', calendarId: 'cal-own-1', date: '2026/08/10', time: '09:00', room: 'A', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲' },
+    { slotKey: 'own:cal-own-2', sourceType: 'own', substituteId: '', calendarId: 'cal-own-2', date: '2026/08/10', time: '10:30', room: 'A', courseName: 'A－空環 Lv.2', originalTeacher: '老師甲' },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.orderedSubstituteIds)), []);
+  assert.equal(plan.endTime, '11:00');
+});
+
+test('mixed special slot planning accepts an own course followed by an open substitute and rejects private slots', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
+    ['2026/08/10', '10:30', 'A－舞綢 Lv.1', '老師乙', 'cal-leave-1'],
+    ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師丙', 'cal-private'],
+  ];
+  const pendingRows = [[
+    'stamp', '老師乙', '2026/08/10', '10:30', 'A－舞綢 Lv.1',
+    '確認中', '', '', '', 'leave-open-1', 'cal-leave-1',
+  ]];
+
+  const plan = backend.buildTeacherSpecialCourseSlotPlan_(
+    '老師甲', 'own:cal-own-1', 120, '09:00', pendingRows, courseRows, 'merge'
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.orderedSubstituteIds)), ['leave-open-1']);
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.occupiedTimes)), ['09:00', '10:30']);
+
+  assert.throws(() => backend.buildTeacherSpecialCourseSlotPlan_(
+    '老師甲', 'own:cal-own-1', 210, '09:00', pendingRows, courseRows, 'merge'
+  ), /12:00.*尚未開放代課/);
+});
+
+test('own-only special claim appends one arrangement and never creates or changes leave rows', () => {
+  const { backend, courseSheet, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2', 'class-b', 'teacher-a', '否', ''],
+      ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師丙', 'cal-private', 'class-c', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const beforeLeaves = JSON.stringify(leaveSheet.values);
+
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', startSlotKey: 'own:cal-own-1', actualStartTime: '09:00',
+    courseName: '舞綢中軸特別課', durationMinutes: 120, difficulty: 'Open level', note: '',
+  });
+
+  assert.equal(JSON.stringify(leaveSheet.values), beforeLeaves);
+  assert.equal(specialRequestSheet.values.length, 2);
+  assert.equal(result.count, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.substituteIds)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.occupiedSlotKeys)), ['own:cal-own-1', 'own:cal-own-2']);
+  const request = specialRequestSheet.values[1];
+  assert.equal(request[1], result.specialGroupId);
+  assert.equal(request[2], '老師甲');
+  assert.equal(request[3], '2026/08/10');
+  assert.equal(request[4], 'A');
+  assert.deepEqual(JSON.parse(request[5]).map((slot) => slot.slotKey), ['own:cal-own-1', 'own:cal-own-2']);
+  assert.deepEqual(JSON.parse(request[6]), []);
+  assert.deepEqual(request.slice(7, 16), [
+    '09:00', '舞綢中軸特別課', 'Open level', 120, '11:00',
+    '使用連續時段', '', '待處理', '待核對',
+  ]);
+  const teacherRecord = backend.getMySubs_('老師甲')
+    .find((item) => item['紀錄類型'] === '特別課安排');
+  assert.equal(teacherRecord['特別課群組 ID'], result.specialGroupId);
+  assert.equal(teacherRecord['實際課程名稱'], '舞綢中軸特別課');
+  assert.equal(teacherRecord['來源時段'].length, 2);
+
+  const adminRecord = backend.getAdminDashboard_(adminSession).obWork
+    .find((item) => item.recordType === 'specialRequest');
+  assert.equal(adminRecord.specialGroupId, result.specialGroupId);
+  assert.equal(adminRecord.actualCourse, '舞綢中軸特別課');
+  assert.equal(adminRecord.sourceSlots.length, 2);
+
+  backend.linkSpecialCourseRequestCalendarItem_(adminSession, result.specialGroupId, 'cal-own-1');
+  assert.equal(specialRequestSheet.values[1][18], 'cal-own-1');
+
+  courseSheet.values = [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/08/10', '09:00', 'A－舞綢中軸特別課 (120min)', '老師甲', 'cal-own-1', 'class-special', 'teacher-a', '否', ''],
+  ];
+  const reconciliation = backend.reconcileObChanges_(adminSession);
+  assert.equal(reconciliation.matched, 1);
+  assert.equal(reconciliation.exceptions, 0);
+  assert.deepEqual(specialRequestSheet.values[1].slice(14, 16), ['已完成', '已核對']);
+  assert.match(specialRequestSheet.values[1][16], /^2026-08-15 /);
+  assert.equal(specialRequestSheet.values[1][17], '');
+});
+
+test('mixed own-and-leave special claim updates only the real leave and stores one group request', () => {
+  const { backend, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '10:30', 'A－舞綢 Lv.1', '老師乙', 'cal-leave-1', 'class-b', 'teacher-b', '否', ''],
+      ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師丙', 'cal-private', 'class-c', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/08/10', '10:30', 'A－舞綢 Lv.1',
+      '確認中', '', '', '', 'leave-open-1', 'cal-leave-1',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', startSlotKey: 'own:cal-own-1', actualStartTime: '09:00',
+    courseName: '椅子瑜伽特別課', durationMinutes: 120, difficulty: '', note: '',
+  });
+
+  assert.equal(result.count, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.substituteIds)), ['leave-open-1']);
+  assert.equal(leaveSheet.values.length, 2);
+  assert.equal(leaveSheet.values[1][5], '已領取');
+  assert.equal(leaveSheet.values[1][6], '老師甲');
+  assert.equal(leaveSheet.values[1][21], result.specialGroupId);
+  assert.equal(specialRequestSheet.values.length, 2);
+  assert.deepEqual(JSON.parse(specialRequestSheet.values[1][6]), ['leave-open-1']);
 });
 
 test('special availability formats each course row only once', () => {

@@ -17,7 +17,8 @@ var SHEETS = {
   PAYROLL_SUMMARIES: '薪資結算',
   PAYROLL_DISPUTES: '薪資異議',
   PAYROLL_PAYMENT_SETTINGS: '薪資付款設定',
-  SHERRY_PAYROLL_FORMAT: '給雪莉的格式'
+  SHERRY_PAYROLL_FORMAT: '給雪莉的格式',
+  SPECIAL_COURSE_REQUESTS: '特別課安排'
 };
 
 var SHEET_HEADERS = {
@@ -39,6 +40,12 @@ var SHEET_HEADERS = {
   ACCOUNTS: [
     '指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至',
     '可教授類別', '功能權限'
+  ],
+  SPECIAL_COURSE_REQUESTS: [
+    '申請時間', '特別課群組 ID', '老師', '日期', '教室', '來源時段 JSON',
+    '代課編號 JSON', '實際開始時間', '特別課名稱', '預計難度', '分鐘數',
+    '結束時間', '模式', '備註', '狀態', 'OB 核對狀態', 'OB 核對時間',
+    '差異原因', '替代 OB Calendar ID'
   ],
   VVIP_SELECTIONS: [
     '登記時間', 'Email', '月份', 'OB Calendar ID', '日期', '時間', '課程', '老師',
@@ -773,6 +780,11 @@ function ensureSystemStructure_() {
     ensureSupportingSheet_(ss, SHEETS.INVITATIONS, SHEET_HEADERS.INVITATIONS);
     ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
     ensureSupportingSheet_(ss, SHEETS.SETTINGS, SHEET_HEADERS.SETTINGS);
+    ensureSupportingSheet_(
+      ss,
+      SHEETS.SPECIAL_COURSE_REQUESTS,
+      SHEET_HEADERS.SPECIAL_COURSE_REQUESTS
+    );
     ensureVvipStructureUnlocked_(ss);
     ensurePayrollStructureUnlocked_(ss);
     var accountSheet = ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
@@ -1185,6 +1197,13 @@ function doPost(e) {
         return linkReplacementCalendarItem_(
           session,
           parameters.substituteId,
+          parameters.replacementCalendarId
+        );
+      },
+      linkSpecialCourseRequestCalendarItem: function() {
+        return linkSpecialCourseRequestCalendarItem_(
+          session,
+          parameters.specialGroupId,
           parameters.replacementCalendarId
         );
       },
@@ -3433,13 +3452,15 @@ function getClaimOptions_(session) {
   assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
   assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
   var courseRows = courseSheet.getDataRange().getValues().slice(1);
-  var pendingRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
+  var allLeaveRows = leaveSheet.getDataRange().getValues().slice(1);
+  var pendingRows = allLeaveRows.filter(function(row) {
     return isOrdinaryOpenLeaveRow_(row);
   });
   return {
     capabilities: capabilities,
     classes: buildRecurringClaimCourseOptions_(courseRows, capabilities),
-    specialAvailability: getSpecialCourseAvailability_(pendingRows, courseRows)
+    specialAvailability: getTeacherSpecialCourseAvailability_(teacher, allLeaveRows, courseRows),
+    specialSlots: buildSpecialCourseSlotsForTeacher_(teacher, allLeaveRows, courseRows)
   };
 }
 
@@ -3652,6 +3673,54 @@ function minutesToTimeText_(minutesValue) {
   return String(hours).padStart(2, '0') + ':' + String(remainder).padStart(2, '0');
 }
 
+function buildSpecialCourseSlotsForTeacher_(teacherName, pendingRows, courseRows) {
+  var teacher = cleanText_(teacherName);
+  var activeLeaveByCalendarId = {};
+  (pendingRows || []).forEach(function(row) {
+    var calendarId = cleanText_(row && row[10]);
+    if (!calendarId || ['確認中', '已領取'].indexOf(cleanText_(row && row[5])) === -1) return;
+    activeLeaveByCalendarId[calendarId] = row;
+  });
+
+  return (courseRows || []).map(function(row) {
+    var calendarId = cleanText_(row && row[4]);
+    var courseTeacher = cleanText_(row && row[3]);
+    var leaveRow = activeLeaveByCalendarId[calendarId] || null;
+    var leaveTeacher = cleanText_(leaveRow && leaveRow[1]);
+    var sourceType = '';
+    var substituteId = '';
+    if (leaveRow) {
+      if (leaveTeacher === teacher || !isOrdinaryOpenLeaveRow_(leaveRow)) return null;
+      sourceType = 'leave';
+      substituteId = cleanText_(leaveRow[9]);
+    } else if (courseTeacher === teacher) {
+      sourceType = 'own';
+    } else {
+      return null;
+    }
+
+    var date = formatMyDate(row && row[0]);
+    var time = formatMyTime(row && row[1]);
+    var courseName = cleanText_(row && row[2]);
+    var room = getCourseRoom_(courseName);
+    if (!calendarId || !date || !time || !room) return null;
+    return {
+      slotKey: sourceType === 'own' ? 'own:' + calendarId : 'leave:' + substituteId,
+      sourceType: sourceType,
+      substituteId: substituteId,
+      calendarId: calendarId,
+      date: date,
+      time: time,
+      room: room,
+      courseName: courseName,
+      originalTeacher: sourceType === 'own' ? courseTeacher : leaveTeacher
+    };
+  }).filter(Boolean).sort(function(a, b) {
+    return [a.date, a.time, a.room, a.slotKey].join('|')
+      .localeCompare([b.date, b.time, b.room, b.slotKey].join('|'));
+  });
+}
+
 function getSpecialCourseAvailability_(pendingRows, courseRows) {
   var openByCalendarId = {};
   (pendingRows || []).forEach(function(row) {
@@ -3709,6 +3778,170 @@ function getSpecialCourseAvailability_(pendingRows, courseRows) {
     };
   });
   return availability;
+}
+
+function getTeacherSpecialCourseAvailability_(teacherName, pendingRows, courseRows) {
+  var slots = buildSpecialCourseSlotsForTeacher_(teacherName, pendingRows, courseRows);
+  var slotByCalendarId = {};
+  slots.forEach(function(slot) {
+    slotByCalendarId[slot.calendarId] = slot;
+  });
+
+  var schedules = {};
+  (courseRows || []).forEach(function(row) {
+    var date = formatMyDate(row && row[0]);
+    var time = formatMyTime(row && row[1]);
+    var room = getCourseRoom_(row && row[2]);
+    var minutes = timeTextToMinutes_(time);
+    var calendarId = cleanText_(row && row[4]);
+    if (!date || !room || minutes < 0 || !calendarId) return;
+    var key = date + '|' + room;
+    if (!schedules[key]) schedules[key] = [];
+    schedules[key].push({
+      date: date,
+      room: room,
+      time: time,
+      minutes: minutes,
+      calendarId: calendarId
+    });
+  });
+  Object.keys(schedules).forEach(function(key) {
+    schedules[key].sort(function(a, b) { return a.minutes - b.minutes; });
+  });
+
+  var availability = {};
+  slots.forEach(function(slot) {
+    var startMinutes = timeTextToMinutes_(slot.time);
+    var schedule = schedules[slot.date + '|' + slot.room] || [];
+    var next = schedule.filter(function(course) {
+      return course.minutes > startMinutes;
+    })[0] || null;
+    var partner = next ? slotByCalendarId[next.calendarId] : null;
+    var option = {
+      room: slot.room,
+      date: slot.date,
+      startTime: slot.time,
+      nextCourseTime: next ? next.time : '',
+      maxDurationMinutes: next ? Math.max(0, next.minutes - startMinutes - 15) : 240,
+      mergePartnerIds: partner ? [partner.slotKey] : [],
+      requiresClosingTimeConfirmation: !next
+    };
+    availability[slot.slotKey] = option;
+    if (slot.substituteId) availability[slot.substituteId] = option;
+  });
+  return availability;
+}
+
+function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationMinutes, actualStartTime, pendingRows, courseRows, mode) {
+  var teacher = cleanText_(teacherName);
+  var wantedKey = cleanText_(startSlotKey);
+  var duration = Number(durationMinutes);
+  if (!wantedKey) throw new Error('請只勾選特別課開始的第一堂。');
+  if (!isFinite(duration) || Math.floor(duration) !== duration || duration < 90 || duration > 240) {
+    throw new Error('特別課時長必須是 90 至 240 分鐘的整數。');
+  }
+
+  var availableSlots = buildSpecialCourseSlotsForTeacher_(teacher, pendingRows, courseRows);
+  var availableByCalendarId = {};
+  var leaveByCalendarId = {};
+  (pendingRows || []).forEach(function(row) {
+    var calendarId = cleanText_(row && row[10]);
+    if (calendarId) leaveByCalendarId[calendarId] = row;
+  });
+  var startSlot = null;
+  availableSlots.forEach(function(slot) {
+    availableByCalendarId[slot.calendarId] = slot;
+    if (slot.slotKey === wantedKey) startSlot = slot;
+  });
+  if (!startSlot) throw new Error('找不到指定的特別課時段，請重新整理。');
+
+  var occupancyStartMinutes = timeTextToMinutes_(startSlot.time);
+  var schedule = (courseRows || []).map(function(row) {
+    var time = formatMyTime(row && row[1]);
+    return {
+      date: formatMyDate(row && row[0]),
+      room: getCourseRoom_(row && row[2]),
+      time: time,
+      minutes: timeTextToMinutes_(time),
+      calendarId: cleanText_(row && row[4])
+    };
+  }).filter(function(course) {
+    return course.date === startSlot.date && course.room === startSlot.room &&
+      course.minutes >= occupancyStartMinutes;
+  }).sort(function(a, b) { return a.minutes - b.minutes; });
+
+  if (!schedule.some(function(course) { return course.calendarId === startSlot.calendarId; })) {
+    throw new Error(
+      startSlot.date + ' ' + startSlot.room + ' 教室 ' + startSlot.time +
+      ' 尚未出現在 OB 課表，請通知管理員重新同步。'
+    );
+  }
+
+  var normalizedActualStartTime = cleanText_(actualStartTime) || startSlot.time;
+  var actualStartMinutes = timeTextToMinutes_(normalizedActualStartTime);
+  if (actualStartMinutes < 0 || actualStartMinutes % 15 !== 0) {
+    throw new Error('實際開始時間必須是有效的 15 分鐘刻度。');
+  }
+  if (actualStartMinutes < occupancyStartMinutes) {
+    throw new Error('實際開始時間不可早於所選時段 ' + startSlot.time + '。');
+  }
+  var firstFollowingCourse = schedule.filter(function(course) {
+    return course.minutes > occupancyStartMinutes;
+  })[0] || null;
+  if (firstFollowingCourse && actualStartMinutes > firstFollowingCourse.minutes - 15) {
+    throw new Error(
+      '實際開始時間最晚只能選 ' + minutesToTimeText_(firstFollowingCourse.minutes - 15) +
+      '；若要更晚開始，請改選後面的時段。'
+    );
+  }
+
+  var endMinutes = actualStartMinutes + duration;
+  if (endMinutes >= 24 * 60) throw new Error('特別課不可跨日，請縮短時長。');
+  var turnoverEndMinutes = endMinutes + 15;
+  var requiredCourses = schedule.filter(function(course) {
+    return course.minutes < turnoverEndMinutes;
+  });
+  var orderedSlots = requiredCourses.map(function(course) {
+    var slot = availableByCalendarId[course.calendarId] || null;
+    if (slot) return slot;
+    var unavailableLeave = leaveByCalendarId[course.calendarId] || null;
+    if (unavailableLeave && cleanText_(unavailableLeave[6])) {
+      throw new Error('此課程剛被其他老師領取，請重新整理。');
+    }
+    if (unavailableLeave && !isOrdinaryOpenLeaveRow_(unavailableLeave)) {
+      throw new Error('此課程尚待管理員完成 OB 核對或回復，暫時不能領取。');
+    }
+    if (mode === 'vacancy') {
+      throw new Error(
+        '特別課結束後需保留 15 分鐘換場；下一堂 ' + course.time +
+        ' 開始，最晚只能上到 ' + minutesToTimeText_(course.minutes - 15) + '。'
+      );
+    }
+    throw new Error(
+      course.date + ' ' + course.room + ' 教室 ' + course.time +
+      ' 尚未開放代課，且不是您的正課，無法安排這堂特別課。'
+    );
+  });
+  var nextCourse = schedule.filter(function(course) {
+    return course.minutes >= turnoverEndMinutes;
+  })[0] || null;
+
+  return {
+    orderedSlots: orderedSlots,
+    orderedSubstituteIds: orderedSlots.map(function(slot) {
+      return cleanText_(slot.substituteId);
+    }).filter(Boolean),
+    occupiedTimes: orderedSlots.map(function(slot) { return slot.time; }),
+    room: startSlot.room,
+    date: startSlot.date,
+    startTime: startSlot.time,
+    occupancyStartTime: startSlot.time,
+    actualStartTime: minutesToTimeText_(actualStartMinutes),
+    endMinutes: endMinutes,
+    endTime: minutesToTimeText_(endMinutes),
+    nextCourse: nextCourse,
+    requiresClosingTimeConfirmation: !nextCourse
+  };
 }
 
 function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, pendingRows, courseRows, mode) {
@@ -4046,7 +4279,7 @@ function getMySubs_(teacherName) {
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   var auditByTarget = getAuditHistoryMap_();
-  return sheet.getDataRange().getValues().slice(1).filter(function(r) {
+  var substituteItems = sheet.getDataRange().getValues().slice(1).filter(function(r) {
     return cleanText_(r[6]) === name && cleanText_(r[5]) === '已領取';
   }).map(function(r) {
     return {
@@ -4073,6 +4306,98 @@ function getMySubs_(teacherName) {
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
     };
   });
+  var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
+  if (!specialRequestSheet) return substituteItems;
+  assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+  var specialItems = specialRequestSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return cleanText_(row[2]) === name && specialRequestHasOwnSlot_(row);
+  }).map(function(row) {
+    var sourceSlots = getSpecialRequestSourceSlots_(row);
+    var groupId = cleanText_(row[1]);
+    return {
+      '紀錄類型': '特別課安排',
+      '代課編號': '',
+      'OB Calendar ID': cleanText_(row[18]),
+      '日期': formatMyDate(row[3]),
+      '時段': formatMyTime(row[7]),
+      '課程': sourceSlots.map(function(slot) { return cleanText_(slot.courseName); }).join('＋'),
+      '課程大類': '特別課',
+      '原老師': sourceSlots.map(function(slot) { return cleanText_(slot.originalTeacher); })
+        .filter(Boolean).filter(function(value, index, values) { return values.indexOf(value) === index; }).join('、'),
+      '備註': cleanText_(row[13]),
+      '實際課程 ID': '',
+      '實際課程名稱': cleanText_(row[8]),
+      '預計難度': cleanText_(row[9]),
+      '處理類型': '安排特別課',
+      '實際課程類別': '特別課',
+      '特別課群組 ID': groupId,
+      '特別課模式': cleanText_(row[12]),
+      '特別課分鐘數': Number(row[10]) || 0,
+      '特別課實際開始時間': formatMyTime(row[7]),
+      '特別課結束時間': formatMyTime(row[11]),
+      '來源時段': sourceSlots,
+      '異動狀態': cleanText_(row[14]),
+      '可申請退出': false,
+      '異動紀錄': auditByTarget[groupId] || []
+    };
+  });
+  return substituteItems.concat(specialItems);
+}
+
+function getSpecialRequestSourceSlots_(row) {
+  try {
+    var parsed = JSON.parse(cleanText_(row && row[5]) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function specialRequestHasOwnSlot_(row) {
+  return getSpecialRequestSourceSlots_(row).some(function(slot) {
+    return cleanText_(slot && slot.sourceType) === 'own';
+  });
+}
+
+function toAdminSpecialCourseRequestItem_(row, auditHistory) {
+  var sourceSlots = getSpecialRequestSourceSlots_(row);
+  var sourceTeachers = sourceSlots.map(function(slot) {
+    return cleanText_(slot && slot.originalTeacher);
+  }).filter(Boolean).filter(function(value, index, values) {
+    return values.indexOf(value) === index;
+  });
+  return {
+    recordType: 'specialRequest',
+    substituteId: '',
+    originalTeacher: sourceTeachers.join('、'),
+    substituteTeacher: cleanText_(row[2]),
+    date: formatMyDate(row[3]),
+    time: formatMyTime(row[7]),
+    originalCourse: sourceSlots.map(function(slot) {
+      return cleanText_(slot && slot.courseName);
+    }).filter(Boolean).join('＋'),
+    actualCourse: cleanText_(row[8]),
+    actualClassId: '',
+    difficulty: cleanText_(row[9]),
+    handlingType: '安排特別課',
+    note: cleanText_(row[13]),
+    status: cleanText_(row[14]),
+    changeStatus: '',
+    verificationStatus: cleanText_(row[15]),
+    verificationTime: cleanText_(row[16]),
+    differenceReason: cleanText_(row[17]),
+    originalCalendarId: sourceSlots.map(function(slot) {
+      return cleanText_(slot && slot.calendarId);
+    }).filter(Boolean).join('、'),
+    replacementCalendarId: cleanText_(row[18]),
+    specialGroupId: cleanText_(row[1]),
+    specialMode: cleanText_(row[12]),
+    specialDurationMinutes: Number(row[10]) || 0,
+    specialActualStartTime: formatMyTime(row[7]),
+    specialEndTime: formatMyTime(row[11]),
+    sourceSlots: sourceSlots,
+    auditHistory: auditHistory || []
+  };
 }
 
 function submitLeave_(session, items) {
@@ -4201,6 +4526,7 @@ function claimSpecialCourse_(session, payload) {
   var source = payload || {};
   var mode = cleanText_(source.mode);
   var ids = Array.isArray(source.substituteIds) ? source.substituteIds.map(cleanText_).filter(Boolean) : [];
+  var startSlotKey = cleanText_(source.startSlotKey) || (ids.length === 1 ? 'leave:' + ids[0] : '');
   var courseName = cleanText_(source.courseName);
   var difficulty = cleanText_(source.difficulty);
   var note = cleanText_(source.note);
@@ -4208,7 +4534,7 @@ function claimSpecialCourse_(session, payload) {
   var actualStartTime = cleanText_(source.actualStartTime);
 
   if (['vacancy', 'merge'].indexOf(mode) === -1) throw new Error('請選擇特別課安排方式。');
-  if (ids.length !== 1) {
+  if (!startSlotKey || ids.length > 1) {
     throw new Error('請只勾選特別課開始的第一堂。');
   }
   if (ids.some(function(id, index) { return ids.indexOf(id) !== index; })) {
@@ -4230,18 +4556,26 @@ function claimSpecialCourse_(session, payload) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    var specialRequestSheet = requireSheet_(ss, SHEETS.SPECIAL_COURSE_REQUESTS);
     assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
     var leaveValues = leaveSheet.getDataRange().getValues();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
-    var slotPlan = buildSpecialCourseSlotPlan_(
-      ids[0], durationMinutes, actualStartTime, leaveValues.slice(1), courseRows, mode
+    var slotPlan = buildTeacherSpecialCourseSlotPlan_(
+      teacher,
+      startSlotKey,
+      durationMinutes,
+      actualStartTime,
+      leaveValues.slice(1),
+      courseRows,
+      mode
     );
     var requiredIds = slotPlan.orderedSubstituteIds;
-    if (mode === 'merge' && requiredIds.length < 2) {
+    if (mode === 'merge' && slotPlan.orderedSlots.length < 2) {
       throw new Error('此時段不需使用後續時段，請改用單堂延長。');
     }
-    if (mode === 'vacancy' && requiredIds.length > 1) {
+    if (mode === 'vacancy' && slotPlan.orderedSlots.length > 1) {
       throw new Error('這堂特別課會占用後續時段，請改用「使用連續時段」。');
     }
     var rowById = {};
@@ -4280,14 +4614,6 @@ function claimSpecialCourse_(session, payload) {
         calendarId: cleanText_(row[10])
       };
     }).sort(function(a, b) { return a.minutes - b.minutes; });
-
-    var first = selected[0];
-    if (selected.some(function(item) { return item.date !== first.date; })) {
-      throw new Error('合併特別課必須是同一天。');
-    }
-    if (selected.some(function(item) { return item.room !== first.room; })) {
-      throw new Error('合併特別課必須是同一間教室。');
-    }
 
     var endMinutes = slotPlan.endMinutes;
     if (endMinutes >= 24 * 60) throw new Error('特別課不可跨日，請縮短時長。');
@@ -4335,7 +4661,29 @@ function claimSpecialCourse_(session, payload) {
       return { item: item, rowValues: nextRow };
     });
 
-    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+    var requestRow = [
+      getTimestamp_(),
+      specialGroupId,
+      teacher,
+      slotPlan.date,
+      slotPlan.room,
+      JSON.stringify(slotPlan.orderedSlots),
+      JSON.stringify(requiredIds),
+      slotPlan.actualStartTime,
+      courseName,
+      difficulty,
+      durationMinutes,
+      endTime,
+      specialMode,
+      note,
+      '待處理',
+      '待核對',
+      '',
+      '',
+      ''
+    ];
+
+    return runStateTransitionUnlocked_([leaveSheet, specialRequestSheet], function(appendAudits) {
       updates.forEach(function(update) {
         leaveSheet.getRange(
           update.item.dataIndex + 1,
@@ -4344,7 +4692,13 @@ function claimSpecialCourse_(session, payload) {
           SHEET_HEADERS.LEAVES.length - 5
         ).setValues([update.rowValues.slice(5, SHEET_HEADERS.LEAVES.length)]);
       });
-      appendAudits(updates.map(function(update) {
+      specialRequestSheet.getRange(
+        specialRequestSheet.getLastRow() + 1,
+        1,
+        1,
+        SHEET_HEADERS.SPECIAL_COURSE_REQUESTS.length
+      ).setValues([requestRow]);
+      var auditEvents = updates.map(function(update) {
         return {
           actor: teacher,
           action: '領取特別課',
@@ -4360,14 +4714,31 @@ function claimSpecialCourse_(session, payload) {
             '邀請編號：' + invitationId
           ].join('；')
         };
-      }));
+      });
+      auditEvents.push({
+        actor: teacher,
+        action: '安排特別課',
+        targetId: specialGroupId,
+        before: '',
+        after: '待處理',
+        reason: [
+          slotPlan.date,
+          slotPlan.room + ' 教室',
+          slotPlan.actualStartTime + '–' + endTime,
+          courseName,
+          '來源時段：' + slotPlan.orderedSlots.map(function(slot) { return slot.slotKey; }).join('、'),
+          '邀請編號：' + invitationId
+        ].join('；')
+      });
+      appendAudits(auditEvents);
       return {
-        count: updates.length,
+        count: slotPlan.orderedSlots.length,
         substituteIds: updates.map(function(update) { return update.item.id; }),
+        occupiedSlotKeys: slotPlan.orderedSlots.map(function(slot) { return slot.slotKey; }),
         specialGroupId: specialGroupId,
         actualStartTime: slotPlan.actualStartTime,
         endTime: endTime,
-        occupiedTimes: updates.map(function(update) { return update.item.time; }),
+        occupiedTimes: slotPlan.orderedSlots.map(function(slot) { return slot.time; }),
         requiresClosingTimeConfirmation: !nextCourse
       };
     });
@@ -4646,10 +5017,17 @@ function reconcileObChanges_(session) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
     assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    if (specialRequestSheet) {
+      assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+    }
     var leaveRows = leaveSheet.getDataRange().getValues();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var specialRequestRows = specialRequestSheet
+      ? specialRequestSheet.getDataRange().getValues()
+      : [];
     var courseByCalendarId = {};
     var targetMonth = getNextMonthKey_();
     courseRows.forEach(function(row) {
@@ -4659,13 +5037,27 @@ function reconcileObChanges_(session) {
 
     var result = { checked: 0, matched: 0, exceptions: 0 };
     var updates = [];
+    var specialRequestUpdates = [];
     var audits = [];
+    var ownSpecialRequestByGroup = {};
+    for (var specialIndex = 1; specialIndex < specialRequestRows.length; specialIndex++) {
+      var specialRow = specialRequestRows[specialIndex];
+      if (!specialRequestHasOwnSlot_(specialRow)) continue;
+      var specialRequestGroupId = cleanText_(specialRow[1]);
+      if (specialRequestGroupId) {
+        ownSpecialRequestByGroup[specialRequestGroupId] = {
+          rowIndex: specialIndex,
+          row: specialRow
+        };
+      }
+    }
     var specialGroupRows = {};
     for (var groupRowIndex = 1; groupRowIndex < leaveRows.length; groupRowIndex++) {
       var groupRow = leaveRows[groupRowIndex];
       if (!isLeaveRowInMonth_(groupRow, targetMonth)) continue;
       var groupId = cleanText_(groupRow[21]);
       if (!groupId || getObExpectation_(groupRow).restoreType) continue;
+      if (ownSpecialRequestByGroup[groupId]) continue;
       if (!specialGroupRows[groupId]) specialGroupRows[groupId] = [];
       specialGroupRows[groupId].push({ rowIndex: groupRowIndex, row: groupRow });
     }
@@ -4677,6 +5069,9 @@ function reconcileObChanges_(session) {
       if (!isLeaveRowInMonth_(row, targetMonth) || !isActiveObWorkRow_(row)) continue;
       var expectation = getObExpectation_(row);
       var specialGroupId = cleanText_(row[21]);
+      if (specialGroupId && ownSpecialRequestByGroup[specialGroupId] && !expectation.restoreType) {
+        continue;
+      }
       if (specialGroupId && !expectation.restoreType) {
         if (processedSpecialGroups[specialGroupId]) continue;
         processedSpecialGroups[specialGroupId] = true;
@@ -4766,15 +5161,118 @@ function reconcileObChanges_(session) {
       updates.push({ rowNumber: rowIndex + 1, values: nextRow.slice(5, 21) });
     });
 
-    if (!updates.length) return result;
-    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+    Object.keys(ownSpecialRequestByGroup).forEach(function(groupId) {
+      var requestRecord = ownSpecialRequestByGroup[groupId];
+      var requestRow = requestRecord.row;
+      if (!isSpecialRequestRowInMonth_(requestRow, targetMonth)) return;
+      if (['已核對', '已完成'].indexOf(cleanText_(requestRow[15])) !== -1 ||
+          cleanText_(requestRow[14]) === '已完成') {
+        return;
+      }
+      var outcome = getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId);
+      var differences = outcome.differences;
+      var now = getTimestamp_();
+      var nextRequestRow = requestRow.slice();
+      while (nextRequestRow.length < SHEET_HEADERS.SPECIAL_COURSE_REQUESTS.length) nextRequestRow.push('');
+      result.checked += 1;
+      if (!differences.length) {
+        nextRequestRow[14] = '已完成';
+        nextRequestRow[15] = '已核對';
+        nextRequestRow[16] = now;
+        nextRequestRow[17] = '';
+        result.matched += 1;
+      } else {
+        nextRequestRow[14] = '待處理';
+        nextRequestRow[15] = '核對異常';
+        nextRequestRow[16] = now;
+        nextRequestRow[17] = differences.join('；');
+        result.exceptions += 1;
+      }
+      specialRequestUpdates.push({
+        rowNumber: requestRecord.rowIndex + 1,
+        values: nextRequestRow.slice(14, 18)
+      });
+      audits.push({
+        actor: actor,
+        action: differences.length ? '特別課 OB 核對異常' : '特別課 OB 核對完成',
+        targetId: groupId,
+        before: cleanText_(requestRow[15]),
+        after: cleanText_(nextRequestRow[15]),
+        reason: differences.length ? differences.join('；') : outcome.effectiveCalendarId
+      });
+
+      for (var linkedIndex = 1; linkedIndex < leaveRows.length; linkedIndex++) {
+        var linkedRow = leaveRows[linkedIndex];
+        if (cleanText_(linkedRow[21]) !== groupId || cleanText_(linkedRow[5]) !== '已領取') continue;
+        var nextLinkedRow = linkedRow.slice();
+        while (nextLinkedRow.length < SHEET_HEADERS.LEAVES.length) nextLinkedRow.push('');
+        nextLinkedRow[8] = differences.length ? '待處理' : '已完成';
+        nextLinkedRow[15] = differences.length ? '核對異常' : '已核對';
+        nextLinkedRow[16] = now;
+        nextLinkedRow[17] = differences.length ? differences.join('；') : '';
+        updates.push({ rowNumber: linkedIndex + 1, values: nextLinkedRow.slice(5, 21) });
+      }
+    });
+
+    if (!updates.length && !specialRequestUpdates.length) return result;
+    var transitionSheets = [leaveSheet];
+    if (specialRequestSheet) transitionSheets.push(specialRequestSheet);
+    return runStateTransitionUnlocked_(transitionSheets, function(appendAudits) {
       updates.forEach(function(update) {
         leaveSheet.getRange(update.rowNumber, 6, 1, 16).setValues([update.values]);
+      });
+      specialRequestUpdates.forEach(function(update) {
+        specialRequestSheet.getRange(update.rowNumber, 15, 1, 4).setValues([update.values]);
       });
       appendAudits(audits);
       return result;
     });
   });
+}
+
+function isSpecialRequestRowInMonth_(row, month) {
+  var date = formatMyDate(row && row[3]);
+  var match = /^(\d{4})\/(\d{2})\//.exec(date);
+  return Boolean(match) && match[1] + '-' + match[2] === cleanText_(month);
+}
+
+function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
+  var candidateIds = [];
+  var replacementId = cleanText_(requestRow && requestRow[18]);
+  if (replacementId) candidateIds.push(replacementId);
+  getSpecialRequestSourceSlots_(requestRow).forEach(function(slot) {
+    var calendarId = cleanText_(slot && slot.calendarId);
+    if (calendarId) candidateIds.push(calendarId);
+  });
+  var existingIds = [];
+  candidateIds.forEach(function(calendarId) {
+    if (!courseByCalendarId[calendarId] || existingIds.indexOf(calendarId) !== -1) return;
+    existingIds.push(calendarId);
+  });
+  if (!existingIds.length) {
+    return { effectiveCalendarId: '', differences: ['找不到特別課群組的 OB 課程'] };
+  }
+  if (existingIds.length > 1) {
+    return {
+      effectiveCalendarId: '',
+      differences: ['同一特別課安排找到多堂 OB 課程，請確認只保留一堂實際特別課']
+    };
+  }
+  var effectiveCalendarId = existingIds[0];
+  return {
+    effectiveCalendarId: effectiveCalendarId,
+    differences: getObCourseDifferences_(
+      effectiveCalendarId,
+      courseByCalendarId[effectiveCalendarId],
+      {
+        teacher: cleanText_(requestRow[2]),
+        course: cleanText_(requestRow[8]),
+        classId: '',
+        restoreType: ''
+      },
+      normalizeSpecialCourseReconciliationName_
+    )
+  };
 }
 
 function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, courseNameNormalizer) {
@@ -4936,6 +5434,47 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
   });
 }
 
+function linkSpecialCourseRequestCalendarItem_(session, specialGroupId, replacementCalendarId) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var groupId = cleanText_(specialGroupId);
+  var replacementId = cleanText_(replacementCalendarId);
+  if (!groupId) throw new Error('找不到特別課群組，請重新整理。');
+  if (!replacementId) throw new Error('請選擇替代的 OB 課程。');
+
+  return withScriptLock_(function() {
+    var obCourse = findObCourseByCalendarId_(replacementId);
+    if (!obCourse) throw new Error('找不到選擇的替代 OB 課程，請先重新同步。');
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.SPECIAL_COURSE_REQUESTS);
+    assertHeaders_(sheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+    var values = sheet.getDataRange().getValues();
+    var rowNumber = 0;
+    var before = '';
+    for (var index = 1; index < values.length; index++) {
+      if (cleanText_(values[index][1]) !== groupId) continue;
+      rowNumber = index + 1;
+      before = cleanText_(values[index][18]);
+      break;
+    }
+    if (!rowNumber) throw new Error('找不到特別課安排紀錄，請重新整理。');
+
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(rowNumber, 15, 1, 5).setValues([[
+        '待處理', '待核對', '', '', replacementId
+      ]]);
+      appendAudits([{
+        actor: actor,
+        action: '連結特別課替代 OB 課程',
+        targetId: groupId,
+        before: before,
+        after: replacementId,
+        reason: obCourse.courseName
+      }]);
+      return { specialGroupId: groupId, replacementCalendarId: replacementId };
+    });
+  });
+}
+
 function getAdminDashboard_(session) {
   assertCapabilitySession_(session, 'course_admin');
   return withScriptLock_(function() {
@@ -4944,10 +5483,14 @@ function getAdminDashboard_(session) {
     var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
     var accountSheet = requireSheet_(ss, SHEETS.ACCOUNTS);
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
     assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
     assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
     assertHeaders_(accountSheet, SHEET_HEADERS.ACCOUNTS);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    if (specialRequestSheet) {
+      assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+    }
 
     var auditByTarget = getAuditHistoryMap_();
     var leaveSourceRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
@@ -4956,6 +5499,17 @@ function getAdminDashboard_(session) {
     var targetMonth = getNextMonthKey_();
     var leaves = leaveSourceRows.map(function(row) {
       return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || []);
+    });
+    var ownSpecialRequests = specialRequestSheet
+      ? specialRequestSheet.getDataRange().getValues().slice(1).filter(function(row) {
+          return cleanText_(row[1]) && specialRequestHasOwnSlot_(row);
+        }).map(function(row) {
+          return toAdminSpecialCourseRequestItem_(row, auditByTarget[cleanText_(row[1])] || []);
+        })
+      : [];
+    var ownSpecialGroupIds = {};
+    ownSpecialRequests.forEach(function(item) {
+      ownSpecialGroupIds[item.specialGroupId] = true;
     });
     var activeInvitees = invitationSheet.getDataRange().getValues().slice(1).filter(function(row) {
       return cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
@@ -4993,23 +5547,33 @@ function getAdminDashboard_(session) {
       }),
       activeInvitees: activeInvitees,
       obWork: leaves.filter(function(item) {
+        if (ownSpecialGroupIds[item.specialGroupId]) return false;
         return ['取消後待回復 OB', '退出後待回復 OB'].indexOf(item.changeStatus) !== -1 ||
           (item.status === '已領取' &&
             ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
-      }),
+      }).concat(ownSpecialRequests.filter(function(item) {
+        return ['待處理', '核對異常'].indexOf(item.status) !== -1 ||
+          ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1;
+      })),
       changeRequests: leaves.filter(function(item) {
         return item.status === '已取消' ||
           ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1 ||
           /取消|退出/.test(item.changeStatus);
       }),
       exceptions: leaves.filter(function(item, index) {
+        if (ownSpecialGroupIds[item.specialGroupId]) return false;
         return isLeaveRowInMonth_(leaveSourceRows[index], targetMonth) &&
           ['核對異常', '待人工核對'].indexOf(item.verificationStatus) !== -1;
-      }),
+      }).concat(ownSpecialRequests.filter(function(item) {
+        return item.verificationStatus === '核對異常';
+      })),
       completed: leaves.filter(function(item) {
+        if (ownSpecialGroupIds[item.specialGroupId]) return false;
         return item.status !== '已取消' &&
           ['已核對', '已回復核對'].indexOf(item.verificationStatus) !== -1;
-      }),
+      }).concat(ownSpecialRequests.filter(function(item) {
+        return item.verificationStatus === '已核對';
+      })),
       replacementOptions: replacementOptions
     };
   });

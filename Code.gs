@@ -4385,6 +4385,8 @@ function getMySubs_(teacherName) {
       '特別課分鐘數': Number(r[23]) || 0,
       '特別課實際開始時間': getSpecialCourseActualStartTime_(r[23], r[24]),
       '特別課結束時間': formatMyTime(r[24]),
+      '實際開始時間': formatMyTime(r[25]) || formatMyTime(r[3]),
+      '延後分鐘數': Number(r[26]) || 0,
       '異動狀態': cleanText_(r[18]),
       '可申請退出': cleanText_(r[18]) !== '申請退出中',
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
@@ -5294,7 +5296,13 @@ function reconcileObChanges_(session) {
       var nextRow = row.slice();
       while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
       if (!differences.length) {
-        if (expectation.restoreType === 'cancellation') {
+        if (expectation.closeType === 'delay-occupancy') {
+          nextRow[8] = '已完成';
+          nextRow[15] = '已關閉';
+          nextRow[16] = now;
+          nextRow[17] = '';
+          nextRow[18] = '延後占用／OB 已關閉';
+        } else if (expectation.restoreType === 'cancellation') {
           nextRow[8] = '已完成';
           nextRow[15] = '已回復核對';
           nextRow[16] = now;
@@ -5316,7 +5324,9 @@ function reconcileObChanges_(session) {
         result.matched += 1;
         audits.push({
           actor: actor,
-          action: expectation.restoreType ? 'OB 回復完成' : 'OB 核對完成',
+          action: expectation.closeType === 'delay-occupancy'
+            ? '延後占用 OB 關閉完成'
+            : (expectation.restoreType ? 'OB 回復完成' : 'OB 核對完成'),
           targetId: row[9],
           before: before,
           after: auditAfter || cleanText_(nextRow[15]) || cleanText_(nextRow[18]),
@@ -5331,7 +5341,9 @@ function reconcileObChanges_(session) {
         result.exceptions += 1;
         audits.push({
           actor: actor,
-          action: expectation.restoreType ? 'OB 回復異常' : 'OB 核對異常',
+          action: expectation.closeType === 'delay-occupancy'
+            ? '延後占用 OB 尚未關閉'
+            : (expectation.restoreType ? 'OB 回復異常' : 'OB 核對異常'),
           targetId: row[9],
           before: before,
           after: '核對異常',
@@ -5460,6 +5472,14 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
   var normalizeCourse = typeof courseNameNormalizer === 'function'
     ? courseNameNormalizer
     : normalizeCourseName_;
+  if (expectation && expectation.closeType === 'delay-occupancy') {
+    if (!effectiveCalendarId) {
+      differences.push('尚未連結 OB Calendar ID');
+    } else if (obRow) {
+      differences.push('OB 課程仍存在，尚未關閉');
+    }
+    return differences;
+  }
   if (!effectiveCalendarId) {
     differences.push('尚未連結 OB Calendar ID');
   } else if (!obRow) {
@@ -5474,6 +5494,11 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
       }
     } else if (normalizeCourse(obRow[2]) !== normalizeCourse(expectation.course)) {
       differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
+    }
+    if (expectation.expectedTime && formatMyTime(obRow[1]) !== expectation.expectedTime) {
+      differences.push(
+        '時間不一致：預期 ' + expectation.expectedTime + '，OB 為 ' + formatMyTime(obRow[1])
+      );
     }
   }
   return differences;
@@ -5538,18 +5563,33 @@ function isActiveObWorkRow_(row) {
   if (['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) !== -1) {
     return true;
   }
+  if (cleanText_(row[5]) === '延後占用') {
+    return ['待關閉 OB', '核對異常'].indexOf(cleanText_(row[15])) !== -1;
+  }
   if (cleanText_(row[5]) !== '已領取') return false;
   return ['', '待核對', '核對異常'].indexOf(cleanText_(row[15])) !== -1;
 }
 
 function getObExpectation_(row) {
   var changeStatus = cleanText_(row[18]);
+  if (cleanText_(row[5]) === '延後占用') {
+    return {
+      teacher: '',
+      course: '',
+      classId: '',
+      expectedTime: '',
+      restoreType: '',
+      closeType: 'delay-occupancy'
+    };
+  }
   if (changeStatus === '取消後待回復 OB') {
     return {
       teacher: cleanText_(row[1]),
       course: cleanText_(row[4]),
       classId: '',
-      restoreType: 'cancellation'
+      expectedTime: '',
+      restoreType: 'cancellation',
+      closeType: ''
     };
   }
   if (changeStatus === '退出後待回復 OB') {
@@ -5557,14 +5597,18 @@ function getObExpectation_(row) {
       teacher: cleanText_(row[1]),
       course: cleanText_(row[4]),
       classId: '',
-      restoreType: 'withdrawal'
+      expectedTime: '',
+      restoreType: 'withdrawal',
+      closeType: ''
     };
   }
   return {
     teacher: cleanText_(row[6]),
     course: cleanText_(row[12]) || cleanText_(row[4]),
     classId: cleanText_(row[11]),
-    restoreType: ''
+    expectedTime: cleanText_(row[21]) ? '' : formatMyTime(row[25]),
+    restoreType: '',
+    closeType: ''
   };
 }
 
@@ -5680,6 +5724,15 @@ function getAdminDashboard_(session) {
     var leaves = leaveSourceRows.map(function(row) {
       return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || []);
     });
+    var leaveById = {};
+    leaves.forEach(function(item) {
+      leaveById[item.substituteId] = item;
+    });
+    leaves.forEach(function(item) {
+      item.delaySourceTeacher = item.delaySourceSubstituteId && leaveById[item.delaySourceSubstituteId]
+        ? leaveById[item.delaySourceSubstituteId].substituteTeacher
+        : '';
+    });
     var ownSpecialRequests = specialRequestSheet
       ? specialRequestSheet.getDataRange().getValues().slice(1).filter(function(row) {
           return cleanText_(row[1]) && specialRequestHasOwnSlot_(row);
@@ -5729,6 +5782,8 @@ function getAdminDashboard_(session) {
       obWork: leaves.filter(function(item) {
         if (ownSpecialGroupIds[item.specialGroupId]) return false;
         return ['取消後待回復 OB', '退出後待回復 OB'].indexOf(item.changeStatus) !== -1 ||
+          (item.status === '延後占用' &&
+            ['待關閉 OB', '核對異常'].indexOf(item.verificationStatus) !== -1) ||
           (item.status === '已領取' &&
             ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
       }).concat(ownSpecialRequests.filter(function(item) {
@@ -5750,7 +5805,7 @@ function getAdminDashboard_(session) {
       completed: leaves.filter(function(item) {
         if (ownSpecialGroupIds[item.specialGroupId]) return false;
         return item.status !== '已取消' &&
-          ['已核對', '已回復核對'].indexOf(item.verificationStatus) !== -1;
+          ['已核對', '已回復核對', '已關閉'].indexOf(item.verificationStatus) !== -1;
       }).concat(ownSpecialRequests.filter(function(item) {
         return item.verificationStatus === '已核對';
       })),
@@ -5784,6 +5839,9 @@ function toAdminLeaveItem_(row, auditHistory) {
     specialDurationMinutes: Number(row[23]) || 0,
     specialActualStartTime: getSpecialCourseActualStartTime_(row[23], row[24]),
     specialEndTime: formatMyTime(row[24]),
+    actualStartTime: formatMyTime(row[25]) || formatMyTime(row[3]),
+    startDelayMinutes: Number(row[26]) || 0,
+    delaySourceSubstituteId: cleanText_(row[27]),
     auditHistory: auditHistory
   };
 }

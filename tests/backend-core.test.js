@@ -3884,6 +3884,92 @@ test('stale claim cannot consume withdrawal restore work or clear its restore st
   assert.equal(leaveSheet.values[1][18], '退出後待回復 OB');
 });
 
+test('delayed primary claim verifies its actual OB start time', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/01', '18:30', 'A－空環 Lv.1', '老師甲',
+      'cal-a', 'class-ring-1', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1',
+      '已領取', '老師甲', '', '待處理', 'leave-a', 'cal-a',
+      'class-ring-1', 'A－空環 Lv.1', '', '沿用原課程', '待核對', '', '', '',
+      '空環', '', '', '', '', '', '19:00', 30, '',
+    ]],
+  });
+
+  fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(fixture.leaveSheet.values[1][15], '核對異常');
+  assert.match(fixture.leaveSheet.values[1][17], /時間不一致.*19:00.*18:30/);
+
+  fixture.courseSheet.values[1][1] = '19:00';
+  fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(fixture.leaveSheet.values[1][15], '已核對');
+  assert.equal(fixture.leaveSheet.values[1][17], '');
+});
+
+test('delay occupied row completes only after its OB calendar disappears', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙',
+      'cal-b', 'class-b', 'teacher-b', '否', '',
+    ]],
+    leaveRows: [[
+      'stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2',
+      '延後占用', '', '由代課編號 leave-a 延後占用', '待處理', 'leave-b', 'cal-b',
+      '', '', '', '', '待關閉 OB', '', '', '延後占用／待管理員關閉 OB',
+      '', '', '', '', '', '', '', '', 'leave-a',
+    ]],
+  });
+
+  const stillOpen = fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(stillOpen.exceptions, 1);
+  assert.equal(fixture.leaveSheet.values[1][15], '核對異常');
+  assert.match(fixture.leaveSheet.values[1][17], /OB 課程仍存在/);
+
+  fixture.courseSheet.values.splice(1, 1);
+  const closed = fixture.backend.reconcileObChanges_(fixture.adminSession);
+  assert.equal(closed.matched, 1);
+  assert.equal(fixture.leaveSheet.values[1][8], '已完成');
+  assert.equal(fixture.leaveSheet.values[1][15], '已關閉');
+  assert.equal(fixture.leaveSheet.values[1][18], '延後占用／OB 已關閉');
+});
+
+test('delay occupied admin work links its source while personal records keep only the claimed class', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [],
+    leaveRows: [
+      [
+        'stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1',
+        '已領取', '老師甲', '實際開始：19:00', '待處理', 'leave-a', 'cal-a',
+        'class-a', 'A－空環 Lv.1', '', '沿用原課程', '待核對', '', '', '',
+        '空環', '', '', '', '', '', '19:00', 30, '',
+      ],
+      [
+        'stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2',
+        '延後占用', '', '由代課編號 leave-a 延後占用', '待處理', 'leave-b', 'cal-b',
+        '', '', '', '', '待關閉 OB', '', '', '延後占用／待管理員關閉 OB',
+        '', '', '', '', '', '', '', '', 'leave-a',
+      ],
+    ],
+  });
+
+  const dashboard = fixture.backend.getAdminDashboard_(fixture.adminSession);
+  const occupied = dashboard.obWork.find((item) => item.substituteId === 'leave-b');
+  const personal = fixture.backend.getMySubs_('老師甲');
+
+  assert.ok(occupied);
+  assert.equal(occupied.delaySourceSubstituteId, 'leave-a');
+  assert.equal(occupied.delaySourceTeacher, '老師甲');
+  assert.ok(!dashboard.pendingInvitations.some((item) => item.substituteId === 'leave-b'));
+  assert.deepEqual(personal.map((item) => item['代課編號']), ['leave-a']);
+  assert.equal(personal[0]['實際開始時間'], '19:00');
+  assert.equal(personal[0]['延後分鐘數'], 30);
+});
+
 test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     courseRows: [

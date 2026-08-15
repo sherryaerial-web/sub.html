@@ -873,6 +873,40 @@ test('renders own-course special requests as one teacher record and one admin wo
   assert.match(html, /linkAdminSpecialReplacement\(groupId, select\.value\)/);
 });
 
+test('renders delayed claim timing in teacher and admin records without replacement controls on occupancy', () => {
+  const { context } = createFrontendRuntime();
+  const teacherMarkup = context.renderMySubGroup({
+    specialGroupId: '',
+    items: [{
+      '代課編號': 'leave-a', '日期': '2026/09/01', '時段': '18:30',
+      '實際開始時間': '19:00', '延後分鐘數': 30, '課程': 'A－空環 Lv.1',
+      '原老師': '老師乙', '處理類型': '沿用原課程', '實際課程名稱': 'A－空環 Lv.1',
+      '異動狀態': '', '可申請退出': true, '異動紀錄': [],
+    }],
+  });
+  const primaryMarkup = context.renderAdminObItem({
+    substituteId: 'leave-a', date: '2026/09/01', time: '18:30',
+    actualStartTime: '19:00', startDelayMinutes: 30,
+    originalCourse: 'A－空環 Lv.1', actualCourse: 'A－空環 Lv.1',
+    originalTeacher: '老師乙', substituteTeacher: '老師甲', status: '已領取',
+    changeStatus: '', differenceReason: '', auditHistory: [],
+  }, []);
+  const occupiedMarkup = context.renderAdminObItem({
+    substituteId: 'leave-b', date: '2026/09/01', time: '20:00',
+    originalCourse: 'A－空環 Lv.2', actualCourse: 'A－空環 Lv.2',
+    originalTeacher: '老師丙', substituteTeacher: '', status: '延後占用',
+    changeStatus: '延後占用／待管理員關閉 OB', differenceReason: '',
+    delaySourceSubstituteId: 'leave-a', delaySourceTeacher: '老師甲', auditHistory: [],
+  }, []);
+
+  assert.match(teacherMarkup, /調整開始時間：18:30 → 19:00/);
+  assert.match(primaryMarkup, /調整開始時間：18:30 → 19:00/);
+  assert.match(occupiedMarkup, /延後占用／待管理員關閉 OB/);
+  assert.match(occupiedMarkup, /來源代課編號：leave-a/);
+  assert.match(occupiedMarkup, /來源老師：老師甲/);
+  assert.doesNotMatch(occupiedMarkup, /data-admin-action="link-replacement"/);
+});
+
 test('special-course draft delays the actual start while reserving every occupied slot', () => {
   const { context } = createFrontendRuntime();
   const availability = {

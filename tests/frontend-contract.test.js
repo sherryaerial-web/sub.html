@@ -1491,6 +1491,41 @@ test('admin invitation rounds render invited teachers disabled and selectable by
   assert.equal(button.textContent, '勾選本排');
 });
 
+test('pending invitation actions render above teacher rounds without duplicates', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getAdminDashboard: {
+      leavePaused: false,
+      pendingInvitations: [{
+        date: '2026/09/01',
+        time: '10:00',
+        originalCourse: '空環',
+        originalTeacher: '老師甲',
+        substituteTeacher: '',
+        status: '確認中',
+        changeStatus: '',
+        auditHistory: [],
+      }],
+      activeInvitees: [],
+      obWork: [],
+      changeRequests: [],
+      exceptions: [],
+      completed: [],
+      teachers: ['老師乙'],
+      replacementOptions: [],
+    },
+  });
+
+  await context.fetchAdminDashboard();
+  const rendered = getElement('admin-tab-content').innerHTML;
+  const actionsIndex = rendered.indexOf('data-admin-action="open-invitations"');
+  const roundsIndex = rendered.indexOf('class="teacher-rounds"');
+
+  assert.ok(actionsIndex >= 0, 'invitation actions should exist');
+  assert.ok(actionsIndex < roundsIndex, 'invitation actions should render before teacher rounds');
+  assert.equal((rendered.match(/data-admin-action="open-invitations"/g) || []).length, 1);
+  assert.equal((rendered.match(/data-admin-action="copy-invitation"/g) || []).length, 1);
+});
+
 test('pending invitation queue shows an open teacher picker before collapsed date groups', () => {
   const start = html.indexOf('activeAdminTab === "pendingInvitations"');
   const end = html.indexOf('activeAdminTab === "activeInvitees"', start);

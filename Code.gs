@@ -4660,31 +4660,59 @@ function reconcileObChanges_(session) {
     var result = { checked: 0, matched: 0, exceptions: 0 };
     var updates = [];
     var audits = [];
+    var specialGroupRows = {};
+    for (var groupRowIndex = 1; groupRowIndex < leaveRows.length; groupRowIndex++) {
+      var groupRow = leaveRows[groupRowIndex];
+      if (!isLeaveRowInMonth_(groupRow, targetMonth)) continue;
+      var groupId = cleanText_(groupRow[21]);
+      if (!groupId || getObExpectation_(groupRow).restoreType) continue;
+      if (!specialGroupRows[groupId]) specialGroupRows[groupId] = [];
+      specialGroupRows[groupId].push({ rowIndex: groupRowIndex, row: groupRow });
+    }
+
+    var reconcileTargets = [];
+    var processedSpecialGroups = {};
     for (var rowIndex = 1; rowIndex < leaveRows.length; rowIndex++) {
       var row = leaveRows[rowIndex];
       if (!isLeaveRowInMonth_(row, targetMonth) || !isActiveObWorkRow_(row)) continue;
-      result.checked += 1;
+      var expectation = getObExpectation_(row);
+      var specialGroupId = cleanText_(row[21]);
+      if (specialGroupId && !expectation.restoreType) {
+        if (processedSpecialGroups[specialGroupId]) continue;
+        processedSpecialGroups[specialGroupId] = true;
+        var groupRecords = specialGroupRows[specialGroupId] || [];
+        var groupOutcome = getSpecialCourseGroupObOutcome_(groupRecords, courseByCalendarId);
+        groupRecords.filter(function(record) {
+          return isActiveObWorkRow_(record.row);
+        }).forEach(function(record) {
+          reconcileTargets.push({
+            rowIndex: record.rowIndex,
+            row: record.row,
+            effectiveCalendarId: groupOutcome.effectiveCalendarId,
+            expectation: getObExpectation_(record.row),
+            differences: groupOutcome.differences
+          });
+        });
+        continue;
+      }
       var effectiveCalendarId = cleanText_(row[20]) || cleanText_(row[10]);
       var obRow = courseByCalendarId[effectiveCalendarId];
-      var expectation = getObExpectation_(row);
-      var differences = [];
-      if (!effectiveCalendarId) {
-        differences.push('尚未連結 OB Calendar ID');
-      } else if (!obRow) {
-        differences.push('找不到 OB 課程（Calendar ID：' + effectiveCalendarId + '）');
-      } else {
-        if (cleanText_(obRow[3]) !== expectation.teacher) {
-          differences.push('指導者不一致：預期 ' + expectation.teacher + '，OB 為 ' + cleanText_(obRow[3]));
-        }
-        if (expectation.classId) {
-          if (cleanText_(obRow[5]) !== expectation.classId) {
-            differences.push('課程不一致：預期 Class ID ' + expectation.classId + '，OB 為 ' + cleanText_(obRow[5]));
-          }
-        } else if (normalizeCourseName_(obRow[2]) !== normalizeCourseName_(expectation.course)) {
-          differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
-        }
-      }
+      reconcileTargets.push({
+        rowIndex: rowIndex,
+        row: row,
+        effectiveCalendarId: effectiveCalendarId,
+        expectation: expectation,
+        differences: getObCourseDifferences_(effectiveCalendarId, obRow, expectation)
+      });
+    }
 
+    reconcileTargets.forEach(function(target) {
+      result.checked += 1;
+      var rowIndex = target.rowIndex;
+      var row = target.row;
+      var effectiveCalendarId = target.effectiveCalendarId;
+      var expectation = target.expectation;
+      var differences = target.differences;
       var now = getTimestamp_();
       var before = cleanText_(row[15]);
       var auditAfter = '';
@@ -4736,7 +4764,7 @@ function reconcileObChanges_(session) {
         });
       }
       updates.push({ rowNumber: rowIndex + 1, values: nextRow.slice(5, 21) });
-    }
+    });
 
     if (!updates.length) return result;
     return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
@@ -4747,6 +4775,65 @@ function reconcileObChanges_(session) {
       return result;
     });
   });
+}
+
+function getObCourseDifferences_(effectiveCalendarId, obRow, expectation) {
+  var differences = [];
+  if (!effectiveCalendarId) {
+    differences.push('尚未連結 OB Calendar ID');
+  } else if (!obRow) {
+    differences.push('找不到 OB 課程（Calendar ID：' + effectiveCalendarId + '）');
+  } else {
+    if (cleanText_(obRow[3]) !== expectation.teacher) {
+      differences.push('指導者不一致：預期 ' + expectation.teacher + '，OB 為 ' + cleanText_(obRow[3]));
+    }
+    if (expectation.classId) {
+      if (cleanText_(obRow[5]) !== expectation.classId) {
+        differences.push('課程不一致：預期 Class ID ' + expectation.classId + '，OB 為 ' + cleanText_(obRow[5]));
+      }
+    } else if (normalizeCourseName_(obRow[2]) !== normalizeCourseName_(expectation.course)) {
+      differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
+    }
+  }
+  return differences;
+}
+
+function getSpecialCourseGroupObOutcome_(groupRecords, courseByCalendarId) {
+  var existingIds = [];
+  var seenIds = {};
+  groupRecords.forEach(function(record) {
+    var row = record.row;
+    var effectiveCalendarId = cleanText_(row[20]) || cleanText_(row[10]);
+    if (!effectiveCalendarId || !courseByCalendarId[effectiveCalendarId] || seenIds[effectiveCalendarId]) {
+      return;
+    }
+    seenIds[effectiveCalendarId] = true;
+    existingIds.push(effectiveCalendarId);
+  });
+
+  if (!existingIds.length) {
+    return {
+      effectiveCalendarId: '',
+      differences: ['找不到特別課群組的 OB 課程']
+    };
+  }
+  if (existingIds.length > 1) {
+    return {
+      effectiveCalendarId: '',
+      differences: ['同一特別課群組找到多堂 OB 課程，請確認只保留一堂實際特別課']
+    };
+  }
+
+  var effectiveCalendarId = existingIds[0];
+  var expectation = getObExpectation_(groupRecords[0].row);
+  return {
+    effectiveCalendarId: effectiveCalendarId,
+    differences: getObCourseDifferences_(
+      effectiveCalendarId,
+      courseByCalendarId[effectiveCalendarId],
+      expectation
+    )
+  };
 }
 
 function isLeaveRowInMonth_(row, month) {

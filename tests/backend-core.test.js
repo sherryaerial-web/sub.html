@@ -3417,6 +3417,66 @@ test('reconcile marks exact OB teacher and class matches and reports mismatches'
   assert.match(missing[17], /找不到/);
 });
 
+function createSpecialGroupReconciliationRows(groupId = 'special-group-a') {
+  return [
+    ['時間', '老師乙', '2026/08/12', '13:30', 'B－空環 Lv.2', '已領取', '老師甲', '', '待處理', 'leave-special-1', 'group-calendar-1', '', '卡拉特別課', '', '調整為特別課', '待核對', '', '', '', '地板課程', '', groupId, '使用連續時段', 180, '16:30'],
+    ['時間', '老師丙', '2026/08/12', '15:00', 'B－空環 Lv.1', '已領取', '老師甲', '', '待處理', 'leave-special-2', 'group-calendar-2', '', '卡拉特別課', '', '調整為特別課', '待核對', '', '', '', '地板課程', '', groupId, '使用連續時段', 180, '16:30'],
+    ['時間', '老師乙', '2026/08/12', '16:30', 'B－空環 Lv.0', '已領取', '老師甲', '', '待處理', 'leave-special-3', 'group-calendar-3', '', '卡拉特別課', '', '調整為特別課', '待核對', '', '', '', '地板課程', '', groupId, '使用連續時段', 180, '16:30'],
+  ];
+}
+
+test('special-course group reconciliation accepts one surviving OB event for every occupied slot', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [[
+      '2026/08/12', '13:30', '卡拉特別課', '老師甲',
+      'group-calendar-1', 'class-special', 'teacher-a', '是', '',
+    ]],
+    leaveRows: createSpecialGroupReconciliationRows(),
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 3, matched: 3, exceptions: 0 });
+  leaveSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[8], '已完成');
+    assert.equal(row[15], '已核對');
+    assert.equal(row[17], '');
+  });
+});
+
+test('special-course group reconciliation rejects a group with no surviving OB event', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [],
+    leaveRows: createSpecialGroupReconciliationRows('special-group-missing'),
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 3, matched: 0, exceptions: 3 });
+  leaveSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[15], '核對異常');
+    assert.match(row[17], /找不到特別課群組的 OB 課程/);
+  });
+});
+
+test('special-course group reconciliation rejects multiple surviving OB events', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/12', '13:30', '卡拉特別課', '老師甲', 'group-calendar-1', 'class-special', 'teacher-a', '是', ''],
+      ['2026/08/12', '15:00', '卡拉特別課', '老師甲', 'group-calendar-2', 'class-special', 'teacher-a', '是', ''],
+    ],
+    leaveRows: createSpecialGroupReconciliationRows('special-group-duplicate'),
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 3, matched: 0, exceptions: 3 });
+  leaveSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[15], '核對異常');
+    assert.match(row[17], /同一特別課群組找到多堂 OB 課程/);
+  });
+});
+
 test('reconcile ignores already verified history after it leaves the current OB snapshot', () => {
   const verifiedRow = [
     '時間', '老師甲', '2026/06/01', '09:00', '空環 Lv.1', '已領取', '老師乙', '', '已完成',

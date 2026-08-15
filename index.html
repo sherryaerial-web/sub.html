@@ -493,6 +493,8 @@
     .claim-date-heading[aria-expanded="true"] .claim-date-chevron { transform: rotate(180deg); }
     .claim-date-content { margin-top: 10px; }
     .claim-card { grid-template-columns: 24px minmax(0, 1fr); padding: 0; overflow: hidden; }
+    .claim-card.special-auto-occupied,
+    .claim-card.ordinary-auto-occupied { background: var(--soft); opacity: 0.68; }
     .claim-card > .claim-checkbox { margin: 17px 0 0 15px; }
     .claim-summary { min-width: 0; padding: 14px 15px 13px 0; }
     .claim-requirement {
@@ -2418,6 +2420,69 @@
       syncOrdinaryClaimSubmitState();
     }
 
+    function updateOrdinarySelectionConstraints() {
+      const ordinary = (document.querySelector('input[name="claim-mode"]:checked')?.value || "ordinary") === "ordinary";
+      if (!ordinary) return;
+      const checkboxes = [...document.querySelectorAll(".claim-checkbox")];
+      checkboxes.forEach((checkbox) => {
+        checkbox.disabled = false;
+        checkbox.removeAttribute("title");
+        const card = checkbox.closest(".claim-card");
+        card?.classList.remove("ordinary-auto-occupied");
+        const warning = card?.querySelector(".special-slot-warning");
+        if (warning) {
+          warning.hidden = true;
+          warning.textContent = "";
+        }
+      });
+
+      const occupiedIds = new Set();
+      checkboxes.filter((checkbox) => checkbox.checked).forEach((checkbox) => {
+        if (occupiedIds.has(checkbox.dataset.substituteId)) return;
+        const card = checkbox.closest(".claim-card");
+        if (card?.querySelector('input[type="radio"]:checked')?.value !== "existing") return;
+        const target = pendingLeaves.find((item) => item["代課編號"] === checkbox.dataset.substituteId);
+        if (!target) return;
+        try {
+          const preview = buildOrdinaryDelayPreview(
+            target,
+            card.querySelector(".claim-start-delay")?.value || 0,
+            claimOptions.specialAvailability || {},
+            pendingLeaves
+          );
+          if (!preview.blocked && preview.occupiedSubstituteId) {
+            occupiedIds.add(preview.occupiedSubstituteId);
+          }
+        } catch (error) {
+          // 延後摘要與送出按鈕會顯示或阻擋無效狀態。
+        }
+      });
+
+      occupiedIds.forEach((substituteId) => {
+        const checkbox = checkboxes.find((item) => item.dataset.substituteId === substituteId);
+        if (!checkbox) return;
+        checkbox.checked = false;
+        checkbox.disabled = true;
+        checkbox.title = "系統自動占用";
+        const card = checkbox.closest(".claim-card");
+        card?.classList.add("ordinary-auto-occupied");
+        const editor = card?.querySelector(".claim-editor");
+        if (editor) editor.hidden = true;
+        const warning = card?.querySelector(".special-slot-warning");
+        if (warning) {
+          warning.hidden = false;
+          warning.textContent = "系統自動占用";
+        }
+      });
+      document.querySelectorAll(".claim-date-group").forEach((group) => {
+        const count = [...group.querySelectorAll(".claim-checkbox")]
+          .filter((checkbox) => !checkbox.disabled).length;
+        const label = group.querySelector(".claim-date-count");
+        if (label) label.textContent = `${count} 堂待領`;
+      });
+      syncOrdinaryClaimSubmitState();
+    }
+
     function updateClaimCardState(card) {
       if (!card) return;
       const checked = card.querySelector(".claim-checkbox").checked;
@@ -2661,6 +2726,7 @@
       syncSpecialDurationStepper();
       updateSpecialSelectionConstraints();
       document.querySelectorAll(".claim-card").forEach(updateClaimCardState);
+      updateOrdinarySelectionConstraints();
       const button = byId("claim-submit");
       button.innerHTML = special
         ? '<i data-lucide="sparkles"></i>確認領取並安排特別課'
@@ -3847,6 +3913,8 @@
       if ((document.querySelector('input[name="claim-mode"]:checked')?.value || "ordinary") === "special") {
         updateSpecialSelectionConstraints(event.target.classList?.contains("claim-checkbox") ? event.target : null);
         updateSpecialClaimSummary();
+      } else {
+        updateOrdinarySelectionConstraints();
       }
     }
     byId("pending-leaves-list").addEventListener("change", handleClaimEditorChange);

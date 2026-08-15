@@ -244,6 +244,8 @@ function createOrdinaryClaimConstraintCard({ substituteId, checked, handling, de
   const summary = { dataset: { blocked: 'false' }, textContent: '' };
   const radio = { value: handling };
   const delayControl = { value: String(delay) };
+  const fields = { hidden: handling !== 'existing' };
+  const adjustmentPanel = { hidden: handling !== 'existing' };
   let card;
   const checkbox = {
     checked,
@@ -262,6 +264,10 @@ function createOrdinaryClaimConstraintCard({ substituteId, checked, handling, de
     '.claim-delay-summary': summary,
     'input[type="radio"]:checked': radio,
     '.claim-start-delay': delayControl,
+    '.claim-fields': fields,
+    '.claim-adjustment-panel': adjustmentPanel,
+    '.claim-course-type': { value: '__ORIGINAL__' },
+    '.claim-difficulty-field': { hidden: true },
   };
   card = {
     querySelector(selector) { return controls[selector] || null; },
@@ -1124,7 +1130,13 @@ test('ordinary delayed claim marks the next course as system occupied before sub
     return originalQuerySelectorAll(selector);
   };
 
-  context.updateOrdinarySelectionConstraints();
+  const changeEvent = {
+    target: {
+      closest(selector) { return selector === '.claim-card' ? source.card : null; },
+      classList: { contains() { return false; } },
+    },
+  };
+  context.handleClaimEditorChange(changeEvent);
 
   assert.equal(source.checkbox.checked, true);
   assert.equal(next.checkbox.checked, false);
@@ -1137,7 +1149,7 @@ test('ordinary delayed claim marks the next course as system occupied before sub
   assert.deepEqual(JSON.parse(JSON.stringify(context.getSelectedClaimIds())), ['leave-source']);
 
   source.delay.value = '0';
-  context.updateOrdinarySelectionConstraints();
+  context.handleClaimEditorChange(changeEvent);
 
   assert.equal(next.checkbox.disabled, false);
   assert.equal(next.checkbox.checked, false);

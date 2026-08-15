@@ -2815,6 +2815,65 @@ test('continuous special claim expands one starting id into every required same-
   });
 });
 
+test('special claim may start later than the occupied slot and still reserves every required slot', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-delayed-1', 'class-ring-2', 'teacher-b', '否', ''],
+      ['2026/09/12', '15:00', 'B－空環 Lv.1', '老師丙', 'cal-delayed-2', 'class-ring-1', 'teacher-c', '否', ''],
+      ['2026/09/12', '15:45', 'B－舞綢 Lv.1', '老師丁', 'cal-boundary', 'class-silk-1', 'teacher-d', '否', ''],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/12', '13:30', 'B－空環 Lv.2', '確認中', '', '', '', 'leave-delayed-1', 'cal-delayed-1'],
+      ['stamp', '老師丙', '2026/09/12', '15:00', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-delayed-2', 'cal-delayed-2'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', substituteIds: ['leave-delayed-1'], actualStartTime: '14:00',
+    courseName: '椅子瑜伽特別課', durationMinutes: 90, difficulty: '', note: '',
+  });
+
+  const rows = leaveSheet.values.filter((row) => /^leave-delayed-/.test(row[9]));
+  assert.equal(result.actualStartTime, '14:00');
+  assert.equal(result.endTime, '15:30');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.substituteIds)), ['leave-delayed-1', 'leave-delayed-2']);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.occupiedTimes)), ['13:30', '15:00']);
+  rows.forEach((row) => {
+    assert.equal(row[24], '15:30');
+    assert.match(row[7], /實際開始：14:00/);
+  });
+  const teacherRecord = backend.getMySubs_('老師甲')
+    .find((item) => item['代課編號'] === 'leave-delayed-1');
+  assert.equal(teacherRecord['特別課實際開始時間'], '14:00');
+  const adminRecord = backend.getAdminDashboard_(adminSession).obWork
+    .find((item) => item.substituteId === 'leave-delayed-1');
+  assert.equal(adminRecord.specialActualStartTime, '14:00');
+});
+
+test('special claim rejects an earlier, non-quarter-hour, or too-late actual start without writes', () => {
+  ['13:15', '13:40', '14:50'].forEach((actualStartTime) => {
+    const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+      courseRows: [
+        ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-invalid-1', 'class-ring-2', 'teacher-b', '否', ''],
+        ['2026/09/12', '15:00', 'B－空環 Lv.1', '老師丙', 'cal-invalid-2', 'class-ring-1', 'teacher-c', '否', ''],
+      ],
+      leaveRows: [[
+        'stamp', '老師乙', '2026/09/12', '13:30', 'B－空環 Lv.2',
+        '確認中', '', '', '', 'leave-invalid-1', 'cal-invalid-1',
+      ]],
+    });
+    backend.openInvitations_(adminSession, ['老師甲']);
+    const before = JSON.stringify(leaveSheet.values);
+
+    assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
+      mode: 'vacancy', substituteIds: ['leave-invalid-1'], actualStartTime,
+      courseName: '椅子瑜伽特別課', durationMinutes: 90, difficulty: '', note: '',
+    }), /實際開始時間/);
+    assert.equal(JSON.stringify(leaveSheet.values), before);
+  });
+});
+
 test('continuous special claim blocks a missing required slot without partial writes', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
     courseRows: [

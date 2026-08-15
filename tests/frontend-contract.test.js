@@ -603,14 +603,30 @@ test('keeps substitute dates collapsed by default and preserves an expanded date
   assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="false"/);
   assert.match(list.innerHTML, /data-claim-date-content="2026\/09\/12"[^>]*hidden/);
 
+  const toggleAttributes = { 'aria-expanded': 'false' };
+  const toggle = {
+    setAttribute(name, value) { toggleAttributes[name] = value; },
+  };
+  const content = { hidden: true };
+  context.document.querySelector = (selector) => {
+    if (selector.includes('data-claim-date-toggle')) return toggle;
+    if (selector.includes('data-claim-date-content')) return content;
+    return null;
+  };
+  const originalRender = context.renderAvailableSubstitutes;
+  let renderCalls = 0;
+  context.renderAvailableSubstitutes = () => { renderCalls += 1; };
   context.toggleClaimDateGroup('2026/09/12');
-  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="true"/);
-  assert.doesNotMatch(list.innerHTML, /data-claim-date-content="2026\/09\/12"[^>]*hidden/);
+  assert.equal(renderCalls, 0);
+  assert.equal(toggleAttributes['aria-expanded'], 'true');
+  assert.equal(content.hidden, false);
 
-  context.renderAvailableSubstitutes();
+  context.renderAvailableSubstitutes = originalRender;
+  originalRender();
   assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="true"/);
   context.toggleClaimDateGroup('2026/09/12');
-  assert.match(list.innerHTML, /data-claim-date-toggle="2026\/09\/12"[^>]*aria-expanded="false"/);
+  assert.equal(toggleAttributes['aria-expanded'], 'false');
+  assert.equal(content.hidden, true);
 });
 
 test('removes claimed courses immediately and refreshes after a concurrent conflict', () => {
@@ -692,6 +708,9 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。/);
   assert.match(html, /特別課名稱/);
   assert.match(html, /placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"/);
+  assert.match(html, /實際開始時間/);
+  assert.match(html, /id="special-actual-start"/);
+  assert.match(html, /只能延後，並以 15 分鐘為單位/);
   assert.match(html, /難度／等級（如有）/);
   assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
   assert.match(html, /自訂分鐘數（90–240）/);
@@ -703,7 +722,7 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /claim-note/);
 });
 
-test('special-course draft expands one starting slot into a three-slot preview while note stays optional', () => {
+test('special-course draft delays the actual start while reserving every occupied slot', () => {
   const { context } = createFrontendRuntime();
   const availability = {
     'leave-a': {
@@ -730,21 +749,38 @@ test('special-course draft expands one starting slot into a three-slot preview w
     mode: 'vacancy', substituteIds: ['leave-a'], courseName: '主題課', durationMinutes: 89, note: '',
   }, availability), /90 到 240 分鐘/);
 
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getSpecialCourseStartTimeOptions('leave-a', 90, availability))),
+    ['13:30', '13:45', '14:00', '14:15', '14:30', '14:45'],
+  );
+
+  ['13:15', '13:40', '14:50'].forEach((actualStartTime) => {
+    assert.throws(() => context.validateSpecialCourseDraft({
+      mode: 'merge', substituteIds: ['leave-a'], actualStartTime,
+      courseName: '主題課', durationMinutes: 90, note: '',
+    }, availability), /實際開始時間/);
+  });
+
   const validated = context.validateSpecialCourseDraft({
-    mode: 'merge', substituteIds: ['leave-a'], courseName: '主題課', difficulty: '', durationMinutes: 240, note: '',
+    mode: 'merge', substituteIds: ['leave-a'], actualStartTime: '14:00',
+    courseName: '主題課', difficulty: '', durationMinutes: 90, note: '',
   }, availability);
   assert.deepEqual(JSON.parse(JSON.stringify(validated)), {
     mode: 'merge',
     substituteIds: ['leave-a'],
+    actualStartTime: '14:00',
     courseName: '主題課',
     difficulty: '',
-    durationMinutes: 240,
+    durationMinutes: 90,
     note: '',
     slotPreview: {
-      ids: ['leave-a', 'leave-b', 'leave-c'],
+      ids: ['leave-a', 'leave-b'],
       room: 'B',
       date: '2026/09/12',
-      times: ['13:30', '15:00', '16:30'],
+      times: ['13:30', '15:00'],
+      occupancyStartTime: '13:30',
+      actualStartTime: '14:00',
+      endTime: '15:30',
     },
   });
 });

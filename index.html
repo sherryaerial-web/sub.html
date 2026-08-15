@@ -1037,6 +1037,7 @@
             </div>
             <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。</p>
             <div class="claim-fields">
+              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><select id="special-actual-start" class="claim-control" disabled><option value="">請先勾選起始時段</option></select><p class="hint">只能延後，並以 15 分鐘為單位；所選代課時段仍是教室占用起點。</p></div>
               <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"></div>
               <div class="claim-field"><label for="special-course-difficulty">難度／等級（如有）</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
               <div class="claim-field"><label>課程長度 <span class="claim-required">必填</span></label><div class="special-duration-options"><label class="handling-option"><input type="radio" name="special-duration" value="90" checked>90 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="120">120 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="custom">自訂</label></div></div>
@@ -1361,13 +1362,55 @@
       return hours * 60 + minutes;
     }
 
-    function buildSpecialCourseSlotPreview(startId, durationMinutes, availabilityMap) {
+    function formatClaimTimeMinutes(totalMinutes) {
+      const minutes = Number(totalMinutes);
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes >= 24 * 60) return "";
+      return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    }
+
+    function getSpecialCourseStartTimeOptions(startId, durationMinutes, availabilityMap) {
+      const availability = availabilityMap || {};
+      const first = availability[startId];
+      if (!first) return [];
+      const occupancyStartMinutes = parseClaimTimeMinutes(first.startTime);
+      const duration = Number(durationMinutes);
+      if (!Number.isFinite(occupancyStartMinutes) || !Number.isInteger(duration) || duration < 90 || duration > 240) {
+        return [];
+      }
+      const nextMinutes = parseClaimTimeMinutes(first.nextCourseTime);
+      const latestByNextCourse = Number.isFinite(nextMinutes) ? nextMinutes - 15 : 24 * 60 - duration - 1;
+      const latestStartMinutes = Math.floor(latestByNextCourse / 15) * 15;
+      const options = [];
+      for (let minutes = occupancyStartMinutes; minutes <= latestStartMinutes; minutes += 15) {
+        options.push(formatClaimTimeMinutes(minutes));
+      }
+      return options;
+    }
+
+    function buildSpecialCourseSlotPreview(startId, durationMinutes, actualStartTime, availabilityMap) {
       const availability = availabilityMap || {};
       const first = availability[startId];
       if (!first) throw new Error("找不到起始時段，請重新整理後再試。");
-      const startMinutes = parseClaimTimeMinutes(first.startTime);
-      if (!Number.isFinite(startMinutes)) throw new Error("起始時段資料不完整，請通知管理員。");
-      const turnoverEndMinutes = startMinutes + Number(durationMinutes) + 15;
+      const occupancyStartMinutes = parseClaimTimeMinutes(first.startTime);
+      if (!Number.isFinite(occupancyStartMinutes)) throw new Error("起始時段資料不完整，請通知管理員。");
+      const normalizedActualStartTime = String(actualStartTime || first.startTime || "").trim();
+      const actualStartMinutes = parseClaimTimeMinutes(normalizedActualStartTime);
+      if (!Number.isFinite(actualStartMinutes) || actualStartMinutes % 15 !== 0) {
+        throw new Error("實際開始時間必須是有效的 15 分鐘刻度。");
+      }
+      if (actualStartMinutes < occupancyStartMinutes) {
+        throw new Error(`實際開始時間不可早於所選時段 ${first.startTime}。`);
+      }
+      const allowedStartTimes = getSpecialCourseStartTimeOptions(startId, Number(durationMinutes), availability);
+      if (!allowedStartTimes.includes(formatClaimTimeMinutes(actualStartMinutes))) {
+        const latest = allowedStartTimes[allowedStartTimes.length - 1];
+        throw new Error(latest
+          ? `實際開始時間最晚只能選 ${latest}；若要更晚開始，請改選後面的時段。`
+          : "實際開始時間無可用選項，請重新選擇時段。");
+      }
+      const endMinutes = actualStartMinutes + Number(durationMinutes);
+      if (endMinutes >= 24 * 60) throw new Error("特別課不可跨日，請縮短長度。");
+      const turnoverEndMinutes = endMinutes + 15;
       const ids = [startId];
       const times = [first.startTime];
       const visited = new Set(ids);
@@ -1391,8 +1434,15 @@
         times.push(current.startTime);
       }
 
-      if (ids.length < 2) throw new Error("此時段不需使用後續時段，請改用「單堂延長」。");
-      return { ids, room: first.room, date: first.date, times };
+      return {
+        ids,
+        room: first.room,
+        date: first.date,
+        times,
+        occupancyStartTime: first.startTime,
+        actualStartTime: formatClaimTimeMinutes(actualStartMinutes),
+        endTime: formatClaimTimeMinutes(endMinutes)
+      };
     }
 
     function validateSpecialCourseDraft(draft, availabilityMap) {
@@ -1406,6 +1456,8 @@
       const durationMinutes = Number(change.durationMinutes);
       const note = String(change.note || "").trim();
       const availability = availabilityMap || {};
+      const selectedOption = availability[substituteIds[0]] || {};
+      const actualStartTime = String(change.actualStartTime || selectedOption.startTime || "").trim();
 
       if (!courseName) throw new Error("請填寫特別課名稱。");
       if (!Number.isInteger(durationMinutes) || durationMinutes < 90 || durationMinutes > 240) {
@@ -1420,15 +1472,26 @@
         if (Number.isFinite(maximum) && durationMinutes > maximum) {
           throw new Error(`這個時段最多只能安排 ${maximum} 分鐘，需保留 15 分鐘換場。`);
         }
+        const slotPreview = buildSpecialCourseSlotPreview(
+          substituteIds[0], durationMinutes, actualStartTime, availability
+        );
+        if (slotPreview.ids.length > 1) {
+          throw new Error("這堂特別課會占用後續時段，請改用「使用連續時段」。");
+        }
       } else if (mode === "merge") {
         if (substituteIds.length !== 1) throw new Error("使用連續時段時，請只勾選特別課開始的第一堂。");
-        const slotPreview = buildSpecialCourseSlotPreview(substituteIds[0], durationMinutes, availability);
-        return { mode, substituteIds, courseName, difficulty, durationMinutes, note, slotPreview };
+        const slotPreview = buildSpecialCourseSlotPreview(
+          substituteIds[0], durationMinutes, actualStartTime, availability
+        );
+        if (slotPreview.ids.length < 2) {
+          throw new Error("此時段不需使用後續時段，請改用「單堂延長」。");
+        }
+        return { mode, substituteIds, actualStartTime, courseName, difficulty, durationMinutes, note, slotPreview };
       } else {
         throw new Error("特別課安排方式無效，請重新選擇。");
       }
 
-      return { mode, substituteIds, courseName, difficulty, durationMinutes, note };
+      return { mode, substituteIds, actualStartTime, courseName, difficulty, durationMinutes, note };
     }
 
     function getSingleSlotSpecialCourseBlockReason(option) {
@@ -2070,7 +2133,12 @@
       if (!normalizedDate) return;
       if (expandedClaimDates.has(normalizedDate)) expandedClaimDates.delete(normalizedDate);
       else expandedClaimDates.add(normalizedDate);
-      renderAvailableSubstitutes();
+      const expanded = expandedClaimDates.has(normalizedDate);
+      const escapedDate = CSS.escape(normalizedDate);
+      const toggle = document.querySelector(`[data-claim-date-toggle="${escapedDate}"]`);
+      const content = document.querySelector(`[data-claim-date-content="${escapedDate}"]`);
+      if (toggle) toggle.setAttribute("aria-expanded", String(expanded));
+      if (content) content.hidden = !expanded;
     }
 
     function renderAvailableSubstitutes() {
@@ -2231,11 +2299,35 @@
         .filter(Boolean);
     }
 
+    function syncSpecialCourseStartTimeOptions() {
+      const select = byId("special-actual-start");
+      const selectedIds = getSelectedClaimIds();
+      const selectedDuration = document.querySelector('input[name="special-duration"]:checked')?.value || "90";
+      const durationMinutes = selectedDuration === "custom"
+        ? Number(byId("special-custom-duration").value)
+        : Number(selectedDuration);
+      const previousValue = String(select.value || "");
+      const options = selectedIds.length === 1
+        ? getSpecialCourseStartTimeOptions(
+            selectedIds[0], durationMinutes, claimOptions.specialAvailability || {}
+          )
+        : [];
+      select.disabled = options.length === 0;
+      if (!options.length) {
+        select.innerHTML = '<option value="">請先勾選起始時段</option>';
+        select.value = "";
+        return;
+      }
+      select.innerHTML = options.map((time) => `<option value="${time}">${time}</option>`).join("");
+      select.value = options.includes(previousValue) ? previousValue : options[0];
+    }
+
     function readSpecialCourseDraft() {
       const selectedDuration = document.querySelector('input[name="special-duration"]:checked')?.value || "90";
       return {
         mode: document.querySelector('input[name="special-claim-mode"]:checked')?.value || "vacancy",
         substituteIds: getSelectedClaimIds(),
+        actualStartTime: byId("special-actual-start").value,
         courseName: byId("special-course-name").value,
         difficulty: byId("special-course-difficulty").value,
         durationMinutes: selectedDuration === "custom"
@@ -2264,9 +2356,11 @@
           : `${details}；後面沒有課，送出後會提醒管理員確認閉館時間。`;
       } else if (mode === "merge" && ids.length === 1) {
         try {
-          const duration = readSpecialCourseDraft().durationMinutes;
-          const preview = buildSpecialCourseSlotPreview(ids[0], duration, claimOptions.specialAvailability || {});
-          summary.textContent = `將占用 ${preview.room} 教室 ${preview.times.join("、")}`;
+          const draft = readSpecialCourseDraft();
+          const preview = buildSpecialCourseSlotPreview(
+            ids[0], draft.durationMinutes, draft.actualStartTime, claimOptions.specialAvailability || {}
+          );
+          summary.textContent = `實際 ${preview.actualStartTime} 開始，將占用 ${preview.room} 教室 ${preview.times.join("、")}；預計 ${preview.endTime} 結束。`;
         } catch (error) {
           summary.textContent = error.message;
         }
@@ -2311,13 +2405,16 @@
         });
       }
       const selectedIds = getSelectedClaimIds();
+      syncSpecialCourseStartTimeOptions();
       if (mode !== "merge" || !selectedIds.length) return;
       if (selectedIds.length > 1) {
         checkboxes.forEach((checkbox) => { checkbox.checked = checkbox.dataset.substituteId === selectedIds[0]; });
       }
       try {
-        const duration = readSpecialCourseDraft().durationMinutes;
-        const preview = buildSpecialCourseSlotPreview(selectedIds[0], duration, availability);
+        const draft = readSpecialCourseDraft();
+        const preview = buildSpecialCourseSlotPreview(
+          selectedIds[0], draft.durationMinutes, draft.actualStartTime, availability
+        );
         preview.ids.slice(1).forEach((id) => {
           const checkbox = checkboxes.find((item) => item.dataset.substituteId === id);
           const card = checkbox?.closest(".claim-card");
@@ -2453,7 +2550,7 @@
 
       const sourceRows = rows.map((row) => `<div class="item-meta">${escapeHtml(formatDateWithWeekday(row["日期"]))} ${escapeHtml(row["時段"])}｜${escapeHtml(row["課程"])}<br>代課編號：${escapeHtml(row["代課編號"])}｜OB Calendar ID：${escapeHtml(row["OB Calendar ID"] || "未提供")}</div>`).join("");
       const actions = rows.filter((row) => row["可申請退出"]).map((row) => `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(row["代課編號"])}"><i data-lucide="log-out"></i>申請退出 ${escapeHtml(row["時段"])}</button>`).join("");
-      return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${rows.length} 堂</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${rows.length}）</summary>${sourceRows}</details><div class="hint">若要退出，請依原始時段分別提出申請。</div><div class="record-actions">${actions}</div></div></article>`;
+      return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${rows.length} 堂</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${rows.length}）</summary>${sourceRows}</details><div class="hint">若要退出，請依原始時段分別提出申請。</div><div class="record-actions">${actions}</div></div></article>`;
     }
 
     async function fetchMySubs() {
@@ -2787,7 +2884,7 @@
       if (!group.specialGroupId) return rows.map((row) => renderRow(row)).join("");
       const item = rows[0] || {};
       const identifiers = rows.map((row) => `代課編號 ${row.substituteId || "未提供"}｜OB Calendar ID ${row.originalCalendarId || "未提供"}`).join("；");
-      return `<section class="special-record-group"><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item.specialMode || "特別課")}｜${escapeHtml(item.specialDurationMinutes || "待確認")} 分鐘｜結束 ${escapeHtml(item.specialEndTime || "待確認")}</div><div class="item-meta">${escapeHtml(identifiers)}</div>${rows.map((row) => renderRow(row)).join("")}</section>`;
+      return `<section class="special-record-group"><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item.specialMode || "特別課")}｜${escapeHtml(item.specialDurationMinutes || "待確認")} 分鐘｜${escapeHtml(item.specialActualStartTime || "待確認")}–${escapeHtml(item.specialEndTime || "待確認")}</div><div class="item-meta">${escapeHtml(identifiers)}</div>${rows.map((row) => renderRow(row)).join("")}</section>`;
     }
 
     function renderAdminItem(item, extraHtml = "") {

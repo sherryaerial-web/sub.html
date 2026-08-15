@@ -1798,6 +1798,86 @@ test('ordinary duration treats only 綢吊 as ninety minutes and limits delay ch
   );
 });
 
+test('ordinary sixty-minute delay occupies only the conflicting next open leave', () => {
+  const backend = loadBackend();
+  const leaveRows = [
+    ['stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+    ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+  ];
+  const courseRows = [
+    ['2026/09/01', '18:30', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+    ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-b'],
+    ['2026/09/01', '21:30', 'A－瑜伽', '原老師丙', 'cal-c'],
+  ];
+
+  const fifteen = backend.buildOrdinaryClaimDelayPlan_(leaveRows[0], 15, leaveRows, courseRows);
+  const thirty = backend.buildOrdinaryClaimDelayPlan_(leaveRows[0], 30, leaveRows, courseRows);
+
+  assert.equal(fifteen.actualStartTime, '18:45');
+  assert.equal(fifteen.endTime, '19:45');
+  assert.equal(fifteen.occupiedSubstituteId, '');
+  assert.equal(thirty.actualStartTime, '19:00');
+  assert.equal(thirty.endTime, '20:00');
+  assert.equal(thirty.occupiedSubstituteId, 'leave-b');
+  assert.equal(thirty.occupiedRowIndex, 1);
+});
+
+test('ordinary planner treats 綢吊 as ninety minutes but 舞綢 as sixty minutes', () => {
+  const backend = loadBackend();
+  const next = ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'];
+  const cases = [
+    { course: 'A－綢吊 Lv.1', expected: 'leave-b' },
+    { course: 'A－舞綢 Lv.1', expected: '' },
+  ];
+
+  cases.forEach(({ course, expected }) => {
+    const source = ['stamp', '原老師甲', '2026/09/01', '18:30', course, '確認中', '', '', '', 'leave-a', 'cal-a'];
+    const courseRows = [
+      ['2026/09/01', '18:30', course, '原老師甲', 'cal-a'],
+      ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-b'],
+    ];
+    assert.equal(
+      backend.buildOrdinaryClaimDelayPlan_(source, 0, [source, next], courseRows).occupiedSubstituteId,
+      expected
+    );
+  });
+});
+
+test('ordinary planner rejects unavailable or multiple following slots without mutating input', () => {
+  const backend = loadBackend();
+  const source = ['stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'];
+  const next = ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '已領取', '別人', '', '', 'leave-b', 'cal-b'];
+  const courseRows = [
+    ['2026/09/01', '18:30', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+    ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-b'],
+  ];
+  const leaveSnapshot = JSON.stringify([source, next]);
+  const courseSnapshot = JSON.stringify(courseRows);
+
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, 30, [source], courseRows),
+    /下一堂課衝突/
+  );
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, 30, [source, next], courseRows),
+    /下一堂課衝突/
+  );
+  const noCalendar = source.slice();
+  noCalendar[10] = '';
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(noCalendar, 30, [noCalendar], courseRows),
+    /Calendar ID 不完整/
+  );
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, 30, [source], courseRows.concat([
+      ['2026/09/01', '20:10', 'A－瑜伽', '原老師丙', 'cal-c'],
+    ])),
+    /占用兩堂以上/
+  );
+  assert.equal(JSON.stringify([source, next]), leaveSnapshot);
+  assert.equal(JSON.stringify(courseRows), courseSnapshot);
+});
+
 test('classifies supported course categories', () => {
   const backend = loadBackend();
   assert.equal(typeof backend.getCourseCategory_, 'function');
@@ -2537,10 +2617,139 @@ test('two invited teachers with stale lists produce exactly one claim winner', (
   );
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-c');
-  assert.deepEqual(JSON.parse(JSON.stringify(winner)), { count: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(winner)), { count: 1, occupiedSubstituteIds: [] });
   assert.equal(claimedRow[5], '已領取');
   assert.equal(claimedRow[6], '老師甲');
   assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-c').length, 1);
+});
+
+test('ordinary delay atomically claims the source and reserves the next open leave', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30,
+  }]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    count: 1,
+    occupiedSubstituteIds: ['leave-b'],
+  });
+  assert.equal(leaveSheet.values[1][5], '已領取');
+  assert.equal(leaveSheet.values[1][6], '老師甲');
+  assert.equal(leaveSheet.values[1][25], '19:00');
+  assert.equal(leaveSheet.values[1][26], 30);
+  assert.equal(leaveSheet.values[2][5], '延後占用');
+  assert.equal(leaveSheet.values[2][6], '');
+  assert.equal(leaveSheet.values[2][8], '待處理');
+  assert.equal(leaveSheet.values[2][15], '待關閉 OB');
+  assert.equal(leaveSheet.values[2][18], '延後占用／待管理員關閉 OB');
+  assert.equal(leaveSheet.values[2][27], 'leave-a');
+  assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-a').length, 1);
+  assert.equal(auditSheet.values.filter((row) => row[2] === '延後占用' && row[3] === 'leave-b').length, 1);
+});
+
+test('ordinary delay batch conflict rejects every write', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [
+      { substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30 },
+      { substituteId: 'leave-b', handlingType: 'original', startDelayMinutes: 0 },
+    ]),
+    /同時領取|重複/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
+test('ordinary delay rollback restores both leaves when the occupied write fails', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    leaveSheet,
+    ({ row, column }) => row === 3 && column === 6,
+    'injected occupied write failure'
+  );
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30,
+    }]),
+    /injected occupied write failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
+});
+
+test('ordinary delay rollback restores both leaves when its audit append fails', () => {
+  const {
+    backend, leaveSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '18:30', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-b', 'class-b'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:30', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+      ['stamp', '老師丙', '2026/08/10', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
+  const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
+  injectSetValuesFailureOnce(
+    auditSheet,
+    ({ row }) => row > 1,
+    'injected delayed audit failure'
+  );
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: 30,
+    }]),
+    /injected delayed audit failure/
+  );
+  assert.equal(JSON.stringify(leaveSheet.getDataRange().getValues()), leaveBefore);
+  assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
 });
 
 test('claim rolls back the business row when its audit append fails', () => {
@@ -2649,7 +2858,7 @@ test('direct claim preserves the original difficulty and ignores forged editable
   }]);
 
   const claimedRow = leaveSheet.values.find((row) => row[9] === 'leave-b');
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1, occupiedSubstituteIds: [] });
   assert.equal(claimedRow[5], '已領取');
   assert.equal(claimedRow[6], '老師甲');
   assert.equal(claimedRow[7], '沿用原課程；難度：Lv.1');
@@ -3548,7 +3757,7 @@ test('rejected cancellation restores an OB-started pending leave to list and cla
       substituteId: 'leave-cancel-rejected',
       changeNote: '',
     }]))),
-    { count: 1 }
+    { count: 1, occupiedSubstituteIds: [] }
   );
   assert.equal(row[5], '已領取');
   assert.equal(row[6], '老師甲');
@@ -3572,7 +3781,7 @@ test('terminal I and S history labels do not block an otherwise eligible pending
       substituteId: 'leave-terminal-history',
       changeNote: '',
     }]))),
-    { count: 1 }
+    { count: 1, occupiedSubstituteIds: [] }
   );
   assert.equal(leaveSheet.values[1][5], '已領取');
 });

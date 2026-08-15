@@ -3482,6 +3482,76 @@ function normalizeOrdinaryDelayMinutes_(value) {
   return delay;
 }
 
+function buildOrdinaryClaimDelayPlan_(sourceRow, delayMinutes, leaveRows, courseRows) {
+  var delay = normalizeOrdinaryDelayMinutes_(delayMinutes);
+  var date = formatMyDate(sourceRow && sourceRow[2]);
+  var originalStartTime = formatMyTime(sourceRow && sourceRow[3]);
+  var originalStartMinutes = timeTextToMinutes_(originalStartTime);
+  var calendarId = cleanText_(sourceRow && sourceRow[10]);
+  var room = getCourseRoom_(sourceRow && sourceRow[4]);
+  var durationMinutes = getOrdinaryCourseDurationMinutes_(sourceRow && sourceRow[4]);
+  if (!date || originalStartMinutes < 0 || !calendarId || !room) {
+    throw new Error('代課時間或 OB Calendar ID 不完整，請重新整理。');
+  }
+
+  var actualStartMinutes = originalStartMinutes + delay;
+  var endMinutes = actualStartMinutes + durationMinutes;
+  var turnoverEndMinutes = endMinutes + 15;
+  if (actualStartMinutes >= 24 * 60 || endMinutes >= 24 * 60) {
+    throw new Error('延後後課程不可跨日。');
+  }
+
+  var schedule = (courseRows || []).map(function(row) {
+    var time = formatMyTime(row && row[1]);
+    return {
+      date: formatMyDate(row && row[0]),
+      minutes: timeTextToMinutes_(time),
+      room: getCourseRoom_(row && row[2]),
+      calendarId: cleanText_(row && row[4])
+    };
+  }).filter(function(course) {
+    return course.date === date && course.room === room && course.minutes >= 0;
+  }).sort(function(a, b) {
+    return a.minutes - b.minutes;
+  });
+
+  if (!schedule.some(function(course) { return course.calendarId === calendarId; })) {
+    throw new Error('原課程尚未出現在 OB 課表，請通知管理員重新同步。');
+  }
+
+  var conflicts = schedule.filter(function(course) {
+    return course.minutes > originalStartMinutes && course.minutes < turnoverEndMinutes;
+  });
+  if (conflicts.length > 1) {
+    throw new Error('延後會占用兩堂以上，請聯絡管理員。');
+  }
+
+  var occupiedRowIndex = -1;
+  var occupiedSubstituteId = '';
+  if (conflicts.length === 1) {
+    var occupiedCalendarId = conflicts[0].calendarId;
+    occupiedRowIndex = (leaveRows || []).findIndex(function(row) {
+      return cleanText_(row && row[10]) === occupiedCalendarId;
+    });
+    var occupiedRow = occupiedRowIndex >= 0 ? leaveRows[occupiedRowIndex] : null;
+    if (!occupiedRow || !isOrdinaryOpenLeaveRow_(occupiedRow)) {
+      throw new Error('延後時間與下一堂課衝突，請聯絡管理員。');
+    }
+    occupiedSubstituteId = cleanText_(occupiedRow[9]);
+  }
+
+  return {
+    delayMinutes: delay,
+    originalStartTime: originalStartTime,
+    actualStartTime: minutesToTimeText_(actualStartMinutes),
+    durationMinutes: durationMinutes,
+    endTime: minutesToTimeText_(endMinutes),
+    turnoverEndTime: minutesToTimeText_(turnoverEndMinutes),
+    occupiedRowIndex: occupiedRowIndex,
+    occupiedSubstituteId: occupiedSubstituteId
+  };
+}
+
 function stripNewTeacherMarker_(courseName) {
   return cleanText_(String(courseName || '').replace(
     /\s*(?:〈\s*新老師\s*〉|<\s*新老師\s*>|（\s*新老師\s*）|\(\s*新老師\s*\)|【\s*新老師\s*】)\s*$/,
@@ -4775,19 +4845,29 @@ function claimSubstitute_(session, items) {
 
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
     assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
     var values = leaveSheet.getDataRange().getValues();
+    var leaveRows = values.slice(1);
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
     var rowById = {};
     for (var rowIndex = 1; rowIndex < values.length; rowIndex++) {
       var substituteId = cleanText_(values[rowIndex][9]);
       if (substituteId) rowById[substituteId] = rowIndex;
     }
 
-    var seen = {};
-    var updates = items.map(function(item) {
+    var primaryIds = {};
+    items.forEach(function(item) {
       var id = cleanText_(item.substituteId || item['代課編號']);
-      if (!id || seen[id]) throw new Error('代課資料編號無效或重複。');
-      seen[id] = true;
+      if (!id || primaryIds[id]) throw new Error('代課資料編號無效或重複。');
+      primaryIds[id] = true;
+    });
+
+    var reservedOccupiedIds = {};
+    var occupiedUpdates = [];
+    var primaryUpdates = items.map(function(item) {
+      var id = cleanText_(item.substituteId || item['代課編號']);
       if (rowById[id] == null) throw new Error('找不到指定的代課課程，請重新整理。');
 
       var dataIndex = rowById[id];
@@ -4808,6 +4888,24 @@ function claimSubstitute_(session, items) {
       }
       if (cleanText_(row[1]) === teacher) {
         throw new Error('不能領取自己原本的課程。');
+      }
+
+      var delay = normalizeOrdinaryDelayMinutes_(item.startDelayMinutes);
+      var delayPlan = delay ? buildOrdinaryClaimDelayPlan_(
+        row,
+        delay,
+        leaveRows,
+        courseRows
+      ) : {
+        delayMinutes: 0,
+        originalStartTime: formatMyTime(row[3]),
+        actualStartTime: formatMyTime(row[3]),
+        occupiedRowIndex: -1,
+        occupiedSubstituteId: ''
+      };
+      if (delayPlan.occupiedSubstituteId &&
+          (primaryIds[delayPlan.occupiedSubstituteId] || reservedOccupiedIds[delayPlan.occupiedSubstituteId])) {
+        throw new Error('同一批不可同時領取或重複占用下一堂課。');
       }
 
       var change = validateClaimChange_({
@@ -4838,29 +4936,97 @@ function claimSubstitute_(session, items) {
       nextRow[17] = '';
       nextRow[18] = '';
       nextRow[19] = change.category;
+      nextRow[25] = delayPlan.actualStartTime;
+      nextRow[26] = delayPlan.delayMinutes;
+      nextRow[27] = '';
+      if (delayPlan.delayMinutes) {
+        nextRow[7] = [
+          change.summary,
+          '實際開始：' + delayPlan.actualStartTime
+        ].filter(Boolean).join('；');
+      }
+
+      if (delayPlan.occupiedSubstituteId) {
+        reservedOccupiedIds[delayPlan.occupiedSubstituteId] = true;
+        var occupiedDataIndex = delayPlan.occupiedRowIndex;
+        var occupiedRow = leaveRows[occupiedDataIndex].slice();
+        while (occupiedRow.length < SHEET_HEADERS.LEAVES.length) occupiedRow.push('');
+        occupiedRow[5] = '延後占用';
+        occupiedRow[6] = '';
+        occupiedRow[7] = '由代課編號 ' + id + ' 延後占用';
+        occupiedRow[8] = '待處理';
+        occupiedRow[11] = '';
+        occupiedRow[12] = '';
+        occupiedRow[13] = '';
+        occupiedRow[14] = '';
+        occupiedRow[15] = '待關閉 OB';
+        occupiedRow[16] = '';
+        occupiedRow[17] = '';
+        occupiedRow[18] = '延後占用／待管理員關閉 OB';
+        occupiedRow[19] = '';
+        occupiedRow[20] = '';
+        occupiedRow[21] = '';
+        occupiedRow[22] = '';
+        occupiedRow[23] = '';
+        occupiedRow[24] = '';
+        occupiedRow[25] = '';
+        occupiedRow[26] = '';
+        occupiedRow[27] = id;
+        occupiedUpdates.push({
+          sheetRow: occupiedDataIndex + 2,
+          rowValues: occupiedRow,
+          substituteId: delayPlan.occupiedSubstituteId,
+          sourceId: id
+        });
+      }
       return {
         sheetRow: dataIndex + 1,
         rowValues: nextRow,
-        summary: change.summary
+        summary: nextRow[7],
+        substituteId: id,
+        occupiedSubstituteId: delayPlan.occupiedSubstituteId
       };
     });
 
     return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
-      updates.forEach(function(update) {
-        leaveSheet.getRange(update.sheetRow, 6, 1, 16)
-          .setValues([update.rowValues.slice(5, 21)]);
+      primaryUpdates.concat(occupiedUpdates).forEach(function(update) {
+        leaveSheet.getRange(
+          update.sheetRow,
+          6,
+          1,
+          SHEET_HEADERS.LEAVES.length - 5
+        ).setValues([update.rowValues.slice(5, SHEET_HEADERS.LEAVES.length)]);
       });
-      appendAudits(updates.map(function(update) {
+      var audits = primaryUpdates.map(function(update) {
         return {
           actor: teacher,
           action: '領取代課',
-          targetId: cleanText_(values[update.sheetRow - 1][9]),
+          targetId: update.substituteId,
           before: '確認中',
           after: '已領取',
-          reason: [update.summary, '邀請編號：' + invitationId].filter(Boolean).join('；')
+          reason: [
+            update.summary,
+            update.occupiedSubstituteId ? '占用下一堂：' + update.occupiedSubstituteId : '',
+            '邀請編號：' + invitationId
+          ].filter(Boolean).join('；')
+        };
+      }).concat(occupiedUpdates.map(function(update) {
+        return {
+          actor: teacher,
+          action: '延後占用',
+          targetId: update.substituteId,
+          before: '確認中',
+          after: '延後占用',
+          reason: '來源代課編號：' + update.sourceId
         };
       }));
-      return { count: updates.length };
+      appendAudits(audits);
+      return {
+        count: primaryUpdates.length,
+        occupiedSubstituteIds: occupiedUpdates.map(function(update) {
+          return update.substituteId;
+        })
+      };
     });
   } finally {
     lock.releaseLock();

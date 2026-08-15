@@ -13,6 +13,10 @@ const outputDir = "/private/tmp/substitute-v2-screenshots";
 const html = await fs.readFile(path.join(repoDir, "index.html"), "utf8");
 const lucidePath = path.resolve(path.dirname(require.resolve("lucide")), "../umd/lucide.js");
 const lucideScript = await fs.readFile(lucidePath);
+const visualHtml = html.replace(
+  '<script src="vendor/xlsx.full.min.js"></script>',
+  '<script>window.XLSX = { utils: {} };</script>',
+);
 
 const hardTimeout = setTimeout(() => {
   console.error("visual check exceeded 90 seconds");
@@ -258,14 +262,23 @@ try {
       await route.fulfill({ status: 200, contentType: "application/javascript", body: lucideScript });
     });
     await page.route("https://script.google.com/**", async (route) => {
+      const request = route.request();
+      const payload = { status: "success", data: apiPayload(request) };
+      if (request.method() !== "POST") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+        return;
+      }
+      const requestId = new URLSearchParams(request.postData() || "").get("requestId");
+      const relayMessage = JSON.stringify({ source: "sherry-gas-relay", requestId, payload }).replaceAll("<", "\\u003c");
       await route.fulfill({
         status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ status: "success", data: apiPayload(route.request()) })
+        contentType: "text/html; charset=utf-8",
+        body: `<!doctype html><meta charset="utf-8"><script>parent.postMessage(${relayMessage}, "*");<\/script>`
       });
     });
 
-    await page.setContent(html, { waitUntil: "networkidle", timeout: 10000 });
+    await page.setContent(visualHtml, { waitUntil: "networkidle", timeout: 10000 });
+    if (errors.length) throw new Error(`${viewport.name}: browser startup errors: ${errors.join(" | ")}`);
     if (adminHeaderOnly) {
       await login(page, "Ivy");
       await page.locator("#admin-entry").click();

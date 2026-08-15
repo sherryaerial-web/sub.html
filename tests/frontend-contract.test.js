@@ -13,6 +13,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
   const windowListeners = new Map();
   const bodyChildren = [];
   let claimSubmitted = false;
+  let requestCounter = 0;
   const getElement = (id) => {
     if (!elements.has(id)) {
       elements.set(id, {
@@ -112,6 +113,21 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
           if (action === 'claimSubstitute') claimSubmitted = true;
           if (options.autoRelay === false) return;
 
+          if ((options.errorActions || []).includes(action)) {
+            Promise.resolve().then(() => {
+              emitWindowEvent('message', {
+                origin: 'https://script.googleusercontent.com',
+                source: targetFrame.contentWindow,
+                data: {
+                  source: 'sherry-gas-relay',
+                  requestId: fields.requestId,
+                  payload: { status: 'error', message: `${action} 載入失敗` },
+                },
+              });
+            });
+            return;
+          }
+
           let data;
           if (action === 'getAvailableSubstitutes' && claimSubmitted) {
             data = [];
@@ -183,7 +199,12 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     window: {
       localStorage: { getItem() { return ''; }, setItem() {} },
       scrollTo() {},
-      crypto: { randomUUID: () => 'test-request-uuid' },
+      crypto: {
+        randomUUID: () => {
+          requestCounter += 1;
+          return requestCounter === 1 ? 'test-request-uuid' : `test-request-uuid-${requestCounter}`;
+        },
+      },
       setTimeout,
       clearTimeout,
       addEventListener(type, listener) {
@@ -1141,6 +1162,137 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /callPostApi\(["']linkReplacementCalendarItem["']/);
   assert.match(html, /callPostApi\(["']resolveChangeRequest["']/);
   assert.match(html, /複製 LINE 邀請文字/);
+});
+
+test('admin Excel export exposes one action and a pinned local workbook writer', () => {
+  assert.match(html, /id=["']admin-export["']/);
+  assert.match(html, /vendor\/xlsx\.full\.min\.js/);
+  assert.match(html, /匯出 Excel/);
+});
+
+test('admin Excel export builds capability-scoped worksheets with complete results', () => {
+  const { context } = createFrontendRuntime();
+  const course = {
+    pendingInvitations: [{
+      substituteId: 'pending-1', date: '2026/09/04', time: '11:00', originalCourse: 'B－舞綢 Lv.2',
+      originalTeacher: '@N.a', substituteTeacher: '', status: '確認中', pin: '1234'
+    }],
+    activeInvitees: [{ teacherName: '卡拉 卡拉', openedAt: '2026-08-15 10:00', viewedAt: '' }],
+    obWork: [{
+      substituteId: 'claimed-1', date: '2026/09/05', time: '12:30', originalCourse: 'A－空瑜 Lv.0~2',
+      originalTeacher: '芊芊', substituteTeacher: '卡拉 卡拉', actualCourse: '椅子瑜伽特別課',
+      difficulty: 'Open level', status: '已領取', verificationStatus: '待核對', note: '=HYPERLINK("bad")'
+    }],
+    changeRequests: [{
+      substituteId: 'claimed-2', date: '2026/09/06', time: '13:30', originalCourse: 'A－空環 Lv.1',
+      originalTeacher: '老師甲', substituteTeacher: '老師乙', status: '已取消', changeStatus: '申請取消中'
+    }],
+    exceptions: [{
+      substituteId: 'claimed-1', date: '2026/09/05', time: '12:30', originalCourse: 'A－空瑜 Lv.0~2',
+      originalTeacher: '芊芊', substituteTeacher: '卡拉 卡拉', actualCourse: '椅子瑜伽特別課',
+      status: '已領取', verificationStatus: '核對異常'
+    }],
+    completed: [{
+      substituteId: 'claimed-3', date: '2026/09/07', time: '14:00', originalCourse: 'B－舞綢 Lv.1',
+      originalTeacher: '老師丙', substituteTeacher: '老師丁', actualCourse: 'B－舞綢 Lv.1',
+      status: '已領取', verificationStatus: '已核對'
+    }]
+  };
+
+  const sheets = context.buildAdminExportSheets({ capabilities: ['course_admin'], course });
+  const names = Array.from(sheets, (sheet) => sheet.name);
+  assert.deepEqual(names, ['代課結果', '待領取', '邀請中', '待處理OB', '取消退出', '核對異常']);
+  const results = sheets[0].rows;
+  assert.equal(results.length, 4, 'header plus three unique claimed/completed rows');
+  assert.equal(results[1][results[0].indexOf('備註')], '\'=HYPERLINK("bad")');
+  assert.doesNotMatch(JSON.stringify(sheets), /1234|pin|salt|hash/i);
+});
+
+test('admin Excel export includes payroll and VVIP sheets only when authorized', () => {
+  const { context } = createFrontendRuntime();
+  const payroll = {
+    month: '2026-09',
+    summaries: [{
+      teacherName: '卡拉 卡拉', subtotal: 5000, bonusRate: 0.1, bonusAmount: 500,
+      fixedAdjustment: 0, adminAdjustment: -100, totalSalary: 5400, status: '已確認'
+    }],
+    lines: [{
+      lineId: 'line-1', teacherName: '卡拉 卡拉', date: '2026/09/05', time: '12:30',
+      courseName: '椅子瑜伽特別課', billingType: '特別課', attendanceCount: 6,
+      courseIncome: 6000, ruleDetail: '固定鐘點', amount: 5000, manualAdjustment: 0, status: '已確認'
+    }],
+    disputes: [{ id: 'd-1', teacherName: '卡拉 卡拉', lineId: 'line-1', message: '請確認', status: '待處理' }]
+  };
+  const vvip = {
+    month: '2026-09',
+    members: [{
+      email: 'member@example.com', registeredAt: '2026-08-15 10:00', date: '2026/09/08', time: '18:30',
+      courseName: 'A－空瑜 Lv.1', teacherName: '老師甲', calendarId: 'cal-1', status: '已確認'
+    }]
+  };
+
+  const payrollSheets = context.buildAdminExportSheets({ capabilities: ['payroll_admin'], payroll });
+  assert.deepEqual(Array.from(payrollSheets, (sheet) => sheet.name), ['薪資總表', '薪資明細', '薪資異議']);
+  assert.equal(payrollSheets[0].rows[1][payrollSheets[0].rows[0].indexOf('應領總額')], 5400);
+
+  const vvipSheets = context.buildAdminExportSheets({ capabilities: ['vvip_admin'], vvip });
+  assert.deepEqual(Array.from(vvipSheets, (sheet) => sheet.name), ['VVIP選課']);
+  assert.equal(vvipSheets[0].rows[1][vvipSheets[0].rows[0].indexOf('Email')], 'member@example.com');
+});
+
+test('admin Excel export keeps headers when an authorized category has no rows', () => {
+  const { context } = createFrontendRuntime();
+  const sheets = context.buildAdminExportSheets({ capabilities: ['course_admin'], course: {} });
+
+  assert.equal(sheets.length, 6);
+  sheets.forEach((sheet) => assert.equal(sheet.rows.length, 1, `${sheet.name} should retain its header`));
+});
+
+test('admin Excel export aborts the download when any authorized source fails', async () => {
+  const { context } = createFrontendRuntime({
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [], exceptions: [], completed: [],
+    },
+  }, { errorActions: ['getPayrollAdminDashboard'] });
+  let downloads = 0;
+  context.window.XLSX = {
+    utils: {},
+    writeFile() { downloads += 1; },
+  };
+  vm.runInContext(`
+    authState.sessionToken = 'admin-session';
+    authState.managementCapabilities = ['course_admin', 'payroll_admin'];
+  `, context);
+
+  await assert.rejects(context.exportAdminExcel(), /getPayrollAdminDashboard 載入失敗/);
+  assert.equal(downloads, 0);
+});
+
+test('admin Excel export rows produce a readable xlsx workbook with the pinned writer', () => {
+  const XLSX = require('../vendor/xlsx.full.min.js');
+  const { context } = createFrontendRuntime();
+  const sheets = context.buildAdminExportSheets({
+    capabilities: ['course_admin'],
+    course: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [], exceptions: [],
+      completed: [{
+        substituteId: 'claimed-1', date: '2026/09/05', time: '12:30', originalCourse: 'A－空瑜 Lv.0~2',
+        originalTeacher: '芊芊', substituteTeacher: '卡拉 卡拉', status: '已領取', verificationStatus: '已核對',
+      }],
+    },
+  });
+  const workbook = XLSX.utils.book_new();
+  sheets.forEach((sheet) => {
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sheet.rows), sheet.name);
+  });
+
+  const bytes = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true });
+  const reread = XLSX.read(bytes, { type: 'buffer' });
+  const results = XLSX.utils.sheet_to_json(reread.Sheets['代課結果'], { header: 1 });
+
+  assert.equal(XLSX.version, '0.20.3');
+  assert.deepEqual(reread.SheetNames, ['代課結果', '待領取', '邀請中', '待處理OB', '取消退出', '核對異常']);
+  assert.equal(results[1][results[0].indexOf('代課老師')], '卡拉 卡拉');
 });
 
 test('copies the production classroom URL with the LINE substitute invitation', () => {

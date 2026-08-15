@@ -389,6 +389,7 @@
 
     .admin-header-actions { justify-content: flex-end; margin: 0; }
     .admin-header-tools { display: grid; justify-items: end; gap: 6px; }
+    .admin-export-actions { display: flex; justify-content: flex-end; }
     .admin-sync-status { min-height: 18px; color: var(--success); font-size: 12px; font-weight: 700; text-align: right; }
     .admin-sync-status.working { color: var(--muted); }
     .admin-sync-status.error { color: var(--danger); }
@@ -736,6 +737,7 @@
       .view-header { flex-direction: column; }
       .admin-header-actions { justify-content: flex-start; }
       .admin-header-tools { width: 100%; justify-items: start; }
+      .admin-export-actions { width: 100%; justify-content: flex-start; }
     }
 
     @media (max-width: 760px) {
@@ -1085,6 +1087,7 @@
                 <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
                 <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
               </div>
+              <div class="admin-export-actions"><button id="admin-export" class="compact-button" type="button"><i data-lucide="file-spreadsheet"></i>匯出 Excel</button></div>
               <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
             </div>
           </div>
@@ -1124,6 +1127,7 @@
   </dialog>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -2716,6 +2720,204 @@
       await fetchMyPayroll();
     }
 
+    function protectExcelCell(value) {
+      if (value == null) return "";
+      if (typeof value === "number") return Number.isFinite(value) ? value : "";
+      if (typeof value === "boolean") return value ? "是" : "否";
+      const text = String(value);
+      return /^[=+\-@]/.test(text) ? `'${text}` : text;
+    }
+
+    function getExportWeekday(dateValue) {
+      const formatted = formatDateWithWeekday(dateValue);
+      const match = /（([日一二三四五六])）$/.exec(formatted);
+      return match ? match[1] : "";
+    }
+
+    function getExportRoom(courseName) {
+      const match = /^\s*([A-D])\s*[－-]/i.exec(String(courseName || ""));
+      return match ? match[1].toUpperCase() : "";
+    }
+
+    function makeExportTable(headers, items, rowBuilder) {
+      const rows = [headers.slice()];
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        rows.push(rowBuilder(item).map(protectExcelCell));
+      });
+      return rows;
+    }
+
+    function buildCourseExportTable(items) {
+      const headers = [
+        "代課編號", "日期", "星期", "時間", "教室", "原課程", "原老師", "代課老師",
+        "實際課程", "難度／等級", "處理方式", "狀態", "異動狀態", "OB核對狀態",
+        "核對時間", "差異原因", "原OB Calendar ID", "替代OB Calendar ID", "特別課群組",
+        "特別課模式", "特別課分鐘", "特別課實際開始", "特別課結束", "備註"
+      ];
+      return makeExportTable(headers, items, (item) => [
+        item.substituteId, item.date, getExportWeekday(item.date), item.time,
+        getExportRoom(item.originalCourse), item.originalCourse, item.originalTeacher,
+        item.substituteTeacher, item.actualCourse || item.originalCourse, item.difficulty,
+        item.handlingType, item.status, item.changeStatus, item.verificationStatus,
+        item.verificationTime, item.differenceReason, item.originalCalendarId,
+        item.replacementCalendarId, item.specialGroupId, item.specialMode,
+        item.specialDurationMinutes || "", item.specialActualStartTime, item.specialEndTime, item.note
+      ]);
+    }
+
+    function buildSubstituteResultItems(courseDashboard) {
+      const byId = new Map();
+      ["obWork", "changeRequests", "exceptions", "completed"].forEach((key) => {
+        (courseDashboard[key] || []).forEach((item) => {
+          if (!item || (!item.substituteTeacher && item.status !== "已領取" && !item.verificationStatus)) return;
+          const identity = item.substituteId || [item.date, item.time, item.originalCourse, item.originalTeacher].join("|");
+          byId.set(identity, { ...(byId.get(identity) || {}), ...item });
+        });
+      });
+      return [...byId.values()].sort((a, b) =>
+        [a.date || "", a.time || "", a.substituteId || ""].join("|")
+          .localeCompare([b.date || "", b.time || "", b.substituteId || ""].join("|"))
+      );
+    }
+
+    function buildAdminExportSheets(payload = {}) {
+      const capabilities = new Set(Array.isArray(payload.capabilities) ? payload.capabilities : []);
+      const sheets = [];
+      if (capabilities.has("course_admin")) {
+        const course = payload.course || {};
+        sheets.push({ name: "代課結果", rows: buildCourseExportTable(buildSubstituteResultItems(course)) });
+        sheets.push({ name: "待領取", rows: buildCourseExportTable(course.pendingInvitations) });
+        sheets.push({
+          name: "邀請中",
+          rows: makeExportTable(["老師", "開放時間", "首次查看時間"], course.activeInvitees, (item) => [
+            item.teacherName, item.openedAt, item.viewedAt
+          ])
+        });
+        sheets.push({ name: "待處理OB", rows: buildCourseExportTable(course.obWork) });
+        sheets.push({ name: "取消退出", rows: buildCourseExportTable(course.changeRequests) });
+        sheets.push({ name: "核對異常", rows: buildCourseExportTable(course.exceptions) });
+      }
+
+      if (capabilities.has("payroll_admin")) {
+        const payroll = payload.payroll || {};
+        sheets.push({
+          name: "薪資總表",
+          rows: makeExportTable([
+            "月份", "老師", "鐘點費", "獎金率", "獎金", "固定加扣", "管理員加扣", "應領總額",
+            "課程利潤", "狀態", "老師確認時間", "調整原因", "管理員確認時間", "管理員確認人"
+          ], payroll.summaries, (item) => [
+            item.month || payroll.month, item.teacherName, item.subtotal, item.bonusRate,
+            item.bonusAmount, item.fixedAdjustment, item.adminAdjustment, item.totalSalary,
+            item.profit, item.status, item.confirmedAt, item.adjustmentReason,
+            item.adminConfirmedAt, item.adminConfirmedBy
+          ])
+        });
+        sheets.push({
+          name: "薪資明細",
+          rows: makeExportTable([
+            "月份", "明細ID", "OB Calendar ID", "老師", "日期", "星期", "時間", "課程",
+            "計費類型", "出席人數", "課程收入", "計費規則", "原金額", "手動加扣",
+            "實領金額", "調整原因", "狀態"
+          ], payroll.lines, (item) => [
+            item.month || payroll.month, item.lineId, item.calendarId, item.teacherName,
+            item.date, getExportWeekday(item.date), item.time, item.courseName, item.billingType,
+            item.attendanceCount, item.courseIncome, item.ruleDetail, item.amount,
+            item.manualAdjustment, (Number(item.amount) || 0) + (Number(item.manualAdjustment) || 0),
+            item.adjustmentReason, item.status
+          ])
+        });
+        sheets.push({
+          name: "薪資異議",
+          rows: makeExportTable([
+            "月份", "異議ID", "老師", "明細ID", "內容", "狀態", "管理員回覆", "提出時間",
+            "處理人", "處理時間"
+          ], payroll.disputes, (item) => [
+            item.month || payroll.month, item.id, item.teacherName, item.lineId, item.message,
+            item.status, item.reply, item.createdAt, item.handler, item.resolvedAt
+          ])
+        });
+      }
+
+      if (capabilities.has("vvip_admin")) {
+        const vvip = payload.vvip || {};
+        sheets.push({
+          name: "VVIP選課",
+          rows: makeExportTable([
+            "Email", "月份", "登記時間", "日期", "星期", "時間", "課程", "老師",
+            "OB Calendar ID", "狀態"
+          ], vvip.members, (item) => [
+            item.email, item.month || vvip.month, item.registeredAt, item.date,
+            getExportWeekday(item.date), item.time, item.courseName, item.teacherName,
+            item.calendarId, item.status
+          ])
+        });
+      }
+      return sheets;
+    }
+
+    function getExportColumnWidths(rows) {
+      const widths = (rows[0] || []).map((header, columnIndex) => {
+        const maxLength = rows.reduce((max, row) => {
+          const value = row[columnIndex] == null ? "" : String(row[columnIndex]);
+          return Math.max(max, value.length);
+        }, String(header || "").length);
+        return { wch: Math.min(Math.max(maxLength + 2, 10), 42) };
+      });
+      return widths;
+    }
+
+    function getTaipeiDateStamp(date = new Date()) {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit"
+      }).formatToParts(date).reduce((output, part) => {
+        output[part.type] = part.value;
+        return output;
+      }, {});
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    }
+
+    async function exportAdminExcel() {
+      const button = byId("admin-export");
+      setButtonBusy(button, true, "整理中...");
+      try {
+        if (!window.XLSX || !window.XLSX.utils) throw new Error("Excel 元件載入失敗，請重新整理後再試。");
+        const capabilities = authState.managementCapabilities.slice();
+        if (!capabilities.length) throw new Error("目前帳號沒有可匯出的管理權限。");
+        const payload = { capabilities };
+        const requests = [];
+        if (capabilities.includes("course_admin")) {
+          requests.push(callApi("getAdminDashboard").then((data) => { payload.course = data; }));
+        }
+        if (capabilities.includes("payroll_admin")) {
+          const month = byId("payroll-admin-month")?.value || payrollDashboard?.month || new Date().toISOString().slice(0, 7);
+          requests.push(callApi("getPayrollAdminDashboard", { month }).then((data) => { payload.payroll = data; }));
+        }
+        if (capabilities.includes("vvip_admin")) {
+          requests.push(callApi("getVvipAdminDashboard", { email: "" }).then((data) => { payload.vvip = data; }));
+        }
+        await Promise.all(requests);
+
+        const sheets = buildAdminExportSheets(payload);
+        if (!sheets.length) throw new Error("目前沒有可匯出的管理資料。");
+        const workbook = window.XLSX.utils.book_new();
+        sheets.forEach((sheet) => {
+          const worksheet = window.XLSX.utils.aoa_to_sheet(sheet.rows);
+          worksheet["!cols"] = getExportColumnWidths(sheet.rows);
+          if (sheet.rows[0] && sheet.rows[0].length) {
+            worksheet["!autofilter"] = { ref: window.XLSX.utils.encode_range({
+              s: { r: 0, c: 0 }, e: { r: Math.max(sheet.rows.length - 1, 0), c: sheet.rows[0].length - 1 }
+            }) };
+          }
+          window.XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
+        });
+        const filename = `Sherry教室管理_${getTaipeiDateStamp()}.xlsx`;
+        window.XLSX.writeFile(workbook, filename, { compression: true });
+        setNotice(`已匯出 ${sheets.length} 個工作表。`);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
     async function fetchPayrollAdminDashboard(rethrow = false) {
       const content = byId("admin-tab-content");
       content.innerHTML = '<div class="state">載入薪資後台中...</div>';
@@ -3221,6 +3423,9 @@
     });
     byId("admin-refresh").addEventListener("click", async () => {
       try { await refreshAdminData(); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("admin-export").addEventListener("click", async () => {
+      try { await exportAdminExcel(); } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-reconcile").addEventListener("click", async () => {
       try { await reconcileAdminObChanges(); } catch (error) { setNotice(error.message, "error"); }

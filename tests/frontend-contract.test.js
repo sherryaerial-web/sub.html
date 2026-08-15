@@ -712,20 +712,38 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /id="special-actual-start"/);
   assert.equal(
     (html.match(/開始時段預設為第一門課程開始時間，如需調整請從此調整/g) || []).length,
-    2
+    1
   );
-  assert.doesNotMatch(html, /請先勾選起始時段/);
+  assert.match(html, /id="special-start-guidance"[^>]*>開始時段預設為第一門課程開始時間，如需調整請從此調整/);
+  const specialStartSelect = html.match(/<select id="special-actual-start"[\s\S]*?<\/select>/)?.[0] || '';
+  assert.doesNotMatch(specialStartSelect, /開始時段預設為第一門課程開始時間/);
+  assert.equal((html.match(/請先勾選第一堂課程/g) || []).length, 2);
   assert.match(html, /只能延後，並以 15 分鐘為單位/);
   assert.match(html, /難度／等級（如有）/);
   assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
   assert.match(html, /自訂分鐘數（90–240）/);
-  assert.match(html, /id="special-custom-duration"[^>]*min="90"[^>]*max="240"/);
-  assert.match(html, /請使用欄位右側的上下箭頭選擇分鐘數，避免直接手動輸入/);
+  assert.match(html, /id="special-custom-duration"[^>]*min="90"[^>]*max="240"[^>]*step="15"[^>]*readonly/);
+  assert.match(html, /id="special-duration-decrease"[^>]*aria-label="減少 15 分鐘"/);
+  assert.match(html, /id="special-duration-increase"[^>]*aria-label="增加 15 分鐘"/);
+  assert.match(html, /請使用減少與增加按鈕選擇分鐘數/);
   assert.doesNotMatch(html, /備註\s*<span class="claim-required">必填/);
   assert.doesNotMatch(html, /new-difficulty-required/);
   assert.match(html, /claim-course-type/);
   assert.match(html, /claim-difficulty-select/);
   assert.match(html, /claim-note/);
+});
+
+test('custom special-course duration uses visible 15-minute controls on mobile', () => {
+  const { context, getElement } = createFrontendRuntime();
+  const input = getElement('special-custom-duration');
+  input.value = '90';
+  context.adjustSpecialCustomDuration(-15);
+  assert.equal(input.value, '90');
+  context.adjustSpecialCustomDuration(15);
+  assert.equal(input.value, '105');
+  input.value = '240';
+  context.adjustSpecialCustomDuration(15);
+  assert.equal(input.value, '240');
 });
 
 test('special-course draft delays the actual start while reserving every occupied slot', () => {

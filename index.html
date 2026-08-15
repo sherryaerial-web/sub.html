@@ -548,6 +548,19 @@
     .special-claim-panel { margin-bottom: 18px; padding: 16px; border: 1px solid #d3c1ba; border-radius: var(--radius); background: var(--aqua-50); }
     .special-claim-panel .handling-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .special-duration-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+    .special-duration-stepper { display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; gap: 8px; }
+    .special-duration-stepper .claim-control { min-width: 0; text-align: center; }
+    .duration-step-button {
+      min-height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .duration-step-button:disabled { cursor: not-allowed; opacity: 0.4; }
     .special-claim-summary { margin: 10px 0 12px; padding: 11px 12px; border: 1px solid #d9c5a6; border-radius: var(--radius); background: var(--amber-100); color: var(--ink); font-size: 13px; font-weight: 750; line-height: 1.55; }
     .special-record-group { display: grid; gap: 8px; padding: 12px; border: 1px solid #d3c1ba; border-radius: var(--radius); background: var(--aqua-50); }
     .special-record-group + .special-record-group { margin-top: 10px; }
@@ -1037,11 +1050,11 @@
             </div>
             <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。</p>
             <div class="claim-fields">
-              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><select id="special-actual-start" class="claim-control" disabled><option value="">開始時段預設為第一門課程開始時間，如需調整請從此調整</option></select><p class="hint">只能延後，並以 15 分鐘為單位；所選代課時段仍是教室占用起點。</p></div>
+              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><p id="special-start-guidance" class="hint">開始時段預設為第一門課程開始時間，如需調整請從此調整。</p><select id="special-actual-start" class="claim-control" aria-describedby="special-start-guidance special-start-limit" disabled><option value="">請先勾選第一堂課程</option></select><p id="special-start-limit" class="hint">只能延後，並以 15 分鐘為單位；所選代課時段仍是教室占用起點。</p></div>
               <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"></div>
               <div class="claim-field"><label for="special-course-difficulty">難度／等級（如有）</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
               <div class="claim-field"><label>課程長度 <span class="claim-required">必填</span></label><div class="special-duration-options"><label class="handling-option"><input type="radio" name="special-duration" value="90" checked>90 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="120">120 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="custom">自訂</label></div></div>
-              <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（90–240）</label><input id="special-custom-duration" class="claim-control" type="number" min="90" max="240" step="5" inputmode="numeric" placeholder="例如：105"><p class="hint">請使用欄位右側的上下箭頭選擇分鐘數，避免直接手動輸入。</p></div>
+              <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（90–240）</label><div class="special-duration-stepper"><button id="special-duration-decrease" class="duration-step-button" type="button" aria-label="減少 15 分鐘">−</button><input id="special-custom-duration" class="claim-control" type="number" min="90" max="240" step="15" value="90" inputmode="numeric" readonly><button id="special-duration-increase" class="duration-step-button" type="button" aria-label="增加 15 分鐘">＋</button></div><p class="hint">請使用減少與增加按鈕選擇分鐘數，每次調整 15 分鐘。</p></div>
               <div class="claim-field full"><label for="special-course-note">備註</label><textarea id="special-course-note" class="claim-control" maxlength="240" placeholder="可填寫特別課內容、合併原因或其他安排"></textarea></div>
             </div>
           </section>
@@ -2299,6 +2312,21 @@
         .filter(Boolean);
     }
 
+    function syncSpecialDurationStepper() {
+      const input = byId("special-custom-duration");
+      const value = Number(input.value) || 90;
+      byId("special-duration-decrease").disabled = value <= 90;
+      byId("special-duration-increase").disabled = value >= 240;
+    }
+
+    function adjustSpecialCustomDuration(deltaMinutes) {
+      const input = byId("special-custom-duration");
+      const current = Number(input.value) || 90;
+      const next = Math.min(240, Math.max(90, current + Number(deltaMinutes || 0)));
+      input.value = String(next);
+      syncSpecialDurationStepper();
+    }
+
     function syncSpecialCourseStartTimeOptions() {
       const select = byId("special-actual-start");
       const selectedIds = getSelectedClaimIds();
@@ -2314,7 +2342,7 @@
         : [];
       select.disabled = options.length === 0;
       if (!options.length) {
-        select.innerHTML = '<option value="">開始時段預設為第一門課程開始時間，如需調整請從此調整</option>';
+        select.innerHTML = '<option value="">請先勾選第一堂課程</option>';
         select.value = "";
         return;
       }
@@ -2436,6 +2464,10 @@
       byId("special-claim-panel").hidden = !special;
       const custom = document.querySelector('input[name="special-duration"]:checked')?.value === "custom";
       byId("special-custom-duration-field").hidden = !special || !custom;
+      if (custom && !Number(byId("special-custom-duration").value)) {
+        byId("special-custom-duration").value = "90";
+      }
+      syncSpecialDurationStepper();
       updateSpecialSelectionConstraints();
       document.querySelectorAll(".claim-card").forEach(updateClaimCardState);
       const button = byId("claim-submit");
@@ -3232,6 +3264,16 @@
     document.querySelectorAll('input[name="claim-mode"]').forEach((input) => input.addEventListener("change", updateClaimMode));
     byId("special-claim-panel").addEventListener("change", updateClaimMode);
     byId("special-claim-panel").addEventListener("input", () => {
+      updateSpecialSelectionConstraints();
+      updateSpecialClaimSummary();
+    });
+    byId("special-duration-decrease").addEventListener("click", () => {
+      adjustSpecialCustomDuration(-15);
+      updateSpecialSelectionConstraints();
+      updateSpecialClaimSummary();
+    });
+    byId("special-duration-increase").addEventListener("click", () => {
+      adjustSpecialCustomDuration(15);
       updateSpecialSelectionConstraints();
       updateSpecialClaimSummary();
     });

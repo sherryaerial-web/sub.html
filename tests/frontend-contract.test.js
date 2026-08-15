@@ -710,11 +710,17 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"/);
   assert.match(html, /實際開始時間/);
   assert.match(html, /id="special-actual-start"/);
+  assert.equal(
+    (html.match(/開始時段預設為第一門課程開始時間，如需調整請從此調整/g) || []).length,
+    2
+  );
+  assert.doesNotMatch(html, /請先勾選起始時段/);
   assert.match(html, /只能延後，並以 15 分鐘為單位/);
   assert.match(html, /難度／等級（如有）/);
   assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
   assert.match(html, /自訂分鐘數（90–240）/);
   assert.match(html, /id="special-custom-duration"[^>]*min="90"[^>]*max="240"/);
+  assert.match(html, /請使用欄位右側的上下箭頭選擇分鐘數，避免直接手動輸入/);
   assert.doesNotMatch(html, /備註\s*<span class="claim-required">必填/);
   assert.doesNotMatch(html, /new-difficulty-required/);
   assert.match(html, /claim-course-type/);

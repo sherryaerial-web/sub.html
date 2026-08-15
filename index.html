@@ -1037,11 +1037,11 @@
             </div>
             <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。</p>
             <div class="claim-fields">
-              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><select id="special-actual-start" class="claim-control" disabled><option value="">請先勾選起始時段</option></select><p class="hint">只能延後，並以 15 分鐘為單位；所選代課時段仍是教室占用起點。</p></div>
+              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><select id="special-actual-start" class="claim-control" disabled><option value="">開始時段預設為第一門課程開始時間，如需調整請從此調整</option></select><p class="hint">只能延後，並以 15 分鐘為單位；所選代課時段仍是教室占用起點。</p></div>
               <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"></div>
               <div class="claim-field"><label for="special-course-difficulty">難度／等級（如有）</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
               <div class="claim-field"><label>課程長度 <span class="claim-required">必填</span></label><div class="special-duration-options"><label class="handling-option"><input type="radio" name="special-duration" value="90" checked>90 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="120">120 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="custom">自訂</label></div></div>
-              <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（90–240）</label><input id="special-custom-duration" class="claim-control" type="number" min="90" max="240" step="5" inputmode="numeric" placeholder="例如：105"></div>
+              <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（90–240）</label><input id="special-custom-duration" class="claim-control" type="number" min="90" max="240" step="5" inputmode="numeric" placeholder="例如：105"><p class="hint">請使用欄位右側的上下箭頭選擇分鐘數，避免直接手動輸入。</p></div>
               <div class="claim-field full"><label for="special-course-note">備註</label><textarea id="special-course-note" class="claim-control" maxlength="240" placeholder="可填寫特別課內容、合併原因或其他安排"></textarea></div>
             </div>
           </section>
@@ -2314,7 +2314,7 @@
         : [];
       select.disabled = options.length === 0;
       if (!options.length) {
-        select.innerHTML = '<option value="">請先勾選起始時段</option>';
+        select.innerHTML = '<option value="">開始時段預設為第一門課程開始時間，如需調整請從此調整</option>';
         select.value = "";
         return;
       }

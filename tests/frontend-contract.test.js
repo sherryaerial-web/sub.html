@@ -237,6 +237,42 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
   };
 }
 
+function createOrdinaryClaimConstraintCard({ substituteId, checked, handling, delay }) {
+  const classes = new Set();
+  const editor = { hidden: !checked };
+  const warning = { hidden: true, textContent: '' };
+  const summary = { dataset: { blocked: 'false' }, textContent: '' };
+  const radio = { value: handling };
+  const delayControl = { value: String(delay) };
+  let card;
+  const checkbox = {
+    checked,
+    disabled: false,
+    title: '',
+    dataset: { substituteId, slotKey: `leave:${substituteId}` },
+    closest(selector) { return selector === '.claim-card' ? card : null; },
+    removeAttribute(name) {
+      if (name === 'title') this.title = '';
+    },
+  };
+  const controls = {
+    '.claim-checkbox': checkbox,
+    '.claim-editor': editor,
+    '.special-slot-warning': warning,
+    '.claim-delay-summary': summary,
+    'input[type="radio"]:checked': radio,
+    '.claim-start-delay': delayControl,
+  };
+  card = {
+    querySelector(selector) { return controls[selector] || null; },
+    classList: {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+    },
+  };
+  return { card, checkbox, editor, warning, summary, radio, delay: delayControl, classes };
+}
+
 test('keeps API secrets out of the public frontend', () => {
   assert.doesNotMatch(html, /eyJ[a-zA-Z0-9_-]+\./);
   assert.doesNotMatch(html, /Authorization\s*:\s*['"]Bearer/i);
@@ -1038,6 +1074,76 @@ test('ordinary delay preview distinguishes sixty-minute and 綢吊 claims', () =
     { 'leave-a': { nextCourseTime: '20:00', mergePartnerIds: [] } },
     pending
   ).blocked, true);
+});
+
+test('ordinary delayed claim marks the next course as system occupied before submit', async () => {
+  const { context } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [],
+      specialAvailability: {
+        'leave-source': {
+          startTime: '10:00', nextCourseTime: '11:15', mergePartnerIds: ['leave-next'],
+        },
+      },
+    },
+    getAvailableSubstitutes: [
+      {
+        '代課編號': 'leave-source', '原老師': '老師甲', '日期': '2026/09/24',
+        '時段': '10:00', '課程': 'C－空環 Lv.3~4', '課程大類': '空環', '可沿用原課程': true,
+      },
+      {
+        '代課編號': 'leave-next', '原老師': '老師乙', '日期': '2026/09/24',
+        '時段': '11:15', '課程': 'C－柔軟度開發', '課程大類': '地板課程', '可沿用原課程': false,
+      },
+    ],
+  });
+  await context.fetchAvailableSubstitutes();
+
+  const source = createOrdinaryClaimConstraintCard({
+    substituteId: 'leave-source', checked: true, handling: 'existing', delay: 30,
+  });
+  const next = createOrdinaryClaimConstraintCard({
+    substituteId: 'leave-next', checked: true, handling: 'existing', delay: 0,
+  });
+  const cards = [source, next];
+  const dateCount = { textContent: '2 堂待領' };
+  const dateGroup = {
+    querySelectorAll(selector) { return selector === '.claim-checkbox' ? cards.map((item) => item.checkbox) : []; },
+    querySelector(selector) { return selector === '.claim-date-count' ? dateCount : null; },
+  };
+  const originalQuerySelector = context.document.querySelector.bind(context.document);
+  const originalQuerySelectorAll = context.document.querySelectorAll.bind(context.document);
+  context.document.querySelector = (selector) => selector === 'input[name="claim-mode"]:checked'
+    ? { value: 'ordinary' }
+    : originalQuerySelector(selector);
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '.claim-checkbox') return cards.map((item) => item.checkbox);
+    if (selector === '.claim-checkbox:checked') return cards.map((item) => item.checkbox).filter((item) => item.checked);
+    if (selector === '.claim-date-group') return [dateGroup];
+    return originalQuerySelectorAll(selector);
+  };
+
+  context.updateOrdinarySelectionConstraints();
+
+  assert.equal(source.checkbox.checked, true);
+  assert.equal(next.checkbox.checked, false);
+  assert.equal(next.checkbox.disabled, true);
+  assert.equal(next.editor.hidden, true);
+  assert.equal(next.warning.hidden, false);
+  assert.equal(next.warning.textContent, '系統自動占用');
+  assert.equal(next.classes.has('ordinary-auto-occupied'), true);
+  assert.equal(dateCount.textContent, '1 堂待領');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getSelectedClaimIds())), ['leave-source']);
+
+  source.delay.value = '0';
+  context.updateOrdinarySelectionConstraints();
+
+  assert.equal(next.checkbox.disabled, false);
+  assert.equal(next.checkbox.checked, false);
+  assert.equal(next.warning.hidden, true);
+  assert.equal(next.classes.has('ordinary-auto-occupied'), false);
+  assert.equal(dateCount.textContent, '2 堂待領');
 });
 
 test('time-only adjustment sends original handling with the selected delay', () => {

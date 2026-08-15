@@ -1316,10 +1316,27 @@ function getSyncDateRange_(now) {
   var dateFrom = Utilities.formatDate(source, timezone, 'yyyy-MM-dd');
   var parts = dateFrom.split('-').map(Number);
   var endOfNextMonth = new Date(parts[0], parts[1] + 1, 0, 12, 0, 0);
+  var fetchThrough = new Date(parts[0], parts[1] + 1, 1, 12, 0, 0);
   return {
     dateFrom: dateFrom,
-    dateTo: Utilities.formatDate(endOfNextMonth, timezone, 'yyyy-MM-dd')
+    dateTo: Utilities.formatDate(fetchThrough, timezone, 'yyyy-MM-dd'),
+    calendarDateTo: Utilities.formatDate(endOfNextMonth, timezone, 'yyyy-MM-dd')
   };
+}
+
+function getApiDateNumber_(value) {
+  var text = cleanText_(value).replace(/\//g, '-');
+  var match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
+  if (!match) return null;
+  return Number(match[1]) * 10000 + Number(match[2]) * 100 + Number(match[3]);
+}
+
+function isDateWithinApiWindow_(value, dateFrom, dateTo) {
+  var dateNumber = getApiDateNumber_(value);
+  var fromNumber = getApiDateNumber_(dateFrom);
+  var toNumber = getApiDateNumber_(dateTo);
+  return dateNumber !== null && fromNumber !== null && toNumber !== null &&
+    dateNumber >= fromNumber && dateNumber <= toNumber;
 }
 
 function normalizeCalendarItem_(item) {
@@ -1419,6 +1436,7 @@ function syncCourseListFromApi(sessionToken) {
     if (!item) {
       throw new Error('Omcean API 第 ' + (index + 1) + ' 筆包含無效課程資料，為保護舊資料已停止同步。');
     }
+    if (!isDateWithinApiWindow_(item.date, range.dateFrom, range.calendarDateTo || range.dateTo)) return;
     var key = item.apiId || [item.date, item.time, item.course, item.instructor].join('|');
     if (dedupe[key]) return;
     dedupe[key] = true;
@@ -2327,10 +2345,12 @@ function getPayrollMonthRange_(monthValue) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('薪資月份格式應為 YYYY-MM。');
   var parts = month.split('-').map(Number);
   var lastDay = new Date(parts[0], parts[1], 0, 12, 0, 0).getDate();
+  var fetchThrough = new Date(parts[0], parts[1], 1, 12, 0, 0);
   return {
     month: month,
     dateFrom: month + '-01',
-    dateTo: month + '-' + ('0' + lastDay).slice(-2)
+    dateTo: Utilities.formatDate(fetchThrough, getTimeZone_(), 'yyyy-MM-dd'),
+    calendarDateTo: month + '-' + ('0' + lastDay).slice(-2)
   };
 }
 
@@ -2524,6 +2544,7 @@ function syncPayrollMonth_(session, monthValue) {
     rawItems.forEach(function(rawItem, index) {
       var item = normalizePayrollCalendarItem_(rawItem);
       if (!item) throw new Error('OB 第 ' + (index + 1) + ' 筆薪資課程資料不完整，已停止同步。');
+      if (!isDateWithinApiWindow_(item.date, range.dateFrom, range.calendarDateTo || range.dateTo)) return;
       if (seen[item.calendarId]) return;
       seen[item.calendarId] = true;
       normalized.push(mergePayrollSource_(item, sourceMap));

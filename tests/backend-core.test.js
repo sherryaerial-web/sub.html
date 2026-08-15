@@ -2033,12 +2033,13 @@ test('re-normalizes cached OB course items before teacher selection', () => {
   }]);
 });
 
-test('calculates today through the end of next month', () => {
+test('calculates an exclusive API date_to one day after the end of next month', () => {
   const backend = loadBackend();
   assert.equal(typeof backend.getSyncDateRange_, 'function');
   const range = backend.getSyncDateRange_(new Date(2026, 7, 3, 12, 0, 0));
   assert.equal(range.dateFrom, '2026-08-03');
-  assert.equal(range.dateTo, '2026-09-30');
+  assert.equal(range.dateTo, '2026-10-01');
+  assert.equal(range.calendarDateTo, '2026-09-30');
 });
 
 test('normalizes a calendar item to the fixed CourseList contract', () => {
@@ -2195,6 +2196,37 @@ test('manual sync preserves the old snapshot when Calendar returns an HTTP error
 
   assert.throws(() => backend.syncCourseListFromApi(adminToken), /API 連線失敗.*503/);
   assert.deepEqual(courseSheet.values, oldValues);
+});
+
+test('manual sync fetches one extra day but only writes courses through the target month', () => {
+  const { backend, courseSheet, calls, adminToken } = createSyncBackend({
+    pages: [[
+      {
+        id: 93001,
+        classTime: '2026-09-30T11:10:00Z',
+        class: { id: 301, nameZhHant: '月底最後一天課程' },
+        instructors: [{ id: 401, firstName: '月底', lastName: '老師' }],
+      },
+      {
+        id: 100101,
+        classTime: '2026-10-01T11:10:00Z',
+        class: { id: 302, nameZhHant: '下月第一天課程' },
+        instructors: [{ id: 402, firstName: '下月', lastName: '老師' }],
+      },
+    ]],
+  });
+  backend.getSyncDateRange_ = () => ({
+    dateFrom: '2026-08-03',
+    dateTo: '2026-10-01',
+    calendarDateTo: '2026-09-30',
+  });
+
+  const result = backend.syncCourseListFromApi(adminToken);
+
+  assert.match(calls[0].url, /date_to=2026-10-01/);
+  assert.equal(result.count, 1);
+  assert.deepEqual(courseSheet.values.slice(1).filter((row) => row[0]).map((row) => row[0]), ['2026/09/30']);
+  assert.equal(courseSheet.values.find((row) => row[4] === '100101'), undefined);
 });
 
 test('manual sync rejects a mixed valid and missing-ID payload without touching the old snapshot', () => {
@@ -4589,6 +4621,67 @@ test('payroll draft blocks missing special-course income and keeps complete inst
   assert.equal(ready.errors.length, 0);
   assert.equal(ready.lines.length, 2);
   assert.equal(ready.summaries.length, 2);
+});
+
+test('payroll sync fetches one extra day but only drafts courses inside the requested month', () => {
+  const services = createAuthServices();
+  services.Utilities.formatDate = formatTaipeiDate;
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const rules = createSheetFixture('薪項設定', [
+    EXPECTED_PAYROLL_RULE_HEADERS,
+    ['預設值', '', '人數階梯', 4, 900],
+  ]);
+  const source = createSheetFixture('薪資來源資料', [EXPECTED_PAYROLL_SOURCE_HEADERS]);
+  const snapshot = createSheetFixture('薪資同步快照', [EXPECTED_PAYROLL_SNAPSHOT_HEADERS]);
+  const lines = createSheetFixture('薪資明細', [EXPECTED_PAYROLL_LINE_HEADERS]);
+  const summaries = createSheetFixture('薪資結算', [EXPECTED_PAYROLL_SUMMARY_HEADERS]);
+  const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
+  const payment = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
+  const audit = createSheetFixture('操作紀錄', [['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因']]);
+  const spreadsheet = createSpreadsheetFixture([rules, source, snapshot, lines, summaries, disputes, payment, audit]);
+  const pages = [[
+    {
+      id: 'pay-0831',
+      class: { id: 'class-0831', nameZhHant: 'A－空環 Lv.1' },
+      classTime: '2026-08-31T10:30:00Z',
+      customersAttended: 4,
+      instructors: [{ id: 'teacher-1', firstName: '月底老師' }],
+    },
+    {
+      id: 'pay-0901',
+      class: { id: 'class-0901', nameZhHant: 'A－空環 Lv.1' },
+      classTime: '2026-09-01T10:30:00Z',
+      customersAttended: 4,
+      instructors: [{ id: 'teacher-2', firstName: '下月老師' }],
+    },
+  ]];
+  const calls = [];
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+    UrlFetchApp: {
+      fetch(url) {
+        calls.push(url);
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify(pages.shift() || []),
+        };
+      },
+    },
+  });
+
+  const result = backend.syncPayrollMonth_({
+    teacherName: '管理員甲',
+    role: '管理員',
+    managementCapabilities: ['payroll_admin'],
+  }, '2026-08');
+
+  assert.match(calls[0], /date_to=2026-09-01/);
+  assert.equal(result.courseCount, 1);
+  assert.equal(result.lineCount, 1);
+  assert.deepEqual(snapshot.values.slice(1).filter((row) => row[2]).map((row) => row[2]), ['pay-0831']);
+  assert.deepEqual(lines.values.slice(1).filter((row) => row[3]).map((row) => row[3]), ['pay-0831']);
+  assert.equal(snapshot.values.some((row) => row[1] === '2026-09'), false);
 });
 
 test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {

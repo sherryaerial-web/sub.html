@@ -3602,8 +3602,31 @@ function stripNewTeacherMarker_(courseName) {
   ));
 }
 
+function getCoursePromotionType_(courseName) {
+  var name = cleanText_(courseName);
+  if (/(?:〈\s*新老師\s*〉|<\s*新老師\s*>|（\s*新老師\s*）|\(\s*新老師\s*\)|【\s*新老師\s*】)\s*$/.test(name)) {
+    return 'new-teacher';
+  }
+  if (/(?:〈\s*優惠\s*〉|<\s*優惠\s*>|（\s*優惠\s*）|\(\s*優惠\s*\)|【\s*優惠\s*】)\s*$/.test(name)) {
+    return 'monthly-discount';
+  }
+  return '';
+}
+
+function stripCoursePromotionMarker_(courseName) {
+  return cleanText_(String(courseName || '').replace(
+    /\s*(?:〈\s*(?:新老師|優惠)\s*〉|<\s*(?:新老師|優惠)\s*>|（\s*(?:新老師|優惠)\s*）|\(\s*(?:新老師|優惠)\s*\)|【\s*(?:新老師|優惠)\s*】)\s*$/,
+    ''
+  ));
+}
+
+function applyCoursePromotionType_(courseName, promotionType) {
+  var baseName = stripCoursePromotionMarker_(courseName);
+  return cleanText_(baseName + (promotionType === 'new-teacher' ? '〈新老師〉' : ''));
+}
+
 function stripCourseRoom_(courseName) {
-  return stripNewTeacherMarker_(
+  return stripCoursePromotionMarker_(
     String(courseName || '').replace(/^\s*[A-D]\s*[－—–-]\s*/i, '')
   );
 }
@@ -3619,6 +3642,7 @@ function normalizeObClassCatalog_(rawClasses) {
     var fullCourseName = cleanText_(item && (
       item.nameZhHant || item.nameEn || item.name || item.fullCourseName || item.courseName
     ));
+    var promotionType = getCoursePromotionType_(fullCourseName);
     var courseName = stripCourseRoom_(fullCourseName);
     var courseKey = normalizeCourseCatalogKey_(courseName);
     if (!classId || !courseName || !courseKey || seen[classId]) return null;
@@ -3629,7 +3653,8 @@ function normalizeObClassCatalog_(rawClasses) {
       courseName: courseName,
       courseKey: courseKey,
       room: getCourseRoom_(fullCourseName),
-      category: getCourseCategory_(courseName)
+      category: getCourseCategory_(courseName),
+      promotionType: promotionType
     };
   }).filter(Boolean).sort(function(a, b) {
     return [a.category, a.courseName, a.room, a.classId].join('|')
@@ -3705,6 +3730,23 @@ function getCourseWeekdayNumber_(dateValue) {
   var match = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/.exec(formatMyDate(dateValue));
   if (!match) return '';
   return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))).getUTCDay();
+}
+
+function getCourseMonthKey_(dateValue) {
+  var match = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/.exec(formatMyDate(dateValue));
+  if (!match) return '';
+  return match[1] + '-' + String(Number(match[2])).padStart(2, '0');
+}
+
+function isTeacherNewInMonth_(teacherName, targetDate, courseRows) {
+  var teacher = cleanText_(teacherName);
+  var monthKey = getCourseMonthKey_(targetDate);
+  if (!teacher || !monthKey) return false;
+  return (courseRows || []).some(function(row) {
+    return cleanText_(row && row[3]) === teacher &&
+      getCourseMonthKey_(row && row[0]) === monthKey &&
+      getCoursePromotionType_(row && row[2]) === 'new-teacher';
+  });
 }
 
 function isTermCourseName_(courseName) {
@@ -4261,16 +4303,21 @@ function getObClassCatalog_() {
   return getCourseListClassCatalogFallback_();
 }
 
-function resolveCatalogCourseForRoom_(catalog, courseKey, targetCourseName) {
+function resolveCatalogCourseForRoom_(catalog, courseKey, targetCourseName, promotionType) {
   var wantedKey = normalizeCourseCatalogKey_(courseKey);
   var matches = (catalog || []).filter(function(item) { return item.courseKey === wantedKey; });
   if (!matches.length) return null;
+  var wantedPromotionType = cleanText_(promotionType);
+  var promotionMatches = matches.filter(function(item) {
+    return cleanText_(item.promotionType) === wantedPromotionType;
+  });
   var targetRoom = getCourseRoom_(targetCourseName);
-  var exactRoom = matches.filter(function(item) { return item.room === targetRoom; })[0] || null;
-  var selected = exactRoom || matches[0];
+  var exactRoom = promotionMatches.filter(function(item) { return item.room === targetRoom; })[0] || null;
+  var selected = exactRoom || promotionMatches[0] || matches[0];
+  var selectedCourseName = applyCoursePromotionType_(selected.courseName, wantedPromotionType);
   return {
     actualClassId: exactRoom ? exactRoom.classId : '',
-    actualCourseName: targetRoom ? targetRoom + '－' + selected.courseName : selected.courseName,
+    actualCourseName: targetRoom ? targetRoom + '－' + selectedCourseName : selectedCourseName,
     category: selected.category,
     needsCreation: !exactRoom
   };
@@ -5003,6 +5050,8 @@ function claimSubstitute_(session, items) {
 
       var change = validateClaimChange_({
         teacher: teacher,
+        targetDate: formatMyDate(row[2]),
+        courseRows: courseRows,
         targetCourseName: cleanText_(row[4]),
         targetCalendarId: cleanText_(row[10]),
         handlingType: item.handlingType,
@@ -5329,7 +5378,7 @@ function reconcileObChanges_(session) {
       var groupRow = leaveRows[groupRowIndex];
       if (!isLeaveRowInMonth_(groupRow, targetMonth)) continue;
       var groupId = cleanText_(groupRow[21]);
-      if (!groupId || getObExpectation_(groupRow).restoreType) continue;
+      if (!groupId || getObExpectation_(groupRow, courseRows).restoreType) continue;
       if (ownSpecialRequestByGroup[groupId]) continue;
       if (!specialGroupRows[groupId]) specialGroupRows[groupId] = [];
       specialGroupRows[groupId].push({ rowIndex: groupRowIndex, row: groupRow });
@@ -5340,7 +5389,7 @@ function reconcileObChanges_(session) {
     for (var rowIndex = 1; rowIndex < leaveRows.length; rowIndex++) {
       var row = leaveRows[rowIndex];
       if (!isLeaveRowInMonth_(row, targetMonth) || !isActiveObWorkRow_(row)) continue;
-      var expectation = getObExpectation_(row);
+      var expectation = getObExpectation_(row, courseRows);
       var specialGroupId = cleanText_(row[21]);
       if (specialGroupId && ownSpecialRequestByGroup[specialGroupId] && !expectation.restoreType) {
         continue;
@@ -5357,7 +5406,7 @@ function reconcileObChanges_(session) {
             rowIndex: record.rowIndex,
             row: record.row,
             effectiveCalendarId: groupOutcome.effectiveCalendarId,
-            expectation: getObExpectation_(record.row),
+            expectation: getObExpectation_(record.row, courseRows),
             differences: groupOutcome.differences
           });
         });
@@ -5661,7 +5710,7 @@ function isActiveObWorkRow_(row) {
   return ['', '待核對', '核對異常'].indexOf(cleanText_(row[15])) !== -1;
 }
 
-function getObExpectation_(row) {
+function getObExpectation_(row, courseRows) {
   var changeStatus = cleanText_(row[18]);
   if (cleanText_(row[5]) === '延後占用') {
     return {
@@ -5693,10 +5742,23 @@ function getObExpectation_(row) {
       closeType: ''
     };
   }
+  var storedCourse = cleanText_(row[12]) || cleanText_(row[4]);
+  var promotionType = isTeacherNewInMonth_(row[6], row[2], courseRows) ? 'new-teacher' : '';
+  var storedPromotionType = getCoursePromotionType_(storedCourse);
+  var expectedClassId = cleanText_(row[11]);
+  if (storedPromotionType !== promotionType) expectedClassId = '';
+  if (expectedClassId) {
+    var matchingClassRow = (courseRows || []).filter(function(courseRow) {
+      return cleanText_(courseRow && courseRow[5]) === expectedClassId;
+    })[0] || null;
+    if (matchingClassRow && getCoursePromotionType_(matchingClassRow[2]) !== promotionType) {
+      expectedClassId = '';
+    }
+  }
   return {
     teacher: cleanText_(row[6]),
-    course: cleanText_(row[12]) || cleanText_(row[4]),
-    classId: cleanText_(row[11]),
+    course: applyCoursePromotionType_(storedCourse, promotionType),
+    classId: expectedClassId,
     expectedTime: cleanText_(row[21]) ? '' : formatMyTime(row[25]),
     restoreType: '',
     closeType: ''
@@ -5713,6 +5775,9 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
     var obCourse = findObCourseByCalendarId_(replacementId);
     if (!obCourse) throw new Error('找不到選擇的替代 OB 課程，請先重新同步。');
     var record = getLeaveRecordByIdUnlocked_(id);
+    var courseSheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), CONFIG.COURSE_SHEET);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
     if (formatMyDate(record.row[2]) !== obCourse.date) {
       throw new Error('替代 OB 課程必須與這堂代課在同一天。');
     }
@@ -5746,7 +5811,7 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
             : '';
         }
 
-        var expectation = getObExpectation_(nextRow);
+        var expectation = getObExpectation_(nextRow, courseRows);
         var differences = getObCourseDifferences_(
           replacementId,
           obCourse.sourceRow,
@@ -6081,6 +6146,9 @@ function validateClaimChange_(claim) {
   var actualCourseName = '';
   var actualCategory = '';
   var handlingType = '';
+  var promotionType = isTeacherNewInMonth_(teacher, item.targetDate, item.courseRows)
+    ? 'new-teacher'
+    : '';
 
   if (!teacher || !targetCourseName) throw new Error('代課課程資料不完整，請重新整理。');
 
@@ -6089,8 +6157,21 @@ function validateClaimChange_(claim) {
       throw new Error('這堂課不在您的可教授類別中，不能沿用原課程。');
     }
     var originalCourse = findObCourseByCalendarId_(item.targetCalendarId);
-    actualClassId = originalCourse ? originalCourse.classId : '';
-    actualCourseName = targetCourseName;
+    if (originalCourse && getCoursePromotionType_(originalCourse.courseName) === promotionType) {
+      actualClassId = originalCourse.classId;
+      actualCourseName = applyCoursePromotionType_(targetCourseName, promotionType);
+    } else {
+      var resolvedOriginalCourse = resolveCatalogCourseForRoom_(
+        getObClassCatalog_(),
+        normalizeCourseCatalogKey_(targetCourseName),
+        targetCourseName,
+        promotionType
+      );
+      actualClassId = resolvedOriginalCourse ? resolvedOriginalCourse.actualClassId : '';
+      actualCourseName = resolvedOriginalCourse
+        ? resolvedOriginalCourse.actualCourseName
+        : applyCoursePromotionType_(targetCourseName, promotionType);
+    }
     actualCategory = targetCategory;
     difficulty = parseClaimCourseOption_(targetCourseName).difficulty;
     note = '';
@@ -6108,7 +6189,8 @@ function validateClaimChange_(claim) {
       var recurringResolvedCourse = resolveCatalogCourseForRoom_(
         getObClassCatalog_(),
         recurringOption.courseKey,
-        targetCourseName
+        targetCourseName,
+        promotionType
       );
       if (!recurringResolvedCourse) {
         throw new Error('找不到選擇的 OB 課程項目，請重新整理。');
@@ -6122,7 +6204,8 @@ function validateClaimChange_(claim) {
       var resolvedCourse = resolveCatalogCourseForRoom_(
         getObClassCatalog_(),
         selectedCourseKey,
-        targetCourseName
+        targetCourseName,
+        promotionType
       );
       if (!resolvedCourse) throw new Error('找不到選擇的 OB 課程項目，請重新整理。');
       actualClassId = resolvedCourse.actualClassId;
@@ -6135,8 +6218,21 @@ function validateClaimChange_(claim) {
       if (!actualClassId) throw new Error('請選擇要改用的 OB 現有課程。');
       var existingCourse = findObCourseByClassId_(actualClassId);
       if (!existingCourse) throw new Error('找不到選擇的 OB 現有課程，請重新整理。');
-      actualCourseName = existingCourse.courseName;
-      actualCategory = existingCourse.category;
+      if (getCoursePromotionType_(existingCourse.courseName) === promotionType) {
+        actualCourseName = applyCoursePromotionType_(existingCourse.courseName, promotionType);
+        actualCategory = existingCourse.category;
+      } else {
+        var resolvedExistingCourse = resolveCatalogCourseForRoom_(
+          getObClassCatalog_(),
+          normalizeCourseCatalogKey_(existingCourse.courseName),
+          targetCourseName,
+          promotionType
+        );
+        if (!resolvedExistingCourse) throw new Error('找不到選擇的 OB 現有課程，請重新整理。');
+        actualClassId = resolvedExistingCourse.actualClassId;
+        actualCourseName = resolvedExistingCourse.actualCourseName;
+        actualCategory = resolvedExistingCourse.category;
+      }
       difficulty = parseClaimCourseOption_(actualCourseName).difficulty;
       handlingType = '改用既有 OB 課程';
     }
@@ -6146,7 +6242,7 @@ function validateClaimChange_(claim) {
     if (!actualCourseName) throw new Error('請填寫特別課名稱。');
     handlingType = '需要新增課程';
   } else if (handlingKey === 'new') {
-    actualCourseName = cleanText_(item.actualCourseName);
+    actualCourseName = applyCoursePromotionType_(item.actualCourseName, promotionType);
     actualCategory = normalizeTeacherCapabilities_([item.category])[0] || '';
     if (!actualCourseName) throw new Error('請填寫需要新增的課程名稱。');
     if (!actualCategory) throw new Error('請選擇需要新增課程的類別。');

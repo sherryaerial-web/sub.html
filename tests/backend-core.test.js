@@ -1927,6 +1927,7 @@ test('deduplicates OB course items across rooms for teacher selection', () => {
     { id: 404, nameZhHant: 'A－空環 Lv.1' },
     { id: 505, nameZhHant: 'A－皮拉提斯' },
     { id: 606, nameZhHant: 'B－皮拉提斯〈新老師〉' },
+    { id: 607, nameZhHant: 'B－皮拉提斯' },
     { id: 707, nameZhHant: 'C－柔軟度開發〈新老師〉' },
   ]);
 
@@ -1940,7 +1941,7 @@ test('deduplicates OB course items across rooms for teacher selection', () => {
   ]);
 
   const resolved = backend.resolveCatalogCourseForRoom_(catalog, '皮拉提斯', 'B－舞綢 Lv.2');
-  assert.equal(resolved.actualClassId, '606');
+  assert.equal(resolved.actualClassId, '607');
   assert.equal(resolved.actualCourseName, 'B－皮拉提斯');
 });
 
@@ -2056,6 +2057,7 @@ test('re-normalizes cached OB course items before teacher selection', () => {
     courseKey: '皮拉提斯',
     room: 'B',
     category: '地板課程',
+    promotionType: 'new-teacher',
   }]);
 });
 
@@ -2698,6 +2700,97 @@ test('two invited teachers with stale lists produce exactly one claim winner', (
   assert.equal(claimedRow[5], '已領取');
   assert.equal(claimedRow[6], '老師甲');
   assert.equal(auditSheet.values.filter((row) => row[2] === '領取代課' && row[3] === 'leave-c').length, 1);
+});
+
+test('ordinary claim switches a monthly discount choice to the regular OB class', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    teacherACapabilities: '舞綢',
+    courseRows: [
+      ['2026/09/27', '17:30', 'A－空環 Lv.2~3', '老師乙', 'calendar-target', 'class-ring', 'teacher-b', '否', ''],
+      ['2026/09/01', '18:30', 'A－舞綢 Lv.1-2〈優惠〉', '老師丙', 'calendar-discount-1', 'class-silk-discount', 'teacher-c', '否', ''],
+      ['2026/09/08', '18:30', 'A－舞綢 Lv.1-2〈優惠〉', '老師丙', 'calendar-discount-2', 'class-silk-discount', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/27', '17:30', 'A－空環 Lv.2~3',
+      '確認中', '', '', '', 'leave-target', 'calendar-target',
+    ]],
+  });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 'class-silk-regular', nameZhHant: 'A－舞綢 Lv.1-2' },
+    { id: 'class-silk-discount', nameZhHant: 'A－舞綢 Lv.1-2〈優惠〉' },
+    { id: 'class-silk-new', nameZhHant: 'A－舞綢 Lv.1-2〈新老師〉' },
+  ]);
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-target', handlingType: 'existing',
+    courseTypeKey: '舞綢', difficulty: 'Lv.1-2',
+  }]);
+
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[11], 'class-silk-regular');
+  assert.equal(row[12], 'A－舞綢 Lv.1-2');
+});
+
+test('new teacher claim switches any ordinary substitute to the new-teacher OB class', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    teacherACapabilities: '舞綢',
+    courseRows: [
+      ['2026/09/27', '17:30', 'A－空環 Lv.2~3', '老師乙', 'calendar-target', 'class-ring', 'teacher-b', '否', ''],
+      ['2026/09/02', '19:00', 'B－空環 Lv.0〈新老師〉', '老師甲', 'calendar-own-new', 'class-ring-new', 'teacher-a', '否', ''],
+      ['2026/09/01', '18:30', 'A－舞綢 Lv.1-2〈優惠〉', '老師丙', 'calendar-discount-1', 'class-silk-discount', 'teacher-c', '否', ''],
+      ['2026/09/08', '18:30', 'A－舞綢 Lv.1-2〈優惠〉', '老師丙', 'calendar-discount-2', 'class-silk-discount', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/27', '17:30', 'A－空環 Lv.2~3',
+      '確認中', '', '', '', 'leave-target', 'calendar-target',
+    ]],
+  });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 'class-silk-regular', nameZhHant: 'A－舞綢 Lv.1-2' },
+    { id: 'class-silk-discount', nameZhHant: 'A－舞綢 Lv.1-2〈優惠〉' },
+    { id: 'class-silk-new', nameZhHant: 'A－舞綢 Lv.1-2〈新老師〉' },
+  ]);
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-target', handlingType: 'existing',
+    courseTypeKey: '舞綢', difficulty: 'Lv.1-2',
+  }]);
+
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[11], 'class-silk-new');
+  assert.equal(row[12], 'A－舞綢 Lv.1-2〈新老師〉');
+});
+
+test('direct claim of a monthly discount course uses the regular OB class for a non-new substitute', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    teacherACapabilities: '舞綢',
+    courseRows: [[
+      '2026/09/27', '17:30', 'A－舞綢 Lv.1-2〈優惠〉', '老師乙',
+      'calendar-target', 'class-silk-discount', 'teacher-b', '否', '',
+    ]],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/27', '17:30', 'A－舞綢 Lv.1-2〈優惠〉',
+      '確認中', '', '', '', 'leave-target', 'calendar-target',
+    ]],
+  });
+  backend.getObClassCatalog_ = () => backend.normalizeObClassCatalog_([
+    { id: 'class-silk-regular', nameZhHant: 'A－舞綢 Lv.1-2' },
+    { id: 'class-silk-discount', nameZhHant: 'A－舞綢 Lv.1-2〈優惠〉' },
+  ]);
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-target', handlingType: 'original',
+  }]);
+
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[11], 'class-silk-regular');
+  assert.equal(row[12], 'A－舞綢 Lv.1-2');
 });
 
 test('ordinary delay atomically claims the source and reserves the next open leave', () => {
@@ -4147,6 +4240,50 @@ test('reconcile marks exact OB teacher and class matches and reports mismatches'
   assert.match(mismatch[17], /代課老師|課程/);
   assert.equal(missing[15], '核對異常');
   assert.match(missing[17], /找不到/);
+});
+
+test('reconciliation accepts a regular OB course for a legacy monthly-discount expectation', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/27', '17:30', 'A－舞綢 Lv.1-2', '老師甲',
+      'calendar-target', 'class-silk-regular', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/27', '17:30', 'A－空環 Lv.2~3',
+      '已領取', '老師甲', '', '待處理', 'leave-target', 'calendar-target',
+      '', 'A－舞綢 Lv.1-2〈優惠〉', 'Lv.1-2', '需要新增課程', '待核對',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
+});
+
+test('reconciliation requires the new-teacher marker when the substitute is new that month', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/27', '17:30', 'A－舞綢 Lv.1-2〈新老師〉', '老師甲', 'calendar-target', 'class-silk-new', 'teacher-a', '是', ''],
+      ['2026/09/02', '19:00', 'B－空環 Lv.0〈新老師〉', '老師甲', 'calendar-own-new', 'class-ring-new', 'teacher-a', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/27', '17:30', 'A－空環 Lv.2~3',
+      '已領取', '老師甲', '', '待處理', 'leave-target', 'calendar-target',
+      '', 'A－舞綢 Lv.1-2', 'Lv.1-2', '需要新增課程', '待核對',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
 });
 
 function createSpecialGroupReconciliationRows(groupId = 'special-group-a') {

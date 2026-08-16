@@ -3376,8 +3376,13 @@ function pauseLeaves_(session, paused) {
 function getAvailableSubstitutes_(session) {
   var teacher = getSessionTeacherName_(session);
   assertTeacherExists_(teacher);
-  var capabilities = getTeacherCapabilities_(teacher);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  var capabilities = getEffectiveTeacherCapabilities_(
+    teacher,
+    courseSheet.getDataRange().getValues().slice(1)
+  );
   var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
   assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
   var invitationValues = invitationSheet.getDataRange().getValues();
@@ -3467,13 +3472,13 @@ function getClaimOptions_(session) {
   if (areClaimsPaused_() || !hasActiveInvitation_(teacher)) {
     return { capabilities: [], classes: [] };
   }
-  var capabilities = getTeacherCapabilities_(teacher);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
   var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
   assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
   var courseRows = courseSheet.getDataRange().getValues().slice(1);
+  var capabilities = getEffectiveTeacherCapabilities_(teacher, courseRows);
   var allLeaveRows = leaveSheet.getDataRange().getValues().slice(1);
   var pendingRows = allLeaveRows.filter(function(row) {
     return isOrdinaryOpenLeaveRow_(row);
@@ -3763,9 +3768,10 @@ function getRecurringClaimOptionsForTeacher_(teacher) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
   assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  var courseRows = courseSheet.getDataRange().getValues().slice(1);
   return buildRecurringClaimCourseOptions_(
-    courseSheet.getDataRange().getValues().slice(1),
-    getTeacherCapabilities_(teacher)
+    courseRows,
+    getEffectiveTeacherCapabilities_(teacher, courseRows)
   );
 }
 
@@ -4314,9 +4320,44 @@ function getTeacherCapabilities_(teacherName) {
   return normalizeTeacherCapabilities_(account.capabilities);
 }
 
+function getRecurringTeacherCapabilities_(teacherName, courseRows) {
+  var teacher = cleanText_(teacherName);
+  if (!teacher) return [];
+  var categories = (courseRows || []).map(function(row) {
+    var courseName = cleanText_(row && row[2]);
+    if (cleanText_(row && row[3]) !== teacher || !courseName ||
+        /\u7279\u5225\u8ab2|\u5834\u5730\u79df\u501f/.test(courseName) || isTermCourseName_(courseName)) {
+      return '';
+    }
+    var category = getCourseCategory_(courseName);
+    return category === '\u5176\u4ed6' ? '' : category;
+  });
+  return normalizeTeacherCapabilities_(categories);
+}
+
+function getEffectiveTeacherCapabilities_(teacherName, courseRows) {
+  return normalizeTeacherCapabilities_(
+    getTeacherCapabilities_(teacherName).concat(
+      getRecurringTeacherCapabilities_(teacherName, courseRows)
+    )
+  );
+}
+
+function getEffectiveTeacherCapabilitiesFromSheet_(teacherName) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var courseSheet = ss.getSheetByName(CONFIG.COURSE_SHEET);
+  if (!courseSheet) return getTeacherCapabilities_(teacherName);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  return getEffectiveTeacherCapabilities_(
+    teacherName,
+    courseSheet.getDataRange().getValues().slice(1)
+  );
+}
+
 function teacherCanTeachCategory_(teacher, category) {
   var normalizedCategory = normalizeTeacherCapabilities_([category])[0] || '';
-  return !!normalizedCategory && getTeacherCapabilities_(teacher).indexOf(normalizedCategory) !== -1;
+  return !!normalizedCategory &&
+    getEffectiveTeacherCapabilitiesFromSheet_(teacher).indexOf(normalizedCategory) !== -1;
 }
 
 function areClaimsPaused_() {

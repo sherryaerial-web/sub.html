@@ -527,7 +527,9 @@ function createInvitationBackend(options = {}) {
   const accountSheet = createSheetFixture('登入帳號', [
     EXPECTED_ACCOUNT_HEADERS,
     createAccount(bootstrap, '管理員甲', '9999', { role: '管理員' }).concat('空環'),
-    createAccount(bootstrap, '老師甲', '1234').concat(options.teacherACapabilities || '空環'),
+    createAccount(bootstrap, '老師甲', '1234').concat(
+      options.teacherACapabilities == null ? '空環' : options.teacherACapabilities
+    ),
     createAccount(bootstrap, '老師乙', '5678').concat(options.teacherBCapabilities || '空環'),
     createAccount(bootstrap, '老師丙', '2468').concat(options.teacherCCapabilities || '空環'),
   ]);
@@ -2920,7 +2922,7 @@ test('batch invitation is all-or-nothing when its audit batch fails', () => {
   assert.equal(JSON.stringify(auditSheet.values), auditBefore);
 });
 
-test('category capability validation reads only the protected account record', () => {
+test('category capability validation combines protected account settings with regular OB courses', () => {
   const { backend } = createInvitationBackend({ teacherACapabilities: '空環、瑜伽 / 舞綢' });
 
   assert.equal(backend.teacherCanTeachCategory_('老師甲', '空環'), true);
@@ -3543,6 +3545,27 @@ test('claim options return only invited teacher capabilities and authorised OB c
   ]);
   assert.equal(options.pinHash, undefined);
   assert.equal(options.role, undefined);
+});
+
+test('teacher regular OB courses supplement missing account teaching capabilities', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    teacherACapabilities: '',
+    courseRows: [
+      ['2026/09/01', '09:00', 'A－空瑜 Lv.1', '老師甲', 'calendar-yoga-1', 'class-yoga-1', 'teacher-a', '否', ''],
+      ['2026/09/08', '09:00', 'A－空瑜 Lv.1', '老師甲', 'calendar-yoga-2', 'class-yoga-1', 'teacher-a', '否', ''],
+      ['2026/09/02', '10:00', 'A－空環技巧訓練期班', '老師甲', 'calendar-term', 'class-term', 'teacher-a', '否', ''],
+      ['2026/09/03', '11:00', 'A－舞綢特別課', '老師甲', 'calendar-special', 'class-special', 'teacher-a', '否', ''],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const options = backend.getClaimOptions_(teacherASession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(options.capabilities)), ['空瑜']);
+  assert.equal(options.classes.some((item) => item.category === '空瑜'), true);
+  assert.equal(options.capabilities.includes('空環'), false);
+  assert.equal(options.capabilities.includes('舞綢'), false);
+  assert.equal(backend.teacherCanTeachCategory_('老師甲', '空瑜'), true);
 });
 
 test('uninvited claim-options route returns no capabilities or OB classes', () => {

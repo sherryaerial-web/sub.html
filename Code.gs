@@ -5838,9 +5838,7 @@ function getAdminDashboard_(session) {
           ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1;
       })),
       changeRequests: leaves.filter(function(item) {
-        return item.status === '已取消' ||
-          ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1 ||
-          /取消|退出/.test(item.changeStatus);
+        return ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1;
       }),
       exceptions: leaves.filter(function(item, index) {
         if (ownSpecialGroupIds[item.specialGroupId]) return false;

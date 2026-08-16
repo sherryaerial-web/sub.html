@@ -3782,6 +3782,7 @@ test('cancel request after a claim requires a reason and admin can approve it', 
 
   const beforeRestore = backend.getAdminDashboard_(adminSession);
   assert.ok(beforeRestore.obWork.some((item) => item.substituteId === 'leave-cancel-request'));
+  assert.ok(!beforeRestore.changeRequests.some((item) => item.substituteId === 'leave-cancel-request'));
   assert.ok(!beforeRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
 
   const reconciliation = backend.reconcileObChanges_(adminSession);
@@ -3791,7 +3792,7 @@ test('cancel request after a claim requires a reason and admin can approve it', 
   assert.equal(leaveSheet.values[1][18], '取消後已回復 OB');
   const afterRestore = backend.getAdminDashboard_(adminSession);
   assert.ok(!afterRestore.obWork.some((item) => item.substituteId === 'leave-cancel-request'));
-  assert.ok(afterRestore.changeRequests.some((item) => item.substituteId === 'leave-cancel-request'));
+  assert.ok(!afterRestore.changeRequests.some((item) => item.substituteId === 'leave-cancel-request'));
   assert.ok(!afterRestore.completed.some((item) => item.substituteId === 'leave-cancel-request'));
 });
 
@@ -4391,19 +4392,31 @@ test('admin dashboard separates work queues without exposing account secrets', (
   assert.doesNotMatch(serialized, /PIN 雜湊|fixed-salt|Salt/);
 });
 
-test('admin dashboard keeps cancelled leaves in cancellation history instead of completed', () => {
+test('admin change-request queue includes only pending cancellation or withdrawal requests', () => {
   const { backend, adminSession } = createInvitationBackend({
-    leaveRows: [[
-      '2026-08-10 00:25:41', '嗨底 Heidi', '2026/09/07', '20:00', 'D－空瑜 Lv.0',
-      '已取消', '', '', '', 'leave-cancelled', 'calendar-cancelled', '', '', '', '', '', '', '',
-      '已自行取消', '', '',
-    ]],
+    leaveRows: [
+      [
+        '2026-08-10 00:25:41', '芮錤 77', '2026/09/27', '17:30', 'B－空環 Lv.1~3',
+        '已取消', '', '', '', 'leave-cancelled', 'calendar-cancelled', '', '', '', '', '', '', '',
+        '已自行取消', '', '',
+      ],
+      [
+        '2026-08-10 00:25:41', 'Lily Yellow', '2026/09/05', '18:15', 'A－舞綢 Lv.3~5',
+        '已領取', 'Jina', '', '', 'leave-withdraw-pending', 'calendar-withdraw', '', '', '', '', '', '', '',
+        '申請退出中', '', '',
+      ],
+      [
+        '2026-08-10 00:25:41', '老師乙', '2026/09/06', '18:15', 'A－空環 Lv.1',
+        '確認中', '', '', '', 'leave-rejected', 'calendar-rejected', '', '', '', '', '', '', '',
+        '取消申請已駁回', '', '',
+      ],
+    ],
     nextMonth: '2026-09',
   });
 
   const dashboard = backend.getAdminDashboard_(adminSession);
 
-  assert.deepEqual(dashboard.changeRequests.map((item) => item.substituteId), ['leave-cancelled']);
+  assert.deepEqual(dashboard.changeRequests.map((item) => item.substituteId), ['leave-withdraw-pending']);
   assert.deepEqual(dashboard.completed, []);
 });
 

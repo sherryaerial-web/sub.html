@@ -3649,6 +3649,26 @@ test('catalog course choice marks an absent room version for admin creation', ()
   assert.equal(normalized.handlingType, '需要新增課程');
 });
 
+test('custom floor course accepts a teacher supplied name without difficulty', () => {
+  const { backend } = createInvitationBackend({ teacherACapabilities: '地板課程' });
+
+  const normalized = backend.validateClaimChange_({
+    teacher: '老師甲',
+    targetCourseName: 'B－舞綢 Lv.2',
+    handlingType: 'new',
+    actualCourseName: '筋膜放鬆新主題',
+    category: '地板課程',
+    difficulty: '',
+    note: 'Jina 自訂課程',
+  });
+
+  assert.equal(normalized.actualCourseName, '筋膜放鬆新主題');
+  assert.equal(normalized.category, '地板課程');
+  assert.equal(normalized.difficulty, '');
+  assert.equal(normalized.handlingType, '需要新增課程');
+  assert.equal(normalized.summary, '需要新增課程：筋膜放鬆新主題；備註：Jina 自訂課程');
+});
+
 test('course type and difficulty resolve independently to the exact room OB class', () => {
   const recurringRows = [
     ['2026/08/01', '09:00', 'A－空環 Lv.1', '老師乙', 'cal-ring-1a', 'class-ring-1a'],
@@ -4244,6 +4264,25 @@ test('reconcile and dashboard exceptions only include next-month leave records',
   );
 });
 
+test('admin replacement choices only include the target month', () => {
+  const { backend, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/08/31', '14:00', 'B－空環 Lv.1~2', '老師甲', 'calendar-aug', 'class-ring', 'teacher-a', '否', ''],
+      ['2026/09/18', '14:00', 'B－空環 Lv.1~2', '老師乙', 'calendar-sep', 'class-ring', 'teacher-b', '否', ''],
+    ],
+    leaveRows: [],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getAdminDashboard_(adminSession).replacementOptions)), [{
+    calendarId: 'calendar-sep',
+    courseName: 'B－空環 Lv.1~2',
+    teacherName: '老師乙',
+    date: '2026/09/18',
+    time: '14:00',
+  }]);
+});
+
 test('reconciliation rolls back every checked row when its audit batch fails', () => {
   const { backend, leaveSheet, auditSheet, adminSession } = createInvitationBackend({
     courseRows: [
@@ -4271,25 +4310,54 @@ test('reconciliation rolls back every checked row when its audit batch fails', (
   assert.equal(JSON.stringify(auditSheet.getDataRange().getValues()), auditBefore);
 });
 
-test('replacement calendar linking preserves the original ID and can then reconcile', () => {
+test('replacement calendar linking adopts its time and immediately reconciles the row', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     courseRows: [[
-      '2026/08/15', '13:00', '空環入門', '老師乙', 'calendar-new', 'class-new', 'teacher-b', '是', '',
+      '2026/08/15', '14:00', '空環入門', '老師乙', 'calendar-new', 'class-new', 'teacher-b', '是', '',
     ]],
     leaveRows: [[
-      '時間', '老師甲', '2026/08/15', '13:00', '舞綢', '已領取', '老師乙', '需要新增', '',
-      'leave-new-calendar', 'calendar-old', '', '空環入門', '', '需要新增課程', '', '', '', '', '空環',
+      '時間', '老師甲', '2026/08/15', '14:15', '舞綢', '已領取', '老師乙', '需要新增', '待處理',
+      'leave-new-calendar', 'calendar-old', 'class-new', '空環入門', '', '需要新增課程', '核對異常', '', '時間不一致', '', '空環',
+      '', '', '', '', '', '14:15', 0,
     ]],
   });
 
-  backend.linkReplacementCalendarItem_(adminSession, 'leave-new-calendar', 'calendar-new');
+  const result = backend.linkReplacementCalendarItem_(adminSession, 'leave-new-calendar', 'calendar-new');
+
   assert.equal(leaveSheet.values[1][10], 'calendar-old');
   assert.equal(leaveSheet.values[1][20], 'calendar-new');
-  assert.equal(leaveSheet.values[1][15], '待核對');
-
-  const result = backend.reconcileObChanges_(adminSession);
-  assert.equal(result.matched, 1);
+  assert.equal(leaveSheet.values[1][25], '14:00');
+  assert.equal(leaveSheet.values[1][26], -15);
+  assert.equal(leaveSheet.values[1][8], '已完成');
   assert.equal(leaveSheet.values[1][15], '已核對');
+  assert.equal(leaveSheet.values[1][17], '');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    substituteId: 'leave-new-calendar',
+    replacementCalendarId: 'calendar-new',
+    verificationStatus: '已核對',
+    differences: [],
+    actualStartTime: '14:00',
+  });
+});
+
+test('replacement calendar linking rejects a course from a different date without writing', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    courseRows: [[
+      '2026/08/16', '14:00', '空環入門', '老師乙', 'calendar-wrong-date', 'class-new', 'teacher-b', '是', '',
+    ]],
+    leaveRows: [[
+      '時間', '老師甲', '2026/08/15', '14:15', '舞綢', '已領取', '老師乙', '需要新增', '待處理',
+      'leave-wrong-date', 'calendar-old', 'class-new', '空環入門', '', '需要新增課程', '核對異常', '', '時間不一致', '', '空環',
+      '', '', '', '', '', '14:15', 0,
+    ]],
+  });
+  const before = JSON.stringify(leaveSheet.values[1]);
+
+  assert.throws(
+    () => backend.linkReplacementCalendarItem_(adminSession, 'leave-wrong-date', 'calendar-wrong-date'),
+    /同一天/,
+  );
+  assert.equal(JSON.stringify(leaveSheet.values[1]), before);
 });
 
 test('reclaim preserves a verified replacement Calendar ID for later reconciliation', () => {

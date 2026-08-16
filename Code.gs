@@ -5669,6 +5669,9 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
     var obCourse = findObCourseByCalendarId_(replacementId);
     if (!obCourse) throw new Error('找不到選擇的替代 OB 課程，請先重新同步。');
     var record = getLeaveRecordByIdUnlocked_(id);
+    if (formatMyDate(record.row[2]) !== obCourse.date) {
+      throw new Error('替代 OB 課程必須與這堂代課在同一天。');
+    }
     var changeStatus = cleanText_(record.row[18]);
     var manualReview = cleanText_(record.row[15]) === '待人工核對';
     if (!manualReview && cleanText_(record.row[5]) !== '已領取' &&
@@ -5676,9 +5679,6 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
       throw new Error('只有待處理 OB 的紀錄可以連結替代 OB 課程。');
     }
     var before = cleanText_(record.row[20]) || cleanText_(record.row[10]);
-    var nextVerification = ['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) !== -1
-      ? '待回復 OB'
-      : '待核對';
     return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
       if (manualReview) {
         record.sheet.getRange(record.rowNumber, 11).setValue(replacementId);
@@ -5689,18 +5689,76 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
           record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([['', '', '']]);
         }
       } else {
-        record.sheet.getRange(record.rowNumber, 21).setValue(replacementId);
-        record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([[nextVerification, '', '']]);
+        var nextRow = record.row.slice();
+        while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
+        var isRestore = ['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) !== -1;
+        nextRow[20] = replacementId;
+        if (!isRestore) {
+          var originalStartMinutes = timeTextToMinutes_(formatMyTime(nextRow[3]));
+          var replacementStartMinutes = timeTextToMinutes_(obCourse.time);
+          nextRow[25] = obCourse.time;
+          nextRow[26] = originalStartMinutes >= 0 && replacementStartMinutes >= 0
+            ? replacementStartMinutes - originalStartMinutes
+            : '';
+        }
+
+        var expectation = getObExpectation_(nextRow);
+        var differences = getObCourseDifferences_(
+          replacementId,
+          obCourse.sourceRow,
+          expectation
+        );
+        var now = getTimestamp_();
+        if (!differences.length) {
+          if (expectation.restoreType === 'cancellation') {
+            nextRow[8] = '已完成';
+            nextRow[15] = '已回復核對';
+            nextRow[16] = now;
+            nextRow[17] = '';
+            nextRow[18] = '取消後已回復 OB';
+          } else if (expectation.restoreType === 'withdrawal') {
+            nextRow[8] = '';
+            nextRow[15] = '';
+            nextRow[16] = '';
+            nextRow[17] = '';
+            nextRow[18] = '';
+          } else {
+            nextRow[8] = '已完成';
+            nextRow[15] = '已核對';
+            nextRow[16] = now;
+            nextRow[17] = '';
+          }
+        } else {
+          nextRow[8] = expectation.restoreType ? '待回復' : '待處理';
+          nextRow[15] = '核對異常';
+          nextRow[16] = now;
+          nextRow[17] = differences.join('；');
+        }
+
+        record.sheet.getRange(record.rowNumber, 9).setValue(nextRow[8]);
+        record.sheet.getRange(record.rowNumber, 16, 1, 4).setValues([nextRow.slice(15, 19)]);
+        record.sheet.getRange(record.rowNumber, 21).setValue(nextRow[20]);
+        if (!isRestore) {
+          record.sheet.getRange(record.rowNumber, 26, 1, 2).setValues([[nextRow[25], nextRow[26]]]);
+        }
       }
       appendAudits([{
         actor: actor,
-        action: manualReview ? '連結舊資料 OB 課程' : '連結替代 OB 課程',
+        action: manualReview ? '連結舊資料 OB 課程' : '連結並核對替代 OB 課程',
         targetId: id,
         before: before,
         after: replacementId,
-        reason: obCourse.courseName
+        reason: obCourse.courseName + (manualReview || !differences.length ? '' : '；' + differences.join('；'))
       }]);
-      return { substituteId: id, replacementCalendarId: replacementId };
+      return manualReview
+        ? { substituteId: id, replacementCalendarId: replacementId }
+        : {
+            substituteId: id,
+            replacementCalendarId: replacementId,
+            verificationStatus: cleanText_(nextRow[15]) || (expectation.restoreType === 'withdrawal' ? '已重新開放' : ''),
+            differences: differences,
+            actualStartTime: formatMyTime(nextRow[25]) || formatMyTime(nextRow[3])
+          };
     });
   });
 }
@@ -5816,7 +5874,10 @@ function getAdminDashboard_(session) {
         date: formatMyDate(row[0]),
         time: formatMyTime(row[1])
       };
-    }).filter(function(item) { return item.calendarId; });
+    }).filter(function(item) {
+      var match = /^(\d{4})\/(\d{2})\//.exec(item.date);
+      return item.calendarId && Boolean(match) && match[1] + '-' + match[2] === targetMonth;
+    });
 
     return {
       paused: areClaimsPaused_(),
@@ -6045,7 +6106,6 @@ function validateClaimChange_(claim) {
     actualCategory = normalizeTeacherCapabilities_([item.category])[0] || '';
     if (!actualCourseName) throw new Error('請填寫需要新增的課程名稱。');
     if (!actualCategory) throw new Error('請選擇需要新增課程的類別。');
-    if (!difficulty) throw new Error('需要新增課程時，請填寫難度。');
     handlingType = '需要新增課程';
   } else {
     throw new Error('課程處理方式無效，請重新選擇。');
@@ -6080,7 +6140,11 @@ function findObCourseByCalendarId_(calendarId) {
         calendarId: wantedId,
         classId: cleanText_(values[index][5]),
         courseName: cleanText_(values[index][2]),
-        category: getCourseCategory_(values[index][2])
+        category: getCourseCategory_(values[index][2]),
+        teacherName: cleanText_(values[index][3]),
+        date: formatMyDate(values[index][0]),
+        time: formatMyTime(values[index][1]),
+        sourceRow: values[index]
       };
     }
   }

@@ -44,6 +44,9 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     '.claim-course-type': { value: '' },
     '.claim-difficulty-select': { value: '' },
     '.claim-difficulty-field': { hidden: false },
+    '.claim-custom-course-field': { hidden: true },
+    '.claim-custom-course-name': { value: '' },
+    '.claim-custom-difficulty': { value: '' },
     '.claim-start-delay': { value: '0' },
     '.claim-delay-summary': { textContent: '', dataset: {}, hidden: false },
     '.new-course-name': { value: '' },
@@ -1383,6 +1386,69 @@ test('submits the OB course type and difficulty as independent choices', async (
   });
 });
 
+test('floor teachers can submit an optional-difficulty custom course name', async () => {
+  const { context, claimCard, claimControls } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['地板課程'],
+      classes: [{
+        courseKey: '地板瑜伽', courseName: '地板瑜伽',
+        courseTypeKey: '地板瑜伽', courseTypeName: '地板瑜伽', difficulty: '',
+        category: '地板課程',
+      }],
+    },
+    getAvailableSubstitutes: [],
+  });
+  await context.fetchAvailableSubstitutes();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getClaimCourseTypes())), [
+    { courseTypeKey: '地板瑜伽', courseTypeName: '地板瑜伽', difficulty: '' },
+    { courseTypeKey: '__OTHER_FLOOR__', courseTypeName: '其他（自行輸入課名）', difficulty: '' },
+  ]);
+
+  claimControls['input[type="radio"]:checked'].value = 'existing';
+  claimControls['.claim-course-type'].value = '__OTHER_FLOOR__';
+  claimControls['.claim-custom-course-name'].value = '筋膜放鬆新主題';
+  claimControls['.claim-custom-difficulty'].value = '';
+  claimControls['.claim-start-delay'].value = '15';
+  context.updateClaimCardState(claimCard);
+
+  assert.equal(claimControls['.claim-custom-course-field'].hidden, false);
+  assert.equal(claimControls['.claim-difficulty-field'].hidden, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
+    handlingType: 'new',
+    actualClassId: '',
+    actualCourseName: '筋膜放鬆新主題',
+    category: '地板課程',
+    difficulty: '',
+    note: '',
+    startDelayMinutes: 15,
+  });
+  assert.equal(context.validateClaimDraft(context.readClaimDraft(claimCard), {
+    '代課編號': 'leave-custom-floor',
+    '課程': 'B－舞綢 Lv.2',
+    '課程大類': '舞綢',
+    '可沿用原課程': false,
+  }).startDelayMinutes, 15);
+});
+
+test('non-floor teachers do not receive the custom floor course option', async () => {
+  const { context } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [{
+        courseKey: '空環', courseName: '空環', courseTypeKey: '空環',
+        courseTypeName: '空環', difficulty: '', category: '空環',
+      }],
+    },
+    getAvailableSubstitutes: [],
+  });
+  await context.fetchAvailableSubstitutes();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getClaimCourseTypes())), [
+    { courseTypeKey: '空環', courseTypeName: '空環', difficulty: '' },
+  ]);
+});
+
 test('treats discounted and regular OB names as the same frontend course type', () => {
   const { context } = createFrontendRuntime();
 
@@ -1639,6 +1705,28 @@ test('approved withdrawal tells the administrator how to reopen the course', asy
   assert.match(getElement('notice').textContent, /同步 OB 課表/);
   assert.match(getElement('notice').textContent, /重新核對 OB/);
   assert.match(getElement('notice').textContent, /重新開放/);
+});
+
+test('linked replacement course reports immediate reconciliation result', async () => {
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    linkReplacementCalendarItem: {
+      substituteId: 'leave-relinked', replacementCalendarId: 'calendar-1400',
+      verificationStatus: '已核對', differences: [], actualStartTime: '14:00',
+    },
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [],
+      exceptions: [], completed: [], teachers: [], replacementOptions: [],
+    },
+  });
+
+  await context.linkAdminReplacement('leave-relinked', 'calendar-1400');
+
+  assert.deepEqual(
+    requestActions.filter((action) => action === 'linkReplacementCalendarItem' || action === 'getAdminDashboard'),
+    ['linkReplacementCalendarItem', 'getAdminDashboard'],
+  );
+  assert.match(getElement('notice').textContent, /已連結並核對完成/);
+  assert.match(getElement('notice').textContent, /14:00/);
 });
 
 test('OB restore work explains the two required administrator steps', () => {

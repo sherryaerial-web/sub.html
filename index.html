@@ -543,6 +543,7 @@
     .claim-field { min-width: 0; }
     .claim-field.full { grid-column: 1 / -1; }
     .claim-field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 750; }
+    .claim-custom-course-name { margin-bottom: 12px; }
     textarea.claim-control { min-height: 82px; resize: vertical; line-height: 1.5; }
     .claim-required { color: var(--danger); }
     .hint { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.45; }
@@ -1368,7 +1369,6 @@
       if (handlingType === "new") {
         if (!actualCourseName) throw new Error("請填寫需要新增的課程名稱。");
         if (!category) throw new Error("請選擇需要新增課程的類別。");
-        if (!difficulty) throw new Error("需要新增課程時，請填寫難度。");
       }
       if (!["original", "existing", "special", "new"].includes(handlingType)) {
         throw new Error("課程處理方式無效，請重新選擇。");
@@ -1390,7 +1390,7 @@
         difficulty: handlingType === "original" ? "" : difficulty,
         note: handlingType === "original" ? "" : note
       };
-      if (["original", "existing"].includes(handlingType)) normalized.startDelayMinutes = startDelayMinutes;
+      if (["original", "existing", "new"].includes(handlingType)) normalized.startDelayMinutes = startDelayMinutes;
       if (handlingType === "existing") normalized.courseTypeKey = courseTypeKey;
       if (handlingType === "existing" && courseKey) normalized.courseKey = courseKey;
       return normalized;
@@ -2159,9 +2159,17 @@
 
     function getClaimCourseTypes() {
       const seen = new Set();
-      return getTeachableClaimClasses().map((option) => getClaimOptionParts(option))
+      const courseTypes = getTeachableClaimClasses().map((option) => getClaimOptionParts(option))
         .filter((parts) => parts.courseTypeKey && !seen.has(parts.courseTypeKey) && seen.add(parts.courseTypeKey))
         .sort((a, b) => a.courseTypeName.localeCompare(b.courseTypeName, "zh-Hant"));
+      if ((claimOptions.capabilities || []).includes("地板課程")) {
+        courseTypes.push({
+          courseTypeKey: "__OTHER_FLOOR__",
+          courseTypeName: "其他（自行輸入課名）",
+          difficulty: ""
+        });
+      }
+      return courseTypes;
     }
 
     function getClaimDifficulties(courseTypeKey) {
@@ -2381,6 +2389,13 @@
                   </select>
                 </div>
 
+                <div class="claim-field full claim-custom-course-field" hidden>
+                  <label>其他課程名稱 <span class="claim-required">必填</span></label>
+                  <input class="claim-control claim-custom-course-name" maxlength="80" placeholder="請輸入這次要開的課程名稱">
+                  <label>難度／等級（選填）</label>
+                  <input class="claim-control claim-custom-difficulty" maxlength="40" placeholder="例如 Lv.1、Open level">
+                </div>
+
                 <div class="claim-field full">
                   <label>備註（選填）</label>
                   <textarea class="claim-control claim-note" maxlength="240" placeholder="可填改課原因、難度調整或其他事項"></textarea>
@@ -2511,10 +2526,14 @@
       card.querySelector(".claim-fields").hidden = !showAdjustment;
       card.querySelector(".claim-adjustment-panel").hidden = !showAdjustment;
       if (showAdjustment) {
-        const useOriginalCourse = card.querySelector(".claim-course-type")?.value === "__ORIGINAL__";
+        const selectedCourseType = card.querySelector(".claim-course-type")?.value || "";
+        const useOriginalCourse = selectedCourseType === "__ORIGINAL__";
+        const useCustomFloorCourse = selectedCourseType === "__OTHER_FLOOR__";
         const difficultyField = card.querySelector(".claim-difficulty-field");
-        if (difficultyField) difficultyField.hidden = useOriginalCourse;
-        if (!useOriginalCourse) populateClaimDifficultyOptions(card, true);
+        const customCourseField = card.querySelector(".claim-custom-course-field");
+        if (difficultyField) difficultyField.hidden = useOriginalCourse || useCustomFloorCourse;
+        if (customCourseField) customCourseField.hidden = !useCustomFloorCourse;
+        if (!useOriginalCourse && !useCustomFloorCourse) populateClaimDifficultyOptions(card, true);
         updateOrdinaryClaimDelaySummary(card);
       }
     }
@@ -2544,6 +2563,17 @@
           category: "",
           difficulty: "",
           note: "",
+          startDelayMinutes
+        };
+      }
+      if (courseTypeKey === "__OTHER_FLOOR__") {
+        return {
+          handlingType: "new",
+          actualClassId: "",
+          actualCourseName: card.querySelector(".claim-custom-course-name")?.value || "",
+          category: "地板課程",
+          difficulty: card.querySelector(".claim-custom-difficulty")?.value || "",
+          note: card.querySelector(".claim-note")?.value || "",
           startDelayMinutes
         };
       }
@@ -3587,10 +3617,10 @@
         const completionText = item.changeStatus === "退出後待回復 OB"
           ? "核對完成後才會重新開放。"
           : "核對完成後才會結束取消流程。";
-        const detail = `<div class="ob-details"><div class="item-meta">請先確認 OB 已恢復為「${escapeHtml(item.originalTeacher)}｜${escapeHtml(item.originalCourse)}」，再依序按「同步 OB 課表」與「重新核對 OB」。${completionText}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">若 OB 課程 ID 已更換，請選擇新課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+        const detail = `<div class="ob-details"><div class="item-meta">請先確認 OB 已恢復為「${escapeHtml(item.originalTeacher)}｜${escapeHtml(item.originalCourse)}」，再依序按「同步 OB 課表」與「重新核對 OB」。${completionText}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">若 OB 課程 ID 已更換，請選擇新課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
         return renderAdminItem(item, detail);
       }
-      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
       return renderAdminItem(item, detail);
     }
 
@@ -3660,8 +3690,16 @@
     }
 
     async function linkAdminReplacement(substituteId, replacementCalendarId) {
-      await callPostApi("linkReplacementCalendarItem", { substituteId, replacementCalendarId });
-      setNotice("替代 OB 課程已連結，請重新核對。");
+      const result = await callPostApi("linkReplacementCalendarItem", { substituteId, replacementCalendarId });
+      if (result.verificationStatus === "已核對") {
+        setNotice(`替代 OB 課程已連結並核對完成；實際時間 ${result.actualStartTime}。`);
+      } else if (result.verificationStatus === "已回復核對" || result.verificationStatus === "已重新開放") {
+        setNotice("替代 OB 課程已連結並完成回復核對。");
+      } else if ((result.differences || []).length) {
+        setNotice(`替代 OB 課程已連結，但仍有核對異常：${result.differences.join("；")}`, "error");
+      } else {
+        setNotice("替代 OB 課程已連結。");
+      }
       await fetchAdminDashboard();
     }
 

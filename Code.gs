@@ -1797,9 +1797,53 @@ function isVvipSelectionOpen_(settings) {
     cleanText_(settings && settings.activeMonth) === getNextMonthKey_();
 }
 
+function buildVvipLeaveStatusByCalendarId_(sheet) {
+  var byCalendarId = {};
+  if (!sheet) return byCalendarId;
+  assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
+  sheet.getDataRange().getValues().slice(1).forEach(function(row) {
+    var status = cleanText_(row[5]);
+    var calendarIds = [cleanText_(row[10]), cleanText_(row[20])].filter(function(id) {
+      return !!id;
+    });
+    if (!calendarIds.length) return;
+    var item = {
+      status: status,
+      originalTeacherName: cleanText_(row[1]),
+      substituteTeacherName: cleanText_(row[6])
+    };
+    calendarIds.forEach(function(calendarId) {
+      byCalendarId[calendarId] = item;
+    });
+  });
+  return byCalendarId;
+}
+
+function mergeVvipLeaveStatus_(course, leave) {
+  var result = Object.assign({}, course, {
+    leaveStatus: '',
+    originalTeacherName: '',
+    substituteTeacherName: '',
+    leaveLabel: ''
+  });
+  if (!leave || ['確認中', '已領取'].indexOf(leave.status) === -1) return result;
+  result.originalTeacherName = leave.originalTeacherName;
+  result.substituteTeacherName = leave.substituteTeacherName;
+  if (leave.status === '已領取') {
+    result.leaveStatus = 'claimed';
+    result.leaveLabel = '原老師請假：' + leave.originalTeacherName +
+      '｜代課老師：' + (leave.substituteTeacherName || '未定');
+    return result;
+  }
+  result.leaveStatus = 'pending';
+  result.leaveLabel = '原老師請假：' + leave.originalTeacherName + '｜代課老師未定';
+  return result;
+}
+
 function getVvipCourseRows_(month, requireCalendarIds) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, SHEETS.COURSE_LIST);
+  var leaveStatusByCalendarId = buildVvipLeaveStatusByCalendarId_(ss.getSheetByName(SHEETS.LEAVES));
   assertHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
   var missingIds = [];
   var courses = sheet.getDataRange().getValues().slice(1).map(function(row) {
@@ -1828,7 +1872,9 @@ function getVvipCourseRows_(month, requireCalendarIds) {
     }
     unique[course.calendarId] = true;
   });
-  return courses.sort(function(a, b) {
+  return courses.map(function(course) {
+    return mergeVvipLeaveStatus_(course, leaveStatusByCalendarId[course.calendarId]);
+  }).sort(function(a, b) {
     return [a.date, a.time, a.courseName, a.teacherName, a.calendarId].join('|')
       .localeCompare([b.date, b.time, b.courseName, b.teacherName, b.calendarId].join('|'));
   });

@@ -11,8 +11,8 @@ const outputDir = '/private/tmp/substitute-vvip-screenshots';
 const html = await fs.readFile(path.join(repoDir, 'vvip.html'), 'utf8');
 const courses = [
   { calendarId: 'cal-existing', date: '2026/09/02', time: '10:00', courseName: '空環基礎', teacherName: 'Ariel' },
-  { calendarId: 'cal-2', date: '2026/09/02', time: '19:00', courseName: '空中瑜伽', teacherName: 'Jina' },
-  { calendarId: 'cal-3', date: '2026/09/03', time: '18:30', courseName: '舞綢基礎', teacherName: 'Mina' },
+  { calendarId: 'cal-2', date: '2026/09/02', time: '19:00', courseName: '空中瑜伽', teacherName: '原老師甲', leaveStatus: 'pending', originalTeacherName: '原老師甲', substituteTeacherName: '', leaveLabel: '原老師請假：原老師甲｜代課老師未定' },
+  { calendarId: 'cal-3', date: '2026/09/03', time: '18:30', courseName: '舞綢基礎', teacherName: '代課老師乙', leaveStatus: 'claimed', originalTeacherName: '原老師乙', substituteTeacherName: '代課老師乙', leaveLabel: '原老師請假：原老師乙｜代課老師：代課老師乙' },
   { calendarId: 'cal-4', date: '2026/09/04', time: '20:00', courseName: '綢吊基礎', teacherName: 'Ariel' },
 ];
 
@@ -59,6 +59,11 @@ async function runJourney(browser, viewport) {
   await page.setContent(html, { waitUntil: 'networkidle' });
   await page.locator('#vvip-member').fill('測試會員');
   await page.locator('#vvip-lookup').click();
+  await page.getByText('原老師請假：原老師甲｜代課老師未定').waitFor();
+  await page.getByText('原老師請假：原老師乙｜代課老師：代課老師乙').waitFor();
+  if (await page.locator('.vvip-course-checkbox').count() !== courses.length) {
+    throw new Error(`${viewport.name}: leave status created duplicate selectable courses`);
+  }
   await page.locator('.vvip-course-checkbox').nth(1).check();
   await page.locator('.vvip-course-checkbox').nth(2).check();
   await page.locator('#vvip-counter').getByText('已選 3／4 堂').waitFor();

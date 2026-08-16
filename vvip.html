@@ -50,6 +50,7 @@
     .course-time { color:var(--sea-dark); font-size:13px; font-weight:800; }
     .course-name { display:block; margin-top:1px; font-size:15px; font-weight:750; overflow-wrap:anywhere; }
     .course-teacher { display:block; color:var(--muted); font-size:12px; }
+    .course-leave-status { display:block; margin-top:4px; color:var(--coral); font-size:12px; font-weight:700; }
     .course-badge { max-width:118px; color:var(--muted); font-size:11px; text-align:right; overflow-wrap:anywhere; }
     .course-badge.selected { color:var(--success); font-weight:700; }
     .summary { margin-top:20px; }
@@ -128,7 +129,7 @@
     function getAllSelectedIds() { return new Set([...state.existingCalendarIds, ...state.selectedCalendarIds]); }
     function getSelectedCount() { return getAllSelectedIds().size; }
     function groupCoursesByDate(courses) { return (courses || []).reduce((groups, course) => { (groups[course.date] ||= []).push(course); return groups; }, {}); }
-    function filterVvipCourses(courses, query) { const term = String(query || "").trim().toLowerCase(); return !term ? courses : courses.filter((course) => `${course.courseName} ${course.teacherName} ${course.date} ${course.time}`.toLowerCase().includes(term)); }
+    function filterVvipCourses(courses, query) { const term = String(query || "").trim().toLowerCase(); return !term ? courses : courses.filter((course) => `${course.courseName} ${course.teacherName} ${course.originalTeacherName || ""} ${course.substituteTeacherName || ""} ${course.leaveLabel || ""} ${course.date} ${course.time}`.toLowerCase().includes(term)); }
     function selectedCourses() { const selected = new Set(state.selectedCalendarIds); return (state.data ? state.data.courses : []).filter((course) => selected.has(course.calendarId)); }
 
     function renderCounter() { const count = getSelectedCount(); const el = byId("vvip-counter"); el.textContent = `已選 ${count}／${LIMIT} 堂`; el.classList.toggle("full", count >= LIMIT); }
@@ -145,7 +146,8 @@
       const atLimit = getSelectedCount() >= LIMIT && !checked;
       const disabled = existing || atLimit;
       const badge = existing ? '<span class="course-badge selected">已選過</span>' : atLimit && !checked ? '<span class="course-badge">已達四堂上限</span>' : '<span class="course-badge">可登記</span>';
-      return `<label class="course-item"><input class="vvip-course-checkbox" type="checkbox" value="${escapeHtml(course.calendarId)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span><span class="course-time">${escapeHtml(course.time)}</span><span class="course-name">${escapeHtml(course.courseName)}</span><span class="course-teacher">${escapeHtml(course.teacherName)}</span></span>${badge}</label>`;
+      const leaveDetail = course.leaveLabel ? `<span class="course-leave-status">${escapeHtml(course.leaveLabel)}</span>` : "";
+      return `<label class="course-item"><input class="vvip-course-checkbox" type="checkbox" value="${escapeHtml(course.calendarId)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span><span class="course-time">${escapeHtml(course.time)}</span><span class="course-name">${escapeHtml(course.courseName)}</span><span class="course-teacher">${escapeHtml(course.teacherName)}</span>${leaveDetail}</span>${badge}</label>`;
     }
     function renderSummary() {
       const summary = byId("vvip-summary");

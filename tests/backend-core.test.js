@@ -654,8 +654,16 @@ function createVvipBackend(options = {}) {
   const auditSheet = createSheetFixture('操作紀錄', [[
     '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
   ]]);
+  const leaveSheet = createSheetFixture('請假代課紀錄', [
+    EXPECTED_LEAVE_HEADERS.concat(
+      EXPECTED_LEAVE_EXTENSION_HEADERS,
+      EXPECTED_SPECIAL_COURSE_HEADERS,
+      EXPECTED_ORDINARY_DELAY_HEADERS
+    ),
+    ...(options.leaveRows || []),
+  ]);
   const spreadsheet = createSpreadsheetFixture([
-    accountSheet, courseSheet, selectionSheet, settingsSheet, memberSheet, auditSheet,
+    accountSheet, courseSheet, selectionSheet, settingsSheet, memberSheet, auditSheet, leaveSheet,
   ]);
   const backend = loadBackend({
     ...services,
@@ -672,6 +680,7 @@ function createVvipBackend(options = {}) {
     settingsSheet,
     memberSheet,
     auditSheet,
+    leaveSheet,
     adminToken: backend.authenticate_('管理員甲', '9999').sessionToken,
     teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
     adminSession: { teacherName: '管理員甲', role: '管理員' },
@@ -5016,6 +5025,41 @@ test('VVIP reads an auto-formatted active month date as the intended month', () 
 
   assert.equal(settings.activeMonth, '2026-09');
   assert.equal(backend.isVvipSelectionOpen_(settings), true);
+});
+
+test('VVIP course rows merge leave and substitute status without duplicating selectable courses', () => {
+  const courseRows = [
+    ['2026/09/01', '10:00', '一般課', '一般老師', 'cal-normal', 'class-1', 'teacher-1', '否', ''],
+    ['2026/09/02', '10:00', '待代課', '原老師甲', 'cal-pending', 'class-2', 'teacher-2', '否', ''],
+    ['2026/09/03', '10:00', '實際代課', '代課老師乙', 'cal-claimed', 'class-3', 'teacher-3', '是', ''],
+    ['2026/09/04', '10:00', '取消後正常', '原老師丙', 'cal-cancelled', 'class-4', 'teacher-4', '否', ''],
+    ['2026/09/05', '10:00', '替代實際課程', '代課老師丁', 'cal-replacement', 'class-5', 'teacher-5', '是', ''],
+    ['2026/09/06', '10:00', '重新請假', '原老師戊', 'cal-reopened', 'class-6', 'teacher-6', '否', ''],
+  ];
+  const emptyTail = Array(17).fill('');
+  const leaveRows = [
+    ['2026-08-01 09:00:00', '原老師甲', '2026/09/02', '10:00', '待代課', '確認中', '', '', '', 'leave-1', 'cal-pending', ...emptyTail],
+    ['2026-08-01 09:05:00', '原老師乙', '2026/09/03', '10:00', '原課程', '已領取', '代課老師乙', '', '', 'leave-2', 'cal-claimed', ...emptyTail],
+    ['2026-08-01 09:10:00', '原老師丙', '2026/09/04', '10:00', '取消課程', '已取消', '', '', '', 'leave-3', 'cal-cancelled', ...emptyTail],
+    ['2026-08-01 09:15:00', '原老師丁', '2026/09/05', '10:00', '原始課程', '已領取', '代課老師丁', '', '', 'leave-4', 'cal-original', '', '替代實際課程', '', '改用既有 OB 課程', '', '', '', '', '', 'cal-replacement', '', '', '', '', '', '', ''],
+    ['2026-08-01 09:20:00', '原老師戊', '2026/09/06', '10:00', '舊請假', '已取消', '', '', '', 'leave-5-old', 'cal-reopened', ...emptyTail],
+    ['2026-08-02 09:20:00', '原老師戊', '2026/09/06', '10:00', '新請假', '確認中', '', '', '', 'leave-5-new', 'cal-reopened', ...emptyTail],
+  ];
+  const { backend } = createVvipBackend({ courseRows, leaveRows });
+
+  const courses = JSON.parse(JSON.stringify(backend.getVvipCourseRows_('2026-09', true)));
+  const byId = Object.fromEntries(courses.map((course) => [course.calendarId, course]));
+
+  assert.equal(courses.length, 6);
+  assert.equal(byId['cal-normal'].leaveStatus, '');
+  assert.equal(byId['cal-pending'].leaveStatus, 'pending');
+  assert.equal(byId['cal-pending'].leaveLabel, '原老師請假：原老師甲｜代課老師未定');
+  assert.equal(byId['cal-claimed'].leaveStatus, 'claimed');
+  assert.equal(byId['cal-claimed'].leaveLabel, '原老師請假：原老師乙｜代課老師：代課老師乙');
+  assert.equal(byId['cal-cancelled'].leaveStatus, '');
+  assert.equal(byId['cal-replacement'].originalTeacherName, '原老師丁');
+  assert.equal(byId['cal-replacement'].substituteTeacherName, '代課老師丁');
+  assert.equal(byId['cal-reopened'].leaveStatus, 'pending');
 });
 
 test('VVIP administrator maintains unique active OB names and private Email mappings', () => {

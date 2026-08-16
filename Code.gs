@@ -5611,7 +5611,7 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
   var differences = [];
   var normalizeCourse = typeof courseNameNormalizer === 'function'
     ? courseNameNormalizer
-    : normalizeCourseName_;
+    : normalizeOrdinaryCourseReconciliationName_;
   if (expectation && expectation.closeType === 'delay-occupancy') {
     if (!effectiveCalendarId) {
       differences.push('尚未連結 OB Calendar ID');
@@ -5642,6 +5642,10 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
     }
   }
   return differences;
+}
+
+function normalizeOrdinaryCourseReconciliationName_(value) {
+  return normalizeCourseName_(value).replace(/(lv\.?\d+)[~\-–—](\d+)/g, '$1~$2');
 }
 
 function normalizeSpecialCourseReconciliationName_(value) {
@@ -5931,12 +5935,13 @@ function getAdminDashboard_(session) {
     }
 
     var auditByTarget = getAuditHistoryMap_();
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
     var leaveSourceRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
       return cleanText_(row[9]);
     });
     var targetMonth = getNextMonthKey_();
     var leaves = leaveSourceRows.map(function(row) {
-      return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || []);
+      return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || [], courseRows);
     });
     var leaveById = {};
     leaves.forEach(function(item) {
@@ -5975,7 +5980,7 @@ function getAdminDashboard_(session) {
     }).map(function(row) {
       return cleanText_(row[accountHeaders['指導者'] - 1]);
     });
-    var replacementOptions = courseSheet.getDataRange().getValues().slice(1).map(function(row) {
+    var replacementOptions = courseRows.map(function(row) {
       return {
         calendarId: cleanText_(row[4]),
         courseName: cleanText_(row[2]),
@@ -6029,7 +6034,11 @@ function getAdminDashboard_(session) {
   });
 }
 
-function toAdminLeaveItem_(row, auditHistory) {
+function toAdminLeaveItem_(row, auditHistory, courseRows) {
+  var storedCourse = cleanText_(row[12]) || cleanText_(row[4]);
+  var expectedCourse = cleanText_(row[21])
+    ? storedCourse
+    : (getObExpectation_(row, courseRows).course || storedCourse);
   return {
     substituteId: cleanText_(row[9]),
     originalTeacher: cleanText_(row[1]),
@@ -6037,7 +6046,7 @@ function toAdminLeaveItem_(row, auditHistory) {
     date: formatMyDate(row[2]),
     time: formatMyTime(row[3]),
     originalCourse: cleanText_(row[4]),
-    actualCourse: cleanText_(row[12]) || cleanText_(row[4]),
+    actualCourse: expectedCourse,
     actualClassId: cleanText_(row[11]),
     difficulty: cleanText_(row[13]),
     handlingType: cleanText_(row[14]),

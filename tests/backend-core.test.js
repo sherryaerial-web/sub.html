@@ -4264,6 +4264,50 @@ test('reconciliation accepts a regular OB course for a legacy monthly-discount e
   assert.equal(row[17], '');
 });
 
+test('reconciliation treats hyphen and tilde level ranges as the same ordinary course', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/14', '10:30', 'C－舞綢 Lv.1~2', 'Vivi',
+      'calendar-target', 'class-silk-regular', 'teacher-vivi', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', 'Tako', '2026/09/14', '10:30', 'C－空環 Lv.2~3',
+      '已領取', 'Vivi', '需要新增課程：C－舞綢 Lv.1-2〈優惠〉', '待處理',
+      'leave-target', 'calendar-target', '', 'C－舞綢 Lv.1-2〈優惠〉',
+      'Lv.1-2', '需要新增課程', '核對異常', '', '舊差異', '', '舞綢',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
+});
+
+test('admin dashboard displays the current regular expectation for a legacy discount claim', () => {
+  const { backend, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/14', '10:30', 'C－舞綢 Lv.1~2', 'Vivi',
+      'calendar-target', 'class-silk-regular', 'teacher-vivi', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', 'Tako', '2026/09/14', '10:30', 'C－空環 Lv.2~3',
+      '已領取', 'Vivi', '需要新增課程：C－舞綢 Lv.1-2〈優惠〉', '待處理',
+      'leave-target', 'calendar-target', '', 'C－舞綢 Lv.1-2〈優惠〉',
+      'Lv.1-2', '需要新增課程', '核對異常', '', '舊差異', '', '舞綢',
+    ]],
+  });
+
+  const item = backend.getAdminDashboard_(adminSession).exceptions
+    .find((record) => record.substituteId === 'leave-target');
+
+  assert.equal(item.actualCourse, 'C－舞綢 Lv.1-2');
+});
+
 test('reconciliation requires the new-teacher marker when the substitute is new that month', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     nextMonth: '2026-09',

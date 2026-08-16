@@ -3863,6 +3863,23 @@ function isTeacherNewInMonth_(teacherName, targetDate, courseRows) {
   });
 }
 
+function buildNewTeacherMonthMap_(courseRows) {
+  var lookup = {};
+  (courseRows || []).forEach(function(row) {
+    if (getCoursePromotionType_(row && row[2]) !== 'new-teacher') return;
+    var teacher = cleanText_(row && row[3]);
+    var monthKey = getCourseMonthKey_(row && row[0]);
+    if (teacher && monthKey) lookup[JSON.stringify([teacher, monthKey])] = true;
+  });
+  return lookup;
+}
+
+function isTeacherNewInMonthMap_(teacherName, targetDate, lookup) {
+  var teacher = cleanText_(teacherName);
+  var monthKey = getCourseMonthKey_(targetDate);
+  return !!(teacher && monthKey && lookup && lookup[JSON.stringify([teacher, monthKey])]);
+}
+
 function isTermCourseName_(courseName) {
   return cleanText_(courseName).indexOf('期班') !== -1;
 }
@@ -5913,7 +5930,7 @@ function isActiveObWorkRow_(row) {
   return ['', '待核對', '核對異常'].indexOf(cleanText_(row[15])) !== -1;
 }
 
-function getObExpectation_(row, courseRows) {
+function getObExpectation_(row, courseRows, newTeacherMonthMap) {
   var changeStatus = cleanText_(row[18]);
   if (cleanText_(row[5]) === '延後占用') {
     return {
@@ -5946,7 +5963,10 @@ function getObExpectation_(row, courseRows) {
     };
   }
   var storedCourse = cleanText_(row[12]) || cleanText_(row[4]);
-  var promotionType = isTeacherNewInMonth_(row[6], row[2], courseRows) ? 'new-teacher' : '';
+  var teacherIsNew = newTeacherMonthMap
+    ? isTeacherNewInMonthMap_(row[6], row[2], newTeacherMonthMap)
+    : isTeacherNewInMonth_(row[6], row[2], courseRows);
+  var promotionType = teacherIsNew ? 'new-teacher' : '';
   var storedPromotionType = getCoursePromotionType_(storedCourse);
   var expectedClassId = cleanText_(row[11]);
   if (storedPromotionType !== promotionType) expectedClassId = '';
@@ -6136,12 +6156,18 @@ function getAdminDashboard_(session) {
 
     var auditByTarget = getAuditHistoryMap_();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var newTeacherMonthMap = buildNewTeacherMonthMap_(courseRows);
     var leaveSourceRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
       return cleanText_(row[9]);
     });
     var targetMonth = getNextMonthKey_();
     var leaves = leaveSourceRows.map(function(row) {
-      return toAdminLeaveItem_(row, auditByTarget[cleanText_(row[9])] || [], courseRows);
+      return toAdminLeaveItem_(
+        row,
+        auditByTarget[cleanText_(row[9])] || [],
+        courseRows,
+        newTeacherMonthMap
+      );
     });
     var leaveById = {};
     leaves.forEach(function(item) {
@@ -6234,11 +6260,11 @@ function getAdminDashboard_(session) {
   });
 }
 
-function toAdminLeaveItem_(row, auditHistory, courseRows) {
+function toAdminLeaveItem_(row, auditHistory, courseRows, newTeacherMonthMap) {
   var storedCourse = cleanText_(row[12]) || cleanText_(row[4]);
   var expectedCourse = cleanText_(row[21])
     ? storedCourse
-    : (getObExpectation_(row, courseRows).course || storedCourse);
+    : (getObExpectation_(row, courseRows, newTeacherMonthMap).course || storedCourse);
   return {
     substituteId: cleanText_(row[9]),
     originalTeacher: cleanText_(row[1]),

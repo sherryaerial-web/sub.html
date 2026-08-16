@@ -4926,6 +4926,28 @@ test('admin dashboard separates work queues without exposing account secrets', (
   assert.doesNotMatch(serialized, /PIN 雜湊|fixed-salt|Salt/);
 });
 
+test('admin dashboard precomputes new-teacher months without rescanning courses for each leave', () => {
+  const { backend, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/02', '19:00', 'B－空環 Lv.0〈新老師〉', '老師甲', 'calendar-own-new', 'class-ring-new', 'teacher-a', '否', ''],
+      ['2026/09/27', '17:30', 'A－舞綢 Lv.1-2〈新老師〉', '老師甲', 'calendar-target', 'class-silk-new', 'teacher-a', '是', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/27', '17:30', 'A－空環 Lv.2~3',
+      '已領取', '老師甲', '', '待處理', 'leave-target', 'calendar-target',
+      '', 'A－舞綢 Lv.1-2', 'Lv.1-2', '需要新增課程', '待核對',
+    ]],
+  });
+  backend.isTeacherNewInMonth_ = () => {
+    throw new Error('dashboard should use its precomputed new-teacher month lookup');
+  };
+
+  const item = backend.getAdminDashboard_(adminSession).obWork[0];
+
+  assert.match(item.actualCourse, /新老師/);
+});
+
 test('admin change-request queue includes only pending cancellation or withdrawal requests', () => {
   const { backend, adminSession } = createInvitationBackend({
     leaveRows: [

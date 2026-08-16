@@ -1777,7 +1777,13 @@ function getVvipSettings_(sheet) {
   var settings = {};
   sheet.getDataRange().getValues().slice(1).forEach(function(row) {
     var key = cleanText_(row[0]);
-    if (key && settings[key] == null) settings[key] = cleanText_(row[1]);
+    if (!key || settings[key] != null) return;
+    var value = row[1];
+    if (key === 'activeMonth' && value && typeof value.getTime === 'function' && !isNaN(value.getTime())) {
+      settings[key] = Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM-dd').slice(0, 7);
+      return;
+    }
+    settings[key] = cleanText_(value);
   });
   return settings;
 }

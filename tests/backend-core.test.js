@@ -4980,6 +4980,22 @@ test('VVIP always targets next month and treats stale open settings as closed', 
   assert.equal(backend.isVvipSelectionOpen_({ activeMonth: '2026-09', isOpen: '是' }), true);
 });
 
+test('VVIP reads an auto-formatted active month date as the intended month', () => {
+  const { backend, settingsSheet } = createVvipBackend();
+  backend.Utilities.formatDate = (value, _timezone, pattern) => {
+    if (pattern !== 'yyyy-MM-dd') return '';
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(value));
+  };
+  settingsSheet.values[1][1] = new Date('2026-09-01T00:00:00+08:00');
+
+  const settings = backend.getVvipSettings_(settingsSheet);
+
+  assert.equal(settings.activeMonth, '2026-09');
+  assert.equal(backend.isVvipSelectionOpen_(settings), true);
+});
+
 test('VVIP administrator maintains unique active OB names and private Email mappings', () => {
   const { backend, adminSession, memberSheet } = createVvipBackend();
 

@@ -3357,7 +3357,13 @@
           renderAdminGroup(group, (item) => renderAdminObItem(item, data.replacementOptions || []))
         ).join("") || `<div class="state">目前沒有${activeAdminTab === "obWork" ? "待處理 OB" : "核對異常"}</div>`;
       } else if (activeAdminTab === "changeRequests") {
-        content.innerHTML = (data.changeRequests || []).map((item) => renderAdminItem(item, `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve" data-decision="approve" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="check"></i>核准</button><button class="danger-button" type="button" data-admin-action="resolve" data-decision="reject" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="x"></i>駁回</button></div>`)).join("") || '<div class="state">目前沒有取消或退出申請</div>';
+        content.innerHTML = (data.changeRequests || []).map((item) => {
+          const canResolve = ["申請取消中", "申請退出中"].includes(item.changeStatus);
+          const actions = canResolve
+            ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve" data-decision="approve" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="check"></i>核准</button><button class="danger-button" type="button" data-admin-action="resolve" data-decision="reject" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="x"></i>駁回</button></div>`
+            : "";
+          return renderAdminItem(item, actions);
+        }).join("") || '<div class="state">目前沒有取消或退出申請</div>';
       } else {
         content.innerHTML = renderAdminItems(data.completed, "目前沒有已完成紀錄");
       }
@@ -3568,6 +3574,13 @@
         const detail = `<div class="ob-details"><div class="item-meta">請在 OB 關閉這堂課，再按「同步 OB 課表」與「重新核對 OB」。</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}</div>`;
         return renderAdminItem(item, detail);
       }
+      if (["取消後待回復 OB", "退出後待回復 OB"].includes(item.changeStatus)) {
+        const completionText = item.changeStatus === "退出後待回復 OB"
+          ? "核對完成後才會重新開放。"
+          : "核對完成後才會結束取消流程。";
+        const detail = `<div class="ob-details"><div class="item-meta">請先確認 OB 已恢復為「${escapeHtml(item.originalTeacher)}｜${escapeHtml(item.originalCourse)}」，再依序按「同步 OB 課表」與「重新核對 OB」。${completionText}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">若 OB 課程 ID 已更換，請選擇新課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+        return renderAdminItem(item, detail);
+      }
       const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
       return renderAdminItem(item, detail);
     }
@@ -3650,8 +3663,11 @@
     }
 
     async function resolveAdminChangeRequest(substituteId, decision, reason) {
-      await callPostApi("resolveChangeRequest", { substituteId, decision, reason });
-      setNotice(decision === "approve" ? "申請已核准。" : "申請已駁回。");
+      const result = await callPostApi("resolveChangeRequest", { substituteId, decision, reason });
+      const needsObRestore = decision === "approve" && ["cancellation", "withdrawal"].includes(result.requestType);
+      setNotice(needsObRestore
+        ? "申請已核准。請先在 OB 恢復原課程，再依序按「同步 OB 課表」與「重新核對 OB」；核對完成後才會重新開放。"
+        : (decision === "approve" ? "申請已核准。" : "申請已駁回。"));
       await fetchAdminDashboard();
     }
 

@@ -1522,6 +1522,67 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
+test('admin cancellation history does not expose resolution actions after the request is terminal', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__dashboard = {
+    changeRequests: [{
+      substituteId: 'cancelled-history', date: '2026/09/27', time: '17:30',
+      originalCourse: 'B－空環 Lv.1~3', originalTeacher: '芮錤 77',
+      substituteTeacher: '', status: '已取消', changeStatus: '已自行取消', auditHistory: [],
+    }],
+  };
+  vm.runInContext('activeAdminTab = "changeRequests"; adminDashboard = __dashboard; renderAdminTab();', context);
+
+  assert.match(getElement('admin-tab-content').innerHTML, /已自行取消/);
+  assert.doesNotMatch(getElement('admin-tab-content').innerHTML, /data-admin-action="resolve"/);
+
+  context.__dashboard = {
+    changeRequests: [{
+      substituteId: 'active-request', date: '2026/09/05', time: '18:15',
+      originalCourse: 'A－舞綢 Lv.3~5', originalTeacher: 'Lily Yellow',
+      substituteTeacher: 'Jina', status: '已領取', changeStatus: '申請退出中', auditHistory: [],
+    }],
+  };
+  vm.runInContext('adminDashboard = __dashboard; renderAdminTab();', context);
+
+  assert.match(getElement('admin-tab-content').innerHTML, /data-admin-action="resolve"/);
+  assert.match(getElement('admin-tab-content').innerHTML, />核准</);
+  assert.match(getElement('admin-tab-content').innerHTML, />駁回</);
+});
+
+test('approved withdrawal tells the administrator how to reopen the course', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    resolveChangeRequest: {
+      substituteId: 'withdrawal-1', requestType: 'withdrawal', decision: 'approve', status: '確認中',
+    },
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [],
+      exceptions: [], completed: [], teachers: [], replacementOptions: [],
+    },
+  });
+
+  await context.resolveAdminChangeRequest('withdrawal-1', 'approve', '');
+
+  assert.match(getElement('notice').textContent, /同步 OB 課表/);
+  assert.match(getElement('notice').textContent, /重新核對 OB/);
+  assert.match(getElement('notice').textContent, /重新開放/);
+});
+
+test('OB restore work explains the two required administrator steps', () => {
+  const { context } = createFrontendRuntime();
+  const rendered = context.renderAdminObItem({
+    substituteId: 'withdrawal-1', date: '2026/09/05', time: '18:15',
+    originalCourse: 'A－舞綢 Lv.3~5', originalTeacher: 'Lily Yellow',
+    substituteTeacher: '', actualCourse: '', difficulty: '', status: '確認中',
+    verificationStatus: '待回復 OB', changeStatus: '退出後待回復 OB', auditHistory: [],
+  }, []);
+
+  assert.match(rendered, /同步 OB 課表/);
+  assert.match(rendered, /重新核對 OB/);
+  assert.match(rendered, /Lily Yellow/);
+  assert.match(rendered, /核對完成後才會重新開放/);
+});
+
 test('admin Excel export exposes one action and a pinned publishable workbook writer', () => {
   assert.match(html, /id=["']admin-export["']/);
   assert.match(html, /assets\/xlsx\.full\.min\.js/);

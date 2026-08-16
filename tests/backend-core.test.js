@@ -3136,6 +3136,7 @@ test('own-only special claim appends one arrangement and never creates or change
     ],
     leaveRows: [],
   });
+  backend.getTimestamp_ = () => '2026-08-15 12:00:00';
   backend.openInvitations_(adminSession, ['老師甲']);
   const beforeLeaves = JSON.stringify(leaveSheet.values);
 

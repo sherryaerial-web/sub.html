@@ -712,6 +712,17 @@
     .dialog-body h3 { margin: 0 0 7px; font-size: 17px; }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .dialog-actions .primary-button { width: auto; min-width: 110px; margin-top: 0; }
+    .claim-success-mark {
+      display: grid;
+      width: 44px;
+      height: 44px;
+      margin-bottom: 14px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--success-soft);
+      color: var(--success);
+    }
+    .claim-success-mark svg { width: 24px; height: 24px; }
 
     .state {
       padding: 22px 14px;
@@ -1147,6 +1158,18 @@
         <button id="request-confirm" class="primary-button" type="submit"><i data-lucide="send"></i>確認送出</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="claim-success-dialog" aria-labelledby="claim-success-title" aria-describedby="claim-success-copy">
+    <div class="dialog-body">
+      <div class="claim-success-mark" aria-hidden="true"><i data-lucide="circle-check-big"></i></div>
+      <h3 id="claim-success-title">代課領取成功</h3>
+      <p id="claim-success-copy" class="section-copy">已成功領取代課，可到代課紀錄查看。</p>
+      <div class="dialog-actions">
+        <button id="claim-success-continue" class="compact-button" type="button">繼續領取</button>
+        <button id="claim-success-records" class="primary-button" type="button">查看代課紀錄</button>
+      </div>
+    </div>
   </dialog>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
@@ -1612,6 +1635,29 @@
       const notice = byId("notice");
       notice.textContent = "";
       notice.className = "notice";
+    }
+
+    function openClaimSuccessDialog(options = {}) {
+      const special = Boolean(options.special);
+      const count = Number(options.count) || 0;
+      byId("claim-success-title").textContent = special ? "特別課領取成功" : "代課領取成功";
+      byId("claim-success-copy").textContent = special
+        ? (options.message || "特別課已成功領取，可到代課紀錄查看。")
+        : `已成功領取 ${count} 堂代課，可到代課紀錄查看。`;
+      const dialog = byId("claim-success-dialog");
+      refreshIcons();
+      if (dialog.showModal) dialog.showModal();
+      else window.alert(byId("claim-success-copy").textContent);
+    }
+
+    function closeClaimSuccessDialog() {
+      const dialog = byId("claim-success-dialog");
+      if (dialog.close) dialog.close();
+    }
+
+    function openClaimRecordsFromSuccess() {
+      closeClaimSuccessDialog();
+      switchView("view-mysubs");
     }
 
     function setButtonBusy(button, busy, busyText) {
@@ -2810,10 +2856,14 @@
         const claimedIds = new Set(returnedIds);
         pendingLeaves = pendingLeaves.filter((item) => !claimedIds.has(item["代課編號"]));
         renderAvailableSubstitutes();
-        setNotice(result.requiresClosingTimeConfirmation
-          ? "特別課已領取；後面沒有課，管理員會再確認閉館時間。"
-          : "特別課已領取，系統已保留 15 分鐘換場。");
         await fetchAvailableSubstitutes();
+        openClaimSuccessDialog({
+          special: true,
+          count: returnedIds.length,
+          message: result.requiresClosingTimeConfirmation
+            ? "特別課已成功領取；後面沒有課，管理員會再確認閉館時間。"
+            : "特別課已成功領取，系統已保留 15 分鐘換場。"
+        });
       } catch (error) {
         setNotice(error.message, "error");
         if (/剛被其他老師領取|重新整理|時段/.test(error.message)) await fetchAvailableSubstitutes();
@@ -2866,8 +2916,8 @@
         ]);
         pendingLeaves = pendingLeaves.filter((item) => !claimedIds.has(item["代課編號"]));
         renderAvailableSubstitutes();
-        setNotice("代課領取成功。");
         await fetchAvailableSubstitutes();
+        openClaimSuccessDialog({ count: items.length });
       } catch (error) {
         setNotice(error.message, "error");
         if (/剛被其他老師領取|重新整理/.test(error.message)) await fetchAvailableSubstitutes();
@@ -3839,6 +3889,8 @@
     byId("clear-leave-dates").addEventListener("click", clearLeaveDates);
     byId("leave-submit").addEventListener("click", submitLeave);
     byId("claim-submit").addEventListener("click", submitClaim);
+    byId("claim-success-continue").addEventListener("click", closeClaimSuccessDialog);
+    byId("claim-success-records").addEventListener("click", openClaimRecordsFromSuccess);
     byId("request-form").addEventListener("submit", submitRequestDialog);
     byId("request-cancel").addEventListener("click", closeRequestDialog);
     byId("my-leaves-list").addEventListener("click", async (event) => {

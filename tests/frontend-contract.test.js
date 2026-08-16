@@ -730,6 +730,43 @@ test('keeps the claim button disabled after the final available course is claime
   assert.equal(getElement('claim-submit').disabled, true);
 });
 
+test('shows a persistent success dialog after the claimed-course list finishes refreshing', async () => {
+  let finishRefresh;
+  const refresh = new Promise((resolve) => { finishRefresh = resolve; });
+  const { context, getElement } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [{ classId: 'class-ring', courseName: '空環 Lv.1', category: '空環' }],
+    },
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-c',
+      '原老師': '老師丙',
+      '日期': '2026/09/11',
+      '時段': '11:00',
+      '課程': '空環 Lv.1',
+      '課程大類': '空環',
+      '可沿用原課程': true,
+    }],
+  }, { postClaimAvailable: refresh });
+  await Promise.resolve();
+  await context.fetchAvailableSubstitutes();
+
+  let opened = false;
+  getElement('claim-success-dialog').showModal = () => { opened = true; };
+
+  const submitting = context.submitClaim();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(opened, false, 'success confirmation should wait until the list refresh settles');
+
+  finishRefresh([]);
+  await submitting;
+
+  assert.equal(opened, true);
+  assert.equal(getElement('claim-success-title').textContent, '代課領取成功');
+  assert.match(getElement('claim-success-copy').textContent, /成功領取 1 堂代課/);
+  assert.match(html, /id="claim-success-records"[^>]*>[^<]*(?:<i[^>]*><\/i>)?查看代課紀錄/);
+});
+
 test('delayed claim submits its minutes and immediately removes the occupied next course', async () => {
   let finishRefresh;
   const refresh = new Promise((resolve) => { finishRefresh = resolve; });

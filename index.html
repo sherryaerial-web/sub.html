@@ -1373,8 +1373,8 @@
       if (!["original", "existing", "special", "new"].includes(handlingType)) {
         throw new Error("課程處理方式無效，請重新選擇。");
       }
-      if (![0, 15, 30].includes(startDelayMinutes)) {
-        throw new Error("一般代課只能使用原時段、延後 15 分鐘或延後 30 分鐘。");
+      if (![-15, 0, 15, 30].includes(startDelayMinutes)) {
+        throw new Error("一般代課只能使用提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。");
       }
 
       if (claimNoteIsRequired(target, handlingType, category) && !note) {
@@ -1417,8 +1417,8 @@
 
     function buildOrdinaryDelayPreview(target, startDelayMinutes, availabilityMap, pendingItems) {
       const delay = Number(startDelayMinutes || 0);
-      if (![0, 15, 30].includes(delay)) {
-        throw new Error("一般代課只能使用原時段、延後 15 分鐘或延後 30 分鐘。");
+      if (![-15, 0, 15, 30].includes(delay)) {
+        throw new Error("一般代課只能使用提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。");
       }
       const originalStartMinutes = parseClaimTimeMinutes(target?.["時段"]);
       if (!Number.isFinite(originalStartMinutes)) {
@@ -1427,28 +1427,36 @@
       const durationMinutes = getOrdinaryCourseDurationMinutes(target?.["課程"]);
       const actualStartMinutes = originalStartMinutes + delay;
       const endMinutes = actualStartMinutes + durationMinutes;
-      if (actualStartMinutes >= 24 * 60 || endMinutes >= 24 * 60) {
-        throw new Error("延後後課程不可跨日。");
+      if (actualStartMinutes < 0 || actualStartMinutes >= 24 * 60 || endMinutes >= 24 * 60) {
+        throw new Error("調整後課程不可跨日。");
       }
       const availability = (availabilityMap || {})[target?.["代課編號"]] || {};
       const nextCourseTime = String(availability.nextCourseTime || "");
       const nextMinutes = parseClaimTimeMinutes(nextCourseTime);
       let occupiedSubstituteId = "";
       let blocked = false;
+      let blockedReason = "";
+      const earliestStartMinutes = parseClaimTimeMinutes(availability.earliestStartTime);
+      if (delay < 0 && Number.isFinite(earliestStartMinutes) && actualStartMinutes < earliestStartMinutes) {
+        blocked = true;
+        blockedReason = "提早時間與上一堂課衝突，請聯絡管理員。";
+      }
       if (Number.isFinite(nextMinutes) && endMinutes + 15 > nextMinutes) {
         occupiedSubstituteId = String((availability.mergePartnerIds || [])[0] || "")
           .replace(/^leave:/, "");
-        blocked = !occupiedSubstituteId || !(pendingItems || []).some((item) =>
+        blocked = blocked || !occupiedSubstituteId || !(pendingItems || []).some((item) =>
           item["代課編號"] === occupiedSubstituteId
         );
       }
-      return {
+      const preview = {
         actualStartTime: formatClaimTimeMinutes(actualStartMinutes),
         endTime: formatClaimTimeMinutes(endMinutes),
         nextCourseTime,
         occupiedSubstituteId,
         blocked
       };
+      if (blockedReason) preview.blockedReason = blockedReason;
+      return preview;
     }
 
     function getSpecialCourseStartTimeOptions(startId, durationMinutes, availabilityMap) {
@@ -2348,6 +2356,7 @@
                 <div class="claim-field full">
                   <label>上課時間</label>
                   <select class="claim-control claim-start-delay">
+                    <option value="-15">提早 15 分鐘</option>
                     <option value="0">原時段</option>
                     <option value="15">延後 15 分鐘</option>
                     <option value="30">延後 30 分鐘</option>
@@ -2418,7 +2427,7 @@
         );
         summary.dataset.blocked = String(preview.blocked);
         summary.textContent = preview.blocked
-          ? "延後時間與下一堂課衝突，請聯絡管理員。"
+          ? (preview.blockedReason || "延後時間與下一堂課衝突，請聯絡管理員。")
           : `${target["時段"]} → ${preview.actualStartTime}｜${preview.endTime} 結束｜${preview.occupiedSubstituteId ? `下一堂 ${preview.nextCourseTime} 需由管理員關閉 OB` : "不占用下一堂"}`;
       } catch (error) {
         summary.dataset.blocked = "true";
@@ -2860,7 +2869,7 @@
       const rows = group.items || [];
       const item = rows[0] || {};
       if (!group.specialGroupId) {
-        const timeChange = Number(item["延後分鐘數"]) > 0
+        const timeChange = Number(item["延後分鐘數"]) !== 0
           ? `<div class="item-meta">調整開始時間：${escapeHtml(item["時段"])} → ${escapeHtml(item["實際開始時間"])}</div>`
           : "";
         return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div><div class="item-course">${escapeHtml(item["課程"])}</div><div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>${timeChange}<div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div><div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>${renderAuditHistory(item["異動紀錄"])}<div class="record-actions">${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="log-out"></i>申請退出代課</button>` : ""}</div></div></article>`;
@@ -3556,7 +3565,7 @@
     }
 
     function renderAdminItem(item, extraHtml = "") {
-      const timeChange = Number(item.startDelayMinutes) > 0
+      const timeChange = Number(item.startDelayMinutes) !== 0
         ? `<div class="item-meta">調整開始時間：${escapeHtml(item.time)} → ${escapeHtml(item.actualStartTime)}</div>`
         : "";
       const delayOccupancy = item.status === "延後占用"

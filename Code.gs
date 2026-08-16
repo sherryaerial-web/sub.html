@@ -3495,10 +3495,14 @@ function getOrdinaryCourseDurationMinutes_(courseName) {
   return cleanText_(courseName).indexOf('綢吊') !== -1 ? 90 : 60;
 }
 
+function getScheduledCourseDurationMinutes_(courseName) {
+  return parseExplicitCourseMinutes_(courseName) || getOrdinaryCourseDurationMinutes_(courseName);
+}
+
 function normalizeOrdinaryDelayMinutes_(value) {
   var delay = value == null || cleanText_(value) === '' ? 0 : Number(value);
-  if ([0, 15, 30].indexOf(delay) === -1) {
-    throw new Error('一般代課只能使用原時段、延後 15 分鐘或延後 30 分鐘。');
+  if ([-15, 0, 15, 30].indexOf(delay) === -1) {
+    throw new Error('一般代課只能使用提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。');
   }
   return delay;
 }
@@ -3518,8 +3522,8 @@ function buildOrdinaryClaimDelayPlan_(sourceRow, delayMinutes, leaveRows, course
   var actualStartMinutes = originalStartMinutes + delay;
   var endMinutes = actualStartMinutes + durationMinutes;
   var turnoverEndMinutes = endMinutes + 15;
-  if (actualStartMinutes >= 24 * 60 || endMinutes >= 24 * 60) {
-    throw new Error('延後後課程不可跨日。');
+  if (actualStartMinutes < 0 || actualStartMinutes >= 24 * 60 || endMinutes >= 24 * 60) {
+    throw new Error('調整後課程不可跨日。');
   }
 
   var schedule = (courseRows || []).map(function(row) {
@@ -3528,7 +3532,8 @@ function buildOrdinaryClaimDelayPlan_(sourceRow, delayMinutes, leaveRows, course
       date: formatMyDate(row && row[0]),
       minutes: timeTextToMinutes_(time),
       room: getCourseRoom_(row && row[2]),
-      calendarId: cleanText_(row && row[4])
+      calendarId: cleanText_(row && row[4]),
+      durationMinutes: getScheduledCourseDurationMinutes_(row && row[2])
     };
   }).filter(function(course) {
     return course.date === date && course.room === room && course.minutes >= 0;
@@ -3538,6 +3543,15 @@ function buildOrdinaryClaimDelayPlan_(sourceRow, delayMinutes, leaveRows, course
 
   if (!schedule.some(function(course) { return course.calendarId === calendarId; })) {
     throw new Error('原課程尚未出現在 OB 課表，請通知管理員重新同步。');
+  }
+
+  if (delay < 0) {
+    var previous = schedule.filter(function(course) {
+      return course.minutes < originalStartMinutes;
+    }).slice(-1)[0] || null;
+    if (previous && actualStartMinutes < previous.minutes + previous.durationMinutes + 15) {
+      throw new Error('提早時間與上一堂課衝突，請聯絡管理員。');
+    }
   }
 
   var conflicts = schedule.filter(function(course) {
@@ -3911,7 +3925,8 @@ function getTeacherSpecialCourseAvailability_(teacherName, pendingRows, courseRo
       room: room,
       time: time,
       minutes: minutes,
-      calendarId: calendarId
+      calendarId: calendarId,
+      durationMinutes: getScheduledCourseDurationMinutes_(row && row[2])
     });
   });
   Object.keys(schedules).forEach(function(key) {
@@ -3925,12 +3940,19 @@ function getTeacherSpecialCourseAvailability_(teacherName, pendingRows, courseRo
     var next = schedule.filter(function(course) {
       return course.minutes > startMinutes;
     })[0] || null;
+    var previous = schedule.filter(function(course) {
+      return course.minutes < startMinutes;
+    }).slice(-1)[0] || null;
     var partner = next ? slotByCalendarId[next.calendarId] : null;
     var option = {
       room: slot.room,
       date: slot.date,
       startTime: slot.time,
       nextCourseTime: next ? next.time : '',
+      previousCourseTime: previous ? previous.time : '',
+      earliestStartTime: previous
+        ? minutesToTimeText_(previous.minutes + previous.durationMinutes + 15)
+        : '',
       maxDurationMinutes: next ? Math.max(0, next.minutes - startMinutes - 15) : 240,
       mergePartnerIds: partner ? [partner.slotKey] : [],
       requiresClosingTimeConfirmation: !next

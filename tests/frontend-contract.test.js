@@ -949,6 +949,29 @@ test('renders delayed claim timing in teacher and admin records without replacem
   assert.doesNotMatch(occupiedMarkup, /data-admin-action="link-replacement"/);
 });
 
+test('renders early claim timing in teacher and admin records', () => {
+  const { context } = createFrontendRuntime();
+  const teacherMarkup = context.renderMySubGroup({
+    specialGroupId: '',
+    items: [{
+      '代課編號': 'leave-a', '日期': '2026/09/01', '時段': '18:45',
+      '實際開始時間': '18:30', '延後分鐘數': -15, '課程': 'A－空環 Lv.1',
+      '原老師': '老師乙', '處理類型': '沿用原課程', '實際課程名稱': 'A－空環 Lv.1',
+      '異動狀態': '', '可申請退出': true, '異動紀錄': [],
+    }],
+  });
+  const adminMarkup = context.renderAdminObItem({
+    substituteId: 'leave-a', date: '2026/09/01', time: '18:45',
+    actualStartTime: '18:30', startDelayMinutes: -15,
+    originalCourse: 'A－空環 Lv.1', actualCourse: 'A－空環 Lv.1',
+    originalTeacher: '老師乙', substituteTeacher: '老師甲', status: '已領取',
+    changeStatus: '', differenceReason: '', auditHistory: [],
+  }, []);
+
+  assert.match(teacherMarkup, /調整開始時間：18:45 → 18:30/);
+  assert.match(adminMarkup, /調整開始時間：18:45 → 18:30/);
+});
+
 test('special-course draft delays the actual start while reserving every occupied slot', () => {
   const { context } = createFrontendRuntime();
   const availability = {
@@ -1043,12 +1066,44 @@ test('ordinary start delay appears only inside the adjustment panel', () => {
 
   assert.match(rendered, /調整課程或時間/);
   assert.match(rendered, /class="claim-control claim-start-delay"/);
+  assert.match(rendered, /提早 15 分鐘/);
   assert.match(rendered, /原時段/);
   assert.match(rendered, /延後 15 分鐘/);
   assert.match(rendered, /延後 30 分鐘/);
   assert.match(rendered, /value="__ORIGINAL__"/);
   assert.equal((rendered.match(/claim-start-delay/g) || []).length, 1);
   assert.ok(rendered.indexOf('claim-start-delay') > rendered.indexOf('claim-adjustment-panel'));
+});
+
+test('ordinary early-start preview allows a safe gap and blocks the previous-course turnover window', () => {
+  const { context } = createFrontendRuntime();
+  const target = { '代課編號': 'leave-a', '時段': '18:45', '課程': 'A－空環 Lv.1' };
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildOrdinaryDelayPreview(target, -15, {
+      'leave-a': { previousCourseTime: '17:00', earliestStartTime: '18:15' },
+    }, []))),
+    {
+      actualStartTime: '18:30',
+      endTime: '19:30',
+      nextCourseTime: '',
+      occupiedSubstituteId: '',
+      blocked: false,
+    }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildOrdinaryDelayPreview(target, -15, {
+      'leave-a': { previousCourseTime: '17:30', earliestStartTime: '18:45' },
+    }, []))),
+    {
+      actualStartTime: '18:30',
+      endTime: '19:30',
+      nextCourseTime: '',
+      occupiedSubstituteId: '',
+      blocked: true,
+      blockedReason: '提早時間與上一堂課衝突，請聯絡管理員。',
+    }
+  );
 });
 
 test('ordinary delay preview distinguishes sixty-minute and 綢吊 claims', () => {
@@ -1172,6 +1227,23 @@ test('time-only adjustment sends original handling with the selected delay', () 
     difficulty: '',
     note: '',
     startDelayMinutes: 30,
+  });
+});
+
+test('time-only early adjustment sends negative fifteen minutes in the existing field', () => {
+  const { context, claimCard, claimControls } = createFrontendRuntime();
+  claimControls['input[type="radio"]:checked'].value = 'existing';
+  claimControls['.claim-course-type'].value = '__ORIGINAL__';
+  claimControls['.claim-start-delay'].value = '-15';
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readClaimDraft(claimCard))), {
+    handlingType: 'original',
+    actualClassId: '',
+    actualCourseName: '',
+    category: '',
+    difficulty: '',
+    note: '',
+    startDelayMinutes: -15,
   });
 });
 

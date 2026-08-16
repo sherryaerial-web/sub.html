@@ -1790,11 +1790,35 @@ test('ordinary duration treats only 綢吊 as ninety minutes and limits delay ch
   assert.equal(backend.getOrdinaryCourseDurationMinutes_('B－舞綢 Lv.1'), 60);
   assert.equal(backend.getOrdinaryCourseDurationMinutes_('A－空環 Lv.2'), 60);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_(undefined), 0);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_('-15'), -15);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_('15'), 15);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_(30), 30);
   assert.throws(
     () => backend.normalizeOrdinaryDelayMinutes_(45),
-    /原時段.*延後 15.*延後 30/
+    /提早 15.*原時段.*延後 15.*延後 30/
+  );
+});
+
+test('ordinary early start allows a safe gap but rejects the previous-course turnover window', () => {
+  const backend = loadBackend();
+  const source = ['stamp', '原老師甲', '2026/09/01', '18:45', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'];
+  const safeRows = [
+    ['2026/09/01', '17:00', 'A－空環 Lv.1', '原老師乙', 'cal-before'],
+    ['2026/09/01', '18:45', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+    ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師丙', 'cal-after'],
+  ];
+
+  const safe = backend.buildOrdinaryClaimDelayPlan_(source, -15, [source], safeRows);
+
+  assert.equal(safe.actualStartTime, '18:30');
+  assert.equal(safe.endTime, '19:30');
+  assert.equal(safe.occupiedSubstituteId, '');
+  assert.throws(
+    () => backend.buildOrdinaryClaimDelayPlan_(source, -15, [source], [
+      ['2026/09/01', '17:30', 'A－空環 Lv.1', '原老師乙', 'cal-before'],
+      ['2026/09/01', '18:45', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+    ]),
+    /提早時間與上一堂課衝突/
   );
 });
 
@@ -2694,6 +2718,35 @@ test('ordinary delay atomically claims the source and reserves the next open lea
   assert.equal(auditSheet.values.filter((row) => row[2] === '延後占用' && row[3] === 'leave-b').length, 1);
 });
 
+test('ordinary early start persists negative fifteen minutes without occupying another leave', () => {
+  const {
+    backend, leaveSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '17:00', 'A－空環 Lv.1', '老師丙', 'cal-before', 'class-before'],
+      ['2026/08/10', '18:45', 'A－空環 Lv.1', '老師乙', 'cal-a', 'class-a'],
+      ['2026/08/10', '20:00', 'A－空環 Lv.2', '老師丙', 'cal-after', 'class-after'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/10', '18:45', 'A－空環 Lv.1', '確認中', '', '', '', 'leave-a', 'cal-a'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSubstitute_(teacherASession, [{
+    substituteId: 'leave-a', handlingType: 'original', startDelayMinutes: -15,
+  }]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    count: 1,
+    occupiedSubstituteIds: [],
+  });
+  assert.equal(leaveSheet.values[1][5], '已領取');
+  assert.equal(leaveSheet.values[1][25], '18:30');
+  assert.equal(leaveSheet.values[1][26], -15);
+  assert.equal(leaveSheet.values[1][27], '');
+});
+
 test('ordinary delay batch conflict rejects every write', () => {
   const {
     backend, leaveSheet, auditSheet, adminSession, teacherASession,
@@ -3072,11 +3125,13 @@ test('special availability uses generic slot keys for own and open substitute co
 
   assert.deepEqual(JSON.parse(JSON.stringify(availability['own:cal-own-1'])), {
     room: 'A', date: '2026/08/10', startTime: '09:00', nextCourseTime: '10:30',
+    previousCourseTime: '', earliestStartTime: '',
     maxDurationMinutes: 75, mergePartnerIds: ['leave:leave-open-1'],
     requiresClosingTimeConfirmation: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(availability['leave:leave-open-1'])), {
     room: 'A', date: '2026/08/10', startTime: '10:30', nextCourseTime: '12:00',
+    previousCourseTime: '09:00', earliestStartTime: '10:15',
     maxDurationMinutes: 75, mergePartnerIds: [], requiresClosingTimeConfirmation: false,
   });
   assert.equal(availability['own:cal-private'], undefined);

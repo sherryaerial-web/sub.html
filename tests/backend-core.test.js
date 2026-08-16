@@ -2572,6 +2572,23 @@ test('invited list read is pure while the explicit POST route records first view
   assert.equal(secondResult.data.recorded, true);
 });
 
+test('teacher substitute list only exposes open courses from the target month', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    leaveRows: [
+      ['時間', '老師乙', '2026/08/31', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-aug', 'calendar-aug'],
+      ['時間', '老師乙', '2026/09/01', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-sep', 'calendar-sep'],
+      ['時間', '老師乙', '2026/10/01', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-oct', 'calendar-oct'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.deepEqual(
+    backend.getAvailableSubstitutes_(teacherASession).map((row) => row['代課編號']),
+    ['leave-sep'],
+  );
+});
+
 test('available-substitute reads never invent missing legacy UUIDs', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
     leaveRows: [[

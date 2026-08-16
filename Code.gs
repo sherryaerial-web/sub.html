@@ -3395,8 +3395,11 @@ function getAvailableSubstitutes_(session) {
   var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
   var leaveValues = leaveSheet.getDataRange().getValues();
+  var targetMonth = getNextMonthKey_();
   var allPendingRows = leaveValues.slice(1).filter(function(row) {
-    return cleanText_(row[5]) === '確認中' && cleanText_(row[1]) !== teacher;
+    return cleanText_(row[5]) === '確認中' &&
+      cleanText_(row[1]) !== teacher &&
+      isLeaveRowInMonth_(row, targetMonth);
   });
   if (allPendingRows.some(function(row) {
     return !cleanText_(row[9]) ||

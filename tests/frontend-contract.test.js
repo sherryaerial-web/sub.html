@@ -1661,6 +1661,73 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
+test('admin OB work renders ordinary courses separately from special-course groups', () => {
+  const { context } = createFrontendRuntime();
+  const markup = context.renderAdminObSections([
+    {
+      substituteId: 'ordinary-1', date: '2026/09/18', time: '14:00',
+      originalCourse: 'B－空環 Lv.1', originalTeacher: '老師甲', substituteTeacher: '老師乙',
+      actualCourse: 'B－空環 Lv.1', status: '已領取', changeStatus: '', auditHistory: [],
+    },
+    {
+      recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/09/20', time: '14:00',
+      originalCourse: 'C－空環＋C－舞綢', originalTeacher: '老師丙', substituteTeacher: '老師丙',
+      actualCourse: '空中環長帶舞碼', specialMode: '使用連續時段', specialDurationMinutes: 90,
+      specialActualStartTime: '14:00', specialEndTime: '15:30', status: '待處理', changeStatus: '',
+      sourceSlots: [], auditHistory: [],
+    },
+  ], []);
+
+  assert.match(markup, /一般代課<\/strong><span>1 堂<\/span>/);
+  assert.match(markup, /特別課群組<\/strong><span>1 組<\/span>/);
+  assert.ok(markup.indexOf('一般代課') < markup.indexOf('特別課群組'));
+  assert.ok(markup.indexOf('ordinary-1') < markup.indexOf('special-1'));
+});
+
+test('replacement selector only renders OB courses from the same date', () => {
+  const { context } = createFrontendRuntime();
+  const markup = context.renderAdminObItem({
+    substituteId: 'leave-1', date: '2026/09/18', time: '14:15',
+    originalCourse: 'B－空環 Lv.1', originalTeacher: '老師甲', substituteTeacher: '老師乙',
+    actualCourse: 'B－空環 Lv.1', status: '已領取', changeStatus: '', auditHistory: [],
+  }, [
+    { calendarId: 'calendar-same-day', date: '2026/09/18', time: '14:00', courseName: 'B－空環 Lv.1', teacherName: '老師乙' },
+    { calendarId: 'calendar-other-day', date: '2026/09/19', time: '14:00', courseName: 'B－空環 Lv.1', teacherName: '老師乙' },
+  ]);
+
+  assert.match(markup, /calendar-same-day/);
+  assert.doesNotMatch(markup, /calendar-other-day/);
+});
+
+test('reconcile OB requires confirmation before sending and reports completion', async () => {
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    reconcileObChanges: { checked: 4, matched: 3, exceptions: 1 },
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [],
+      exceptions: [], completed: [], teachers: [], replacementOptions: [],
+    },
+  });
+  let confirmations = 0;
+  context.window.confirm = () => {
+    confirmations += 1;
+    return confirmations > 1;
+  };
+
+  const cancelled = await context.reconcileAdminObChanges();
+  assert.equal(cancelled, null);
+  assert.equal(requestActions.includes('reconcileObChanges'), false);
+
+  const result = await context.reconcileAdminObChanges();
+  assert.equal(result.checked, 4);
+  assert.deepEqual(
+    requestActions.filter((action) => action === 'reconcileObChanges' || action === 'getAdminDashboard'),
+    ['reconcileObChanges', 'getAdminDashboard'],
+  );
+  assert.match(getElement('notice').textContent, /核對完成/);
+  assert.match(getElement('notice').textContent, /一致 3 筆/);
+  assert.match(getElement('notice').textContent, /異常 1 筆/);
+});
+
 test('admin cancellation history does not expose resolution actions after the request is terminal', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__dashboard = {

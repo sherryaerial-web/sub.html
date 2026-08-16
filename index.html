@@ -661,6 +661,7 @@
     .queue-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 2px 10px; }
     .queue-section-heading strong { font-size: 14px; }
     .queue-section-heading span { color: var(--muted); font-size: 12px; }
+    .admin-ob-section + .admin-ob-section { margin-top: 22px; }
     .queue-empty-state { display: flex; min-height: 92px; align-items: center; justify-content: center; gap: 10px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); font-size: 13px; }
     .queue-empty-state svg { width: 20px; height: 20px; color: var(--green-700); }
     .admin-date-group { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -3392,9 +3393,9 @@
           ${(data.activeInvitees || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}"><i data-lucide="user-x"></i>關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
       } else if (activeAdminTab === "obWork" || activeAdminTab === "exceptions") {
         const items = data[activeAdminTab] || [];
-        content.innerHTML = groupSpecialCourseItems(items).map((group) =>
-          renderAdminGroup(group, (item) => renderAdminObItem(item, data.replacementOptions || []))
-        ).join("") || `<div class="state">目前沒有${activeAdminTab === "obWork" ? "待處理 OB" : "核對異常"}</div>`;
+        content.innerHTML = items.length
+          ? renderAdminObSections(items, data.replacementOptions || [])
+          : `<div class="state">目前沒有${activeAdminTab === "obWork" ? "待處理 OB" : "核對異常"}</div>`;
       } else if (activeAdminTab === "changeRequests") {
         content.innerHTML = (data.changeRequests || []).map((item) => {
           const canResolve = ["申請取消中", "申請退出中"].includes(item.changeStatus);
@@ -3594,6 +3595,24 @@
       return `<section class="special-record-group"><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item.specialMode || "特別課")}｜${escapeHtml(item.specialDurationMinutes || "待確認")} 分鐘｜${escapeHtml(item.specialActualStartTime || "待確認")}–${escapeHtml(item.specialEndTime || "待確認")}</div><div class="item-meta">${escapeHtml(identifiers)}</div>${rows.map((row) => renderRow(row)).join("")}</section>`;
     }
 
+    function renderAdminObSections(items, options) {
+      const groups = groupSpecialCourseItems(items);
+      const ordinaryGroups = groups.filter((group) => !group.specialGroupId);
+      const specialGroups = groups.filter((group) => group.specialGroupId);
+      const renderGroups = (source) => source.map((group) =>
+        renderAdminGroup(group, (item) => renderAdminObItem(item, options || []))
+      ).join("");
+      const sections = [];
+      if (ordinaryGroups.length) {
+        const ordinaryCount = ordinaryGroups.reduce((total, group) => total + (group.items || []).length, 0);
+        sections.push(`<section class="admin-ob-section"><div class="queue-section-heading"><strong>一般代課</strong><span>${ordinaryCount} 堂</span></div>${renderGroups(ordinaryGroups)}</section>`);
+      }
+      if (specialGroups.length) {
+        sections.push(`<section class="admin-ob-section"><div class="queue-section-heading"><strong>特別課群組</strong><span>${specialGroups.length} 組</span></div>${renderGroups(specialGroups)}</section>`);
+      }
+      return sections.join("");
+    }
+
     function renderAdminItem(item, extraHtml = "") {
       const timeChange = Number(item.startDelayMinutes) !== 0
         ? `<div class="item-meta">調整開始時間：${escapeHtml(item.time)} → ${escapeHtml(item.actualStartTime)}</div>`
@@ -3605,8 +3624,9 @@
     }
 
     function renderAdminObItem(item, options) {
+      const sameDateOptions = (options || []).filter((option) => option.date === item.date);
       if (item.recordType === "specialRequest") {
-        const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-special-replacement-select="${escapeHtml(item.specialGroupId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-special-replacement" data-special-group-id="${escapeHtml(item.specialGroupId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+        const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-special-replacement-select="${escapeHtml(item.specialGroupId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-special-replacement" data-special-group-id="${escapeHtml(item.specialGroupId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
         return renderAdminItem(item, detail);
       }
       if (item.status === "延後占用") {
@@ -3617,10 +3637,10 @@
         const completionText = item.changeStatus === "退出後待回復 OB"
           ? "核對完成後才會重新開放。"
           : "核對完成後才會結束取消流程。";
-        const detail = `<div class="ob-details"><div class="item-meta">請先確認 OB 已恢復為「${escapeHtml(item.originalTeacher)}｜${escapeHtml(item.originalCourse)}」，再依序按「同步 OB 課表」與「重新核對 OB」。${completionText}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">若 OB 課程 ID 已更換，請選擇新課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
+        const detail = `<div class="ob-details"><div class="item-meta">請先確認 OB 已恢復為「${escapeHtml(item.originalTeacher)}｜${escapeHtml(item.originalCourse)}」，再依序按「同步 OB 課表」與「重新核對 OB」。${completionText}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">若 OB 課程 ID 已更換，請選擇新課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
         return renderAdminItem(item, detail);
       }
-      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${options.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
+      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
       return renderAdminItem(item, detail);
     }
 
@@ -3684,9 +3704,17 @@
     }
 
     async function reconcileAdminObChanges() {
-      const result = await callPostApi("reconcileObChanges");
-      setNotice(`核對完成：一致 ${result.matched} 筆，異常 ${result.exceptions} 筆。`);
-      await fetchAdminDashboard();
+      if (!window.confirm("確定要重新核對目前所有待處理 OB 課程？")) return null;
+      const button = byId("admin-reconcile");
+      setButtonBusy(button, true, "核對中...");
+      try {
+        const result = await callPostApi("reconcileObChanges");
+        await fetchAdminDashboard();
+        setNotice(`核對完成：一致 ${result.matched} 筆，異常 ${result.exceptions} 筆。`);
+        return result;
+      } finally {
+        setButtonBusy(button, false, "");
+      }
     }
 
     async function linkAdminReplacement(substituteId, replacementCalendarId) {

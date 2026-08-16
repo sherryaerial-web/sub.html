@@ -4642,7 +4642,7 @@ function getMySubs_(teacherName) {
     };
   });
   var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
-  if (!specialRequestSheet) return substituteItems;
+  if (!specialRequestSheet) return sortTeacherSubstituteRecords_(substituteItems);
   assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
   var specialItems = specialRequestSheet.getDataRange().getValues().slice(1).filter(function(row) {
     return cleanText_(row[2]) === name &&
@@ -4678,7 +4678,27 @@ function getMySubs_(teacherName) {
       '異動紀錄': auditByTarget[groupId] || []
     };
   });
-  return substituteItems.concat(specialItems);
+  return sortTeacherSubstituteRecords_(substituteItems.concat(specialItems));
+}
+
+function sortTeacherSubstituteRecords_(items) {
+  return (items || []).slice().sort(function(a, b) {
+    var firstKey = [
+      cleanText_(a && a['日期']),
+      cleanText_(a && (a['實際開始時間'] || a['特別課實際開始時間'] || a['時段'])),
+      cleanText_(a && a['課程']),
+      cleanText_(a && a['代課編號']),
+      cleanText_(a && a['特別課群組 ID'])
+    ].join('|');
+    var secondKey = [
+      cleanText_(b && b['日期']),
+      cleanText_(b && (b['實際開始時間'] || b['特別課實際開始時間'] || b['時段'])),
+      cleanText_(b && b['課程']),
+      cleanText_(b && b['代課編號']),
+      cleanText_(b && b['特別課群組 ID'])
+    ].join('|');
+    return firstKey.localeCompare(secondKey);
+  });
 }
 
 function getSpecialRequestSourceSlots_(row) {

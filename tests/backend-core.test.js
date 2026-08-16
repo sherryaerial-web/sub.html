@@ -2614,6 +2614,43 @@ test('teacher substitute records only include ordinary and special courses from 
   );
 });
 
+test('teacher substitute records sort ordinary and special courses by course start time', () => {
+  const ownSource = (date, time, calendarId) => JSON.stringify([{
+    sourceType: 'own', date, time, courseName: 'A－原始瑜伽',
+    originalTeacher: '老師甲', calendarId,
+  }]);
+  const adjustedOrdinary = [
+    'stamp', '老師乙', '2026/09/05', '20:00', '空環 Lv.1',
+    '已領取', '老師甲', '', '', 'leave-adjusted', 'calendar-adjusted',
+  ];
+  while (adjustedOrdinary.length < 28) adjustedOrdinary.push('');
+  adjustedOrdinary[25] = '18:45';
+  adjustedOrdinary[26] = -15;
+  const { backend } = createInvitationBackend({
+    nextMonth: '2026-09',
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/20', '18:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-late', 'calendar-late'],
+      ['stamp', '老師乙', '2026/09/05', '19:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-early', 'calendar-early'],
+      adjustedOrdinary,
+    ],
+    specialRequestRows: [
+      ['stamp', 'special-sep-6', '老師甲', '2026/09/06', 'A', ownSource('2026/09/06', '11:00', 'own-sep-6'), '[]', '11:00', '九月六日特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
+      ['stamp', 'special-sep-5', '老師甲', '2026/09/05', 'A', ownSource('2026/09/05', '18:30', 'own-sep-5'), '[]', '18:30', '九月五日特別課', '', 90, '20:00', '使用後方空堂', '', '待處理'],
+    ],
+  });
+
+  assert.deepEqual(
+    backend.getMySubs_('老師甲').map((row) => row['代課編號'] || row['特別課群組 ID']),
+    [
+      'special-sep-5',
+      'leave-adjusted',
+      'leave-early',
+      'special-sep-6',
+      'leave-late',
+    ],
+  );
+});
+
 test('available substitute list blocks own-course conflicts but allows an exact fifteen-minute gap', () => {
   const { backend, adminSession, teacherASession } = createInvitationBackend({
     nextMonth: '2026-09',

@@ -5750,6 +5750,7 @@ function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
       {
         teacher: cleanText_(requestRow[2]),
         course: cleanText_(requestRow[8]),
+        difficulty: cleanText_(requestRow[9]),
         classId: '',
         restoreType: ''
       },
@@ -5790,6 +5791,20 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
       if (!courseNamesMatch) {
         differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
       }
+      if (typeof courseNameNormalizer === 'function' &&
+          Object.prototype.hasOwnProperty.call(expectation, 'difficulty')) {
+        var expectedParts = getSpecialCourseReconciliationParts_(expectation.course);
+        var actualParts = getSpecialCourseReconciliationParts_(obRow[2]);
+        var expectedDifficulty = cleanText_(expectation.difficulty) || expectedParts.difficulty;
+        var actualDifficulty = actualParts.difficulty;
+        if (normalizeCourseReconciliationDifficulty_(expectedDifficulty) !==
+            normalizeCourseReconciliationDifficulty_(actualDifficulty)) {
+          differences.push(
+            '等級不一致：預期 ' + (expectedDifficulty || '未標示') +
+            '，OB 為 ' + (actualDifficulty || '未標示')
+          );
+        }
+      }
     }
     if (expectation.expectedTime && formatMyTime(obRow[1]) !== expectation.expectedTime) {
       differences.push(
@@ -5816,12 +5831,23 @@ function ordinaryCourseReconciliationNamesMatch_(expectedCourse, obCourse) {
 }
 
 function normalizeSpecialCourseReconciliationName_(value) {
-  return normalizeCourseName_(
-    stripCourseRoom_(value)
-      .replace(/[（(]\s*\d+\s*(?:min|分鐘)\s*[)）]\s*$/i, '')
-      .replace(/\s*特別課\s*$/, '')
-      .replace(/[＆﹠]/g, '&')
-  );
+  return getSpecialCourseReconciliationParts_(value).name;
+}
+
+function getSpecialCourseReconciliationParts_(value) {
+  var displayName = stripCourseRoom_(value)
+    .replace(/[（(]\s*\d+\s*(?:min|分鐘)\s*[)）]\s*$/i, '')
+    .replace(/[＆﹠]/g, '&')
+    .replace(/瑜珈/g, '瑜伽');
+  var courseParts = parseClaimCourseOption_(displayName);
+  return {
+    name: normalizeCourseName_(courseParts.courseTypeName.replace(/\s*特別課\s*$/, '')),
+    difficulty: cleanText_(courseParts.difficulty)
+  };
+}
+
+function normalizeCourseReconciliationDifficulty_(value) {
+  return normalizeClaimDifficulty_(value).replace(/(lv\.?\d+)[~\-–—](\d+)/g, '$1~$2');
 }
 
 function getSpecialCourseGroupObOutcome_(groupRecords, courseByCalendarId) {
@@ -5929,6 +5955,7 @@ function getObExpectation_(row, courseRows) {
   return {
     teacher: cleanText_(row[6]),
     course: applyCoursePromotionType_(storedCourse, promotionType),
+    difficulty: cleanText_(row[13]),
     classId: expectedClassId,
     expectedTime: cleanText_(row[21]) ? '' : formatMyTime(row[25]),
     restoreType: '',

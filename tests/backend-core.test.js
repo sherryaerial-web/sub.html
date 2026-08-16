@@ -3467,7 +3467,7 @@ test('own-only special claim appends one arrangement and never creates or change
 
   courseSheet.values = [
     EXPECTED_COURSE_HEADERS,
-    ['2026/08/10', '09:00', 'A－舞綢中軸特別課 (120min)', '老師甲', 'cal-own-1', 'class-special', 'teacher-a', '否', ''],
+    ['2026/08/10', '09:00', 'A－舞綢中軸特別課 Open level (120min)', '老師甲', 'cal-own-1', 'class-special', 'teacher-a', '否', ''],
   ];
   const reconciliation = backend.reconcileObChanges_(adminSession);
   assert.equal(reconciliation.matched, 1);
@@ -4547,6 +4547,79 @@ test('special-course group reconciliation accepts OB display formatting around t
     assert.equal(row[15], '已核對');
     assert.equal(row[17], '');
   });
+});
+
+test('special-course request reconciliation ignores OB level suffixes and yoga character variants', () => {
+  const ownSource = (date, time, courseName, calendarId) => JSON.stringify([{
+    sourceType: 'own', date, time, courseName,
+    originalTeacher: '老師甲', calendarId,
+  }]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      [
+        '2026/09/20', '14:00', 'C－空中環長帶舞碼特別課 Lv.3', '老師甲',
+        'calendar-aerial-dance', 'class-aerial-dance', 'teacher-a', '是', '',
+      ],
+      [
+        '2026/09/26', '11:00', 'B－原始瑜伽椅子瑜伽特別課', '老師甲',
+        'calendar-chair-yoga', 'class-chair-yoga', 'teacher-a', '是', '',
+      ],
+    ],
+    leaveRows: [],
+    specialRequestRows: [
+      [
+        'stamp', 'special-aerial-dance', '老師甲', '2026/09/20', 'C',
+        ownSource('2026/09/20', '14:00', 'C－空環 Lv.2~3', 'calendar-aerial-dance'),
+        '[]', '14:00', '空中環長帶舞碼', 'Lv.3', 90, '15:30',
+        '使用連續時段', '', '待處理', '核對異常', '', '舊差異', '',
+      ],
+      [
+        'stamp', 'special-chair-yoga', '老師甲', '2026/09/26', 'B',
+        ownSource('2026/09/26', '11:00', 'A－原始瑜伽', 'calendar-chair-yoga'),
+        '[]', '11:00', '原始瑜伽椅子瑜珈特別課', '', 120, '13:00',
+        '使用連續時段', '', '待處理', '核對異常', '', '舊差異', '',
+      ],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 2, matched: 2, exceptions: 0 });
+  specialRequestSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[14], '已完成');
+    assert.equal(row[15], '已核對');
+    assert.equal(row[17], '');
+  });
+});
+
+test('special-course request reconciliation still rejects a different OB level', () => {
+  const sourceSlots = JSON.stringify([{
+    sourceType: 'own', date: '2026/09/20', time: '14:00', courseName: 'C－空環 Lv.2~3',
+    originalTeacher: '老師甲', calendarId: 'calendar-aerial-dance',
+  }]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/20', '14:00', 'C－空中環長帶舞碼特別課 Lv.2', '老師甲',
+      'calendar-aerial-dance', 'class-aerial-dance', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [],
+    specialRequestRows: [[
+      'stamp', 'special-aerial-dance', '老師甲', '2026/09/20', 'C', sourceSlots,
+      '[]', '14:00', '空中環長帶舞碼', 'Lv.3', 90, '15:30',
+      '使用連續時段', '', '待處理', '待核對', '', '', '',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 0, exceptions: 1 });
+  const row = specialRequestSheet.values[1];
+  assert.equal(row[15], '核對異常');
+  assert.match(row[17], /等級不一致/);
+  assert.match(row[17], /Lv\.3/);
+  assert.match(row[17], /Lv\.2/);
 });
 
 test('special-course group reconciliation still rejects a different main title after display normalization', () => {

@@ -2591,6 +2591,91 @@ test('teacher substitute list only exposes open courses from the target month', 
   );
 });
 
+test('teacher substitute records only include ordinary and special courses from the target month', () => {
+  const ownSource = (date, calendarId) => JSON.stringify([{
+    sourceType: 'own', date, time: '11:00', courseName: 'A－原始瑜伽',
+    originalTeacher: '老師甲', calendarId,
+  }]);
+  const { backend } = createInvitationBackend({
+    nextMonth: '2026-09',
+    leaveRows: [
+      ['stamp', '老師乙', '2026/08/30', '10:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-aug', 'calendar-aug'],
+      ['stamp', '老師乙', '2026/09/05', '10:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-sep', 'calendar-sep'],
+    ],
+    specialRequestRows: [
+      ['stamp', 'special-aug', '老師甲', '2026/08/26', 'A', ownSource('2026/08/26', 'own-aug'), '[]', '11:00', '八月特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
+      ['stamp', 'special-sep', '老師甲', '2026/09/26', 'A', ownSource('2026/09/26', 'own-sep'), '[]', '11:00', '九月特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
+    ],
+  });
+
+  assert.deepEqual(
+    backend.getMySubs_('老師甲').map((row) => [row['日期'], row['實際課程名稱']]),
+    [['2026/09/05', ''], ['2026/09/26', '九月特別課']],
+  );
+});
+
+test('available substitute list blocks own-course conflicts but allows an exact fifteen-minute gap', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/05', '18:00', 'A－空環 Lv.1', '老師甲', 'calendar-own'],
+      ['2026/09/05', '19:00', 'B－空環 Lv.1', '老師乙', 'calendar-close'],
+      ['2026/09/05', '19:15', 'C－空環 Lv.1', '老師丙', 'calendar-safe'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/05', '19:00', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-close', 'calendar-close'],
+      ['stamp', '老師丙', '2026/09/05', '19:15', 'C－空環 Lv.1', '確認中', '', '', '', 'leave-safe', 'calendar-safe'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.deepEqual(
+    backend.getAvailableSubstitutes_(teacherASession).map((row) => row['代課編號']),
+    ['leave-safe'],
+  );
+});
+
+test('available substitute list blocks conflicts with an already claimed substitute before OB sync', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/05', '18:15', 'A－舞綢 Lv.3~5', '老師乙', 'calendar-claimed'],
+      ['2026/09/05', '19:00', 'B－空環 Lv.2~3', '老師丙', 'calendar-pending'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/05', '18:15', 'A－舞綢 Lv.3~5', '已領取', '老師甲', '', '', 'leave-claimed', 'calendar-claimed', '', 'A－香氛瑜伽'],
+      ['stamp', '老師丙', '2026/09/05', '19:00', 'B－空環 Lv.2~3', '確認中', '', '', '', 'leave-pending', 'calendar-pending'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.deepEqual(backend.getAvailableSubstitutes_(teacherASession), []);
+});
+
+test('claim rejects a stale conflicting course without writing any leave row', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/05', '18:00', 'A－空環 Lv.1', '老師甲', 'calendar-own', 'class-ring-1'],
+      ['2026/09/05', '19:00', 'B－空環 Lv.1', '老師乙', 'calendar-target', 'class-ring-1'],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/05', '19:00', 'B－空環 Lv.1',
+      '確認中', '', '', '', 'leave-target', 'calendar-target',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const before = JSON.parse(JSON.stringify(leaveSheet.values));
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-target', handlingType: 'original',
+    }]),
+    /相隔未滿 15 分鐘/,
+  );
+  assert.deepEqual(leaveSheet.values, before);
+});
+
 test('available-substitute reads never invent missing legacy UUIDs', () => {
   const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
     leaveRows: [[
@@ -4287,6 +4372,52 @@ test('reconciliation treats hyphen and tilde level ranges as the same ordinary c
   assert.equal(row[17], '');
 });
 
+test('reconciliation ignores an OB room prefix when the expected custom course has no room', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/05', '12:30', 'A－肩頸舒壓瑜伽', '老師甲',
+      'calendar-target', 'class-shoulder-yoga', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/05', '12:30', 'A－空瑜 Lv.0~2',
+      '已領取', '老師甲', '需要新增課程：肩頸舒壓瑜伽', '待處理',
+      'leave-target', 'calendar-target', '', '肩頸舒壓瑜伽', '',
+      '需要新增課程', '核對異常', '', '舊差異', '', '地板課程',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
+});
+
+test('reconciliation still rejects a different OB room when the expected course includes a room', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/05', '12:30', 'B－肩頸舒壓瑜伽', '老師甲',
+      'calendar-target', 'class-shoulder-yoga-b', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/05', '12:30', 'A－空瑜 Lv.0~2',
+      '已領取', '老師甲', '需要新增課程：A－肩頸舒壓瑜伽', '待處理',
+      'leave-target', 'calendar-target', '', 'A－肩頸舒壓瑜伽', '',
+      '需要新增課程', '待核對', '', '', '', '地板課程',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 0, exceptions: 1 });
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[15], '核對異常');
+  assert.match(row[17], /課程不一致/);
+});
+
 test('admin dashboard displays the current regular expectation for a legacy discount claim', () => {
   const { backend, adminSession } = createInvitationBackend({
     nextMonth: '2026-09',
@@ -4608,6 +4739,10 @@ test('reclaim preserves a verified replacement Calendar ID for later reconciliat
 
 test('legacy manual-review leave stays unavailable until admin links its original OB course', () => {
   const { backend, leaveSheet, auditSheet, adminSession, teacherBSession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-a', 'class-ring-1', 'teacher-a', '否', ''],
+      ['2026/08/01', '10:15', '空環 Lv.1', '老師乙', 'calendar-b', 'class-ring-1', 'teacher-b', '否', ''],
+    ],
     leaveRows: [[
       '時間', '老師甲', '2026/08/01', '09:00', '空環 Lv.1', '確認中', '', '', '',
       'leave-manual', '', '', '', '', '', '待人工核對', '', '找不到完全相同的 OB 課程', '', '', '',

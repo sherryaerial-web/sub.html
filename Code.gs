@@ -3379,9 +3379,10 @@ function getAvailableSubstitutes_(session) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
   assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  var courseRows = courseSheet.getDataRange().getValues().slice(1);
   var capabilities = getEffectiveTeacherCapabilities_(
     teacher,
-    courseSheet.getDataRange().getValues().slice(1)
+    courseRows
   );
   var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
   assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
@@ -3409,6 +3410,21 @@ function getAvailableSubstitutes_(session) {
   }
   var pendingRows = allPendingRows.filter(function(row) {
     return isOrdinaryOpenLeaveRow_(row);
+  });
+  var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
+  var specialRequestRows = [];
+  if (specialRequestSheet) {
+    assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+    specialRequestRows = specialRequestSheet.getDataRange().getValues().slice(1);
+  }
+  var teacherCommitments = buildTeacherCommitmentSlots_(
+    teacher,
+    courseRows,
+    leaveValues.slice(1),
+    specialRequestRows
+  );
+  pendingRows = pendingRows.filter(function(row) {
+    return !findTeacherScheduleConflict_(buildOrdinaryLeaveTimeSlot_(row), teacherCommitments);
   });
   return pendingRows.map(function(row) {
     return {
@@ -3505,6 +3521,98 @@ function getOrdinaryCourseDurationMinutes_(courseName) {
 
 function getScheduledCourseDurationMinutes_(courseName) {
   return parseExplicitCourseMinutes_(courseName) || getOrdinaryCourseDurationMinutes_(courseName);
+}
+
+function buildTeacherTimeSlot_(dateValue, timeValue, durationValue, label, calendarId) {
+  var date = formatMyDate(dateValue);
+  var startMinutes = timeTextToMinutes_(timeValue);
+  var durationMinutes = Number(durationValue);
+  if (!date || startMinutes < 0 || !isFinite(durationMinutes) || durationMinutes <= 0) return null;
+  return {
+    date: date,
+    startMinutes: startMinutes,
+    endMinutes: startMinutes + durationMinutes,
+    label: cleanText_(label),
+    calendarId: cleanText_(calendarId),
+    calendarIds: []
+  };
+}
+
+function buildOrdinaryLeaveTimeSlot_(row, actualStartTime) {
+  var groupId = cleanText_(row && row[21]);
+  var slot = buildTeacherTimeSlot_(
+    row && row[2],
+    actualStartTime ||
+      (groupId ? getSpecialCourseActualStartTime_(row && row[23], row && row[24]) : '') ||
+      formatMyTime(row && row[25]) ||
+      formatMyTime(row && row[3]),
+    groupId ? Number(row && row[23]) : getOrdinaryCourseDurationMinutes_(row && row[4]),
+    cleanText_(row && row[4]),
+    cleanText_(row && row[10])
+  );
+  if (slot) {
+    slot.calendarIds = [cleanText_(row && row[10]), cleanText_(row && row[20])].filter(Boolean);
+  }
+  return slot;
+}
+
+function teacherTimeSlotsConflict_(first, second) {
+  if (!first || !second || first.date !== second.date) return false;
+  return first.startMinutes < second.endMinutes + 15 &&
+    second.startMinutes < first.endMinutes + 15;
+}
+
+function findTeacherScheduleConflict_(candidate, commitments) {
+  if (!candidate) return null;
+  return (commitments || []).filter(function(slot) {
+    if (slot.calendarId && (candidate.calendarIds || []).indexOf(slot.calendarId) !== -1) return false;
+    return teacherTimeSlotsConflict_(candidate, slot);
+  })[0] || null;
+}
+
+function buildTeacherCommitmentSlots_(teacherName, courseRows, leaveRows, specialRequestRows) {
+  var teacher = cleanText_(teacherName);
+  var inactiveOwnCalendarIds = {};
+  (leaveRows || []).forEach(function(row) {
+    if (cleanText_(row && row[1]) !== teacher) return;
+    if (['確認中', '已領取', '延後占用'].indexOf(cleanText_(row && row[5])) === -1) return;
+    var calendarId = cleanText_(row && row[10]);
+    if (calendarId) inactiveOwnCalendarIds[calendarId] = true;
+  });
+
+  var slots = [];
+  (courseRows || []).forEach(function(row) {
+    if (cleanText_(row && row[3]) !== teacher) return;
+    if (inactiveOwnCalendarIds[cleanText_(row && row[4])]) return;
+    var slot = buildTeacherTimeSlot_(
+      row && row[0],
+      row && row[1],
+      getScheduledCourseDurationMinutes_(row && row[2]),
+      row && row[2],
+      row && row[4]
+    );
+    if (slot) slots.push(slot);
+  });
+
+  var seenSpecialGroupIds = {};
+  (leaveRows || []).forEach(function(row) {
+    if (cleanText_(row && row[6]) !== teacher || cleanText_(row && row[5]) !== '已領取') return;
+    var groupId = cleanText_(row && row[21]);
+    if (groupId && seenSpecialGroupIds[groupId]) return;
+    var slot = buildOrdinaryLeaveTimeSlot_(row);
+    if (slot) slots.push(slot);
+    if (groupId) seenSpecialGroupIds[groupId] = true;
+  });
+
+  (specialRequestRows || []).forEach(function(row) {
+    if (cleanText_(row && row[2]) !== teacher || cleanText_(row && row[14]) === '已取消') return;
+    var groupId = cleanText_(row && row[1]);
+    if (groupId && seenSpecialGroupIds[groupId]) return;
+    var slot = buildTeacherTimeSlot_(row && row[3], row && row[7], row && row[10], row && row[8]);
+    if (slot) slots.push(slot);
+    if (groupId) seenSpecialGroupIds[groupId] = true;
+  });
+  return slots;
 }
 
 function normalizeOrdinaryDelayMinutes_(value) {
@@ -4501,8 +4609,11 @@ function getMySubs_(teacherName) {
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   var auditByTarget = getAuditHistoryMap_();
+  var targetMonth = getNextMonthKey_();
   var substituteItems = sheet.getDataRange().getValues().slice(1).filter(function(r) {
-    return cleanText_(r[6]) === name && cleanText_(r[5]) === '已領取';
+    return cleanText_(r[6]) === name &&
+      cleanText_(r[5]) === '已領取' &&
+      isLeaveRowInMonth_(r, targetMonth);
   }).map(function(r) {
     return {
       '代課編號': cleanText_(r[9]),
@@ -4534,7 +4645,9 @@ function getMySubs_(teacherName) {
   if (!specialRequestSheet) return substituteItems;
   assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
   var specialItems = specialRequestSheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return cleanText_(row[2]) === name && specialRequestHasOwnSlot_(row);
+    return cleanText_(row[2]) === name &&
+      specialRequestHasOwnSlot_(row) &&
+      isSpecialRequestRowInMonth_(row, targetMonth);
   }).map(function(row) {
     var sourceSlots = getSpecialRequestSourceSlots_(row);
     var groupId = cleanText_(row[1]);
@@ -4991,6 +5104,18 @@ function claimSubstitute_(session, items) {
     var values = leaveSheet.getDataRange().getValues();
     var leaveRows = values.slice(1);
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
+    var specialRequestRows = [];
+    if (specialRequestSheet) {
+      assertHeaders_(specialRequestSheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+      specialRequestRows = specialRequestSheet.getDataRange().getValues().slice(1);
+    }
+    var teacherCommitments = buildTeacherCommitmentSlots_(
+      teacher,
+      courseRows,
+      leaveRows,
+      specialRequestRows
+    );
     var rowById = {};
     for (var rowIndex = 1; rowIndex < values.length; rowIndex++) {
       var substituteId = cleanText_(values[rowIndex][9]);
@@ -5047,6 +5172,12 @@ function claimSubstitute_(session, items) {
           (primaryIds[delayPlan.occupiedSubstituteId] || reservedOccupiedIds[delayPlan.occupiedSubstituteId])) {
         throw new Error('同一批不可同時領取或重複占用下一堂課。');
       }
+
+      var candidateSlot = buildOrdinaryLeaveTimeSlot_(row, delayPlan.actualStartTime);
+      if (findTeacherScheduleConflict_(candidateSlot, teacherCommitments)) {
+        throw new Error('此課程與您已安排的正課或代課相隔未滿 15 分鐘，不能領取。');
+      }
+      teacherCommitments.push(candidateSlot);
 
       var change = validateClaimChange_({
         teacher: teacher,
@@ -5632,8 +5763,13 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
       if (cleanText_(obRow[5]) !== expectation.classId) {
         differences.push('課程不一致：預期 Class ID ' + expectation.classId + '，OB 為 ' + cleanText_(obRow[5]));
       }
-    } else if (normalizeCourse(obRow[2]) !== normalizeCourse(expectation.course)) {
-      differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
+    } else {
+      var courseNamesMatch = typeof courseNameNormalizer === 'function'
+        ? normalizeCourse(obRow[2]) === normalizeCourse(expectation.course)
+        : ordinaryCourseReconciliationNamesMatch_(expectation.course, obRow[2]);
+      if (!courseNamesMatch) {
+        differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
+      }
     }
     if (expectation.expectedTime && formatMyTime(obRow[1]) !== expectation.expectedTime) {
       differences.push(
@@ -5646,6 +5782,17 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
 
 function normalizeOrdinaryCourseReconciliationName_(value) {
   return normalizeCourseName_(value).replace(/(lv\.?\d+)[~\-–—](\d+)/g, '$1~$2');
+}
+
+function ordinaryCourseReconciliationNamesMatch_(expectedCourse, obCourse) {
+  var expected = cleanText_(expectedCourse);
+  var actual = cleanText_(obCourse);
+  if (!getCourseRoom_(expected)) {
+    expected = expected.replace(/^\s*[A-D]\s*[－—–-]\s*/i, '');
+    actual = actual.replace(/^\s*[A-D]\s*[－—–-]\s*/i, '');
+  }
+  return normalizeOrdinaryCourseReconciliationName_(expected) ===
+    normalizeOrdinaryCourseReconciliationName_(actual);
 }
 
 function normalizeSpecialCourseReconciliationName_(value) {

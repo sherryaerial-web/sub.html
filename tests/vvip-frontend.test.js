@@ -8,17 +8,36 @@ const pagePath = path.join(__dirname, '..', 'vvip.html');
 const html = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, 'utf8') : '';
 const adminHtml = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-function renderCourseFromPage(course) {
+function createVvipPageHarness() {
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1]
-    .replace(/loadVvipMembers\(\);\s*$/, '') + '\nglobalThis.__renderCourse = renderCourse;';
-  const element = {
+    .replace(/loadVvipMembers\(\);\s*$/, '') + `
+      globalThis.__state = state;
+      globalThis.__renderCourse = renderCourse;
+      globalThis.__renderCourses = renderCourses;
+      globalThis.__formatVvipDateWithWeekday = typeof formatVvipDateWithWeekday === "function" ? formatVvipDateWithWeekday : undefined;
+      globalThis.__isVvipSpecialCourse = typeof isVvipSpecialCourse === "function" ? isVvipSpecialCourse : undefined;
+      globalThis.__toggleVvipDate = typeof toggleVvipDate === "function" ? toggleVvipDate : undefined;
+    `;
+  const elements = new Map();
+  const makeElement = () => ({
     addEventListener() {},
     classList: { toggle() {} },
     dataset: {},
     value: '',
-  };
+    innerHTML: '',
+    textContent: '',
+    className: '',
+    hidden: false,
+    disabled: false,
+    requestSubmit() {},
+  });
   const context = {
-    document: { getElementById() { return element; } },
+    document: {
+      getElementById(id) {
+        if (!elements.has(id)) elements.set(id, makeElement());
+        return elements.get(id);
+      },
+    },
     fetch: async () => ({ ok: true, json: async () => ({ status: 'success', data: [] }) }),
     URLSearchParams,
     Set,
@@ -26,6 +45,11 @@ function renderCourseFromPage(course) {
   };
   vm.createContext(context);
   vm.runInContext(script, context);
+  return { context, elements };
+}
+
+function renderCourseFromPage(course) {
+  const { context } = createVvipPageHarness();
   return context.__renderCourse(course);
 }
 
@@ -89,6 +113,54 @@ test('VVIP course card shows leave and substitute status without creating anothe
 
   assert.match(rendered, /原老師請假：原老師乙｜代課老師：代課老師乙/);
   assert.equal((rendered.match(/type="checkbox"/g) || []).length, 1);
+});
+
+test('VVIP classifies only named special courses and formats dates with weekdays', () => {
+  const { context } = createVvipPageHarness();
+
+  assert.equal(typeof context.__formatVvipDateWithWeekday, 'function');
+  assert.equal(typeof context.__isVvipSpecialCourse, 'function');
+  assert.equal(context.__formatVvipDateWithWeekday('2026/09/01'), '2026/09/01（二）');
+  assert.equal(context.__isVvipSpecialCourse({ courseName: '開髖回春特別課 (90min)' }), true);
+  assert.equal(context.__isVvipSpecialCourse({ courseName: '綢吊 Lv.0-2 (90分)' }), false);
+});
+
+test('VVIP separates visible special courses from collapsed ordinary weekday groups', () => {
+  const { context, elements } = createVvipPageHarness();
+  const courses = [
+    { calendarId: 'special-1', date: '2026/09/12', time: '14:00', courseName: '後彎充電特別課', teacherName: '卡拉' },
+    { calendarId: 'ordinary-1', date: '2026/09/01', time: '13:15', courseName: '綢吊 Lv.0-2 (90分)', teacherName: '妙妙' },
+    { calendarId: 'ordinary-2', date: '2026/09/01', time: '18:30', courseName: '空環 Lv.1~2', teacherName: '壹壹' },
+  ];
+  context.__state.data = { courses };
+  context.__renderCourses();
+  const rendered = elements.get('vvip-course-area').innerHTML;
+
+  assert.match(rendered, /class="vvip-special-section"[\s\S]*後彎充電特別課/);
+  assert.ok(rendered.indexOf('vvip-special-section') < rendered.indexOf('vvip-date-group'));
+  assert.match(rendered, /2026\/09\/01（二）[\s\S]*2 堂/);
+  assert.match(rendered, /data-vvip-date-content="2026\/09\/01" hidden/);
+  assert.equal((rendered.match(/type="checkbox"/g) || []).length, courses.length);
+});
+
+test('VVIP search exposes matching ordinary dates without losing manual expansion', () => {
+  const { context, elements } = createVvipPageHarness();
+  const courses = [
+    { calendarId: 'ordinary-1', date: '2026/09/01', time: '13:15', courseName: '綢吊 Lv.0-2 (90分)', teacherName: '妙妙' },
+  ];
+  context.__state.data = { courses };
+  const search = elements.get('vvip-course-search') || context.document.getElementById('vvip-course-search');
+
+  search.value = '綢吊';
+  context.__renderCourses();
+  assert.doesNotMatch(elements.get('vvip-course-area').innerHTML, /data-vvip-date-content="2026\/09\/01" hidden/);
+
+  search.value = '';
+  context.__renderCourses();
+  assert.match(elements.get('vvip-course-area').innerHTML, /data-vvip-date-content="2026\/09\/01" hidden/);
+  assert.equal(typeof context.__toggleVvipDate, 'function');
+  context.__toggleVvipDate('2026/09/01');
+  assert.doesNotMatch(elements.get('vvip-course-area').innerHTML, /data-vvip-date-content="2026\/09\/01" hidden/);
 });
 
 test('VVIP admin workspace remains a protected tab with management actions', () => {

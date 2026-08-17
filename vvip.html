@@ -42,8 +42,16 @@
     .counter { padding:7px 10px; border:1px solid #cdbbb4; border-radius:6px; background:var(--aqua); color:var(--sea-dark); font-size:13px; font-weight:800; }
     .counter.full { border-color:#d5aeb6; background:var(--coral-soft); color:var(--coral); }
     .course-area { margin-top:14px; }
-    .date-group { margin-top:14px; border-top:1px solid var(--line); }
-    .date-heading { margin:0; padding:14px 0 8px; color:var(--sea-dark); font-size:15px; }
+    .vvip-section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:20px 0 0; padding:0 0 9px; border-bottom:1px solid var(--line); color:var(--sea-dark); font-size:16px; }
+    .vvip-section-title span { color:var(--muted); font-size:12px; }
+    .vvip-special-course { padding-top:8px; }
+    .vvip-special-date { padding:8px 4px 0; color:var(--sea-dark); font-size:12px; font-weight:800; }
+    .vvip-date-group { margin-top:10px; border:1px solid var(--line); border-radius:var(--radius); background:#fffdf9; overflow:hidden; }
+    .vvip-date-toggle { display:flex; width:100%; min-height:50px; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px; border:0; background:transparent; color:var(--sea-dark); text-align:left; font-weight:800; }
+    .vvip-date-toggle:hover { background:var(--soft); }
+    .vvip-date-toggle::after { content:"＋"; color:var(--muted); font-size:18px; font-weight:500; }
+    .vvip-date-toggle[aria-expanded="true"]::after { content:"−"; }
+    .vvip-date-content { padding:0 14px 4px; border-top:1px solid var(--line); }
     .course-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:11px; align-items:center; min-height:67px; padding:10px 0; border-top:1px solid #eee7e1; }
     .course-item:first-of-type { border-top:0; }
     .course-item input { width:18px; height:18px; accent-color:var(--sea); }
@@ -79,7 +87,7 @@
     input[type="text"],input[type="search"] { border-color:#bfb4aa; }
     .counter { border-color:#cdbbb4; background:#eee0dc; color:#665851; }
     .course-item { padding:13px 4px; }
-    .course-time,.date-heading { color:#805e55; }
+    .course-time,.vvip-section-title,.vvip-special-date,.vvip-date-toggle { color:#805e55; }
     .course-name { color:#403936; }
     .state { border-color:#c7bbb2; color:#786f69; }
     @media (max-width:620px) { .brand { margin-right:-14px; margin-left:-14px; padding-right:18px; padding-left:18px; } h2 { font-size:26px; } }
@@ -109,6 +117,7 @@
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LIMIT = 4;
     const state = { members: [], memberId: "", data: null, selectedCalendarIds: new Set(), existingCalendarIds: new Set() };
+    const expandedVvipDates = new Set();
     const byId = (id) => document.getElementById(id);
 
     function escapeHtml(value) { return String(value == null ? "" : value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
@@ -129,17 +138,35 @@
     function getAllSelectedIds() { return new Set([...state.existingCalendarIds, ...state.selectedCalendarIds]); }
     function getSelectedCount() { return getAllSelectedIds().size; }
     function groupCoursesByDate(courses) { return (courses || []).reduce((groups, course) => { (groups[course.date] ||= []).push(course); return groups; }, {}); }
+    function formatVvipDateWithWeekday(value) {
+      const match = String(value || "").match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+      if (!match) return String(value || "");
+      const year = Number(match[1]); const month = Number(match[2]); const day = Number(match[3]);
+      const weekday = ["日", "一", "二", "三", "四", "五", "六"][new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+      return `${year}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}（${weekday}）`;
+    }
+    function isVvipSpecialCourse(course) { return String(course && course.courseName || "").includes("特別課"); }
     function filterVvipCourses(courses, query) { const term = String(query || "").trim().toLowerCase(); return !term ? courses : courses.filter((course) => `${course.courseName} ${course.teacherName} ${course.originalTeacherName || ""} ${course.substituteTeacherName || ""} ${course.leaveLabel || ""} ${course.date} ${course.time}`.toLowerCase().includes(term)); }
     function selectedCourses() { const selected = new Set(state.selectedCalendarIds); return (state.data ? state.data.courses : []).filter((course) => selected.has(course.calendarId)); }
 
     function renderCounter() { const count = getSelectedCount(); const el = byId("vvip-counter"); el.textContent = `已選 ${count}／${LIMIT} 堂`; el.classList.toggle("full", count >= LIMIT); }
     function renderCourses() {
       const area = byId("vvip-course-area");
-      const courses = filterVvipCourses(state.data ? state.data.courses : [], byId("vvip-course-search").value);
+      const query = byId("vvip-course-search").value.trim();
+      const courses = filterVvipCourses(state.data ? state.data.courses : [], query);
       if (!courses.length) { area.innerHTML = '<div class="state">尚無可選課程，請稍後再試或調整搜尋條件。</div>'; return; }
-      const groups = groupCoursesByDate(courses);
-      area.innerHTML = Object.keys(groups).sort().map((date) => `<section class="date-group"><h3 class="date-heading">${escapeHtml(date)}</h3>${groups[date].map((course) => renderCourse(course)).join("")}</section>`).join("");
+      const specialCourses = courses.filter(isVvipSpecialCourse);
+      const ordinaryCourses = courses.filter((course) => !isVvipSpecialCourse(course));
+      const specialSection = specialCourses.length ? `<section class="vvip-special-section"><h3 class="vvip-section-title">特別課<span>${specialCourses.length} 堂</span></h3>${specialCourses.map((course) => `<div class="vvip-special-course"><div class="vvip-special-date">${escapeHtml(formatVvipDateWithWeekday(course.date))}</div>${renderCourse(course)}</div>`).join("")}</section>` : "";
+      const groups = groupCoursesByDate(ordinaryCourses);
+      const ordinaryGroups = Object.keys(groups).sort().map((date) => {
+        const expanded = !!query || expandedVvipDates.has(date);
+        return `<section class="vvip-date-group"><button class="vvip-date-toggle" type="button" data-vvip-date-toggle="${escapeHtml(date)}" aria-expanded="${expanded}"><span>${escapeHtml(formatVvipDateWithWeekday(date))}</span><span>${groups[date].length} 堂</span></button><div class="vvip-date-content" data-vvip-date-content="${escapeHtml(date)}" ${expanded ? "" : "hidden"}>${groups[date].map((course) => renderCourse(course)).join("")}</div></section>`;
+      }).join("");
+      const ordinarySection = ordinaryCourses.length ? `<section class="vvip-ordinary-section"><h3 class="vvip-section-title">一般課程<span>${ordinaryCourses.length} 堂</span></h3>${ordinaryGroups}</section>` : "";
+      area.innerHTML = specialSection + ordinarySection;
     }
+    function toggleVvipDate(date) { if (expandedVvipDates.has(date)) expandedVvipDates.delete(date); else expandedVvipDates.add(date); renderCourses(); }
     function renderCourse(course) {
       const existing = state.existingCalendarIds.has(course.calendarId);
       const checked = state.selectedCalendarIds.has(course.calendarId);
@@ -180,6 +207,7 @@
       try {
         const data = await callVvipApi("getVvipSelection", { vvipId: member.id });
         state.memberId = member.id; state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).map((item) => item.calendarId));
+        expandedVvipDates.clear();
         renderWorkspace();
         showNotice(`已載入 ${data.month} 課程。目前已累積 ${data.count} 堂。`, "success");
       } catch (error) {
@@ -215,6 +243,7 @@
 
     byId("vvip-member-form").addEventListener("submit", lookupVvip);
     byId("vvip-course-search").addEventListener("input", renderCourses);
+    byId("vvip-course-area").addEventListener("click", (event) => { const button = event.target.closest ? event.target.closest("[data-vvip-date-toggle]") : null; if (button) toggleVvipDate(button.dataset.vvipDateToggle); });
     byId("vvip-course-area").addEventListener("change", changeSelection);
     byId("vvip-submit").addEventListener("click", submitVvipSelection);
     byId("vvip-retry").addEventListener("click", () => byId("vvip-member-form").requestSubmit());

@@ -1862,12 +1862,13 @@ test('ordinary duration treats only 綢吊 as ninety minutes and limits delay ch
   assert.equal(backend.getOrdinaryCourseDurationMinutes_('B－舞綢 Lv.1'), 60);
   assert.equal(backend.getOrdinaryCourseDurationMinutes_('A－空環 Lv.2'), 60);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_(undefined), 0);
+  assert.equal(backend.normalizeOrdinaryDelayMinutes_('-30'), -30);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_('-15'), -15);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_('15'), 15);
   assert.equal(backend.normalizeOrdinaryDelayMinutes_(30), 30);
   assert.throws(
     () => backend.normalizeOrdinaryDelayMinutes_(45),
-    /提早 15.*原時段.*延後 15.*延後 30/
+    /提早 30.*提早 15.*原時段.*延後 15.*延後 30/
   );
 });
 
@@ -1892,6 +1893,13 @@ test('ordinary early start allows a safe gap but rejects the previous-course tur
     ]),
     /提早時間與上一堂課衝突/
   );
+
+  const thirtyMinutesEarly = backend.buildOrdinaryClaimDelayPlan_(source, -30, [source], [
+    ['2026/09/01', '17:00', 'A－空環 Lv.1', '原老師乙', 'cal-before'],
+    ['2026/09/01', '18:45', 'A－空環 Lv.1', '原老師甲', 'cal-a'],
+  ]);
+  assert.equal(thirtyMinutesEarly.actualStartTime, '18:15');
+  assert.equal(thirtyMinutesEarly.endTime, '19:15');
 });
 
 test('ordinary sixty-minute delay occupies only the conflicting next open leave', () => {
@@ -4568,6 +4576,32 @@ test('reconciliation requires the new-teacher marker when the substitute is new 
   assert.equal(row[17], '');
 });
 
+test('reconciliation accepts a normal OB title for a new-teacher substitute while preserving the promotion expectation', () => {
+  const courseRows = [
+    ['2026/09/20', '17:00', 'D－空瑜 Lv.1~2', 'Melody Wang', 'calendar-target', 'class-yoga-regular', 'teacher-melody', '是', ''],
+    ['2026/09/02', '10:30', 'D－空瑜 Lv.0~2〈新老師〉', 'Melody Wang', 'calendar-own-new', 'class-yoga-new', 'teacher-melody', '否', ''],
+  ];
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows,
+    leaveRows: [[
+      'stamp', '小mo(子涵）', '2026/09/20', '17:00', 'D－空瑜 Lv.1~2',
+      '已領取', 'Melody Wang', '', '待處理', 'leave-target', 'calendar-target',
+      '', 'D－空瑜 Lv.1~2', 'Lv.1~2', '沿用原課程', '待核對',
+    ]],
+  });
+
+  const expectation = backend.getObExpectation_(leaveSheet.values[1], courseRows);
+  assert.equal(expectation.course, 'D－空瑜 Lv.1~2〈新老師〉');
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-target');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
+});
+
 function createSpecialGroupReconciliationRows(groupId = 'special-group-a') {
   return [
     ['時間', '老師乙', '2026/08/12', '13:30', 'B－空環 Lv.2', '已領取', '老師甲', '', '待處理', 'leave-special-1', 'group-calendar-1', '', '卡拉特別課', '', '調整為特別課', '待核對', '', '', '', '地板課程', '', groupId, '使用連續時段', 180, '16:30'],
@@ -4870,6 +4904,39 @@ test('replacement calendar linking adopts its time and immediately reconciles th
     differences: [],
     actualStartTime: '14:00',
   });
+});
+
+test('replacement calendar linking accepts an explicit room change but still requires the same level', () => {
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/26', '10:45', 'A－空瑜 Lv.2', 'Melody Wang', 'calendar-room-a', 'class-room-a', 'teacher-melody', '是', ''],
+      ['2026/09/02', '10:30', 'D－空瑜 Lv.0~2〈新老師〉', 'Melody Wang', 'calendar-own-new', 'class-yoga-new', 'teacher-melody', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', 'Ariel Lu', '2026/09/26', '10:45', 'B－空瑜 Lv.2',
+      '已領取', 'Melody Wang', '', '待處理', 'leave-room-change', 'calendar-room-b',
+      'class-room-b', 'B－空瑜 Lv.2', 'Lv.2', '沿用原課程', '核對異常', '', '舊教室不一致',
+    ]],
+  });
+
+  const linked = backend.linkReplacementCalendarItem_(
+    adminSession,
+    'leave-room-change',
+    'calendar-room-a'
+  );
+
+  assert.equal(leaveSheet.values[1][20], 'calendar-room-a');
+  assert.equal(leaveSheet.values[1][15], '已核對');
+  assert.equal(leaveSheet.values[1][17], '');
+  assert.deepEqual(JSON.parse(JSON.stringify(linked.differences)), []);
+
+  const levelMismatch = backend.ordinaryCourseReconciliationNamesMatch_(
+    'B－空瑜 Lv.2〈新老師〉',
+    'A－空瑜 Lv.2~4',
+    { allowRoomChange: true, ignoreNewTeacherMarker: true }
+  );
+  assert.equal(levelMismatch, false);
 });
 
 test('replacement calendar linking rejects a course from a different date without writing', () => {

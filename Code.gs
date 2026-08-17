@@ -3884,8 +3884,8 @@ function buildTeacherCommitmentSlots_(teacherName, courseRows, leaveRows, specia
 
 function normalizeOrdinaryDelayMinutes_(value) {
   var delay = value == null || cleanText_(value) === '' ? 0 : Number(value);
-  if ([-15, 0, 15, 30].indexOf(delay) === -1) {
-    throw new Error('一般代課只能使用提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。');
+  if ([-30, -15, 0, 15, 30].indexOf(delay) === -1) {
+    throw new Error('一般代課只能使用提早 30 分鐘、提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。');
   }
   return delay;
 }
@@ -6071,7 +6071,10 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
     } else {
       var courseNamesMatch = typeof courseNameNormalizer === 'function'
         ? normalizeCourse(obRow[2]) === normalizeCourse(expectation.course)
-        : ordinaryCourseReconciliationNamesMatch_(expectation.course, obRow[2]);
+        : ordinaryCourseReconciliationNamesMatch_(expectation.course, obRow[2], {
+          allowRoomChange: expectation.allowRoomChange === true,
+          ignoreNewTeacherMarker: expectation.promotionType === 'new-teacher'
+        });
       if (!courseNamesMatch) {
         differences.push('課程不一致：預期 ' + expectation.course + '，OB 為 ' + cleanText_(obRow[2]));
       }
@@ -6103,10 +6106,15 @@ function normalizeOrdinaryCourseReconciliationName_(value) {
   return normalizeCourseName_(value).replace(/(lv\.?\d+)[~\-–—](\d+)/g, '$1~$2');
 }
 
-function ordinaryCourseReconciliationNamesMatch_(expectedCourse, obCourse) {
+function ordinaryCourseReconciliationNamesMatch_(expectedCourse, obCourse, options) {
+  var settings = options || {};
   var expected = cleanText_(expectedCourse);
   var actual = cleanText_(obCourse);
-  if (!getCourseRoom_(expected)) {
+  if (settings.ignoreNewTeacherMarker) {
+    expected = stripNewTeacherMarker_(expected);
+    actual = stripNewTeacherMarker_(actual);
+  }
+  if (settings.allowRoomChange || !getCourseRoom_(expected)) {
     expected = expected.replace(/^\s*[A-D]\s*[－—–-]\s*/i, '');
     actual = actual.replace(/^\s*[A-D]\s*[－—–-]\s*/i, '');
   }
@@ -6230,6 +6238,8 @@ function getObExpectation_(row, courseRows, newTeacherMonthMap) {
   var promotionType = teacherIsNew ? 'new-teacher' : '';
   var storedPromotionType = getCoursePromotionType_(storedCourse);
   var expectedClassId = cleanText_(row[11]);
+  var allowRoomChange = Boolean(cleanText_(row[20]));
+  if (allowRoomChange) expectedClassId = '';
   if (storedPromotionType !== promotionType) expectedClassId = '';
   if (expectedClassId) {
     var matchingClassRow = (courseRows || []).filter(function(courseRow) {
@@ -6244,6 +6254,8 @@ function getObExpectation_(row, courseRows, newTeacherMonthMap) {
     course: applyCoursePromotionType_(storedCourse, promotionType),
     difficulty: cleanText_(row[13]),
     classId: expectedClassId,
+    promotionType: promotionType,
+    allowRoomChange: allowRoomChange,
     expectedTime: cleanText_(row[21]) ? '' : formatMyTime(row[25]),
     restoreType: '',
     closeType: ''

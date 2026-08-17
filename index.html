@@ -1417,8 +1417,8 @@
       if (!["original", "existing", "special", "new"].includes(handlingType)) {
         throw new Error("課程處理方式無效，請重新選擇。");
       }
-      if (![-15, 0, 15, 30].includes(startDelayMinutes)) {
-        throw new Error("一般代課只能使用提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。");
+      if (![-30, -15, 0, 15, 30].includes(startDelayMinutes)) {
+        throw new Error("一般代課只能使用提早 30 分鐘、提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。");
       }
 
       if (claimNoteIsRequired(target, handlingType, category) && !note) {
@@ -1461,8 +1461,8 @@
 
     function buildOrdinaryDelayPreview(target, startDelayMinutes, availabilityMap, pendingItems) {
       const delay = Number(startDelayMinutes || 0);
-      if (![-15, 0, 15, 30].includes(delay)) {
-        throw new Error("一般代課只能使用提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。");
+      if (![-30, -15, 0, 15, 30].includes(delay)) {
+        throw new Error("一般代課只能使用提早 30 分鐘、提早 15 分鐘、原時段、延後 15 分鐘或延後 30 分鐘。");
       }
       const originalStartMinutes = parseClaimTimeMinutes(target?.["時段"]);
       if (!Number.isFinite(originalStartMinutes)) {
@@ -2454,6 +2454,7 @@
                 <div class="claim-field full">
                   <label>上課時間</label>
                   <select class="claim-control claim-start-delay">
+                    <option value="-30">提早 30 分鐘</option>
                     <option value="-15">提早 15 分鐘</option>
                     <option value="0" selected>原時段</option>
                     <option value="15">延後 15 分鐘</option>

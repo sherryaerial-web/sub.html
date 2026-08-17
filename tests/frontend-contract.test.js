@@ -1119,6 +1119,7 @@ test('ordinary start delay appears only inside the adjustment panel', () => {
   assert.match(rendered, /調整課程或時間/);
   assert.match(rendered, /class="claim-control claim-start-delay"/);
   assert.match(rendered, /提早 15 分鐘/);
+  assert.match(rendered, /提早 30 分鐘/);
   assert.match(rendered, /<option value="0" selected>原時段<\/option>/);
   assert.doesNotMatch(rendered, /<option value="-15" selected>/);
   assert.match(rendered, /延後 15 分鐘/);

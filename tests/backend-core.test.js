@@ -4725,6 +4725,50 @@ test('special-course request reconciliation accepts an OB title without the requ
   assert.equal(row[17], '');
 });
 
+test('special-course request reconciliation accepts configured OB title aliases', () => {
+  const sourceSlots = (date, time, courseName, calendarId) => JSON.stringify([{
+    sourceType: 'own', date, time, courseName,
+    originalTeacher: '老師甲', calendarId,
+  }]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      [
+        '2026/09/05', '19:45', 'A－折疊環特別課(90min)', '老師甲',
+        'calendar-folding-hoop', 'class-folding-hoop', 'teacher-a', '是', '',
+      ],
+      [
+        '2026/09/24', '12:15', 'A－迷你環綢舞碼特別課(90min)', '老師甲',
+        'calendar-mini-silk', 'class-mini-silk', 'teacher-a', '是', '',
+      ],
+    ],
+    leaveRows: [],
+    specialRequestRows: [
+      [
+        'stamp', 'special-folding-hoop', '老師甲', '2026/09/05', 'A',
+        sourceSlots('2026/09/05', '19:45', 'A－空環 Lv.0', 'calendar-folding-hoop'),
+        '[]', '19:45', '摺疊環特別課', 'Lv3', 90, '21:15',
+        '使用後方空堂', '', '待處理', '待核對', '', '', '',
+      ],
+      [
+        'stamp', 'special-mini-silk', '老師甲', '2026/09/24', 'A',
+        sourceSlots('2026/09/24', '12:15', 'A－皮拉提斯', 'calendar-mini-silk'),
+        '[]', '12:15', '迷你環綢特別課', 'Lv2', 90, '13:45',
+        '使用後方空堂', '', '待處理', '待核對', '', '', '',
+      ],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 2, matched: 2, exceptions: 0 });
+  specialRequestSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[14], '已完成');
+    assert.equal(row[15], '已核對');
+    assert.equal(row[17], '');
+  });
+});
+
 test('special-course request reconciliation still rejects a different OB level', () => {
   const sourceSlots = JSON.stringify([{
     sourceType: 'own', date: '2026/09/20', time: '14:00', courseName: 'C－空環 Lv.2~3',

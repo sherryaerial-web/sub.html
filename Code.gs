@@ -6133,8 +6133,11 @@ function getSpecialCourseReconciliationParts_(value) {
     .replace(/[＆﹠]/g, '&')
     .replace(/瑜珈/g, '瑜伽');
   var courseParts = parseClaimCourseOption_(displayName);
+  var normalizedName = normalizeCourseName_(courseParts.courseTypeName.replace(/\s*特別課\s*$/, ''))
+    .replace(/摺疊環/g, '折疊環')
+    .replace(/迷你環綢舞碼/g, '迷你環綢');
   return {
-    name: normalizeCourseName_(courseParts.courseTypeName.replace(/\s*特別課\s*$/, '')),
+    name: normalizedName,
     difficulty: cleanText_(courseParts.difficulty)
   };
 }

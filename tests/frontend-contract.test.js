@@ -2090,11 +2090,12 @@ test('admin invitation rounds keep the fixed teaching roster and invited positio
   assert.equal(rounds[0].label, '第 1 輪');
   assert.deepEqual(rounds[0].teachers.map((teacher) => teacher.name), roster.slice(0, 5));
   assert.deepEqual(rounds[6].teachers.map((teacher) => teacher.name), ['番茄🍅', 'Sue']);
-  assert.deepEqual(rounds[7].teachers.map((teacher) => teacher.name), ['新老師']);
+  assert.deepEqual(rounds[7].teachers.map((teacher) => teacher.name), ['狗狗 陳', '新老師']);
   assert.equal(rounds[7].label, '其他老師');
   assert.equal(rounds[0].teachers[0].invited, true);
   assert.equal(rounds[0].teachers[2].invited, true);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '冠蓉'), false);
+  assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '狗狗 陳'), true);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === 'Angela Chuang'), false);
 });
 

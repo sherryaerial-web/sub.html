@@ -1859,7 +1859,8 @@ function getVvipCourseRows_(month, requireCalendarIds) {
     return item;
   }).filter(function(item) {
     return getVvipMonthFromDate_(item.date) === month &&
-      item.calendarId && item.date && item.time && item.courseName && item.teacherName;
+      item.calendarId && item.date && item.time && item.courseName && item.teacherName &&
+      item.courseName.indexOf('場地租借') === -1;
   });
 
   if (requireCalendarIds && missingIds.length) {

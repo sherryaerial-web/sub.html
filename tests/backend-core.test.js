@@ -5062,6 +5062,18 @@ test('VVIP course rows merge leave and substitute status without duplicating sel
   assert.equal(byId['cal-reopened'].leaveStatus, 'pending');
 });
 
+test('VVIP course rows exclude venue rental entries from public selection', () => {
+  const courseRows = [
+    ['2026/09/01', '10:00', 'A－空環 Lv.1', '一般老師', 'cal-normal', 'class-1', 'teacher-1', '否', ''],
+    ['2026/09/01', '14:00', 'C－場地租借', '租借會員', 'cal-rental', 'class-rental', 'teacher-rental', '否', ''],
+  ];
+  const { backend } = createVvipBackend({ courseRows });
+
+  const courses = JSON.parse(JSON.stringify(backend.getVvipCourseRows_('2026-09', true)));
+
+  assert.deepEqual(courses.map((course) => course.calendarId), ['cal-normal']);
+});
+
 test('VVIP administrator maintains unique active OB names and private Email mappings', () => {
   const { backend, adminSession, memberSheet } = createVvipBackend();
 

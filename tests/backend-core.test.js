@@ -4697,6 +4697,34 @@ test('special-course request reconciliation ignores OB level suffixes and yoga c
   });
 });
 
+test('special-course request reconciliation accepts an OB title without the requested level', () => {
+  const sourceSlots = JSON.stringify([{
+    sourceType: 'own', date: '2026/09/20', time: '14:00', courseName: 'C－空環 Lv.2~3',
+    originalTeacher: '老師甲', calendarId: 'calendar-aerial-dance',
+  }]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [[
+      '2026/09/20', '14:00', 'C－空中環長帶舞碼特別課 (90min)', '老師甲',
+      'calendar-aerial-dance', 'class-aerial-dance', 'teacher-a', '是', '',
+    ]],
+    leaveRows: [],
+    specialRequestRows: [[
+      'stamp', 'special-aerial-dance', '老師甲', '2026/09/20', 'C', sourceSlots,
+      '[]', '14:00', '空中環長帶舞碼', 'Lv.3', 90, '15:30',
+      '使用連續時段', '', '待處理', '待核對', '', '', '',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  const row = specialRequestSheet.values[1];
+  assert.equal(row[14], '已完成');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
+});
+
 test('special-course request reconciliation still rejects a different OB level', () => {
   const sourceSlots = JSON.stringify([{
     sourceType: 'own', date: '2026/09/20', time: '14:00', courseName: 'C－空環 Lv.2~3',

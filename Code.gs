@@ -6084,7 +6084,8 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
         var actualParts = getSpecialCourseReconciliationParts_(obRow[2]);
         var expectedDifficulty = cleanText_(expectation.difficulty) || expectedParts.difficulty;
         var actualDifficulty = actualParts.difficulty;
-        if (normalizeCourseReconciliationDifficulty_(expectedDifficulty) !==
+        if (actualDifficulty &&
+            normalizeCourseReconciliationDifficulty_(expectedDifficulty) !==
             normalizeCourseReconciliationDifficulty_(actualDifficulty)) {
           differences.push(
             '等級不一致：預期 ' + (expectedDifficulty || '未標示') +

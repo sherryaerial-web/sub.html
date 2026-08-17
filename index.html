@@ -474,6 +474,7 @@
       justify-content: space-between;
       gap: 12px;
       margin: 0;
+      overflow: hidden;
       padding: 9px 0;
       border: 0;
       border-bottom: 2px solid var(--line-strong);
@@ -736,6 +737,7 @@
     }
 
     .state.error { border-style: solid; border-color: #e7bbb7; background: var(--coral-100); color: var(--coral-600); }
+    .read-refreshing { opacity: .72; transition: opacity .16s ease; }
     .notice {
       position: fixed;
       z-index: 40;
@@ -1190,10 +1192,28 @@
     let adminDashboard = null;
     let vvipDashboard = null;
     let payrollDashboard = null;
+    let hasCourseSnapshot = false;
+    let hasClaimSnapshot = false;
+    let myLeavesSnapshotHtml = null;
+    let mySubsSnapshotHtml = null;
+    const myPayrollSnapshotHtml = new Map();
     let activeAdminTab = "pendingInvitations";
     let requestDialogState = null;
 
     const byId = (id) => document.getElementById(id);
+
+    function beginReadRefresh(element, hasSnapshot, loadingHtml) {
+      if (!hasSnapshot) element.innerHTML = loadingHtml;
+      element.classList.add("read-refreshing");
+      element.setAttribute("aria-busy", "true");
+      if (hasSnapshot) element.setAttribute("inert", "");
+    }
+
+    function endReadRefresh(element) {
+      element.classList.remove("read-refreshing");
+      element.removeAttribute("aria-busy");
+      element.removeAttribute("inert");
+    }
 
     function refreshIcons() {
       if (window.lucide && typeof window.lucide.createIcons === "function") {
@@ -1737,6 +1757,11 @@
       authState.managementCapabilities = [];
       globalCourseList = [];
       pendingLeaves = [];
+      hasCourseSnapshot = false;
+      hasClaimSnapshot = false;
+      myLeavesSnapshotHtml = null;
+      mySubsSnapshotHtml = null;
+      myPayrollSnapshotHtml.clear();
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
       adminDashboard = null;
@@ -1839,17 +1864,32 @@
     }
 
     async function loadMyCourses() {
-      byId("leave-date-list").innerHTML = '<div class="state">載入中...</div>';
-      byId("leave-course-list").innerHTML = '<div class="state">請先選擇日期</div>';
-      byId("leave-confirmation").hidden = true;
-      selectedLeaveDates = new Set();
-      selectedLeaveCourses = new Set();
+      const dateList = byId("leave-date-list");
+      const courseList = byId("leave-course-list");
+      if (hasCourseSnapshot) {
+        renderLeaveDates();
+        renderLeaveCourses();
+      } else {
+        courseList.innerHTML = '<div class="state">請先選擇日期</div>';
+        byId("leave-confirmation").hidden = true;
+        selectedLeaveDates = new Set();
+        selectedLeaveCourses = new Set();
+      }
+      beginReadRefresh(dateList, hasCourseSnapshot, '<div class="state">載入中...</div>');
+      beginReadRefresh(courseList, hasCourseSnapshot, '<div class="state">請先選擇日期</div>');
+      byId("leave-confirmation").setAttribute("inert", "");
       try {
         globalCourseList = await callApi("getMyCourses");
+        hasCourseSnapshot = true;
         renderLeaveDates();
         renderLeaveCourses();
       } catch (error) {
-        byId("leave-date-list").innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hasCourseSnapshot) dateList.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`課程更新失敗：${error.message}`, "error");
+      } finally {
+        endReadRefresh(dateList);
+        endReadRefresh(courseList);
+        byId("leave-confirmation").removeAttribute("inert");
       }
     }
 
@@ -2087,11 +2127,14 @@
 
     async function fetchMyLeaves() {
       const list = byId("my-leaves-list");
-      list.innerHTML = '<div class="state">查詢中...</div>';
+      const hadSnapshot = myLeavesSnapshotHtml !== null;
+      if (hadSnapshot) list.innerHTML = myLeavesSnapshotHtml;
+      beginReadRefresh(list, hadSnapshot, '<div class="state">查詢中...</div>');
       try {
         const items = await callApi("getMyLeaves");
         if (!items.length) {
           list.innerHTML = '<div class="state">目前沒有請假紀錄</div>';
+          myLeavesSnapshotHtml = list.innerHTML;
           return;
         }
         list.innerHTML = items.map((item) => {
@@ -2123,36 +2166,36 @@
             </article>
           `;
         }).join("");
+        myLeavesSnapshotHtml = list.innerHTML;
         refreshIcons();
       } catch (error) {
-        list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hadSnapshot) list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`請假紀錄更新失敗：${error.message}`, "error");
+      } finally {
+        endReadRefresh(list);
       }
     }
 
     async function fetchAvailableSubstitutes() {
       const list = byId("pending-leaves-list");
-      list.innerHTML = '<div class="state">載入中...</div>';
+      if (hasClaimSnapshot) renderAvailableSubstitutes();
+      beginReadRefresh(list, hasClaimSnapshot, '<div class="state">載入中...</div>');
+      byId("claim-submit").disabled = true;
       try {
-        const availableSubstitutes = await callApi("getAvailableSubstitutes");
-        pendingLeaves = availableSubstitutes;
-        claimOptions = { capabilities: [], classes: [] };
+        const data = await callApi("getClaimPageData");
+        pendingLeaves = data?.items || [];
+        claimOptions = data?.options || { capabilities: [], classes: [] };
+        hasClaimSnapshot = true;
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
         renderAvailableSubstitutes();
         if (pendingLeaves.length) byId("claim-submit").disabled = true;
       } catch (error) {
-        list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        return;
-      }
-
-      try {
-        const options = await callApi("getClaimOptions");
-        claimOptions = options || { capabilities: [], classes: [] };
-        renderAvailableSubstitutes();
-      } catch (error) {
+        if (!hasClaimSnapshot) list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`代課清單更新失敗：${error.message}`, "error");
         byId("claim-submit").disabled = true;
-        setNotice(`課程選項載入失敗：${error.message}`, "error");
       } finally {
+        endReadRefresh(list);
         void callPostApi("recordInvitationFirstView").catch((error) => {
           console.warn("首次查看時間記錄失敗，不影響代課清單使用。", error);
         });
@@ -2973,17 +3016,24 @@
 
     async function fetchMySubs() {
       const list = byId("my-subs-list");
-      list.innerHTML = '<div class="state">查詢中...</div>';
+      const hadSnapshot = mySubsSnapshotHtml !== null;
+      if (hadSnapshot) list.innerHTML = mySubsSnapshotHtml;
+      beginReadRefresh(list, hadSnapshot, '<div class="state">查詢中...</div>');
       try {
         const items = await callApi("getMySubs");
         if (!items.length) {
           list.innerHTML = '<div class="state">目前沒有代課紀錄</div>';
+          mySubsSnapshotHtml = list.innerHTML;
           return;
         }
         list.innerHTML = groupSpecialCourseItems(items).map(renderMySubGroup).join("");
+        mySubsSnapshotHtml = list.innerHTML;
         refreshIcons();
       } catch (error) {
-        list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hadSnapshot) list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`代課紀錄更新失敗：${error.message}`, "error");
+      } finally {
+        endReadRefresh(list);
       }
     }
 
@@ -3078,11 +3128,16 @@
 
     async function fetchMyPayroll() {
       const content = byId("my-payroll-content");
-      content.innerHTML = '<div class="state">載入薪資中...</div>';
+      const month = byId("payroll-month").value;
+      const cachedHtml = myPayrollSnapshotHtml.get(month);
+      const hadSnapshot = cachedHtml !== undefined;
+      if (hadSnapshot) content.innerHTML = cachedHtml;
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入薪資中...</div>');
       try {
-        const data = await callApi("getMyPayroll", { month: byId("payroll-month").value });
+        const data = await callApi("getMyPayroll", { month });
         if (!data.summary) {
           content.innerHTML = '<div class="state">這個月份尚未發布薪資</div>';
+          myPayrollSnapshotHtml.set(month, content.innerHTML);
           return;
         }
         const summary = data.summary;
@@ -3090,9 +3145,13 @@
         const lines = (data.lines || []).map((line) => `<article class="list-item payroll-line"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(line.date)} ${escapeHtml(line.time)}</div><div class="item-course">${escapeHtml(line.courseName)}</div><div class="item-meta">${escapeHtml(line.ruleDetail)}${line.attendanceCount !== "" ? `｜出席 ${escapeHtml(line.attendanceCount)} 人` : ""}</div></div><strong class="money">${formatMoney(line.amount + line.manualAdjustment)}</strong>${canDispute ? `<button class="icon-button" type="button" data-payroll-dispute="${escapeHtml(line.lineId)}" title="回報這筆明細" aria-label="回報這筆明細"><i data-lucide="message-circle-warning"></i></button>` : ""}</article>`).join("");
         const disputes = (data.disputes || []).map((item) => `<div class="payroll-note"><strong>${escapeHtml(item.status)}</strong> ${escapeHtml(item.message)}${item.reply ? `<br>回覆：${escapeHtml(item.reply)}` : ""}</div>`).join("");
         content.innerHTML = `<div class="payroll-hero"><span>${escapeHtml(summary.month)} 應領薪資</span><strong>${formatMoney(summary.totalSalary)}</strong><div class="payroll-breakdown"><span>鐘點費 ${formatMoney(summary.subtotal)}</span><span>獎金 ${formatMoney(summary.bonusAmount)}</span><span>固定加扣 ${formatMoney(summary.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(summary.adminAdjustment)}</span></div>${summary.adjustmentReason ? `<div class="payroll-note">調整原因：${escapeHtml(summary.adjustmentReason)}</div>` : ""}<span class="status-pill">${escapeHtml(summary.status)}</span>${summary.status === "管理員已確認" ? `<span class="payroll-final-meta">管理員已確認${summary.adminConfirmedAt ? `｜${escapeHtml(summary.adminConfirmedAt)}` : ""}</span>` : ""}</div><div class="list">${lines || '<div class="state">沒有薪資明細</div>'}</div>${disputes}<div class="payroll-actions">${summary.status === "待確認" ? `<button class="primary-button" type="button" data-payroll-confirm="${escapeHtml(summary.version)}"><i data-lucide="badge-check"></i>我已核對，確認薪資</button>` : ""}</div>`;
+        myPayrollSnapshotHtml.set(month, content.innerHTML);
         refreshIcons();
       } catch (error) {
-        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`薪資更新失敗：${error.message}`, "error");
+      } finally {
+        endReadRefresh(content);
       }
     }
 
@@ -3307,13 +3366,19 @@
 
     async function fetchPayrollAdminDashboard(rethrow = false) {
       const content = byId("admin-tab-content");
-      content.innerHTML = '<div class="state">載入薪資後台中...</div>';
+      const month = byId("payroll-admin-month")?.value || new Date().toISOString().slice(0, 7);
+      const hadSnapshot = Boolean(payrollDashboard && payrollDashboard.month === month);
+      if (hadSnapshot) renderAdminDashboard();
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入薪資後台中...</div>');
       try {
-        payrollDashboard = await callApi("getPayrollAdminDashboard", { month: byId("payroll-admin-month")?.value || new Date().toISOString().slice(0, 7) });
+        payrollDashboard = await callApi("getPayrollAdminDashboard", { month });
         renderAdminDashboard();
       } catch (error) {
-        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`薪資後台更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
+      } finally {
+        endReadRefresh(content);
       }
     }
 
@@ -3321,14 +3386,27 @@
       if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       const content = byId("admin-tab-content");
-      setAdminCountsUnavailable();
-      content.innerHTML = '<div class="state">載入中...</div>';
+      const hadSnapshot = adminDashboard !== null;
+      if (hadSnapshot) renderAdminDashboard();
+      else setAdminCountsUnavailable();
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入中...</div>');
+      ["admin-sync", "admin-reconcile", "admin-leave-pause"].forEach((id) => {
+        const button = byId(id);
+        if (button) button.disabled = true;
+      });
       try {
         adminDashboard = await callApi("getAdminDashboard");
         renderAdminDashboard();
       } catch (error) {
-        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`管理資料更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
+      } finally {
+        endReadRefresh(content);
+        ["admin-sync", "admin-reconcile", "admin-leave-pause"].forEach((id) => {
+          const button = byId(id);
+          if (button) button.disabled = false;
+        });
       }
     }
 
@@ -3340,13 +3418,18 @@
 
     async function fetchVvipAdminDashboard(email = "", rethrow = false) {
       const content = byId("admin-tab-content");
-      content.innerHTML = '<div class="state">載入 VVIP 選課資料中...</div>';
+      const hadSnapshot = !email && vvipDashboard !== null;
+      if (hadSnapshot) renderAdminDashboard();
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入 VVIP 選課資料中...</div>');
       try {
         vvipDashboard = await callApi("getVvipAdminDashboard", { email });
         renderAdminDashboard();
       } catch (error) {
-        content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`VVIP 資料更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
+      } finally {
+        endReadRefresh(content);
       }
     }
 

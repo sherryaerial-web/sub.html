@@ -211,6 +211,12 @@ function apiPayload(request) {
     };
   }
   if (action === "logout") return { loggedOut: true };
+  if (action === "getClaimPageData") {
+    return {
+      items: fixtures.getAvailableSubstitutes,
+      options: fixtures.getClaimOptions,
+    };
+  }
   return fixtures[action] ?? { count: 1 };
 }
 
@@ -251,7 +257,17 @@ async function capture(page, viewportName, name) {
     const overflow = [...document.querySelectorAll("button, .list-item, .date-option, .summary-item")]
       .filter(visible)
       .filter((element) => element.scrollWidth > element.clientWidth + 2)
-      .map((element) => element.id || element.className || element.textContent.trim().slice(0, 30));
+      .map((element) => ({
+        name: element.id || element.className || element.textContent.trim().slice(0, 30),
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        children: [...element.children].map((child) => ({
+          className: child.className?.baseVal || child.className || child.tagName,
+          left: Math.round(child.getBoundingClientRect().left - element.getBoundingClientRect().left),
+          right: Math.round(child.getBoundingClientRect().right - element.getBoundingClientRect().left),
+          width: Math.round(child.getBoundingClientRect().width),
+        })),
+      }));
     const nav = document.querySelector(".primary-nav");
     const workspace = document.querySelector(".workspace");
     const navStyle = getComputedStyle(nav);
@@ -265,7 +281,7 @@ async function capture(page, viewportName, name) {
     };
   });
   if (layout.scrollWidth > layout.clientWidth + 1) throw new Error(`${viewportName}/${name}: horizontal overflow ${layout.scrollWidth}/${layout.clientWidth}`);
-  if (layout.overflow.length) throw new Error(`${viewportName}/${name}: clipped controls ${layout.overflow.join(" | ")}`);
+  if (layout.overflow.length) throw new Error(`${viewportName}/${name}: clipped controls ${JSON.stringify(layout.overflow)}`);
   if (!layout.mobileNavProtected) throw new Error(`${viewportName}/${name}: mobile navigation overlaps content`);
   if (layout.bodyTextLength < 35) throw new Error(`${viewportName}/${name}: required UI is missing`);
 

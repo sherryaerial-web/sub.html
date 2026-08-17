@@ -136,13 +136,25 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
           }
 
           let data;
-          if (action === 'getAvailableSubstitutes' && claimSubmitted) {
+          if (action === 'getClaimPageData' && claimSubmitted) {
+            data = Promise.resolve(
+              options.postClaimAvailable === undefined ? [] : options.postClaimAvailable,
+            ).then((items) => ({
+              items,
+              options: fixtures.getClaimOptions || { capabilities: [], classes: [] },
+            }));
+          } else if (action === 'getAvailableSubstitutes' && claimSubmitted) {
             data = options.postClaimAvailable === undefined ? [] : options.postClaimAvailable;
+          } else if (action === 'getClaimPageData' && !Object.prototype.hasOwnProperty.call(fixtures, action)) {
+            data = {
+              items: fixtures.getAvailableSubstitutes || [],
+              options: fixtures.getClaimOptions || { capabilities: [], classes: [] },
+            };
           } else if (Object.prototype.hasOwnProperty.call(fixtures, action)) {
             data = fixtures[action];
           } else {
             const authenticatedReads = new Set([
-              'getAvailableSubstitutes', 'getClaimOptions', 'getMySubs',
+              'getAvailableSubstitutes', 'getClaimOptions', 'getClaimPageData', 'getMySubs',
               'getMyCourses', 'getMyLeaves', 'getAdminDashboard', 'recordInvitationFirstView',
             ]);
             data = authenticatedReads.has(action) ? [] : { count: 1 };
@@ -187,7 +199,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
       });
     }
     const authenticatedReads = new Set([
-      'getAvailableSubstitutes', 'getClaimOptions', 'getMySubs',
+      'getAvailableSubstitutes', 'getClaimOptions', 'getClaimPageData', 'getMySubs',
       'getMyCourses', 'getMyLeaves', 'getAdminDashboard', 'recordInvitationFirstView',
     ]);
     const data = isPost && !authenticatedReads.has(action)
@@ -641,7 +653,7 @@ test('renders personal leave history details for the logged-in teacher', () => {
 });
 
 test('loads substitutes through the invited-only API and claims through the locked POST action', () => {
-  assert.match(html, /callApi\(["']getAvailableSubstitutes["']/);
+  assert.match(html, /callApi\(["']getClaimPageData["']/);
   assert.match(html, /callPostApi\(["']claimSubstitute["']/);
   assert.doesNotMatch(html, /callApi\(["']getPendingLeaves["']/);
   assert.doesNotMatch(html, /callPostApi\(["']submitClaim["']/);
@@ -832,7 +844,7 @@ test('uses the protected capability result before deciding whether a course chan
 });
 
 test('loads protected capability and independent course adjustment options for claims', () => {
-  assert.match(html, /callApi\(["']getClaimOptions["']/);
+  assert.match(html, /callApi\(["']getClaimPageData["']/);
   assert.match(html, /claimOptions/);
   assert.match(html, /claim-course-type/);
   assert.match(html, /claim-difficulty-select/);
@@ -1587,57 +1599,59 @@ test('renders the substitute list without waiting for first-view tracking', asyn
   assert.equal(requestActions.includes('recordInvitationFirstView'), true);
 });
 
-test('shows available substitutes while claim options are still loading', async () => {
-  const neverFinishes = new Promise(() => {});
+test('loads substitute items and claim options in one combined request', async () => {
   const { context, getElement, requestActions } = createFrontendRuntime({
-    getAvailableSubstitutes: [{
-      '代課編號': 'leave-visible-before-options',
-      '日期': '2026/09/04',
-      '時段': '11:00',
-      '課程': 'B－舞綢 Lv.2',
-      '課程大類': '舞綢',
-      '原老師': '老師甲',
-      '可沿用原課程': true,
-    }],
-    getClaimOptions: neverFinishes,
+    getClaimPageData: {
+      items: [{
+        '代課編號': 'leave-visible-before-options',
+        '日期': '2026/09/04',
+        '時段': '11:00',
+        '課程': 'B－舞綢 Lv.2',
+        '課程大類': '舞綢',
+        '原老師': '老師甲',
+        '可沿用原課程': true,
+      }],
+      options: { capabilities: ['舞綢'], classes: [] },
+    },
   });
 
-  context.fetchAvailableSubstitutes();
-  await new Promise((resolve) => setImmediate(resolve));
+  await context.fetchAvailableSubstitutes();
 
   assert.match(getElement('pending-leaves-list').innerHTML, /B－舞綢 Lv\.2/);
   assert.equal(getElement('claim-submit').disabled, true);
   assert.deepEqual(
-    requestActions.filter((action) => action === 'getAvailableSubstitutes' || action === 'getClaimOptions'),
-    ['getAvailableSubstitutes', 'getClaimOptions'],
+    requestActions.filter((action) => ['getClaimPageData', 'getAvailableSubstitutes', 'getClaimOptions'].includes(action)),
+    ['getClaimPageData'],
   );
 });
 
-test('waits for the substitute list before starting claim options', async () => {
-  let resolveSubstitutes;
-  const substitutes = new Promise((resolve) => {
-    resolveSubstitutes = resolve;
+test('keeps the last leave records visible while a repeat refresh is pending', async () => {
+  let fixtureReads = 0;
+  let finishRefresh;
+  const fixtures = {};
+  Object.defineProperty(fixtures, 'getMyLeaves', {
+    configurable: true,
+    get() {
+      fixtureReads += 1;
+      if (fixtureReads === 1) {
+        return [{ '代課編號': 'leave-snapshot', '日期': '2026/09/08', '時段': '10:00', '課程': 'A－空環 Lv.1' }];
+      }
+      return new Promise((resolve) => { finishRefresh = resolve; });
+    },
   });
-  const { context, requestActions } = createFrontendRuntime({
-    getAvailableSubstitutes: substitutes,
-    getClaimOptions: { capabilities: [], classes: [] },
-  });
+  const { context, getElement } = createFrontendRuntime(fixtures);
 
-  const loading = context.fetchAvailableSubstitutes();
-  await new Promise((resolve) => setImmediate(resolve));
+  await context.fetchMyLeaves();
+  assert.match(getElement('my-leaves-list').innerHTML, /A－空環 Lv\.1/);
 
-  assert.deepEqual(
-    requestActions.filter((action) => action === 'getAvailableSubstitutes' || action === 'getClaimOptions'),
-    ['getAvailableSubstitutes'],
-  );
+  const refreshing = context.fetchMyLeaves();
+  await Promise.resolve();
+  assert.match(getElement('my-leaves-list').innerHTML, /A－空環 Lv\.1/);
+  assert.doesNotMatch(getElement('my-leaves-list').innerHTML, /查詢中/);
 
-  resolveSubstitutes([]);
-  await loading;
-
-  assert.deepEqual(
-    requestActions.filter((action) => action === 'getAvailableSubstitutes' || action === 'getClaimOptions'),
-    ['getAvailableSubstitutes', 'getClaimOptions'],
-  );
+  finishRefresh([]);
+  await refreshing;
+  assert.match(getElement('my-leaves-list').innerHTML, /目前沒有請假紀錄/);
 });
 
 test('direct claim hides all fields while adjustment shows independent selectors', () => {

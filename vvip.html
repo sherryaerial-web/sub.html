@@ -161,7 +161,8 @@
       const groups = groupCoursesByDate(ordinaryCourses);
       const ordinaryGroups = Object.keys(groups).sort().map((date) => {
         const expanded = !!query || expandedVvipDates.has(date);
-        return `<section class="vvip-date-group"><button class="vvip-date-toggle" type="button" data-vvip-date-toggle="${escapeHtml(date)}" aria-expanded="${expanded}"><span>${escapeHtml(formatVvipDateWithWeekday(date))}</span><span>${groups[date].length} 堂</span></button><div class="vvip-date-content" data-vvip-date-content="${escapeHtml(date)}" ${expanded ? "" : "hidden"}>${groups[date].map((course) => renderCourse(course)).join("")}</div></section>`;
+        const courseCards = expanded ? groups[date].map((course) => renderCourse(course)).join("") : "";
+        return `<section class="vvip-date-group"><button class="vvip-date-toggle" type="button" data-vvip-date-toggle="${escapeHtml(date)}" aria-expanded="${expanded}"><span>${escapeHtml(formatVvipDateWithWeekday(date))}</span><span>${groups[date].length} 堂</span></button><div class="vvip-date-content" data-vvip-date-content="${escapeHtml(date)}" ${expanded ? "" : "hidden"}>${courseCards}</div></section>`;
       }).join("");
       const ordinarySection = ordinaryCourses.length ? `<section class="vvip-ordinary-section"><h3 class="vvip-section-title">一般課程<span>${ordinaryCourses.length} 堂</span></h3>${ordinaryGroups}</section>` : "";
       area.innerHTML = specialSection + ordinarySection;

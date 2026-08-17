@@ -74,8 +74,12 @@ async function runJourney(browser, viewport) {
   await septemberThird.click();
   await page.getByText('原老師請假：原老師甲｜代課老師未定').waitFor();
   await page.getByText('原老師請假：原老師乙｜代課老師：代課老師乙').waitFor();
-  if (await page.locator('.vvip-course-checkbox').count() !== courses.length) {
+  if (await page.locator('.vvip-course-checkbox').count() !== courses.length - 1) {
     throw new Error(`${viewport.name}: leave status created duplicate selectable courses`);
+  }
+  await page.locator('[data-vvip-date-toggle="2026/09/04"]').click();
+  if (await page.locator('.vvip-course-checkbox').count() !== courses.length) {
+    throw new Error(`${viewport.name}: expanded ordinary date did not render its course`);
   }
   await page.locator('.vvip-course-checkbox[value="cal-2"]').check();
   await page.locator('.vvip-course-checkbox[value="cal-3"]').check();

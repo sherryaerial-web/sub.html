@@ -140,7 +140,14 @@ test('VVIP separates visible special courses from collapsed ordinary weekday gro
   assert.ok(rendered.indexOf('vvip-special-section') < rendered.indexOf('vvip-date-group'));
   assert.match(rendered, /2026\/09\/01（二）[\s\S]*2 堂/);
   assert.match(rendered, /data-vvip-date-content="2026\/09\/01" hidden/);
-  assert.equal((rendered.match(/type="checkbox"/g) || []).length, courses.length);
+  assert.equal((rendered.match(/type="checkbox"/g) || []).length, 1);
+  assert.doesNotMatch(rendered, /綢吊 Lv\.0-2|空環 Lv\.1~2/);
+
+  context.__toggleVvipDate('2026/09/01');
+  const expanded = elements.get('vvip-course-area').innerHTML;
+  assert.equal((expanded.match(/type="checkbox"/g) || []).length, courses.length);
+  assert.match(expanded, /綢吊 Lv\.0-2/);
+  assert.match(expanded, /空環 Lv\.1~2/);
 });
 
 test('VVIP search exposes matching ordinary dates without losing manual expansion', () => {

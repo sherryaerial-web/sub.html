@@ -1361,6 +1361,45 @@ test('available substitutes route does not wait for first-view tracking', () => 
   assert.equal(trackingCalls, 1);
 });
 
+test('combined claim page data reads shared CourseList and leave rows once', () => {
+  const fixture = createInvitationBackend({
+    invitationRows: [['invite-a', '老師甲', '時間', '', '開放中', '']],
+  });
+  const originalCourseRange = fixture.courseSheet.getDataRange.bind(fixture.courseSheet);
+  const originalLeaveRange = fixture.leaveSheet.getDataRange.bind(fixture.leaveSheet);
+  let courseReads = 0;
+  let leaveReads = 0;
+  fixture.courseSheet.getDataRange = function() {
+    courseReads += 1;
+    return originalCourseRange();
+  };
+  fixture.leaveSheet.getDataRange = function() {
+    leaveReads += 1;
+    return originalLeaveRange();
+  };
+
+  const data = fixture.backend.getClaimPageData_(fixture.teacherASession);
+  fixture.backend.getClaimPageData_(fixture.teacherASession);
+
+  assert.ok(Array.isArray(data.items));
+  assert.ok(Array.isArray(data.options.capabilities));
+  assert.ok(Array.isArray(data.options.classes));
+  assert.equal(courseReads, 1);
+  assert.equal(leaveReads, 2);
+});
+
+test('read-only admin dashboard does not wait for the global write lock', () => {
+  const fixture = createInvitationBackend();
+  const waitsBeforeRead = fixture.services.__lockState.waits;
+  const releasesBeforeRead = fixture.services.__lockState.releases;
+
+  fixture.backend.getAdminDashboard_(fixture.adminSession);
+
+  assert.equal(fixture.services.__lockState.waits, waitsBeforeRead);
+  assert.equal(fixture.services.__lockState.releases, releasesBeforeRead);
+  assert.equal(fixture.services.__lockState.depth, 0);
+});
+
 test('getMyCourses returns only the logged-in teacher courses with stable OB IDs', () => {
   const { backend } = createLeaveBackend({
     courseRows: [
@@ -1381,6 +1420,28 @@ test('getMyCourses returns only the logged-in teacher courses with stable OB IDs
     '課程大類': '空環',
     'OB Calendar ID': 'calendar-a',
   }]);
+});
+
+test('warm personal course reads reuse stable CourseList rows but always reread live leave state', () => {
+  const fixture = createInvitationBackend();
+  let courseReads = 0;
+  let leaveReads = 0;
+  const originalCourseGetDataRange = fixture.courseSheet.getDataRange.bind(fixture.courseSheet);
+  const originalLeaveGetDataRange = fixture.leaveSheet.getDataRange.bind(fixture.leaveSheet);
+  fixture.courseSheet.getDataRange = () => {
+    courseReads += 1;
+    return originalCourseGetDataRange();
+  };
+  fixture.leaveSheet.getDataRange = () => {
+    leaveReads += 1;
+    return originalLeaveGetDataRange();
+  };
+
+  fixture.backend.getMyCourses_(fixture.teacherASession);
+  fixture.backend.getMyCourses_(fixture.teacherASession);
+
+  assert.equal(courseReads, 1);
+  assert.equal(leaveReads, 2);
 });
 
 test('getMyCourses hides active leave IDs but keeps cancelled leave courses available', () => {
@@ -5072,6 +5133,45 @@ test('VVIP course rows exclude venue rental entries from public selection', () =
   const courses = JSON.parse(JSON.stringify(backend.getVvipCourseRows_('2026-09', true)));
 
   assert.deepEqual(courses.map((course) => course.calendarId), ['cal-normal']);
+});
+
+test('VVIP warm course reads reuse only stable CourseList data and explicit invalidation reloads it', () => {
+  const { backend, courseSheet } = createVvipBackend();
+  const originalGetDataRange = courseSheet.getDataRange.bind(courseSheet);
+  let courseReads = 0;
+  courseSheet.getDataRange = function() {
+    courseReads += 1;
+    return originalGetDataRange();
+  };
+
+  const first = backend.getVvipCourseRows_('2026-09', true);
+  courseSheet.values[1][2] = '快取後修改課名';
+  const warm = backend.getVvipCourseRows_('2026-09', true);
+
+  assert.equal(courseReads, 1);
+  assert.equal(first[0].courseName, '空環基礎');
+  assert.equal(warm[0].courseName, '空環基礎');
+
+  backend.invalidateVvipReadCaches_('2026-09');
+  const refreshed = backend.getVvipCourseRows_('2026-09', true);
+  assert.equal(courseReads, 2);
+  assert.equal(refreshed[0].courseName, '快取後修改課名');
+});
+
+test('VVIP member maintenance invalidates the public member list cache', () => {
+  const { backend, adminSession } = createVvipBackend();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getPublicVvipMembers_())), [
+    { id: 'vvip-member-1', name: '會員一' },
+  ]);
+  backend.saveVvipMember_(adminSession, {
+    name: '會員二', email: 'member2@example.com', active: true, note: '',
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getPublicVvipMembers_())).map((item) => item.name),
+    ['會員一', '會員二']
+  );
 });
 
 test('VVIP administrator maintains unique active OB names and private Email mappings', () => {

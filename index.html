@@ -2215,7 +2215,19 @@
     }
 
     function normalizeClaimDifficulty(value) {
-      return String(value || "").replace(/\s+/g, "").toLowerCase();
+      return String(value || "")
+        .replace(/\s+/g, "")
+        .replace(/[－—–-]/g, "~")
+        .toLowerCase();
+    }
+
+    function canonicalizeClaimDifficulty(value) {
+      const difficulty = String(value || "").trim();
+      if (!difficulty) return "";
+      if (/^open\s*level$/i.test(difficulty)) return "Open level";
+      return difficulty
+        .replace(/^lv\.?\s*/i, "Lv.")
+        .replace(/\s*([~－—–-])\s*/g, "~");
     }
 
     function parseClaimCourseOption(courseNameValue) {
@@ -2243,7 +2255,7 @@
       return {
         courseTypeKey: String(option?.courseTypeKey || parsed.courseTypeKey || "").trim(),
         courseTypeName: String(option?.courseTypeName || parsed.courseTypeName || "").trim(),
-        difficulty: String(option?.difficulty ?? parsed.difficulty ?? "").trim()
+        difficulty: canonicalizeClaimDifficulty(option?.difficulty ?? parsed.difficulty ?? "")
       };
     }
 
@@ -2489,7 +2501,7 @@
 
                 <div class="claim-field full">
                   <label>備註（選填）</label>
-                  <textarea class="claim-control claim-note" maxlength="240" placeholder="可填改課原因、難度調整或其他事項"></textarea>
+                  <textarea class="claim-control claim-note" maxlength="240" placeholder="難度請使用上方欄位；這裡只填其他補充事項"></textarea>
                 </div>
               </div>
             </div>
@@ -3961,7 +3973,28 @@
     }
 
     async function copyInvitationMessage() {
-      const text = "您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。\nhttps://sherryaerial-web.github.io/sub.html/";
+      const text = `您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看：
+
+https://sherryaerial-web.github.io/sub.html/
+
+【普通代課】
+1. 點選「普通代課」。
+2. 展開日期並勾選想領取的課程。
+3. 若可直接教授原課程，選擇「直接認領」。
+4. 若需調整課程或時間，選擇「調整課程或時間」，再選上課時間、課程類型與難度／等級。
+5. 難度／等級請使用選單，不要填在備註；備註只寫其他補充事項。
+6. 確認內容後送出即可。
+
+【安排特別課】
+1. 點選「安排特別課」。
+2. 只需勾選特別課開始的第一堂課程，後續使用時段會由系統自動占用。
+3. 選擇「單堂延長」或「使用連續時段」。
+4. 實際開始時間預設為第一堂課程的開始時間，如需調整請從此調整。
+5. 填寫特別課名稱；難度／等級及備註可視需要填寫。
+6. 課程長度可選擇 90 分鐘、120 分鐘，或使用「−／＋」按鈕以每次 15 分鐘調整。
+7. 確認內容後送出即可。
+
+如畫面仍顯示舊版，請重新整理頁面後再操作，謝謝。`;
       await navigator.clipboard.writeText(text);
       setNotice("LINE 邀請文字已複製。");
     }

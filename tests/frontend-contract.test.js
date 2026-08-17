@@ -1510,6 +1510,30 @@ test('treats discounted and regular OB names as the same frontend course type', 
   });
 });
 
+test('teacher claim difficulty list merges hyphen and tilde ranges into one canonical option', async () => {
+  const { context } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['舞綢'],
+      classes: [
+        {
+          courseKey: '舞綢 Lv.1-2', courseName: '舞綢 Lv.1-2',
+          courseTypeKey: '舞綢', courseTypeName: '舞綢', difficulty: 'Lv.1-2', category: '舞綢',
+        },
+        {
+          courseKey: '舞綢 Lv.1~2', courseName: '舞綢 Lv.1~2',
+          courseTypeKey: '舞綢', courseTypeName: '舞綢', difficulty: 'Lv.1~2', category: '舞綢',
+        },
+      ],
+    },
+    getAvailableSubstitutes: [],
+  });
+
+  await context.fetchAvailableSubstitutes();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getClaimDifficulties('舞綢'))), ['Lv.1~2']);
+  assert.equal(context.findSelectedClaimClass('舞綢', 'Lv.1~2').courseName, '舞綢 Lv.1-2');
+});
+
 test('teacher claim course types exclude period courses from stale API options', async () => {
   const { context } = createFrontendRuntime({
     getClaimOptions: {
@@ -2021,11 +2045,18 @@ test('admin Excel export rows produce a readable xlsx workbook with the pinned w
   assert.equal(results[1][results[0].indexOf('代課老師')], '卡拉 卡拉');
 });
 
-test('copies the production classroom URL with the LINE substitute invitation', () => {
-  assert.match(
-    html,
-    /您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看，謝謝。\\nhttps:\/\/sherryaerial-web\.github\.io\/sub\.html\//
-  );
+test('copies the detailed LINE substitute invitation with difficulty guidance', () => {
+  assert.match(html, /您好，目前有新的代課可以領取，請登入 Sherry Aerial Studio 教室管理系統查看/);
+  assert.match(html, /https:\/\/sherryaerial-web\.github\.io\/sub\.html\//);
+  assert.match(html, /【普通代課】/);
+  assert.match(html, /【安排特別課】/);
+  assert.match(html, /難度／等級請使用選單，不要填在備註/);
+  assert.match(html, /備註只寫其他補充事項/);
+});
+
+test('ordinary claim notes direct teachers to the separate difficulty field', () => {
+  assert.match(html, /placeholder="難度請使用上方欄位；這裡只填其他補充事項"/);
+  assert.doesNotMatch(html, /placeholder="可填改課原因、難度調整或其他事項"/);
 });
 
 test('groups admin pending courses by first-seen date and preserves row order', () => {

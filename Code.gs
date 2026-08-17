@@ -4071,7 +4071,10 @@ function parseExplicitCourseMinutes_(courseName) {
 }
 
 function normalizeClaimDifficulty_(value) {
-  return cleanText_(value).replace(/\s+/g, '').toLowerCase();
+  return cleanText_(value)
+    .replace(/\s+/g, '')
+    .replace(/[－—–-]/g, '~')
+    .toLowerCase();
 }
 
 function parseClaimCourseOption_(courseNameValue) {
@@ -4182,7 +4185,11 @@ function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
   var seen = {};
   return candidates.filter(function(item) {
     if (recurrenceCounts[item.recurrenceKey] < 2) return false;
-    var key = item.category + '|' + item.courseKey;
+    var key = [
+      item.category,
+      normalizeCourseCatalogKey_(item.courseTypeKey),
+      normalizeClaimDifficulty_(item.difficulty)
+    ].join('|');
     if (seen[key]) return false;
     seen[key] = true;
     return true;

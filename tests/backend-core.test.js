@@ -2069,6 +2069,24 @@ test('splits recurring OB course types from their difficulty labels', () => {
   });
 });
 
+test('recurring claim options merge hyphen and tilde spellings of the same difficulty range', () => {
+  const backend = loadBackend();
+  const rows = [
+    ['2026/09/05', '18:30', 'A－舞綢 Lv.1-2', '老師甲', 'calendar-hyphen-1', 'class-hyphen'],
+    ['2026/09/12', '18:30', 'A－舞綢 Lv.1-2', '老師甲', 'calendar-hyphen-2', 'class-hyphen'],
+    ['2026/09/06', '19:00', 'B－舞綢 Lv.1~2', '老師乙', 'calendar-tilde-1', 'class-tilde'],
+    ['2026/09/13', '19:00', 'B－舞綢 Lv.1~2', '老師乙', 'calendar-tilde-2', 'class-tilde'],
+  ];
+
+  const options = backend.buildRecurringClaimCourseOptions_(rows, ['舞綢']);
+
+  assert.equal(options.length, 1);
+  assert.equal(
+    backend.normalizeClaimDifficulty_(options[0].difficulty),
+    backend.normalizeClaimDifficulty_('Lv.1~2')
+  );
+});
+
 test('treats discounted and regular OB names as the same course type', () => {
   const backend = loadBackend();
 

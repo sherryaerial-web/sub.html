@@ -8,12 +8,13 @@ const pagePath = path.join(__dirname, '..', 'vvip.html');
 const html = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, 'utf8') : '';
 const adminHtml = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-function createVvipPageHarness() {
+function createVvipPageHarness(options = {}) {
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/loadVvipMembers\(\);\s*$/, '') + `
       globalThis.__state = state;
       globalThis.__renderCourse = renderCourse;
       globalThis.__renderCourses = renderCourses;
+      globalThis.__submitVvipSelection = submitVvipSelection;
       globalThis.__formatVvipDateWithWeekday = typeof formatVvipDateWithWeekday === "function" ? formatVvipDateWithWeekday : undefined;
       globalThis.__isVvipSpecialCourse = typeof isVvipSpecialCourse === "function" ? isVvipSpecialCourse : undefined;
       globalThis.__toggleVvipDate = typeof toggleVvipDate === "function" ? toggleVvipDate : undefined;
@@ -29,6 +30,7 @@ function createVvipPageHarness() {
     className: '',
     hidden: false,
     disabled: false,
+    scrollIntoView() {},
     requestSubmit() {},
   });
   const context = {
@@ -38,7 +40,7 @@ function createVvipPageHarness() {
         return elements.get(id);
       },
     },
-    fetch: async () => ({ ok: true, json: async () => ({ status: 'success', data: [] }) }),
+    fetch: options.fetch || (async () => ({ ok: true, json: async () => ({ status: 'success', data: [] }) })),
     URLSearchParams,
     Set,
     console,
@@ -57,7 +59,7 @@ test('VVIP public page is a standalone responsive intent-registration page', () 
   assert.match(html, /name=["']viewport["']/);
   assert.match(html, /VVIP 優先選課意願登記/);
   assert.match(html, /不代表正式保留名額/);
-  assert.match(html, /<p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多四堂。<\/p>/);
+  assert.match(html, /<p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多三堂。<\/p>/);
   assert.doesNotMatch(html, /<p class="lead">[^<]*不代表正式保留名額[^<]*<\/p>/);
   assert.match(html, /id=["']vvip-member-form["']/);
   assert.match(html, /id=["']vvip-member["']/);
@@ -75,13 +77,13 @@ test('VVIP public page posts member ID and never exposes Email', () => {
   assert.doesNotMatch(html, /type=["']email["']/i);
 });
 
-test('VVIP public page groups courses, searches them, and enforces the cumulative four-course view', () => {
+test('VVIP public page groups courses, searches them, and enforces the cumulative three-course view', () => {
   assert.match(html, /groupCoursesByDate/);
   assert.match(html, /filterVvipCourses/);
   assert.match(html, /已選.*LIMIT/);
   assert.match(html, /selectedCalendarIds/);
   assert.match(html, /existingCalendarIds/);
-  assert.match(html, /最多.*[四4]/);
+  assert.match(html, /最多.*[三3]/);
   assert.match(html, /id=["']vvip-course-search["']/);
 });
 
@@ -96,6 +98,36 @@ test('VVIP public page keeps closed, empty, duplicate, and retry states visible'
 test('VVIP successful submission keeps the complete accumulated list visible', () => {
   assert.match(html, /const displayed = selected\.length \? selected : \(state\.data\.selections \|\| \[\]\)/);
   assert.match(html, /displayed\.map\(\(course\)/);
+});
+
+test('VVIP submission re-reads the backend before showing success and clearing the pending choice', async () => {
+  const calls = [];
+  const confirmed = {
+    memberId: 'vvip-member-1', memberName: '會員一', month: '2026-09', limit: 3, count: 1,
+    selections: [{ calendarId: 'cal-1', date: '2026/09/01', time: '10:00', courseName: '空環', teacherName: '老師甲' }],
+    courses: [{ calendarId: 'cal-1', date: '2026/09/01', time: '10:00', courseName: '空環', teacherName: '老師甲' }],
+  };
+  const { context, elements } = createVvipPageHarness({
+    fetch: async (_url, request) => {
+      const body = new URLSearchParams(request.body);
+      calls.push(body.get('action'));
+      return { ok: true, json: async () => ({ status: 'success', data: confirmed }) };
+    },
+  });
+  context.__state.memberId = 'vvip-member-1';
+  context.__state.data = confirmed;
+  context.__state.selectedCalendarIds.add('cal-1');
+
+  await context.__submitVvipSelection();
+
+  assert.deepEqual(calls, ['submitVvipSelection', 'getVvipSelection']);
+  assert.equal(context.__state.selectedCalendarIds.size, 0);
+  assert.equal(context.__state.existingCalendarIds.has('cal-1'), true);
+  assert.match(elements.get('vvip-notice').textContent, /已確認選課成功/);
+});
+
+test('VVIP selected-course summary appears before the long course list', () => {
+  assert.ok(html.indexOf('id="vvip-summary"') < html.indexOf('id="vvip-course-area"'));
 });
 
 test('VVIP course card shows leave and substitute status without creating another checkbox', () => {
@@ -182,5 +214,8 @@ test('VVIP admin workspace remains a protected tab with management actions', () 
   assert.match(adminHtml, /exportVvipSelectionsCsv/);
   assert.match(adminHtml, /saveVvipMember/);
   assert.match(adminHtml, /setVvipMemberActive/);
+  assert.match(adminHtml, /data-vvip-record-key/);
+  assert.match(adminHtml, /memberName/);
+  assert.match(adminHtml, /vvip-course-view/);
   assert.match(adminHtml, /new Blob/);
 });

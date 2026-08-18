@@ -688,6 +688,15 @@ function createVvipBackend(options = {}) {
   };
 }
 
+function enableVvipMonthDateFormatting(backend) {
+  backend.Utilities.formatDate = (value, _timezone, pattern) => {
+    if (pattern !== 'yyyy-MM-dd') return '';
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(value));
+  };
+}
+
 test('login returns an opaque session without exposing credentials', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend } = createAuthBackend([createAccount(bootstrap, '老師甲', '1234')]);
@@ -5231,18 +5240,110 @@ test('VVIP always targets next month and treats stale open settings as closed', 
 
 test('VVIP reads an auto-formatted active month date as the intended month', () => {
   const { backend, settingsSheet } = createVvipBackend();
-  backend.Utilities.formatDate = (value, _timezone, pattern) => {
-    if (pattern !== 'yyyy-MM-dd') return '';
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(new Date(value));
-  };
+  enableVvipMonthDateFormatting(backend);
   settingsSheet.values[1][1] = new Date('2026-09-01T00:00:00+08:00');
 
   const settings = backend.getVvipSettings_(settingsSheet);
 
   assert.equal(settings.activeMonth, '2026-09');
   assert.equal(backend.isVvipSelectionOpen_(settings), true);
+});
+
+test('VVIP admin includes selections whose month cell was auto-formatted as a date', () => {
+  const { backend, adminSession } = createVvipBackend({
+    selectionRows: [[
+      '2026-08-18 08:35:20',
+      'vvip@example.com',
+      new Date('2026-09-01T00:00:00+08:00'),
+      'vvip-cal-1',
+      '2026/09/02',
+      '10:00',
+      '空環基礎',
+      '老師甲',
+      '待人工確認',
+      '', '', '',
+      '會員一',
+      'vvip-member-1',
+      '會員一',
+    ]],
+  });
+  enableVvipMonthDateFormatting(backend);
+
+  const dashboard = backend.getVvipAdminDashboard_(adminSession);
+
+  assert.equal(dashboard.metrics.activeSelections, 1);
+  assert.equal(dashboard.metrics.members, 1);
+  assert.equal(dashboard.members[0].calendarId, 'vvip-cal-1');
+});
+
+test('VVIP duplicate detection includes selections whose month cell was auto-formatted as a date', () => {
+  const { backend, selectionSheet } = createVvipBackend({
+    selectionRows: [[
+      '2026-08-18 08:35:20',
+      'vvip@example.com',
+      new Date('2026-09-01T00:00:00+08:00'),
+      'vvip-cal-1',
+      '2026/09/02',
+      '10:00',
+      '空環基礎',
+      '老師甲',
+      '待人工確認',
+      '', '', '',
+      '會員一',
+      'vvip-member-1',
+      '會員一',
+    ]],
+  });
+  enableVvipMonthDateFormatting(backend);
+
+  const result = backend.submitVvipSelection_('vvip-member-1', ['vvip-cal-1']);
+
+  assert.equal(result.count, 1);
+  assert.equal(selectionSheet.values.length, 2);
+});
+
+test('VVIP public count and admin metrics count the same active course only once', () => {
+  const duplicateRows = ['08:35:20', '08:36:20', '08:37:20'].map((time) => [
+    `2026-08-18 ${time}`, 'vvip@example.com', '2026-09', 'vvip-cal-1',
+    '2026/09/02', '10:00', '空環基礎', '老師甲', '待人工確認',
+    '', '', '', '會員一', 'vvip-member-1', '會員一',
+  ]);
+  const { backend, adminSession } = createVvipBackend({ selectionRows: duplicateRows });
+
+  const publicResult = backend.getVvipSelection_('vvip-member-1');
+  const dashboard = backend.getVvipAdminDashboard_(adminSession);
+
+  assert.equal(publicResult.count, 1);
+  assert.equal(publicResult.selections.length, 1);
+  assert.equal(dashboard.metrics.activeSelections, 1);
+  assert.equal(dashboard.members.length, 3);
+  assert.deepEqual(dashboard.members.map((item) => item.memberName), ['會員一', '會員一', '會員一']);
+  assert.equal(new Set(dashboard.members.map((item) => item.recordKey)).size, 3);
+});
+
+test('VVIP administrator cancels exactly the selected duplicate record', () => {
+  const duplicateRows = ['08:35:20', '08:36:20', '08:37:20'].map((time) => [
+    `2026-08-18 ${time}`, 'vvip@example.com', '2026-09', 'vvip-cal-1',
+    '2026/09/02', '10:00', '空環基礎', '老師甲', '待人工確認',
+    '', '', '', '會員一', 'vvip-member-1', '會員一',
+  ]);
+  const { backend, adminSession, selectionSheet } = createVvipBackend({ selectionRows: duplicateRows });
+  const dashboard = backend.getVvipAdminDashboard_(adminSession);
+  const middle = dashboard.members[1];
+
+  const result = backend.cancelVvipSelection_(
+    adminSession,
+    middle.email,
+    middle.calendarId,
+    '重複送出',
+    middle.recordKey
+  );
+
+  assert.equal(result.cancelled, 1);
+  assert.deepEqual(selectionSheet.values.slice(1).map((row) => row[8]), [
+    '待人工確認', '已取消', '待人工確認',
+  ]);
+  assert.equal(backend.getVvipAdminDashboard_(adminSession).metrics.activeSelections, 1);
 });
 
 test('VVIP course rows merge leave and substitute status without duplicating selectable courses', () => {
@@ -5373,14 +5474,14 @@ test('VVIP public selection resolves active whitelist members without exposing E
   assert.equal(selectionSheet.values[3][8], '待人工確認');
 });
 
-test('VVIP selection rejects an over-limit batch without partial writes', () => {
+test('VVIP selection rejects a fourth unique course without partial writes', () => {
   const { backend, selectionSheet } = createVvipBackend();
   backend.submitVvipSelection_('vvip-member-1', ['vvip-cal-1', 'vvip-cal-2', 'vvip-cal-3']);
   const before = JSON.stringify(selectionSheet.getDataRange().getValues());
 
   assert.throws(
-    () => backend.submitVvipSelection_('vvip-member-1', ['vvip-cal-4', 'vvip-cal-5']),
-    /最多.*4 堂|上限/
+    () => backend.submitVvipSelection_('vvip-member-1', ['vvip-cal-4']),
+    /最多.*3 堂|上限/
   );
   assert.equal(JSON.stringify(selectionSheet.getDataRange().getValues()), before);
 });

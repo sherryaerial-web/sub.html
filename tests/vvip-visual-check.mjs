@@ -16,6 +16,7 @@ const courses = [
   { calendarId: 'cal-3', date: '2026/09/03', time: '18:30', courseName: '舞綢基礎', teacherName: '代課老師乙', leaveStatus: 'claimed', originalTeacherName: '原老師乙', substituteTeacherName: '代課老師乙', leaveLabel: '原老師請假：原老師乙｜代課老師：代課老師乙' },
   { calendarId: 'cal-4', date: '2026/09/04', time: '20:00', courseName: '綢吊 Lv.0-2 (90分)', teacherName: 'Ariel' },
 ];
+let submitted = false;
 
 function payload(request) {
   const params = new URLSearchParams(request.postData() || '');
@@ -25,10 +26,14 @@ function payload(request) {
     return [{ id: 'vvip-1', name: '測試會員' }];
   }
   if (action === 'getVvipSelection') {
-    return { email: 'vvip@example.com', month: '2026-09', limit: 4, count: 1, selections: existing, courses };
+    const selections = submitted
+      ? [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }]
+      : existing;
+    return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: selections.length, selections, courses };
   }
   if (action === 'submitVvipSelection') {
-    return { email: 'vvip@example.com', month: '2026-09', limit: 4, count: 3, selections: [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }], courses };
+    submitted = true;
+    return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: 3, selections: [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }], courses };
   }
   return {};
 }
@@ -47,6 +52,7 @@ function inspectScreenshot(buffer, label) {
 }
 
 async function runJourney(browser, viewport) {
+  submitted = false;
   const page = await browser.newPage({ viewport });
   page.setDefaultTimeout(7000);
   const errors = [];
@@ -83,9 +89,9 @@ async function runJourney(browser, viewport) {
   }
   await page.locator('.vvip-course-checkbox[value="cal-2"]').check();
   await page.locator('.vvip-course-checkbox[value="cal-3"]').check();
-  await page.locator('#vvip-counter').getByText('已選 3／4 堂').waitFor();
+  await page.locator('#vvip-counter').getByText('已選 3／3 堂').waitFor();
   await page.locator('#vvip-submit').click();
-  await page.getByText('選課意願已送出').waitFor();
+  await page.getByText('已確認選課成功').waitFor();
   await page.locator('#vvip-summary-list').getByText('空中瑜伽').waitFor();
   await page.locator('#vvip-summary-list').getByText('舞綢基礎').waitFor();
   const layout = await page.evaluate(() => ({

@@ -96,7 +96,7 @@
 <body>
   <main class="page">
     <header class="brand"><div><h1>Sherry Aerial Studio</h1><p>VVIP 選課服務</p></div></header>
-    <section class="headline"><span class="eyebrow">VVIP Priority Selection</span><h2>VVIP 優先選課意願登記</h2><p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多四堂。</p></section>
+    <section class="headline"><span class="eyebrow">VVIP Priority Selection</span><h2>VVIP 優先選課意願登記</h2><p class="lead">請選擇您的 OB 名稱查看本期課程並累積登記，最多三堂。</p></section>
 
     <section class="panel">
       <form id="vvip-member-form" class="member-form">
@@ -108,14 +108,14 @@
 
     <div id="vvip-notice" class="notice" role="status" aria-live="polite"></div>
     <section id="vvip-workspace" hidden>
-      <div class="toolbar"><input id="vvip-course-search" type="search" placeholder="搜尋課程或老師" aria-label="搜尋課程或老師"><span id="vvip-counter" class="counter">已選 0／4 堂</span></div>
-      <div id="vvip-course-area" class="course-area"></div>
+      <div class="toolbar"><input id="vvip-course-search" type="search" placeholder="搜尋課程或老師" aria-label="搜尋課程或老師"><span id="vvip-counter" class="counter">已選 0／3 堂</span></div>
       <section id="vvip-summary" class="panel summary" hidden><h3>送出確認</h3><p id="vvip-summary-copy" class="helper"></p><ul id="vvip-summary-list" class="summary-list"></ul><div class="summary-actions"><button id="vvip-submit" class="button" type="button">送出選課意願</button><button id="vvip-retry" class="button secondary" type="button" hidden>重新整理</button></div></section>
+      <div id="vvip-course-area" class="course-area"></div>
     </section>
   </main>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
-    const LIMIT = 4;
+    const LIMIT = 3;
     const state = { members: [], memberId: "", data: null, selectedCalendarIds: new Set(), existingCalendarIds: new Set() };
     const expandedVvipDates = new Set();
     const byId = (id) => document.getElementById(id);
@@ -173,7 +173,7 @@
       const checked = state.selectedCalendarIds.has(course.calendarId);
       const atLimit = getSelectedCount() >= LIMIT && !checked;
       const disabled = existing || atLimit;
-      const badge = existing ? '<span class="course-badge selected">已選過</span>' : atLimit && !checked ? '<span class="course-badge">已達四堂上限</span>' : '<span class="course-badge">可登記</span>';
+      const badge = existing ? '<span class="course-badge selected">已選過</span>' : atLimit && !checked ? '<span class="course-badge">已達三堂上限</span>' : '<span class="course-badge">可登記</span>';
       const leaveDetail = course.leaveLabel ? `<span class="course-leave-status">${escapeHtml(course.leaveLabel)}</span>` : "";
       return `<label class="course-item"><input class="vvip-course-checkbox" type="checkbox" value="${escapeHtml(course.calendarId)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span><span class="course-time">${escapeHtml(course.time)}</span><span class="course-name">${escapeHtml(course.courseName)}</span><span class="course-teacher">${escapeHtml(course.teacherName)}</span>${leaveDetail}</span>${badge}</label>`;
     }
@@ -232,10 +232,16 @@
       if (!ids.length) return;
       const button = byId("vvip-submit"); setBusy(button, true, "送出中..."); clearNotice();
       try {
-        const data = await callVvipApi("submitVvipSelection", { vvipId: state.memberId, calendarIds: ids });
-        state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).map((item) => item.calendarId));
+        await callVvipApi("submitVvipSelection", { vvipId: state.memberId, calendarIds: ids });
+        const data = await callVvipApi("getVvipSelection", { vvipId: state.memberId });
+        const verifiedIds = new Set((data.selections || []).map((item) => item.calendarId));
+        if (!ids.every((id) => verifiedIds.has(id))) {
+          throw new Error("系統尚未確認全部課程，請保留畫面並再試一次。");
+        }
+        state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = verifiedIds;
         renderWorkspace();
-        showNotice(`選課意願已送出，目前累積 ${data.count}／${LIMIT} 堂。不代表正式保留名額。`, "success");
+        showNotice(`已確認選課成功，目前累積 ${data.count}／${LIMIT} 堂。不代表正式保留名額。`, "success");
+        byId("vvip-summary").scrollIntoView({ behavior: "smooth", block: "start" });
       } catch (error) {
         byId("vvip-retry").hidden = false;
         showNotice(`${error.message || "送出失敗。"} 已保留目前勾選，請重試或重新整理。`, "error");

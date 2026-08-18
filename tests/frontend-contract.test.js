@@ -2220,6 +2220,32 @@ test('admin can refresh the active dashboard without reloading or losing login s
   assert.doesNotMatch(html, /window\.location\.reload\s*\(/);
 });
 
+test('VVIP admin renders selection results before whitelist maintenance', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__vvipDashboardFixture = {
+    month: '2026-09',
+    isOpen: true,
+    metrics: { members: 1, activeSelections: 1 },
+    members: [{
+      email: 'member@example.com', memberName: '會員甲', status: '已確認',
+      date: '2026/09/05', time: '19:45', courseName: '折疊環特別課',
+      teacherName: 'Sherry', calendarId: 'cal-1', recordKey: 'record-1',
+    }],
+    courseView: [{
+      date: '2026/09/05', time: '19:45', courseName: '折疊環特別課',
+      teacherName: 'Sherry', registrants: [{ name: '會員甲', email: 'member@example.com' }],
+    }],
+    whitelist: [{ id: 'vvip-1', name: '會員甲', email: 'member@example.com', active: true }],
+  };
+
+  vm.runInContext('vvipDashboard = __vvipDashboardFixture; renderVvipAdminTab();', context);
+
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.ok(rendered.indexOf('依課程查看') < rendered.indexOf('會員登記'));
+  assert.ok(rendered.indexOf('會員登記') < rendered.indexOf('新增 VVIP 名單'));
+  assert.ok(rendered.indexOf('新增 VVIP 名單') < rendered.indexOf('data-admin-action="toggle-vvip-member"'));
+});
+
 test('persists and validates the authenticated session for every user device', () => {
   assert.match(html, /const\s+AUTH_SESSION_KEY\s*=/);
   assert.match(html, /function\s+saveSession\s*\(/);

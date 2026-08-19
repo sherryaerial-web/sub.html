@@ -1191,6 +1191,7 @@
     let globalCourseList = [];
     let pendingLeaves = [];
     let claimOptions = { capabilities: [], classes: [] };
+    let claimPageState = "notInvited";
     const expandedClaimDates = new Set();
     let selectedLeaveDates = new Set();
     let selectedLeaveCourses = new Set();
@@ -1763,6 +1764,7 @@
       authState.managementCapabilities = [];
       globalCourseList = [];
       pendingLeaves = [];
+      claimPageState = "notInvited";
       hasCourseSnapshot = false;
       hasClaimSnapshot = false;
       myLeavesSnapshotHtml = null;
@@ -2189,6 +2191,7 @@
       byId("claim-submit").disabled = true;
       try {
         const data = await callApi("getClaimPageData");
+        claimPageState = data?.state || "notInvited";
         pendingLeaves = data?.items || [];
         claimOptions = data?.options || { capabilities: [], classes: [] };
         hasClaimSnapshot = true;
@@ -2394,9 +2397,15 @@
       const available = getAvailableClaimItems();
       if (!available.length) {
         expandedClaimDates.clear();
-        list.innerHTML = claimMode === "special"
-          ? '<div class="state">目前沒有可安排特別課的正課或開放代課時段</div>'
-          : '<div class="state">目前沒有可領取的代課</div>';
+        if (claimPageState === "ended") {
+          list.innerHTML = '<div class="queue-empty-state claim-round-ended"><i data-lucide="circle-stop"></i><strong>本輪代課領取已結束</strong><span>本輪邀請已由管理員結束，已領取課程不受影響。</span></div>';
+        } else if (claimPageState === "paused") {
+          list.innerHTML = '<div class="state">目前暫停代課領取</div>';
+        } else {
+          list.innerHTML = claimMode === "special"
+            ? '<div class="state">目前沒有可安排特別課的正課或開放代課時段</div>'
+            : '<div class="state">目前沒有可領取的代課</div>';
+        }
         button.disabled = true;
         updateClaimMode();
         return;
@@ -2896,6 +2905,10 @@
       renderAvailableSubstitutes();
     }
 
+    function isInvitationStateClaimError(error) {
+      return /目前尚未開放代課領取|目前暫停全部代課領取/.test(String(error && error.message || ""));
+    }
+
     async function submitSpecialClaim() {
       let draft;
       try {
@@ -2928,10 +2941,12 @@
         });
       } catch (error) {
         setNotice(error.message, "error");
-        if (/剛被其他老師領取|重新整理|時段/.test(error.message)) await fetchAvailableSubstitutes();
+        if (isInvitationStateClaimError(error) || /剛被其他老師領取|重新整理|時段/.test(error.message)) {
+          await fetchAvailableSubstitutes();
+        }
       } finally {
         setButtonBusy(button, false, "");
-        button.disabled = getAvailableClaimItems().length === 0;
+        button.disabled = claimPageState !== "active" || getAvailableClaimItems().length === 0;
       }
     }
 
@@ -2982,10 +2997,12 @@
         openClaimSuccessDialog({ count: items.length });
       } catch (error) {
         setNotice(error.message, "error");
-        if (/剛被其他老師領取|重新整理/.test(error.message)) await fetchAvailableSubstitutes();
+        if (isInvitationStateClaimError(error) || /剛被其他老師領取|重新整理/.test(error.message)) {
+          await fetchAvailableSubstitutes();
+        }
       } finally {
         setButtonBusy(button, false, "");
-        button.disabled = getAvailableClaimItems().length === 0;
+        button.disabled = claimPageState !== "active" || getAvailableClaimItems().length === 0;
       }
     }
 
@@ -3553,9 +3570,10 @@
           </div>
           ${items.map((item) => `<article class="list-item single-column"><label class="ob-cancellation-row"><input class="ob-cancellation-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}"><span><span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.originalCourse)}</span><span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.replacementCalendarId || item.originalCalendarId || "—")}</span></span></label></article>`).join("") || '<div class="state">目前沒有已從 OB 取消、等待關閉的代課課程</div>'}`;
       } else if (activeAdminTab === "activeInvitees") {
+        const activeInvitees = data.activeInvitees || [];
         content.innerHTML = `
-          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>
-          ${(data.activeInvitees || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}"><i data-lucide="user-x"></i>關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
+          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="item-meta">結束本輪只會關閉目前邀請，不影響已領取課程；之後重新邀請即可開啟新一輪。</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button><button class="danger-button" type="button" data-admin-action="end-invitation-round" ${activeInvitees.length ? "" : "disabled"}><i data-lucide="circle-stop"></i>結束本輪邀請</button></div></div>
+          ${activeInvitees.map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}"><i data-lucide="user-x"></i>關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
       } else if (activeAdminTab === "obWork" || activeAdminTab === "exceptions") {
         const items = data[activeAdminTab] || [];
         content.innerHTML = items.length
@@ -3826,6 +3844,20 @@
       await callPostApi("closeInvitations", { teacherNames: [teacherName] });
       setNotice("邀請已關閉。");
       await fetchAdminDashboard();
+    }
+
+    async function endAdminInvitationRound(button) {
+      const activeCount = (adminDashboard && adminDashboard.activeInvitees || []).length;
+      if (!activeCount) throw new Error("目前沒有邀請中的老師。");
+      if (!window.confirm(`確認結束本輪邀請？目前 ${activeCount} 位邀請中的老師將不能再領課，已領取課程不受影響。`)) return;
+      if (button) setButtonBusy(button, true, "結束中...");
+      try {
+        const result = await callPostApi("endInvitationRound");
+        setNotice(`已結束本輪邀請，共關閉 ${result.closedTeachers} 位老師的邀請。`);
+        await fetchAdminDashboard();
+      } finally {
+        if (button && button.isConnected) setButtonBusy(button, false, "");
+      }
     }
 
     async function toggleAdminPause() {
@@ -4116,6 +4148,10 @@ https://sherryaerial-web.github.io/sub.html/
         if (action === "open-invitations") await openAdminInvitations();
         if (action === "copy-invitation") await copyInvitationMessage();
         if (action === "close-invitation") await closeAdminInvitation(button.dataset.teacherName);
+        if (action === "end-invitation-round") {
+          await endAdminInvitationRound(button);
+          return;
+        }
         if (action === "toggle-pause") await toggleAdminPause();
         if (action === "toggle-leave-pause") await toggleAdminLeavePause();
         if (action === "toggle-vvip") await setVvipSelectionOpen(button.dataset.vvipOpen === "true");

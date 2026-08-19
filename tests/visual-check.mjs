@@ -391,6 +391,14 @@ try {
     await delayedCard.locator(".claim-start-delay").selectOption("30");
     await delayedCard.locator(".claim-delay-summary").filter({ hasText: "下一堂 20:00 需由管理員關閉 OB" }).waitFor();
     results.push(await capture(page, viewport.name, "04-ordinary-delay-claim"));
+    await page.evaluate(() => {
+      claimPageState = "ended";
+      pendingLeaves = [];
+      claimOptions = { capabilities: [], classes: [], specialSlots: [] };
+      renderAvailableSubstitutes();
+    });
+    await page.locator("#pending-leaves-list").getByText("本輪代課領取已結束").waitFor();
+    results.push(await capture(page, viewport.name, "04b-invitation-round-ended"));
 
     await page.locator('.nav-item[data-view="view-mysubs"]').click();
     await page.locator("#my-subs-list .list-item").first().waitFor();

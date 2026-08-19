@@ -3016,6 +3016,149 @@ test('admin manually closes an invitation and records the close timestamp', () =
   assert.equal(auditSheet.values.filter((row) => row[2] === '關閉代課').length, 1);
 });
 
+test('admin ends the invitation round without changing any leave or claimed substitute row', () => {
+  const {
+    backend,
+    invitationSheet,
+    leaveSheet,
+    auditSheet,
+    adminSession,
+    teacherASession,
+    teacherBSession,
+  } = createInvitationBackend({
+    invitationRows: [
+      ['invite-a', '老師甲', '2026-08-20 09:00:00', '2026-08-20 09:05:00', '開放中', ''],
+      ['invite-b', '老師乙', '2026-08-20 09:00:00', '', '開放中', ''],
+      ['invite-old', '老師丙', '2026-08-19 09:00:00', '', '已關閉', '2026-08-19 10:00:00'],
+    ],
+  });
+  const leaveBefore = JSON.stringify(leaveSheet.values);
+
+  const result = backend.endInvitationRound_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    closedInvitations: 2,
+    closedTeachers: 2,
+  });
+  assert.deepEqual(invitationSheet.values.slice(1).map((row) => row[4]), [
+    '本輪已結束', '本輪已結束', '已關閉',
+  ]);
+  assert.ok(invitationSheet.values[1][5]);
+  assert.ok(invitationSheet.values[2][5]);
+  assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);
+  assert.equal(backend.getClaimPageData_(teacherASession).state, 'ended');
+  assert.equal(backend.getClaimPageData_(teacherBSession).state, 'ended');
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getAvailableSubstitutes_(teacherASession))), []);
+  assert.equal(auditSheet.values.filter((row) => row[2] === '結束本輪邀請').length, 2);
+  assert.throws(() => backend.endInvitationRound_(teacherASession), /課程管理權限|管理權限/);
+});
+
+test('opening a new invitation after a round ended restores that teacher claim page', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    invitationRows: [[
+      'invite-old', '老師甲', '2026-08-19 09:00:00', '', '本輪已結束', '2026-08-19 10:00:00',
+    ]],
+  });
+
+  assert.equal(backend.getClaimPageData_(teacherASession).state, 'ended');
+
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.equal(backend.getClaimPageData_(teacherASession).state, 'active');
+});
+
+test('a manually closed historical invitation does not masquerade as an ended round', () => {
+  const { backend, teacherASession } = createInvitationBackend({
+    invitationRows: [[
+      'invite-old', '老師甲', '2026-08-19 09:00:00', '', '已關閉', '2026-08-19 10:00:00',
+    ]],
+  });
+
+  assert.equal(backend.getClaimPageData_(teacherASession).state, 'notInvited');
+});
+
+test('claim page state follows the latest invitation instead of an older ended round', () => {
+  const { backend, teacherASession } = createInvitationBackend({
+    invitationRows: [
+      ['invite-round-one', '老師甲', '2026-08-18 09:00:00', '', '本輪已結束', '2026-08-18 10:00:00'],
+      ['invite-round-two', '老師甲', '2026-08-19 09:00:00', '', '已關閉', '2026-08-19 10:00:00'],
+    ],
+  });
+
+  assert.equal(backend.getClaimPageData_(teacherASession).state, 'notInvited');
+});
+
+test('ending the invitation round restores only invitation rows when its audit write fails', () => {
+  const { backend, invitationSheet, leaveSheet, auditSheet, adminSession } = createInvitationBackend({
+    invitationRows: [
+      ['invite-a', '老師甲', '2026-08-20 09:00:00', '', '開放中', ''],
+      ['invite-b', '老師乙', '2026-08-20 09:00:00', '', '開放中', ''],
+    ],
+  });
+  const invitationsBefore = JSON.stringify(invitationSheet.values);
+  const leavesBefore = JSON.stringify(leaveSheet.values);
+  injectSetValuesFailureOnce(auditSheet, ({ row }) => row >= 2, 'audit unavailable');
+
+  assert.throws(() => backend.endInvitationRound_(adminSession), /audit unavailable/);
+
+  assert.equal(JSON.stringify(invitationSheet.values), invitationsBefore);
+  assert.equal(JSON.stringify(leaveSheet.values), leavesBefore);
+});
+
+test('ending the invitation round precisely restores audit cells if the audit write commits then fails', () => {
+  const { backend, invitationSheet, auditSheet, adminSession } = createInvitationBackend({
+    invitationRows: [
+      ['invite-a', '老師甲', '2026-08-20 09:00:00', '', '開放中', ''],
+      ['invite-b', '老師乙', '2026-08-20 09:00:00', '', '開放中', ''],
+    ],
+  });
+  const invitationsBefore = JSON.stringify(invitationSheet.values);
+  const originalGetRange = auditSheet.getRange.bind(auditSheet);
+  let fired = false;
+  auditSheet.getRange = (row, column, numRows = 1, numColumns = 1) => {
+    const range = originalGetRange(row, column, numRows, numColumns);
+    const originalSetValues = range.setValues.bind(range);
+    range.setValues = (nextValues) => {
+      const result = originalSetValues(nextValues);
+      if (!fired && row >= 2) {
+        fired = true;
+        throw new Error('audit post-write failure');
+      }
+      return result;
+    };
+    return range;
+  };
+
+  assert.throws(() => backend.endInvitationRound_(adminSession), /audit post-write failure/);
+
+  assert.equal(JSON.stringify(invitationSheet.values), invitationsBefore);
+  assert.equal(auditSheet.values.filter((row) => row[2] === '結束本輪邀請').length, 0);
+});
+
+test('end-invitation-round POST is wired only for a course administrator session', () => {
+  const { backend, adminToken, teacherAToken } = createInvitationBackend({
+    invitationRows: [[
+      'invite-a', '老師甲', '2026-08-20 09:00:00', '', '開放中', '',
+    ]],
+  });
+  backend.console.error = () => {};
+
+  const teacherResponse = JSON.parse(backend.doPost({ parameter: {
+    action: 'endInvitationRound', sessionToken: teacherAToken,
+  } }).text);
+  const adminResponse = JSON.parse(backend.doPost({ parameter: {
+    action: 'endInvitationRound', sessionToken: adminToken,
+  } }).text);
+
+  assert.equal(teacherResponse.status, 'error');
+  assert.match(teacherResponse.message, /課程管理權限|管理權限/);
+  assert.equal(adminResponse.status, 'success');
+  assert.deepEqual(JSON.parse(JSON.stringify(adminResponse.data)), {
+    closedInvitations: 1,
+    closedTeachers: 1,
+  });
+});
+
 test('two invited teachers with stale lists produce exactly one claim winner', () => {
   const {
     backend,

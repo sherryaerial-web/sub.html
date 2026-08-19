@@ -128,7 +128,10 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
                 data: {
                   source: 'sherry-gas-relay',
                   requestId: fields.requestId,
-                  payload: { status: 'error', message: `${action} 載入失敗` },
+                  payload: {
+                    status: 'error',
+                    message: (options.errorMessages || {})[action] || `${action} 載入失敗`,
+                  },
                 },
               });
             });
@@ -140,6 +143,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
             data = Promise.resolve(
               options.postClaimAvailable === undefined ? [] : options.postClaimAvailable,
             ).then((items) => ({
+              state: options.postClaimState || 'active',
               items,
               options: fixtures.getClaimOptions || { capabilities: [], classes: [] },
             }));
@@ -666,6 +670,22 @@ test('groups available substitutes by date and keeps the uninvited state neutral
   assert.doesNotMatch(html, /你未受邀|未被邀請|梯次|序位|其他受邀/);
 });
 
+test('shows a clear ended-round state instead of an empty substitute list', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getClaimPageData: {
+      state: 'ended',
+      items: [],
+      options: { capabilities: [], classes: [] },
+    },
+  });
+
+  await context.fetchAvailableSubstitutes();
+
+  assert.match(getElement('pending-leaves-list').innerHTML, /本輪代課領取已結束/);
+  assert.match(getElement('pending-leaves-list').innerHTML, /已領取課程不受影響/);
+  assert.equal(getElement('claim-submit').disabled, true);
+});
+
 test('keeps substitute dates collapsed by default and preserves an expanded date across renders', async () => {
   const { context, getElement } = createFrontendRuntime({
     getAvailableSubstitutes: [
@@ -716,6 +736,37 @@ test('removes claimed courses immediately and refreshes after a concurrent confl
   assert.match(html, /pendingLeaves\s*=\s*pendingLeaves\.filter/);
   assert.match(html, /剛被其他老師領取/);
   assert.match(html, /await fetchAvailableSubstitutes\(\)/);
+});
+
+test('a stale claim page refreshes into the ended-round state after the admin closes invitations', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'],
+      classes: [{ classId: 'class-ring', courseName: '空環 Lv.1', category: '空環' }],
+    },
+    getClaimPageData: {
+      state: 'active',
+      items: [{
+        '代課編號': 'leave-c', '原老師': '老師丙', '日期': '2026/08/11',
+        '時段': '11:00', '課程': '空環 Lv.1', '課程大類': '空環', '可沿用原課程': true,
+      }],
+      options: {
+        capabilities: ['空環'],
+        classes: [{ classId: 'class-ring', courseName: '空環 Lv.1', category: '空環' }],
+      },
+    },
+  }, {
+    errorActions: ['claimSubstitute'],
+    errorMessages: { claimSubstitute: '目前尚未開放代課領取。' },
+    postClaimAvailable: [],
+    postClaimState: 'ended',
+  });
+  await context.fetchAvailableSubstitutes();
+
+  await context.submitClaim();
+
+  assert.match(getElement('pending-leaves-list').innerHTML, /本輪代課領取已結束/);
+  assert.equal(getElement('claim-submit').disabled, true);
 });
 
 test('keeps the claim button disabled after the final available course is claimed', async () => {
@@ -2201,6 +2252,51 @@ test('OB-cancelled queue renders bulk-safe rows separately from pending invitati
   assert.match(html, /action === "closeMissingObCancellations" \? 120000 : 45000/);
   assert.match(html, /button\.setAttribute\("aria-busy", "true"\)/);
   assert.match(html, /await closeSelectedMissingObCancellations\(button\);\s*return;/);
+});
+
+test('course admin can end every active invitation from one guarded action', async () => {
+  const dashboardAfterEnd = {
+    pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [], exceptions: [], completed: [],
+    missingObCancellations: [], teachers: [], replacementOptions: [], paused: false,
+  };
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    endInvitationRound: { closedInvitations: 2, closedTeachers: 2 },
+    getAdminDashboard: dashboardAfterEnd,
+  });
+  context.__dashboard = {
+    ...dashboardAfterEnd,
+    activeInvitees: [
+      { teacherName: '老師甲', openedAt: '2026-08-20 09:00:00' },
+      { teacherName: '老師乙', openedAt: '2026-08-20 09:00:00' },
+    ],
+  };
+  vm.runInContext('activeAdminTab = "activeInvitees"; adminDashboard = __dashboard; renderAdminTab();', context);
+  assert.match(getElement('admin-tab-content').innerHTML, /結束本輪邀請/);
+
+  context.window.confirm = () => true;
+  let finishEndRequest;
+  const endRequest = new Promise((resolve) => { finishEndRequest = resolve; });
+  context.callPostApi = (action) => {
+    requestActions.push(action);
+    if (action === 'endInvitationRound') return endRequest;
+    return Promise.resolve(dashboardAfterEnd);
+  };
+  const button = {
+    innerHTML: '<i data-lucide="circle-stop"></i>結束本輪邀請',
+    dataset: {},
+    disabled: false,
+    isConnected: true,
+  };
+  const ending = context.endAdminInvitationRound(button);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(button.disabled, true);
+
+  finishEndRequest({ closedInvitations: 2, closedTeachers: 2 });
+  await ending;
+
+  assert.ok(requestActions.includes('endInvitationRound'));
+  assert.match(getElement('notice').textContent, /已結束本輪邀請/);
+  assert.equal(button.disabled, false);
 });
 
 test('payroll admin can adjust salaries and finalize teacher-confirmed results', () => {

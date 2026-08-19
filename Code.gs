@@ -102,6 +102,7 @@ var CONFIG = {
   LEAVE_BATCH_MAX: 50,
   INVITATION_OPEN_STATUS: '開放中',
   INVITATION_CLOSED_STATUS: '已關閉',
+  INVITATION_ROUND_ENDED_STATUS: '本輪已結束',
   CLAIMS_PAUSED_SETTING: '暫停全部領取',
   LEAVES_PAUSED_SETTING: '暫停全部請假',
   VVIP_MAX_SELECTIONS: 3,
@@ -1177,6 +1178,9 @@ function doPost(e) {
       },
       closeInvitations: function() {
         return closeInvitations_(session, parseTeacherNames_(parameters));
+      },
+      endInvitationRound: function() {
+        return endInvitationRound_(session);
       },
       pauseClaims: function() {
         return pauseClaims_(session, parseBoolean_(parameters.paused, '暫停設定'));
@@ -3581,6 +3585,89 @@ function closeInvitations_(session, teacherNames) {
   });
 }
 
+function endInvitationRound_(session) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
+    var auditSheet = requireSheet_(ss, SHEETS.AUDIT);
+    assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
+    assertHeaders_(auditSheet, SHEET_HEADERS.AUDIT);
+    var values = sheet.getDataRange().getValues();
+    var now = getTimestamp_();
+    var records = [];
+    var teacherMap = {};
+    for (var index = 1; index < values.length; index++) {
+      var row = values[index];
+      if (cleanText_(row[4]) !== CONFIG.INVITATION_OPEN_STATUS) continue;
+      var teacher = cleanText_(row[1]);
+      records.push({
+        rowNumber: index + 1,
+        invitationId: cleanText_(row[0]),
+        teacher: teacher,
+        snapshot: [row[4], row[5]]
+      });
+      if (teacher) teacherMap[teacher] = true;
+    }
+    if (!records.length) return { closedInvitations: 0, closedTeachers: 0 };
+    var auditStartRow = auditSheet.getLastRow() + 1;
+    var auditSnapshot = auditSheet.getRange(
+      auditStartRow,
+      1,
+      records.length,
+      SHEET_HEADERS.AUDIT.length
+    ).getValues();
+
+    try {
+      records.forEach(function(record) {
+        sheet.getRange(record.rowNumber, 5, 1, 2).setValues([[
+          CONFIG.INVITATION_ROUND_ENDED_STATUS,
+          now
+        ]]);
+      });
+      appendAuditEventsUnlocked_(auditSheet, records.map(function(record) {
+        return {
+          actor: actor,
+          action: '結束本輪邀請',
+          targetId: record.invitationId,
+          before: CONFIG.INVITATION_OPEN_STATUS,
+          after: CONFIG.INVITATION_ROUND_ENDED_STATUS,
+          reason: record.teacher
+        };
+      }));
+    } catch (error) {
+      var rollbackFailures = [];
+      try {
+        auditSheet.getRange(
+          auditStartRow,
+          1,
+          records.length,
+          SHEET_HEADERS.AUDIT.length
+        ).setValues(auditSnapshot);
+      } catch (auditRestoreError) {
+        rollbackFailures.push('稽核範圍：' + getErrorMessage_(auditRestoreError));
+      }
+      records.slice().reverse().forEach(function(record) {
+        try {
+          sheet.getRange(record.rowNumber, 5, 1, 2).setValues([record.snapshot]);
+        } catch (restoreError) {
+          rollbackFailures.push(
+            '邀請第 ' + record.rowNumber + ' 列：' + getErrorMessage_(restoreError)
+          );
+        }
+      });
+      if (rollbackFailures.length) {
+        throw new Error(getErrorMessage_(error) + '；精準回復失敗：' + rollbackFailures.join('；'));
+      }
+      throw error;
+    }
+    return {
+      closedInvitations: records.length,
+      closedTeachers: Object.keys(teacherMap).length
+    };
+  });
+}
+
 function pauseClaims_(session, paused) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var shouldPause = paused === true;
@@ -3677,15 +3764,24 @@ function getClaimPageReadContext_(session, includeSpecialRequestRows) {
   var invitationSheet = requireSheet_(ss, SHEETS.INVITATIONS);
   assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
   var invitationRows = invitationSheet.getDataRange().getValues().slice(1);
-  var hasInvitation = invitationRows.some(function(row) {
-    return cleanText_(row[1]) === teacher &&
-      cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
-  });
-  var active = hasInvitation && !areClaimsPaused_();
+  var latestInvitation = null;
+  for (var invitationIndex = invitationRows.length - 1; invitationIndex >= 0; invitationIndex--) {
+    if (cleanText_(invitationRows[invitationIndex][1]) === teacher) {
+      latestInvitation = invitationRows[invitationIndex];
+      break;
+    }
+  }
+  var latestInvitationStatus = latestInvitation ? cleanText_(latestInvitation[4]) : '';
+  var hasInvitation = latestInvitationStatus === CONFIG.INVITATION_OPEN_STATUS;
+  var hasEndedInvitation = latestInvitationStatus === CONFIG.INVITATION_ROUND_ENDED_STATUS;
+  var claimsPaused = areClaimsPaused_();
+  var active = hasInvitation && !claimsPaused;
   var context = {
     teacher: teacher,
     ss: ss,
     active: active,
+    state: hasInvitation ? (claimsPaused ? 'paused' : 'active') :
+      (hasEndedInvitation ? 'ended' : 'notInvited'),
     courseRows: [],
     leaveRows: [],
     capabilities: [],
@@ -3798,6 +3894,7 @@ function buildClaimOptionsFromContext_(context) {
 function getClaimPageData_(session) {
   var context = getClaimPageReadContext_(session, true);
   return {
+    state: context.state,
     items: buildAvailableSubstitutesFromContext_(context),
     options: buildClaimOptionsFromContext_(context)
   };

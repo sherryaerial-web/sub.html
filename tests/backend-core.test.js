@@ -576,6 +576,10 @@ function createInvitationBackend(options = {}) {
     EXPECTED_SPECIAL_REQUEST_HEADERS,
     ...(options.specialRequestRows || []),
   ]);
+  const vvipSelectionSheet = createSheetFixture('VVIP選課紀錄', [
+    EXPECTED_VVIP_SELECTION_HEADERS,
+    ...(options.vvipSelectionRows || []),
+  ]);
   const spreadsheet = createSpreadsheetFixture([
     accountSheet,
     teacherSheet,
@@ -585,6 +589,7 @@ function createInvitationBackend(options = {}) {
     auditSheet,
     settingsSheet,
     specialRequestSheet,
+    vvipSelectionSheet,
   ]);
   const backend = loadBackend({
     ...services,
@@ -606,6 +611,7 @@ function createInvitationBackend(options = {}) {
     auditSheet,
     settingsSheet,
     specialRequestSheet,
+    vvipSelectionSheet,
     adminToken,
     teacherAToken,
     teacherBToken,
@@ -1935,6 +1941,43 @@ test('ordinary sixty-minute delay occupies only the conflicting next open leave'
   assert.equal(thirty.occupiedRowIndex, 1);
 });
 
+test('ordinary delay planning consistently uses a verified replacement OB Calendar ID', () => {
+  const backend = loadBackend();
+  const source = [
+    'stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1',
+    '確認中', '', '', '', 'leave-a', 'cal-old',
+  ];
+  while (source.length < 21) source.push('');
+  source[20] = 'cal-new';
+  const courseRows = [
+    ['2026/09/01', '18:30', 'A－空環 Lv.1', '原老師甲', 'cal-new'],
+    ['2026/09/01', '20:00', 'A－空環 Lv.2', '原老師乙', 'cal-next'],
+  ];
+
+  const result = backend.buildOrdinaryClaimDelayPlan_(source, 15, [source], courseRows);
+
+  assert.equal(result.actualStartTime, '18:45');
+});
+
+test('teacher special-course slots consistently use a verified replacement OB Calendar ID', () => {
+  const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-09';
+  const source = [
+    'stamp', '原老師甲', '2026/09/01', '18:30', 'A－空環 Lv.1',
+    '確認中', '', '', '', 'leave-a', 'cal-old',
+  ];
+  while (source.length < 21) source.push('');
+  source[20] = 'cal-new';
+
+  const slots = backend.buildSpecialCourseSlotsForTeacher_('代課老師乙', [source], [[
+    '2026/09/01', '18:30', 'A－空環 Lv.1', '原老師甲', 'cal-new',
+  ]]);
+
+  assert.equal(slots.length, 1);
+  assert.equal(slots[0].calendarId, 'cal-new');
+  assert.equal(slots[0].substituteId, 'leave-a');
+});
+
 test('ordinary planner treats 綢吊 as ninety minutes but 舞綢 as sixty minutes', () => {
   const backend = loadBackend();
   const next = ['stamp', '原老師乙', '2026/09/01', '20:00', 'A－空環 Lv.2', '確認中', '', '', '', 'leave-b', 'cal-b'];
@@ -2682,6 +2725,11 @@ test('invited list read is pure while the explicit POST route records first view
 test('teacher substitute list only exposes open courses from the target month', () => {
   const { backend, adminSession, teacherASession } = createInvitationBackend({
     nextMonth: '2026-09',
+    courseRows: [
+      ['2026/08/31', '10:00', '空環 Lv.1', '老師乙', 'calendar-aug'],
+      ['2026/09/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-sep'],
+      ['2026/10/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-oct'],
+    ],
     leaveRows: [
       ['時間', '老師乙', '2026/08/31', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-aug', 'calendar-aug'],
       ['時間', '老師乙', '2026/09/01', '10:00', '空環 Lv.1', '確認中', '', '', '', 'leave-sep', 'calendar-sep'],
@@ -2792,6 +2840,73 @@ test('available substitute list blocks conflicts with an already claimed substit
   backend.openInvitations_(adminSession, ['老師甲']);
 
   assert.deepEqual(backend.getAvailableSubstitutes_(teacherASession), []);
+});
+
+test('OB-missing pending leaves move out of invitations and never reach the teacher claim list', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/05', '19:15', 'C－空環 Lv.1', '老師丙', 'calendar-present'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/05', '19:00', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-missing', 'calendar-missing'],
+      ['stamp', '老師丙', '2026/09/05', '19:15', 'C－空環 Lv.1', '確認中', '', '', '', 'leave-present', 'calendar-present'],
+    ],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const dashboard = backend.getAdminDashboard_(adminSession);
+
+  assert.deepEqual(dashboard.pendingInvitations.map((item) => item.substituteId), ['leave-present']);
+  assert.deepEqual(dashboard.missingObCancellations.map((item) => item.substituteId), ['leave-missing']);
+  assert.deepEqual(
+    backend.getAvailableSubstitutes_(teacherASession).map((item) => item['代課編號']),
+    ['leave-present'],
+  );
+});
+
+test('unlinked legacy leaves never enter the OB-cancelled bulk-close queue', () => {
+  const { backend, adminSession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/05', '19:15', 'C－空環 Lv.1', '老師丙', 'calendar-present'],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/05', '19:00', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-unlinked', ''],
+    ],
+  });
+
+  const dashboard = backend.getAdminDashboard_(adminSession);
+
+  assert.deepEqual(dashboard.pendingInvitations, []);
+  assert.deepEqual(dashboard.missingObCancellations, []);
+  assert.throws(
+    () => backend.closeMissingObCancellations_(adminSession, ['leave-unlinked']),
+    /不可關閉|尚未連結|重新整理/,
+  );
+});
+
+test('claim rejects a pending leave whose original OB course disappeared after the page loaded', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/05', '19:15', 'C－空環 Lv.1', '老師丙', 'calendar-other'],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/05', '19:00', 'B－空環 Lv.1',
+      '確認中', '', '', '', 'leave-missing', 'calendar-missing',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const before = JSON.stringify(leaveSheet.values);
+
+  assert.throws(
+    () => backend.claimSubstitute_(teacherASession, [{
+      substituteId: 'leave-missing', handlingType: 'original',
+    }]),
+    /OB.*不存在|課程已取消|重新整理/,
+  );
+  assert.equal(JSON.stringify(leaveSheet.values), before);
 });
 
 test('claim rejects a stale conflicting course without writing any leave row', () => {
@@ -5081,6 +5196,7 @@ test('reclaim preserves a verified replacement Calendar ID for later reconciliat
 
   assert.equal(leaveSheet.values[1][10], 'calendar-old');
   assert.equal(leaveSheet.values[1][20], 'calendar-new');
+  assert.equal(leaveSheet.values[1][11], 'class-new');
 });
 
 test('legacy manual-review leave stays unavailable until admin links its original OB course', () => {
@@ -5344,6 +5460,188 @@ test('VVIP administrator cancels exactly the selected duplicate record', () => {
     '待人工確認', '已取消', '待人工確認',
   ]);
   assert.equal(backend.getVvipAdminDashboard_(adminSession).metrics.activeSelections, 1);
+});
+
+test('bulk-closing OB-missing leaves marks matching VVIP choices cancelled and frees the quota', () => {
+  const { backend, adminSession, leaveSheet, selectionSheet, auditSheet } = createVvipBackend({
+    courseRows: [
+      ['2026/09/03', '11:00', '舞綢基礎', '老師乙', 'vvip-cal-2', 'class-2', 'teacher-2', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '原老師甲', '2026/09/02', '10:00', '空環基礎',
+      '確認中', '', '', '', 'leave-cancelled-ob', 'vvip-cal-1',
+    ]],
+    selectionRows: [[
+      '2026-08-18 08:35:20', 'vvip@example.com', '2026-09', 'vvip-cal-1',
+      '2026/09/02', '10:00', '空環基礎', '原老師甲', '已確認',
+      '2026-08-18 09:00:00', '', '', '管理員甲', 'vvip-member-1', '會員一',
+    ]],
+  });
+
+  const result = backend.closeMissingObCancellations_(adminSession, ['leave-cancelled-ob']);
+  const publicData = backend.getVvipSelection_('vvip-member-1');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { closed: 1, vvipCancelled: 1 });
+  assert.equal(leaveSheet.values[1][5], '已取消');
+  assert.equal(leaveSheet.values[1][15], '已關閉');
+  assert.equal(leaveSheet.values[1][18], 'OB 已取消／代課已關閉');
+  assert.equal(selectionSheet.values[1][8], '課程已取消');
+  assert.equal(selectionSheet.values[1][11], 'OB 課程已取消');
+  assert.equal(publicData.count, 0);
+  assert.equal(publicData.selections.length, 1);
+  assert.equal(publicData.selections[0].status, '課程已取消');
+  assert.ok(auditSheet.values.some((row) => row[2] === '管理員關閉 OB 已取消代課'));
+  assert.ok(auditSheet.values.some((row) => row[2] === 'VVIP 課程取消'));
+});
+
+test('bulk-closing a missing replacement does not cancel a VVIP choice whose original OB course still exists', () => {
+  const leaveRow = [
+    'stamp', '原老師甲', '2026/09/02', '10:00', '空環基礎',
+    '確認中', '', '', '', 'leave-replacement-missing', 'cal-original',
+  ];
+  while (leaveRow.length < 21) leaveRow.push('');
+  leaveRow[20] = 'cal-replacement-missing';
+  const { backend, adminSession, selectionSheet } = createVvipBackend({
+    courseRows: [[
+      '2026/09/02', '10:00', '空環基礎', '原老師甲', 'cal-original', 'class-1', 'teacher-1', '否', '',
+    ]],
+    leaveRows: [leaveRow],
+    selectionRows: [[
+      'stamp', 'vvip@example.com', '2026-09', 'cal-original', '2026/09/02', '10:00',
+      '空環基礎', '原老師甲', '已確認', '', '', '', '會員一', 'vvip-member-1', '會員一',
+    ]],
+  });
+
+  const result = backend.closeMissingObCancellations_(adminSession, ['leave-replacement-missing']);
+
+  assert.equal(result.closed, 1);
+  assert.equal(result.vvipCancelled, 0);
+  assert.equal(selectionSheet.values[1][8], '已確認');
+});
+
+test('bulk-closing 34 OB-missing leaves uses at most one leave write per explicit row', () => {
+  const leaveRows = Array.from({ length: 34 }, (_, index) => [
+    'stamp', `原老師${index + 1}`, '2026/09/02', '10:00', `課程${index + 1}`,
+    '確認中', '', '', '', `leave-missing-${index + 1}`, `cal-missing-${index + 1}`,
+  ]);
+  const fixture = createVvipBackend({
+    courseRows: [[
+      '2026/09/03', '11:00', '其他課程', '老師乙', 'cal-other', 'class-2', 'teacher-2', '否', '',
+    ]],
+    leaveRows,
+  });
+  let leaveWrites = 0;
+  const originalGetRange = fixture.leaveSheet.getRange.bind(fixture.leaveSheet);
+  fixture.leaveSheet.getRange = (row, column, numRows = 1, numColumns = 1) => {
+    const range = originalGetRange(row, column, numRows, numColumns);
+    const originalSetValue = range.setValue.bind(range);
+    const originalSetValues = range.setValues.bind(range);
+    range.setValue = (value) => {
+      leaveWrites += 1;
+      return originalSetValue(value);
+    };
+    range.setValues = (values) => {
+      leaveWrites += 1;
+      return originalSetValues(values);
+    };
+    return range;
+  };
+
+  const result = fixture.backend.closeMissingObCancellations_(
+    fixture.adminSession,
+    leaveRows.map((row) => row[9])
+  );
+
+  assert.equal(result.closed, 34);
+  assert.ok(leaveWrites <= 34, `expected at most 34 leave writes, got ${leaveWrites}`);
+});
+
+test('VVIP cancelled history remains visible when every active-month OB course is gone', () => {
+  const { backend } = createVvipBackend({
+    courseRows: [],
+    selectionRows: [[
+      'stamp', 'vvip@example.com', '2026-09', 'cal-cancelled', '2026/09/02', '10:00',
+      '已取消課程', '原老師甲', '課程已取消', '', '2026-08-20 10:00:00',
+      'OB 課程已取消', '管理員甲', 'vvip-member-1', '會員一',
+    ]],
+  });
+
+  const result = backend.getVvipSelection_('vvip-member-1');
+
+  assert.equal(result.count, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.courses)), []);
+  assert.equal(result.selections.length, 1);
+  assert.equal(result.selections[0].status, '課程已取消');
+});
+
+test('bulk-closing missing OB leaves validates the whole batch before any Sheet write', () => {
+  const { backend, adminSession, leaveSheet, selectionSheet } = createVvipBackend({
+    courseRows: [
+      ['2026/09/03', '11:00', '仍存在課程', '老師乙', 'cal-present', 'class-2', 'teacher-2', '否', ''],
+    ],
+    leaveRows: [
+      ['stamp', '老師甲', '2026/09/02', '10:00', '已取消課程', '確認中', '', '', '', 'leave-missing', 'cal-missing'],
+      ['stamp', '老師乙', '2026/09/03', '11:00', '仍存在課程', '確認中', '', '', '', 'leave-present', 'cal-present'],
+    ],
+    selectionRows: [[
+      'stamp', 'vvip@example.com', '2026-09', 'cal-missing', '2026/09/02', '10:00',
+      '已取消課程', '老師甲', '待人工確認', '', '', '', '會員一', 'vvip-member-1', '會員一',
+    ]],
+  });
+  const leaveBefore = JSON.stringify(leaveSheet.values);
+  const vvipBefore = JSON.stringify(selectionSheet.values);
+
+  assert.throws(
+    () => backend.closeMissingObCancellations_(adminSession, ['leave-missing', 'leave-present']),
+    /仍存在|重新同步|不可關閉/,
+  );
+  assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);
+  assert.equal(JSON.stringify(selectionSheet.values), vvipBefore);
+});
+
+test('bulk-closing rollback restores only selected rows and never clears a human-data sheet', () => {
+  const { backend, adminSession, leaveSheet, selectionSheet, auditSheet } = createVvipBackend({
+    courseRows: [
+      ['2026/09/03', '11:00', '其他課程', '老師乙', 'cal-other', 'class-2', 'teacher-2', '否', ''],
+    ],
+    leaveRows: [
+      ['stamp', '老師甲', '2026/09/02', '10:00', '已取消課程', '確認中', '', '', '', 'leave-missing', 'cal-missing'],
+      ['stamp', '老師乙', '2026/09/03', '11:00', '其他課程', '已領取', '老師丙', '', '', 'leave-unrelated', 'cal-other'],
+    ],
+    selectionRows: [
+      ['stamp', 'vvip@example.com', '2026-09', 'cal-missing', '2026/09/02', '10:00', '已取消課程', '老師甲', '已確認', '', '', '', '會員一', 'vvip-member-1', '會員一'],
+      ['stamp', 'other@example.com', '2026-09', 'cal-other', '2026/09/03', '11:00', '其他課程', '老師乙', '已確認', '', '', '', '會員二', 'vvip-member-2', '會員二'],
+    ],
+  });
+  const clearedRanges = [];
+  [leaveSheet, selectionSheet].forEach((sheet) => {
+    const originalGetRange = sheet.getRange.bind(sheet);
+    sheet.getRange = (row, column, numRows = 1, numColumns = 1) => {
+      const range = originalGetRange(row, column, numRows, numColumns);
+      const originalClear = range.clearContent.bind(range);
+      range.clearContent = () => {
+        clearedRanges.push({ sheet: sheet.name, row, column, numRows, numColumns });
+        return originalClear();
+      };
+      return range;
+    };
+  });
+  injectSetValuesFailureOnce(auditSheet, ({ row }) => row >= 2, 'audit unavailable');
+  const trimTrailingBlanks = (rows) => rows.map((row) => {
+    const copy = row.slice();
+    while (copy.length && copy[copy.length - 1] === '') copy.pop();
+    return copy;
+  });
+  const leaveBefore = trimTrailingBlanks(leaveSheet.values);
+  const vvipBefore = trimTrailingBlanks(selectionSheet.values);
+
+  assert.throws(
+    () => backend.closeMissingObCancellations_(adminSession, ['leave-missing']),
+    /audit unavailable/,
+  );
+  assert.deepEqual(trimTrailingBlanks(leaveSheet.values), leaveBefore);
+  assert.deepEqual(trimTrailingBlanks(selectionSheet.values), vvipBefore);
+  assert.deepEqual(clearedRanges, []);
 });
 
 test('VVIP course rows merge leave and substitute status without duplicating selectable courses', () => {

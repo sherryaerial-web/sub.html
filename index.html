@@ -448,6 +448,7 @@
     .item-date { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
     .item-course { margin-top: 3px; overflow-wrap: anywhere; font-size: 15px; font-weight: 750; line-height: 1.45; }
     .item-meta { margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .course-cancelled-status { display: inline-block; margin-left: 8px; color: var(--coral-600); font-size: 12px; font-weight: 800; }
 
     .category-tag, .status-tag {
       display: inline-flex;
@@ -623,6 +624,8 @@
     .summary-item span { color: var(--muted); font-size: 11px; }
     .admin-workspace { min-width: 0; }
     .admin-control { margin-bottom: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .ob-cancellation-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; }
+    .ob-cancellation-checkbox { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--sea-700); }
     .vvip-course-view { display: grid; gap: 16px; margin-top: 14px; }
 
     .admin-tabs {
@@ -1132,6 +1135,7 @@
           <div class="admin-workspace">
             <div class="admin-tabs" role="tablist" aria-label="管理工作區">
               <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="missingObCancellations" data-capability="course_admin"><i data-lucide="calendar-x-2"></i>OB 已取消<span class="admin-tab-count" data-admin-count="missingObCancellations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
@@ -1331,10 +1335,11 @@
         };
 
         window.addEventListener("message", handleMessage);
+        const timeoutMs = action === "closeMissingObCancellations" ? 120000 : 45000;
         timeoutId = window.setTimeout(() => {
           cleanup();
           reject(new Error("系統連線逾時，請重新整理後再試一次。"));
-        }, 45000);
+        }, timeoutMs);
         document.body.appendChild(iframe);
         document.body.appendChild(form);
         form.submit();
@@ -3468,6 +3473,7 @@
       leavePauseButton.innerHTML = `<i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}`;
       byId("admin-summary").innerHTML = [
         ["待領取", (data.pendingInvitations || []).length],
+        ["OB 已取消待關閉", (data.missingObCancellations || []).length],
         ["待處理 OB", (data.obWork || []).length],
         ["待處理異動", (data.changeRequests || []).length]
       ].map(([label, count]) => `<div class="summary-item"><span>${label}</span><strong>${count}</strong></div>`).join("");
@@ -3534,6 +3540,18 @@
           ${inviteTeacherPanel}
           <div class="queue-section-heading"><strong>待領取課程</strong><span>${pendingItems.length} 堂</span></div>
           ${pendingCourseList}`;
+      } else if (activeAdminTab === "missingObCancellations") {
+        const items = data.missingObCancellations || [];
+        content.innerHTML = `
+          <div class="admin-control">
+            <strong>已從 OB 取消、等待關閉代課</strong>
+            <div class="item-meta">只列出仍為待領取、尚無代課老師，且目前連結的 OB Calendar ID 已從同步課表消失的課程。確認後會保留紀錄、關閉代課，VVIP 已選課會標示取消並釋放名額。</div>
+            <div class="admin-item-actions">
+              <button class="compact-button" type="button" data-admin-action="select-all-ob-cancellations" ${items.length ? "" : "disabled"}><i data-lucide="list-checks"></i>全選本頁</button>
+              <button class="danger-button" type="button" data-admin-action="close-ob-cancellations" ${items.length ? "" : "disabled"}><i data-lucide="calendar-x-2"></i>關閉勾選課程</button>
+            </div>
+          </div>
+          ${items.map((item) => `<article class="list-item single-column"><label class="ob-cancellation-row"><input class="ob-cancellation-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}"><span><span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.originalCourse)}</span><span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.replacementCalendarId || item.originalCalendarId || "—")}</span></span></label></article>`).join("") || '<div class="state">目前沒有已從 OB 取消、等待關閉的代課課程</div>'}`;
       } else if (activeAdminTab === "activeInvitees") {
         content.innerHTML = `
           <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button></div></div>
@@ -3572,7 +3590,7 @@
         const rows = grouped[email];
         const hasPending = rows.some((item) => item.status === "待人工確認");
         const memberName = rows.find((item) => item.memberName)?.memberName || "暱稱未填";
-        return `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(memberName)}</div><div class="item-meta">${escapeHtml(email)}｜${rows.length} 筆登記｜${escapeHtml(rows.map((item) => item.status).join("、"))}</div>${rows.map((item) => `<div class="item-meta">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.courseName)}｜${escapeHtml(item.teacherName)}<button class="danger-button" type="button" data-admin-action="cancel-vvip" data-vvip-email="${escapeHtml(email)}" data-vvip-calendar-id="${escapeHtml(item.calendarId)}" data-vvip-record-key="${escapeHtml(item.recordKey)}"><i data-lucide="x"></i>取消此筆</button></div>`).join("")}<div class="admin-item-actions">${hasPending ? `<button class="compact-button" type="button" data-admin-action="confirm-vvip" data-vvip-email="${escapeHtml(email)}"><i data-lucide="badge-check"></i>確認 Email</button>` : ""}</div></div></article>`;
+        return `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(memberName)}</div><div class="item-meta">${escapeHtml(email)}｜${rows.length} 筆登記｜${escapeHtml(rows.map((item) => item.status).join("、"))}</div>${rows.map((item) => `<div class="item-meta">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.courseName)}｜${escapeHtml(item.teacherName)}${item.courseCancelled ? '<strong class="course-cancelled-status">課程已取消</strong>' : `<button class="danger-button" type="button" data-admin-action="cancel-vvip" data-vvip-email="${escapeHtml(email)}" data-vvip-calendar-id="${escapeHtml(item.calendarId)}" data-vvip-record-key="${escapeHtml(item.recordKey)}"><i data-lucide="x"></i>取消此筆</button>`}</div>`).join("")}<div class="admin-item-actions">${hasPending ? `<button class="compact-button" type="button" data-admin-action="confirm-vvip" data-vvip-email="${escapeHtml(email)}"><i data-lucide="badge-check"></i>確認 Email</button>` : ""}</div></div></article>`;
       }).join("") || '<div class="state">目前沒有符合條件的 VVIP 選課紀錄</div>';
       const courseView = (data.courseView || []).map((course) => {
         const registrants = (course.registrants || []).map((item) => item.name ? `${item.name}（${item.email}）` : item.email);
@@ -3898,6 +3916,34 @@
       await fetchAdminDashboard();
     }
 
+    function selectAllMissingObCancellations() {
+      const checkboxes = Array.from(document.querySelectorAll(".ob-cancellation-checkbox"));
+      const shouldSelect = checkboxes.some((checkbox) => !checkbox.checked);
+      checkboxes.forEach((checkbox) => { checkbox.checked = shouldSelect; });
+    }
+
+    async function closeSelectedMissingObCancellations(button) {
+      const substituteIds = Array.from(document.querySelectorAll(".ob-cancellation-checkbox:checked"))
+        .map((checkbox) => checkbox.value)
+        .filter(Boolean);
+      if (!substituteIds.length) throw new Error("請先勾選要關閉的課程。");
+      if (!window.confirm(`確認關閉 ${substituteIds.length} 堂已從 OB 取消的代課課程？`)) return;
+      if (button) {
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+      }
+      try {
+        const result = await callPostApi("closeMissingObCancellations", { substituteIds });
+        setNotice(`已關閉 ${result.closed} 堂代課；${result.vvipCancelled} 筆 VVIP 選課已標示取消。`);
+        await fetchAdminDashboard();
+      } finally {
+        if (button && button.isConnected) {
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+        }
+      }
+    }
+
     async function setVvipSelectionOpen(open) {
       await callPostApi("setVvipSelectionOpen", { open });
       setNotice(open ? "已開放本期 VVIP 選課。" : "已關閉本期 VVIP 選課。");
@@ -4057,6 +4103,14 @@ https://sherryaerial-web.github.io/sub.html/
         const action = button.dataset.adminAction;
         if (action === "toggle-teacher-round") {
           toggleAdminTeacherRound(button);
+          return;
+        }
+        if (action === "select-all-ob-cancellations") {
+          selectAllMissingObCancellations();
+          return;
+        }
+        if (action === "close-ob-cancellations") {
+          await closeSelectedMissingObCancellations(button);
           return;
         }
         if (action === "open-invitations") await openAdminInvitations();

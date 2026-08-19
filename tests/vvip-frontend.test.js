@@ -14,6 +14,7 @@ function createVvipPageHarness(options = {}) {
       globalThis.__state = state;
       globalThis.__renderCourse = renderCourse;
       globalThis.__renderCourses = renderCourses;
+      globalThis.__renderSummary = renderSummary;
       globalThis.__submitVvipSelection = submitVvipSelection;
       globalThis.__formatVvipDateWithWeekday = typeof formatVvipDateWithWeekday === "function" ? formatVvipDateWithWeekday : undefined;
       globalThis.__isVvipSpecialCourse = typeof isVvipSpecialCourse === "function" ? isVvipSpecialCourse : undefined;
@@ -147,6 +148,25 @@ test('VVIP course card shows leave and substitute status without creating anothe
   assert.equal((rendered.match(/type="checkbox"/g) || []).length, 1);
 });
 
+test('VVIP selected summary keeps a cancelled course visible without consuming the three-course quota', () => {
+  const { context, elements } = createVvipPageHarness();
+  context.__state.data = {
+    count: 0,
+    selections: [{
+      calendarId: 'cal-cancelled', date: '2026/09/05', time: '19:00',
+      courseName: '空環 Lv.1', teacherName: '老師甲', status: '課程已取消',
+    }],
+    courses: [],
+  };
+  context.__state.existingCalendarIds = new Set();
+
+  context.__renderSummary();
+
+  assert.match(elements.get('vvip-summary-copy').textContent, /累積 0／3 堂/);
+  assert.match(elements.get('vvip-summary-list').innerHTML, /課程已取消/);
+  assert.match(elements.get('vvip-summary-list').innerHTML, /空環 Lv\.1/);
+});
+
 test('VVIP classifies only named special courses and formats dates with weekdays', () => {
   const { context } = createVvipPageHarness();
 
@@ -203,7 +223,7 @@ test('VVIP search exposes matching ordinary dates without losing manual expansio
 });
 
 test('VVIP admin workspace remains a protected tab with management actions', () => {
-  assert.equal((adminHtml.match(/role=["']tab["']/g) || []).length, 8);
+  assert.equal((adminHtml.match(/role=["']tab["']/g) || []).length, 9);
   assert.match(adminHtml, /data-admin-tab=["']vvip["']/);
   assert.match(adminHtml, /data-capability=["']vvip_admin["']/);
   assert.match(adminHtml, /VVIP 選課/);

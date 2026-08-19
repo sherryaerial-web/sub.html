@@ -59,6 +59,7 @@
     .course-name { display:block; margin-top:1px; font-size:15px; font-weight:750; overflow-wrap:anywhere; }
     .course-teacher { display:block; color:var(--muted); font-size:12px; }
     .course-leave-status { display:block; margin-top:4px; color:var(--coral); font-size:12px; font-weight:700; }
+    .course-cancelled-status { display:inline-block; margin-left:6px; color:var(--coral); font-size:12px; font-weight:800; }
     .course-badge { max-width:118px; color:var(--muted); font-size:11px; text-align:right; overflow-wrap:anywhere; }
     .course-badge.selected { color:var(--success); font-weight:700; }
     .summary { margin-top:20px; }
@@ -137,6 +138,7 @@
 
     function getAllSelectedIds() { return new Set([...state.existingCalendarIds, ...state.selectedCalendarIds]); }
     function getSelectedCount() { return getAllSelectedIds().size; }
+    function isCancelledVvipCourse(course) { return !!(course && (course.courseCancelled || course.status === "課程已取消")); }
     function groupCoursesByDate(courses) { return (courses || []).reduce((groups, course) => { (groups[course.date] ||= []).push(course); return groups; }, {}); }
     function formatVvipDateWithWeekday(value) {
       const match = String(value || "").match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
@@ -183,7 +185,7 @@
       const displayed = selected.length ? selected : (state.data.selections || []);
       summary.hidden = !state.data;
       byId("vvip-summary-copy").textContent = selected.length ? `本次新增 ${selected.length} 堂，送出後累積 ${getSelectedCount()}／${LIMIT} 堂。` : `目前累積 ${getSelectedCount()}／${LIMIT} 堂，可勾選課程後送出。`;
-      byId("vvip-summary-list").innerHTML = displayed.map((course) => `<li>${escapeHtml(course.date)} ${escapeHtml(course.time)}｜${escapeHtml(course.courseName)}｜${escapeHtml(course.teacherName)}</li>`).join("") || '<li>本次尚未勾選新課程。</li>';
+      byId("vvip-summary-list").innerHTML = displayed.map((course) => `<li>${escapeHtml(course.date)} ${escapeHtml(course.time)}｜${escapeHtml(course.courseName)}｜${escapeHtml(course.teacherName)}${isCancelledVvipCourse(course) ? '<strong class="course-cancelled-status">課程已取消</strong>' : ""}</li>`).join("") || '<li>本次尚未勾選新課程。</li>';
       byId("vvip-submit").disabled = !selected.length;
     }
     function renderWorkspace() { byId("vvip-workspace").hidden = false; byId("vvip-course-search").value = ""; renderCounter(); renderCourses(); renderSummary(); }
@@ -207,7 +209,7 @@
       const button = byId("vvip-lookup"); setBusy(button, true, "載入中..."); clearNotice();
       try {
         const data = await callVvipApi("getVvipSelection", { vvipId: member.id });
-        state.memberId = member.id; state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).map((item) => item.calendarId));
+        state.memberId = member.id; state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).filter((item) => !isCancelledVvipCourse(item)).map((item) => item.calendarId));
         expandedVvipDates.clear();
         renderWorkspace();
         showNotice(`已載入 ${data.month} 課程。目前已累積 ${data.count} 堂。`, "success");
@@ -234,7 +236,7 @@
       try {
         await callVvipApi("submitVvipSelection", { vvipId: state.memberId, calendarIds: ids });
         const data = await callVvipApi("getVvipSelection", { vvipId: state.memberId });
-        const verifiedIds = new Set((data.selections || []).map((item) => item.calendarId));
+        const verifiedIds = new Set((data.selections || []).filter((item) => !isCancelledVvipCourse(item)).map((item) => item.calendarId));
         if (!ids.every((id) => verifiedIds.has(id))) {
           throw new Error("系統尚未確認全部課程，請保留畫面並再試一次。");
         }

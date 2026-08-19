@@ -113,6 +113,8 @@ var CONFIG = {
   VVIP_PENDING_STATUS: '待人工確認',
   VVIP_CONFIRMED_STATUS: '已確認',
   VVIP_CANCELLED_STATUS: '已取消',
+  VVIP_COURSE_CANCELLED_STATUS: '課程已取消',
+  OB_CANCELLATION_BATCH_MAX: 100,
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
@@ -1185,6 +1187,12 @@ function doPost(e) {
       cancelLeave: function() {
         return cancelLeave_(session, parameters.substituteId);
       },
+      closeMissingObCancellations: function() {
+        return closeMissingObCancellations_(
+          session,
+          parseJsonArray_(parameters.substituteIds, '取消課程清單')
+        );
+      },
       requestLeaveCancellation: function() {
         return requestLeaveCancellation_(session, parameters.substituteId, parameters.reason);
       },
@@ -2068,14 +2076,20 @@ function isActiveVvipSelectionRow_(row) {
   return [CONFIG.VVIP_PENDING_STATUS, CONFIG.VVIP_CONFIRMED_STATUS].indexOf(cleanText_(row[8])) !== -1;
 }
 
+function isCourseCancelledVvipSelectionRow_(row) {
+  return cleanText_(row[8]) === CONFIG.VVIP_COURSE_CANCELLED_STATUS;
+}
+
 function toVvipSelectionItem_(row) {
+  var status = cleanText_(row[8]);
   return {
     calendarId: cleanText_(row[3]),
     date: formatMyDate(row[4]),
     time: formatMyTime(row[5]),
     courseName: cleanText_(row[6]),
     teacherName: cleanText_(row[7]),
-    status: cleanText_(row[8])
+    status: status,
+    courseCancelled: status === CONFIG.VVIP_COURSE_CANCELLED_STATUS
   };
 }
 
@@ -2087,6 +2101,24 @@ function dedupeVvipSelectionItems_(items) {
     seen[calendarId] = true;
     return true;
   });
+}
+
+function buildPublicVvipSelectionItems_(rows) {
+  var activeItems = dedupeVvipSelectionItems_((rows || []).filter(function(item) {
+    return isActiveVvipSelectionRow_(item.row);
+  }).map(function(item) {
+    return toVvipSelectionItem_(item.row);
+  }));
+  var activeIds = {};
+  activeItems.forEach(function(item) { activeIds[item.calendarId] = true; });
+  var cancelledItems = dedupeVvipSelectionItems_((rows || []).filter(function(item) {
+    return isCourseCancelledVvipSelectionRow_(item.row);
+  }).map(function(item) {
+    return toVvipSelectionItem_(item.row);
+  })).filter(function(item) {
+    return !activeIds[item.calendarId];
+  });
+  return activeItems.concat(cancelledItems);
 }
 
 function buildVvipAdminRecordKey_(rowNumber, row) {
@@ -2104,17 +2136,23 @@ function getVvipSelection_(memberId) {
   }
   var month = getVvipActiveMonth_(settings);
   var courses = getVvipCourseRows_(month, true);
-  if (!courses.length) throw new Error('本期尚無可選課程，請稍後再試。');
   var selectionSheet = requireSheet_(ss, SHEETS.VVIP_SELECTIONS);
-  var selections = dedupeVvipSelectionItems_(getVvipSelectionRows_(selectionSheet, email, month, member.id)
-    .filter(function(item) { return isActiveVvipSelectionRow_(item.row); })
-    .map(function(item) { return toVvipSelectionItem_(item.row); }));
+  var selectionRows = getVvipSelectionRows_(selectionSheet, email, month, member.id);
+  var selections = buildPublicVvipSelectionItems_(selectionRows);
+  if (!courses.length && !selections.length) {
+    throw new Error('本期尚無可選課程，請稍後再試。');
+  }
+  var activeCount = dedupeVvipSelectionItems_(selectionRows.filter(function(item) {
+    return isActiveVvipSelectionRow_(item.row);
+  }).map(function(item) {
+    return toVvipSelectionItem_(item.row);
+  })).length;
   return {
     memberId: member.id,
     memberName: member.name,
     month: month,
     limit: CONFIG.VVIP_MAX_SELECTIONS,
-    count: selections.length,
+    count: activeCount,
     selections: selections,
     courses: courses
   };
@@ -2207,17 +2245,18 @@ function submitVvipSelection_(memberId, calendarIds) {
 }
 
 function buildVvipSelectionResult_(member, month, courses, rows) {
-  var selections = dedupeVvipSelectionItems_((rows || []).filter(function(item) {
+  var selections = buildPublicVvipSelectionItems_(rows || []);
+  var activeCount = dedupeVvipSelectionItems_((rows || []).filter(function(item) {
     return isActiveVvipSelectionRow_(item.row);
   }).map(function(item) {
     return toVvipSelectionItem_(item.row);
-  }));
+  })).length;
   return {
     memberId: member.id,
     memberName: member.name,
     month: month,
     limit: CONFIG.VVIP_MAX_SELECTIONS,
-    count: selections.length,
+    count: activeCount,
     selections: selections,
     courses: courses
   };
@@ -2287,6 +2326,9 @@ function getVvipAdminDashboard_(session, emailQuery) {
     return normalizeVvipMonthKey_(item.row[2]) === month && (!email || cleanText_(item.row[1]) === email);
   });
   var activeRows = rows.filter(function(item) { return isActiveVvipSelectionRow_(item.row); });
+  var visibleRows = rows.filter(function(item) {
+    return isActiveVvipSelectionRow_(item.row) || isCourseCancelledVvipSelectionRow_(item.row);
+  });
   var whitelistRows = getVvipMemberRows_(requireSheet_(ss, SHEETS.VVIP_MEMBERS));
   var whitelistNameByEmail = {};
   whitelistRows.forEach(function(member) {
@@ -2294,7 +2336,7 @@ function getVvipAdminDashboard_(session, emailQuery) {
   });
   var emails = {};
   activeRows.forEach(function(item) { emails[cleanText_(item.row[1])] = true; });
-  var members = activeRows.map(function(item) {
+  var members = visibleRows.map(function(item) {
     var output = toVvipSelectionItem_(item.row);
     output.email = cleanText_(item.row[1]);
     output.memberName = cleanText_(item.row[14]) || cleanText_(item.row[12]) || whitelistNameByEmail[output.email] || '';
@@ -2307,7 +2349,7 @@ function getVvipAdminDashboard_(session, emailQuery) {
   });
   var grouped = {};
   var uniqueActive = {};
-  members.forEach(function(item) {
+  members.filter(function(item) { return !item.courseCancelled; }).forEach(function(item) {
     var activeKey = item.email + '|' + item.calendarId;
     if (uniqueActive[activeKey]) return;
     uniqueActive[activeKey] = true;
@@ -3695,6 +3737,7 @@ function buildAvailableSubstitutesFromContext_(context) {
   var leaveRows = context.leaveRows;
   var capabilities = context.capabilities;
   var targetMonth = getNextMonthKey_();
+  var courseCalendarIds = buildCourseCalendarIdSet_(courseRows);
   var allPendingRows = leaveRows.filter(function(row) {
     return cleanText_(row[5]) === '確認中' &&
       cleanText_(row[1]) !== teacher &&
@@ -3707,7 +3750,7 @@ function buildAvailableSubstitutesFromContext_(context) {
     throw new Error('代課資料尚未完成初始化，請通知管理員執行系統設定。');
   }
   var pendingRows = allPendingRows.filter(function(row) {
-    return isOrdinaryOpenLeaveRow_(row);
+    return isOrdinaryOpenLeaveRow_(row) && courseCalendarIds[getEffectiveOpenLeaveCalendarId_(row)];
   });
   var teacherCommitments = buildTeacherCommitmentSlots_(
     teacher,
@@ -3772,6 +3815,25 @@ function isOrdinaryOpenLeaveRow_(row) {
     !!cleanText_(row[9]) &&
     !!cleanText_(row[10]) &&
     !getOpenLeaveBlockingState_(row);
+}
+
+function buildCourseCalendarIdSet_(courseRows) {
+  var ids = {};
+  (courseRows || []).forEach(function(row) {
+    var calendarId = cleanText_(row && row[4]);
+    if (calendarId) ids[calendarId] = true;
+  });
+  return ids;
+}
+
+function getEffectiveOpenLeaveCalendarId_(row) {
+  return cleanText_(row && row[20]) || cleanText_(row && row[10]);
+}
+
+function isMissingObCancellationCandidateRow_(row, courseCalendarIds, targetMonth) {
+  return isOrdinaryOpenLeaveRow_(row) &&
+    isLeaveRowInMonth_(row, targetMonth) &&
+    !courseCalendarIds[getEffectiveOpenLeaveCalendarId_(row)];
 }
 
 function getOpenLeaveBlockingState_(row) {
@@ -3933,7 +3995,7 @@ function buildOrdinaryClaimDelayPlan_(sourceRow, delayMinutes, leaveRows, course
   var date = formatMyDate(sourceRow && sourceRow[2]);
   var originalStartTime = formatMyTime(sourceRow && sourceRow[3]);
   var originalStartMinutes = timeTextToMinutes_(originalStartTime);
-  var calendarId = cleanText_(sourceRow && sourceRow[10]);
+  var calendarId = getEffectiveOpenLeaveCalendarId_(sourceRow);
   var room = getCourseRoom_(sourceRow && sourceRow[4]);
   var durationMinutes = getOrdinaryCourseDurationMinutes_(sourceRow && sourceRow[4]);
   if (!date || originalStartMinutes < 0 || !calendarId || !room) {
@@ -3987,7 +4049,7 @@ function buildOrdinaryClaimDelayPlan_(sourceRow, delayMinutes, leaveRows, course
   if (conflicts.length === 1) {
     var occupiedCalendarId = conflicts[0].calendarId;
     occupiedRowIndex = (leaveRows || []).findIndex(function(row) {
-      return cleanText_(row && row[10]) === occupiedCalendarId;
+      return getEffectiveOpenLeaveCalendarId_(row) === occupiedCalendarId;
     });
     var occupiedRow = occupiedRowIndex >= 0 ? leaveRows[occupiedRowIndex] : null;
     if (!occupiedRow || !isOrdinaryOpenLeaveRow_(occupiedRow)) {
@@ -4287,7 +4349,7 @@ function buildSpecialCourseSlotsForTeacher_(teacherName, pendingRows, courseRows
   var teacher = cleanText_(teacherName);
   var activeLeaveByCalendarId = {};
   (pendingRows || []).forEach(function(row) {
-    var calendarId = cleanText_(row && row[10]);
+    var calendarId = getEffectiveOpenLeaveCalendarId_(row);
     if (!calendarId || ['確認中', '已領取'].indexOf(cleanText_(row && row[5])) === -1) return;
     activeLeaveByCalendarId[calendarId] = row;
   });
@@ -4336,7 +4398,7 @@ function getSpecialCourseAvailability_(pendingRows, courseRows) {
   var openByCalendarId = {};
   (pendingRows || []).forEach(function(row) {
     var id = cleanText_(row && row[9]);
-    var calendarId = cleanText_(row && row[10]);
+    var calendarId = getEffectiveOpenLeaveCalendarId_(row);
     if (id && calendarId && isOrdinaryOpenLeaveRow_(row)) openByCalendarId[calendarId] = id;
   });
 
@@ -4464,7 +4526,7 @@ function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationM
   var availableByCalendarId = {};
   var leaveByCalendarId = {};
   (pendingRows || []).forEach(function(row) {
-    var calendarId = cleanText_(row && row[10]);
+    var calendarId = getEffectiveOpenLeaveCalendarId_(row);
     if (calendarId) leaveByCalendarId[calendarId] = row;
   });
   var startSlot = null;
@@ -4575,7 +4637,7 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
   var leaveByCalendarId = {};
   (pendingRows || []).forEach(function(row) {
     var substituteId = cleanText_(row && row[9]);
-    var calendarId = cleanText_(row && row[10]);
+    var calendarId = getEffectiveOpenLeaveCalendarId_(row);
     if (substituteId === wantedId) startRow = row;
     if (substituteId && calendarId) leaveByCalendarId[calendarId] = row;
   });
@@ -4585,7 +4647,7 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
   var occupancyStartTime = formatMyTime(startRow[3]);
   var occupancyStartMinutes = timeTextToMinutes_(occupancyStartTime);
   var room = getCourseRoom_(startRow[4]);
-  var startCalendarId = cleanText_(startRow[10]);
+  var startCalendarId = getEffectiveOpenLeaveCalendarId_(startRow);
   if (!date || !room || occupancyStartMinutes < 0 || !startCalendarId) {
     throw new Error('特別課的日期、時間、教室或 OB Calendar ID 資料不完整。');
   }
@@ -5297,7 +5359,7 @@ function claimSpecialCourse_(session, payload) {
         time: time,
         room: room,
         minutes: minutes,
-        calendarId: cleanText_(row[10])
+        calendarId: getEffectiveOpenLeaveCalendarId_(row)
       };
     }).sort(function(a, b) { return a.minutes - b.minutes; });
 
@@ -5453,6 +5515,7 @@ function claimSubstitute_(session, items) {
     var values = leaveSheet.getDataRange().getValues();
     var leaveRows = values.slice(1);
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var courseCalendarIds = buildCourseCalendarIdSet_(courseRows);
     var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
     var specialRequestRows = [];
     if (specialRequestSheet) {
@@ -5491,6 +5554,9 @@ function claimSubstitute_(session, items) {
       }
       if (!cleanText_(row[10])) {
         throw new Error('此課程尚未連結 OB Calendar ID，請通知管理員先完成核對。');
+      }
+      if (!courseCalendarIds[getEffectiveOpenLeaveCalendarId_(row)]) {
+        throw new Error('這堂課已不在 OB 課表，可能已取消，請重新整理。');
       }
       if (!isOrdinaryOpenLeaveRow_(row)) {
         var unresolvedState = getOpenLeaveBlockingState_(row);
@@ -5533,7 +5599,7 @@ function claimSubstitute_(session, items) {
         targetDate: formatMyDate(row[2]),
         courseRows: courseRows,
         targetCourseName: cleanText_(row[4]),
-        targetCalendarId: cleanText_(row[10]),
+        targetCalendarId: getEffectiveOpenLeaveCalendarId_(row),
         handlingType: item.handlingType,
         courseTypeKey: item.courseTypeKey,
         courseKey: item.courseKey,
@@ -5679,6 +5745,165 @@ function cancelLeave_(session, substituteId) {
       }]);
       return { substituteId: id, status: '已取消' };
     });
+  });
+}
+
+function normalizeMissingObCancellationIds_(values) {
+  if (!Array.isArray(values)) throw new Error('取消課程清單必須是陣列。');
+  var seen = {};
+  var ids = [];
+  values.forEach(function(value) {
+    var id = cleanText_(value);
+    if (!id || seen[id]) return;
+    seen[id] = true;
+    ids.push(id);
+  });
+  if (!ids.length) throw new Error('請至少選擇一堂已從 OB 取消的課程。');
+  if (ids.length > CONFIG.OB_CANCELLATION_BATCH_MAX) {
+    throw new Error('單次最多可關閉 ' + CONFIG.OB_CANCELLATION_BATCH_MAX + ' 堂課程。');
+  }
+  return ids;
+}
+
+function closeMissingObCancellations_(session, substituteIds) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var ids = normalizeMissingObCancellationIds_(substituteIds);
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
+    var vvipSheet = ss.getSheetByName(SHEETS.VVIP_SELECTIONS);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    if (vvipSheet) assertHeaders_(vvipSheet, SHEET_HEADERS.VVIP_SELECTIONS);
+
+    var leaveValues = leaveSheet.getDataRange().getValues();
+    var courseCalendarIds = buildCourseCalendarIdSet_(courseSheet.getDataRange().getValues().slice(1));
+    var targetMonth = getNextMonthKey_();
+    var recordById = {};
+    for (var rowIndex = 1; rowIndex < leaveValues.length; rowIndex++) {
+      var substituteId = cleanText_(leaveValues[rowIndex][9]);
+      if (substituteId) recordById[substituteId] = {
+        rowNumber: rowIndex + 1,
+        row: leaveValues[rowIndex]
+      };
+    }
+
+    var records = ids.map(function(id) {
+      var record = recordById[id];
+      if (!record) throw new Error('找不到代課編號 ' + id + '，請重新整理。');
+      if (!isMissingObCancellationCandidateRow_(record.row, courseCalendarIds, targetMonth)) {
+        if (courseCalendarIds[getEffectiveOpenLeaveCalendarId_(record.row)]) {
+          throw new Error(formatMyDate(record.row[2]) + ' ' + formatMyTime(record.row[3]) +
+            ' 的 OB 課程仍存在，不可關閉；請先重新同步確認。');
+        }
+        throw new Error(formatMyDate(record.row[2]) + ' ' + formatMyTime(record.row[3]) +
+          ' 目前狀態不可關閉，請重新整理。');
+      }
+      return record;
+    });
+
+    var selectedCalendarIds = {};
+    records.forEach(function(record) {
+      var effectiveCalendarId = getEffectiveOpenLeaveCalendarId_(record.row);
+      if (effectiveCalendarId) selectedCalendarIds[effectiveCalendarId] = true;
+      var originalCalendarId = cleanText_(record.row[10]);
+      if (originalCalendarId && originalCalendarId !== effectiveCalendarId && !courseCalendarIds[originalCalendarId]) {
+        selectedCalendarIds[originalCalendarId] = true;
+      }
+    });
+    var vvipRecords = [];
+    if (vvipSheet) {
+      vvipSheet.getDataRange().getValues().slice(1).forEach(function(row, index) {
+        if (normalizeVvipMonthKey_(row[2]) !== targetMonth ||
+            !selectedCalendarIds[cleanText_(row[3])] ||
+            !isActiveVvipSelectionRow_(row)) return;
+        vvipRecords.push({ rowNumber: index + 2, row: row });
+      });
+    }
+
+    var auditSheet = requireSheet_(ss, SHEETS.AUDIT);
+    assertHeaders_(auditSheet, SHEET_HEADERS.AUDIT);
+    var leaveSnapshots = records.map(function(record) {
+      var values = record.row.slice(5, 19);
+      while (values.length < 14) values.push('');
+      return {
+        rowNumber: record.rowNumber,
+        values: values
+      };
+    });
+    var vvipSnapshots = vvipRecords.map(function(record) {
+      var values = record.row.slice(8, 13);
+      while (values.length < 5) values.push('');
+      return {
+        rowNumber: record.rowNumber,
+        values: values
+      };
+    });
+    var now = getTimestamp_();
+    var auditEvents = records.map(function(record) {
+      return {
+        actor: actor,
+        action: '管理員關閉 OB 已取消代課',
+        targetId: cleanText_(record.row[9]),
+        before: cleanText_(record.row[5]),
+        after: '已取消',
+        reason: getEffectiveOpenLeaveCalendarId_(record.row)
+      };
+    }).concat(vvipRecords.map(function(record) {
+      return {
+        actor: actor,
+        action: 'VVIP 課程取消',
+        targetId: cleanText_(record.row[3]),
+        before: cleanText_(record.row[8]),
+        after: CONFIG.VVIP_COURSE_CANCELLED_STATUS,
+        reason: cleanText_(record.row[1])
+      };
+    }));
+    try {
+      records.forEach(function(record, index) {
+        var nextValues = leaveSnapshots[index].values.slice();
+        nextValues[0] = '已取消';
+        nextValues[3] = '已完成';
+        nextValues[10] = '已關閉';
+        nextValues[11] = now;
+        nextValues[12] = 'OB 已取消課程';
+        nextValues[13] = 'OB 已取消／代課已關閉';
+        leaveSheet.getRange(record.rowNumber, 6, 1, 14).setValues([nextValues]);
+      });
+      vvipRecords.forEach(function(record) {
+        vvipSheet.getRange(record.rowNumber, 9, 1, 5).setValues([[
+          CONFIG.VVIP_COURSE_CANCELLED_STATUS,
+          cleanText_(record.row[9]),
+          now,
+          'OB 課程已取消',
+          actor
+        ]]);
+      });
+      appendAuditEventsUnlocked_(auditSheet, auditEvents);
+    } catch (error) {
+      var rollbackFailures = [];
+      vvipSnapshots.slice().reverse().forEach(function(snapshot) {
+        try {
+          vvipSheet.getRange(snapshot.rowNumber, 9, 1, 5).setValues([snapshot.values]);
+        } catch (restoreError) {
+          rollbackFailures.push('VVIP 第 ' + snapshot.rowNumber + ' 列：' + getErrorMessage_(restoreError));
+        }
+      });
+      leaveSnapshots.slice().reverse().forEach(function(snapshot) {
+        try {
+          leaveSheet.getRange(snapshot.rowNumber, 6, 1, 14).setValues([snapshot.values]);
+        } catch (restoreError) {
+          rollbackFailures.push('代課第 ' + snapshot.rowNumber + ' 列：' + getErrorMessage_(restoreError));
+        }
+      });
+      if (rollbackFailures.length) {
+        throw new Error(getErrorMessage_(error) + '；精準回復失敗：' + rollbackFailures.join('；'));
+      }
+      throw error;
+    }
+    invalidateVvipReadCaches_(targetMonth);
+    return { closed: records.length, vvipCancelled: vvipRecords.length };
   });
 }
 
@@ -6478,6 +6703,7 @@ function getAdminDashboard_(session) {
 
     var auditByTarget = getAuditHistoryMap_();
     var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var courseCalendarIds = buildCourseCalendarIdSet_(courseRows);
     var newTeacherMonthMap = buildNewTeacherMonthMap_(courseRows);
     var leaveSourceRows = leaveSheet.getDataRange().getValues().slice(1).filter(function(row) {
       return cleanText_(row[9]);
@@ -6546,7 +6772,16 @@ function getAdminDashboard_(session) {
       leavePaused: areLeavesPaused_(),
       teachers: teachers,
       pendingInvitations: leaves.filter(function(item, index) {
-        return isOrdinaryOpenLeaveRow_(leaveSourceRows[index]);
+        return isOrdinaryOpenLeaveRow_(leaveSourceRows[index]) &&
+          isLeaveRowInMonth_(leaveSourceRows[index], targetMonth) &&
+          courseCalendarIds[getEffectiveOpenLeaveCalendarId_(leaveSourceRows[index])];
+      }),
+      missingObCancellations: leaves.filter(function(item, index) {
+        return isMissingObCancellationCandidateRow_(
+          leaveSourceRows[index],
+          courseCalendarIds,
+          targetMonth
+        );
       }),
       activeInvitees: activeInvitees,
       obWork: leaves.filter(function(item) {

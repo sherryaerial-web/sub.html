@@ -1,18 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import pngjs from "pngjs";
-import { chromium } from "playwright";
+import playwright from "playwright";
+
+const { chromium } = playwright;
 
 const { PNG } = pngjs;
-const require = createRequire(import.meta.url);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, "..");
 const outputDir = "/private/tmp/substitute-v2-screenshots";
 const html = await fs.readFile(path.join(repoDir, "index.html"), "utf8");
-const lucidePath = path.resolve(path.dirname(require.resolve("lucide")), "../umd/lucide.js");
-const lucideScript = await fs.readFile(lucidePath);
+const lucideScript = Buffer.from("window.lucide={createIcons(){}};");
 const visualHtml = html.replace(
   '<script src="assets/xlsx.full.min.js"></script>',
   '<script>window.XLSX = { utils: {} };</script>',
@@ -180,6 +179,15 @@ const fixtures = {
       "冠蓉", "狗狗 陳", "Lydia 慕恩", "尚昀 陳", "Angela Chuang"
     ],
     pendingInvitations: [leavePending],
+    missingObCancellations: [{
+      ...leavePending,
+      substituteId: "sub-ob-cancelled",
+      date: "2026/09/18",
+      time: "19:30",
+      originalCourse: "A－空環 Lv.1~2",
+      originalTeacher: "小mo(子涵）",
+      originalCalendarId: "cal-ob-cancelled"
+    }],
     activeInvitees: ["卡拉 卡拉", "芊芊♡", "Tako", "@N.a🧘🏻♀️", "蜜莉 戴", "Liz 🌰", "Angela Chuang"]
       .map((teacherName, index) => ({
         invitationId: `invite-${index + 1}`,
@@ -397,7 +405,7 @@ try {
     await login(page, "Ivy");
     await page.locator("#admin-entry").click();
     await page.locator("#admin-summary .summary-item").first().waitFor();
-    const adminTabs = ["pendingInvitations", "activeInvitees", "obWork", "changeRequests", "exceptions", "completed"];
+    const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {
       const tab = adminTabs[index];
       await page.locator(`[data-admin-tab="${tab}"]`).click();

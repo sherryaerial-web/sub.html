@@ -2180,6 +2180,29 @@ test('pending invitation queue shows an open teacher picker before collapsed dat
   );
 });
 
+test('OB-cancelled queue renders bulk-safe rows separately from pending invitations', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__dashboard = {
+    pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [], exceptions: [], completed: [],
+    missingObCancellations: [{
+      substituteId: 'leave-missing', date: '2026/09/05', time: '19:00',
+      originalCourse: 'A－空環 Lv.1', originalTeacher: '老師甲', status: '確認中',
+      originalCalendarId: 'cal-missing', auditHistory: [],
+    }],
+  };
+
+  vm.runInContext('activeAdminTab = "missingObCancellations"; adminDashboard = __dashboard; renderAdminTab();', context);
+
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /已從 OB 取消/);
+  assert.match(rendered, /value="leave-missing"/);
+  assert.match(rendered, /data-admin-action="select-all-ob-cancellations"/);
+  assert.match(rendered, /data-admin-action="close-ob-cancellations"/);
+  assert.match(html, /action === "closeMissingObCancellations" \? 120000 : 45000/);
+  assert.match(html, /button\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(html, /await closeSelectedMissingObCancellations\(button\);\s*return;/);
+});
+
 test('payroll admin can adjust salaries and finalize teacher-confirmed results', () => {
   assert.match(html, /callPostApi\(["']adjustPayrollSummary["']/);
   assert.match(html, /callPostApi\(["']finalizePayroll["']/);
@@ -2281,8 +2304,8 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the eight capability-scoped admin tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 8);
+test('keeps the nine capability-scoped admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 9);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);

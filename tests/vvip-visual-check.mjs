@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import playwright from 'playwright';
 import pngjs from 'pngjs';
 
+const { chromium } = playwright;
 const { PNG } = pngjs;
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, '..');
@@ -21,7 +22,10 @@ let submitted = false;
 function payload(request) {
   const params = new URLSearchParams(request.postData() || '');
   const action = params.get('action');
-  const existing = [{ ...courses[1], status: '待人工確認' }];
+  const existing = [
+    { ...courses[1], status: '待人工確認' },
+    { calendarId: 'cal-cancelled', date: '2026/09/06', time: '15:30', courseName: '空環 Lv.1', teacherName: '原老師丙', status: '課程已取消', courseCancelled: true },
+  ];
   if (action === 'getVvipMembers') {
     return [{ id: 'vvip-1', name: '測試會員' }];
   }
@@ -29,7 +33,7 @@ function payload(request) {
     const selections = submitted
       ? [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }]
       : existing;
-    return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: selections.length, selections, courses };
+    return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: selections.filter((item) => !item.courseCancelled).length, selections, courses };
   }
   if (action === 'submitVvipSelection') {
     submitted = true;
@@ -94,6 +98,7 @@ async function runJourney(browser, viewport) {
   await page.getByText('已確認選課成功').waitFor();
   await page.locator('#vvip-summary-list').getByText('空中瑜伽').waitFor();
   await page.locator('#vvip-summary-list').getByText('舞綢基礎').waitFor();
+  await page.locator('#vvip-summary-list').getByText('課程已取消').waitFor();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,

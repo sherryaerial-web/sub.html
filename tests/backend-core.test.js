@@ -5393,6 +5393,18 @@ test('VVIP course rows exclude venue rental entries from public selection', () =
   assert.deepEqual(courses.map((course) => course.calendarId), ['cal-normal']);
 });
 
+test('VVIP course rows exclude period courses that require direct teacher registration', () => {
+  const courseRows = [
+    ['2026/09/01', '10:00', 'A－空環 Lv.1', '一般老師', 'cal-normal', 'class-1', 'teacher-1', '否', ''],
+    ['2026/09/01', '14:00', 'C－空環 Lv.3 技巧訓練期班', '雪莉老師', 'cal-term', 'class-term', 'teacher-term', '否', ''],
+  ];
+  const { backend } = createVvipBackend({ courseRows });
+
+  const courses = JSON.parse(JSON.stringify(backend.getVvipCourseRows_('2026-09', true)));
+
+  assert.deepEqual(courses.map((course) => course.calendarId), ['cal-normal']);
+});
+
 test('VVIP warm course reads reuse only stable CourseList data and explicit invalidation reloads it', () => {
   const { backend, courseSheet } = createVvipBackend();
   const originalGetDataRange = courseSheet.getDataRange.bind(courseSheet);

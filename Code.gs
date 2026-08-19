@@ -1918,7 +1918,7 @@ function getVvipCourseRows_(month, requireCalendarIds) {
   var courses = baseCourses.filter(function(item) {
     if (!item.calendarId) missingIds.push(item);
     return item.calendarId && item.date && item.time && item.courseName && item.teacherName &&
-      item.courseName.indexOf('場地租借') === -1;
+      item.courseName.indexOf('場地租借') === -1 && !isTermCourseName_(item.courseName);
   });
 
   if (requireCalendarIds && missingIds.length) {

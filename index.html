@@ -3542,11 +3542,11 @@
               <span class="invite-teacher-count">${availableTeacherCount} 位可邀請${invitedTeacherCount ? `｜${invitedTeacherCount} 位邀請中` : ""}</span>
             </summary>
             <div class="invite-teacher-body">
-              ${renderAdminInvitationRounds(data.teachers, data.activeInvitees)}
               <div class="admin-item-actions">
                 <button class="compact-button" type="button" data-admin-action="open-invitations"><i data-lucide="send"></i>開放給勾選老師</button>
                 <button class="compact-button" type="button" data-admin-action="copy-invitation"><i data-lucide="copy"></i>複製 LINE 邀請文字</button>
               </div>
+              ${renderAdminInvitationRounds(data.teachers, data.activeInvitees)}
             </div>
           </details>` : `
           <div class="invite-teacher-placeholder" aria-disabled="true">

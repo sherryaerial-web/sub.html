@@ -176,7 +176,7 @@ OB `calendar` API 可提供課程、完整指導者、容量與出席人數，�
 5. 若同時看到「工作表1」與「請假代課紀錄」，立即停止，不要刪資料；先人工比對並只保留正確正式表。
 6. 依上一節建立第一位管理員。
 7. 依「37 位老師密碼一次性匯入」流程建立老師帳號。
-8. 確認 `登入帳號` 內所有應登入者都有完整 Salt、PIN 雜湊且「是否在職」為啟用，並在 H 欄補上可教授類別、I 欄補上功能權限。正式設定為 IVY：`course_admin、payroll_admin、vvip_admin`；Sherry：`course_admin、payroll_admin`；Tako：`course_admin`。未補類別前，跨道具領取判斷不完整。
+8. 確認 `登入帳號` 內所有應登入者都有完整 Salt、PIN 雜湊且「是否在職」為啟用，並在 H 欄補上可教授類別、I 欄補上功能權限。正式設定為冠蓉／IVY：`course_admin、payroll_admin、vvip_admin`；Sherry：不設定管理權限；Tako：`course_admin、vvip_admin`。未補類別前，跨道具領取判斷不完整。
 9. 到 Apps Script 左側「觸發條件」刪除舊版 `syncCourseListFromApi` 的時間觸發條件。新版只允許管理員手動同步。
 10. 部署 Apps Script Web App 的新版本；執行身分使用部署者，存取權沿用目前正式設定。
 11. 若 Web App URL 改變，更新 `index.html` 內的 `APP_URL`。

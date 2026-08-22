@@ -4713,7 +4713,7 @@ test('delay occupied admin work links its source while personal records keep onl
   assert.equal(personal[0]['延後分鐘數'], 30);
 });
 
-test('admin dashboard keeps pending and completed delay closures visible in one history queue', () => {
+test('admin dashboard keeps only pending delay closures in the action queue', () => {
   const fixture = createInvitationBackend({
     nextMonth: '2026-09',
     courseRows: [],
@@ -4743,8 +4743,9 @@ test('admin dashboard keeps pending and completed delay closures visible in one 
 
   assert.deepEqual(
     dashboard.delayClosures.map((item) => item.substituteId),
-    ['leave-delay-open', 'leave-delay-closed']
+    ['leave-delay-open']
   );
+  assert.ok(dashboard.completed.some((item) => item.substituteId === 'leave-delay-closed'));
 });
 
 test('course admin can correct difficulty and note on one claimed row and sends it back to OB review', () => {

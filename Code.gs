@@ -7023,6 +7023,7 @@ function getAdminDashboard_(session) {
       activeInvitees: activeInvitees,
       delayClosures: leaves.filter(function(item, index) {
         return item.status === '延後占用' &&
+          ['待關閉 OB', '核對異常'].indexOf(item.verificationStatus) !== -1 &&
           isLeaveRowInMonth_(leaveSourceRows[index], targetMonth);
       }),
       obWork: leaves.filter(function(item) {

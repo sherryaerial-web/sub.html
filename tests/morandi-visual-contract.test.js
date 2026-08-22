@@ -38,5 +38,6 @@ test('admin teacher invitations render as five-person desktop rounds with mobile
   assert.match(html, /\.teacher-round\s*\{/);
   assert.match(html, /\.teacher-round-grid\s*\{[^}]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(html, /\.teacher-option\.is-invited\s*\{/);
+  assert.match(html, /@media\s*\(max-width:\s*920px\)[\s\S]*\.teacher-round-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.teacher-round-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
 });

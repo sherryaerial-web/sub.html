@@ -317,6 +317,7 @@ const adminHeaderOnly = process.env.VISUAL_SCOPE === "admin-header";
 try {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 900 },
+    { name: "tablet", width: 820, height: 980 },
     { name: "mobile", width: 390, height: 844 }
   ]) {
     const page = await browser.newPage({ viewport });
@@ -355,6 +356,7 @@ try {
         const commandBar = document.querySelector(".admin-command-bar");
         const commandActions = document.querySelector(".admin-command-actions");
         const tabs = document.querySelector(".admin-tabs");
+        const teacherRoundGrid = document.querySelector(".teacher-round-grid");
         const summary = document.querySelector("#admin-summary");
         const headerText = document.querySelector("#view-admin")?.innerText || "";
         return {
@@ -363,12 +365,16 @@ try {
           duplicateCancellationLabels: (headerText.match(/OB 已取消待關閉/g) || []).length,
           summaryVisible: Boolean(summary && getComputedStyle(summary).display !== "none" && summary.getBoundingClientRect().height > 0),
           tabsOverflow: tabs ? tabs.scrollWidth > tabs.clientWidth + 1 : true,
+          teacherRoundColumns: teacherRoundGrid ? getComputedStyle(teacherRoundGrid).gridTemplateColumns.split(" ").filter(Boolean).length : 0,
         };
       });
       if (!adminHeaderLayout.hasCommandBar) throw new Error(`${viewport.name}: management command bar missing`);
       if (adminHeaderLayout.duplicateCancellationLabels !== 1) throw new Error(`${viewport.name}: duplicated cancellation reminder`);
       if (adminHeaderLayout.summaryVisible) throw new Error(`${viewport.name}: duplicate summary grid is still visible`);
       if (viewport.width > 760 && adminHeaderLayout.tabsOverflow) throw new Error(`${viewport.name}: management tabs overflow instead of using two rows`);
+      if (viewport.width > 920 && adminHeaderLayout.teacherRoundColumns !== 5) throw new Error(`${viewport.name}: teacher rounds are not five columns`);
+      if (viewport.width > 760 && viewport.width <= 920 && adminHeaderLayout.teacherRoundColumns !== 3) throw new Error(`${viewport.name}: teacher rounds are not three columns`);
+      if (viewport.width <= 760 && adminHeaderLayout.teacherRoundColumns !== 2) throw new Error(`${viewport.name}: teacher rounds are not two columns`);
       if (viewport.width <= 760 && adminHeaderLayout.commandColumns !== 2) throw new Error(`${viewport.name}: management tools are not a two-column grid`);
       results.push(await capture(page, viewport.name, "admin-header"));
       if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);

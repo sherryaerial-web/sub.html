@@ -388,9 +388,22 @@
     }
 
     .admin-header-actions { justify-content: flex-end; margin: 0; }
-    .admin-header-tools { display: grid; justify-items: end; gap: 6px; }
-    .admin-export-actions { display: flex; justify-content: flex-end; }
-    .admin-sync-status { min-height: 18px; color: var(--success); font-size: 12px; font-weight: 700; text-align: right; }
+    #view-admin > .view-header { margin-bottom: 14px; }
+    .admin-command-bar {
+      display: grid;
+      grid-template-columns: minmax(270px, .9fr) minmax(0, 1.8fr);
+      align-items: center;
+      gap: 10px 18px;
+      margin-bottom: 14px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .admin-command-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .admin-command-actions .compact-button { min-height: 42px; }
+    .admin-sync-status { grid-column: 1 / -1; min-height: 0; color: var(--success); font-size: 12px; font-weight: 700; text-align: right; }
     .admin-sync-status.working { color: var(--muted); }
     .admin-sync-status.error { color: var(--danger); }
     .record-actions, .admin-item-actions { margin-top: 12px; }
@@ -408,14 +421,13 @@
       font-weight: 700;
     }
 
-    .admin-act-as-control {
-      display: flex;
-      min-width: 220px;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .admin-act-as-control .admin-select { min-height: 40px; }
+    .admin-act-as-control { display: grid; min-width: 0; grid-template-columns: auto minmax(140px, 1fr); align-items: center; gap: 12px; }
+    .admin-act-as-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .admin-act-as-label > svg.lucide { width: 20px; height: 20px; color: var(--sea-700); }
+    .admin-act-as-copy { display: grid; gap: 1px; }
+    .admin-act-as-copy strong { font-size: 13px; }
+    .admin-act-as-copy small { color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .admin-act-as-control .admin-select { width: 100%; min-height: 42px; }
 
     .date-list {
       display: grid;
@@ -644,6 +656,24 @@
 
     .summary-item strong { display: block; margin-top: 2px; color: var(--ink); font-size: 20px; }
     .summary-item span { color: var(--muted); font-size: 11px; }
+    .admin-reminders { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 0 0 14px; }
+    .admin-reminders:empty { display: none; }
+    .admin-reminder {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 58px;
+      padding: 11px 14px;
+      border-left: 3px solid var(--coral-600);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+    }
+    .admin-reminder:hover { border-color: var(--coral-600); background: var(--coral-100); }
+    .admin-reminder strong { flex: 0 0 auto; margin: 0; color: var(--coral-600); }
+    .admin-all-clear { display: flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--success); font-size: 12px; font-weight: 700; }
+    .admin-all-clear > svg.lucide { width: 17px; height: 17px; }
     .admin-workspace { min-width: 0; }
     .admin-control { margin-bottom: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
     .ob-cancellation-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; }
@@ -651,9 +681,9 @@
     .vvip-course-view { display: grid; gap: 16px; margin-top: 14px; }
 
     .admin-tabs {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 4px;
-      overflow-x: auto;
       padding: 4px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -664,7 +694,7 @@
     .admin-tab {
       display: inline-flex;
       min-height: 38px;
-      flex: 1 0 auto;
+      min-width: 0;
       align-items: center;
       justify-content: center;
       gap: 6px;
@@ -797,8 +827,9 @@
       .date-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .view-header { flex-direction: column; }
       .admin-header-actions { justify-content: flex-start; }
-      .admin-header-tools { width: 100%; justify-items: start; }
-      .admin-export-actions { width: 100%; justify-content: flex-start; }
+      .admin-command-bar { grid-template-columns: 1fr; align-items: stretch; }
+      .admin-command-actions { justify-content: flex-start; }
+      .admin-sync-status { text-align: left; }
     }
 
     @media (max-width: 760px) {
@@ -808,8 +839,6 @@
       .brand-name { font-size: 13px; }
       .brand-subtitle { font-size: 10px; }
       .current-user { max-width: 102px; padding: 5px 7px; }
-      #view-admin .admin-header-actions { width: 100%; flex-wrap: nowrap; gap: 6px; }
-      #view-admin .admin-header-actions .compact-button { min-width: 0; gap: 4px; padding: 6px; font-size: 11px; white-space: nowrap; }
       .app-layout { display: block; min-height: calc(100vh - 58px); }
       .sidebar { border: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
       .primary-nav {
@@ -837,10 +866,18 @@
       .claim-field.full { grid-column: auto; }
       .confirmation-row { grid-template-columns: 105px minmax(0, 1fr); }
       .admin-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #view-admin > .view-header { margin-bottom: 12px; padding-bottom: 14px; }
+      .admin-command-bar { gap: 12px; margin-bottom: 12px; padding: 12px; }
+      .admin-act-as-control { grid-template-columns: 1fr; gap: 8px; }
+      .admin-act-as-copy small { white-space: normal; }
+      .admin-command-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .admin-command-actions .compact-button { width: 100%; min-width: 0; gap: 5px; padding: 8px 6px; font-size: 11px; white-space: nowrap; }
+      .admin-command-actions #admin-export { grid-column: 1 / -1; }
+      .admin-reminders { grid-template-columns: 1fr; margin-bottom: 12px; }
       .teacher-round-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .invite-teacher-panel summary { padding: 11px 12px; }
       .invite-teacher-body { padding: 0 12px 12px; }
-      .admin-tabs { margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; border-right: 0; border-left: 0; border-radius: 0; }
+      .admin-tabs { display: flex; overflow-x: auto; margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; border-right: 0; border-left: 0; border-radius: 0; }
       .admin-tab { flex: 0 0 auto; }
     }
 
@@ -1144,23 +1181,22 @@
         <section id="view-admin" class="view">
           <div class="view-header">
             <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
-            <div class="admin-header-tools">
-              <label id="admin-act-as-control" class="admin-act-as-control" for="admin-act-as" hidden>
-                <span>代老師操作</span>
-                <select id="admin-act-as" class="admin-select"><option value="">選擇老師</option></select>
-              </label>
-              <div class="admin-header-actions">
-                <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
-                <button id="admin-refresh" class="icon-button" type="button" aria-label="重新整理資料" title="重新整理資料"><i data-lucide="rotate-cw"></i></button>
-                <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
-                <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
-              </div>
-              <div class="admin-export-actions"><button id="admin-export" class="compact-button" type="button"><i data-lucide="file-spreadsheet"></i>匯出 Excel</button></div>
-              <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
-            </div>
           </div>
-          <div id="admin-reminders" class="admin-summary" aria-live="polite"></div>
-          <div id="admin-summary" class="admin-summary"></div>
+          <div class="admin-command-bar">
+            <label id="admin-act-as-control" class="admin-act-as-control" for="admin-act-as" hidden>
+              <span class="admin-act-as-label"><i data-lucide="user-cog"></i><span class="admin-act-as-copy"><strong>代老師操作</strong><small>代為請假、領課或退出</small></span></span>
+              <select id="admin-act-as" class="admin-select"><option value="">選擇老師</option></select>
+            </label>
+            <div class="admin-command-actions">
+              <button id="admin-refresh" class="compact-button" type="button"><i data-lucide="rotate-cw"></i>更新資料</button>
+              <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
+              <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
+              <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
+              <button id="admin-export" class="compact-button" type="button"><i data-lucide="file-spreadsheet"></i>匯出 Excel</button>
+            </div>
+            <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
+          </div>
+          <div id="admin-reminders" class="admin-reminders" aria-live="polite"></div>
           <div class="admin-workspace">
             <div class="admin-tabs" role="tablist" aria-label="管理工作區">
               <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">—</span></button>
@@ -3598,22 +3634,15 @@
         .slice().sort((a, b) => a.localeCompare(b, "zh-Hant"))
         .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
         .join("");
-      byId("admin-summary").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-sync").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-reconcile").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       const leavePauseButton = byId("admin-leave-pause");
       leavePauseButton.hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       leavePauseButton.innerHTML = `<i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}`;
-      byId("admin-summary").innerHTML = [
-        ["待領取", (data.pendingInvitations || []).length],
-        ["OB 已取消待關閉", (data.missingObCancellations || []).length],
-        ["待處理 OB", (data.obWork || []).length],
-        ["待處理異動", (data.changeRequests || []).length]
-      ].map(([label, count]) => `<div class="summary-item"><span>${label}</span><strong>${count}</strong></div>`).join("");
       const reminders = buildAdminReminderItems();
       byId("admin-reminders").innerHTML = reminders.length
-        ? reminders.map((item) => `<button class="summary-item" type="button" data-admin-reminder-tab="${escapeHtml(item.tab)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join("")
-        : '<div class="summary-item"><span>目前沒有待辦提醒</span><strong>✓</strong></div>';
+        ? reminders.map((item) => `<button class="summary-item admin-reminder" type="button" data-admin-reminder-tab="${escapeHtml(item.tab)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join("")
+        : '<div class="admin-all-clear"><i data-lucide="circle-check-big"></i><span>目前沒有待辦提醒</span></div>';
       document.querySelectorAll(".admin-tab").forEach((button) => {
         const active = button.dataset.adminTab === activeAdminTab;
         button.classList.toggle("active", active);

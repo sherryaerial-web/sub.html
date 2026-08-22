@@ -2369,12 +2369,13 @@ test('payroll admin can adjust salaries and finalize teacher-confirmed results',
 test('course admin can pause leave registration separately from substitute claims', () => {
   assert.match(html, /callPostApi\(["']pauseLeaves["']/);
   const adminHeaderStart = html.indexOf('id="view-admin"');
-  const adminHeaderEnd = html.indexOf('id="admin-summary"', adminHeaderStart);
+  const adminHeaderEnd = html.indexOf('class="admin-workspace"', adminHeaderStart);
   const adminHeader = html.slice(adminHeaderStart, adminHeaderEnd);
 
   assert.match(adminHeader, /id=["']admin-leave-pause["']/);
   assert.match(html, /byId\(["']admin-leave-pause["']\)\.addEventListener\(["']click["']/);
-  assert.match(html, /#view-admin\s+\.admin-header-actions\s*\{[^}]*flex-wrap:\s*nowrap/s);
+  assert.match(adminHeader, /class=["']admin-command-actions["']/);
+  assert.match(html, /\.admin-command-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(html, /暫停請假登記/);
 });
 
@@ -2451,6 +2452,23 @@ test('management reminders expose only queues authorized for the logged-in admin
   const crownItems = JSON.parse(JSON.stringify(context.buildAdminReminderItems()));
   assert.deepEqual(crownItems.map((item) => item.label), ['待處理 OB', '待處理異動', 'VVIP 待確認']);
   assert.equal(crownItems[2].count, 3);
+});
+
+test('management header renders each pending queue once without a duplicate summary grid', () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext(`
+    adminDashboard = {
+      teachers: [], pendingInvitations: [], activeInvitees: [],
+      obWork: [], changeRequests: [], missingObCancellations: [{ substituteId: 'missing-1' }],
+      delayClosures: [], exceptions: [], completed: []
+    };
+    authState.managementCapabilities = ['course_admin'];
+    renderAdminDashboard();
+  `, context);
+
+  const headerHtml = `${getElement('admin-reminders').innerHTML}${getElement('admin-summary').innerHTML}`;
+  assert.equal((headerHtml.match(/OB 已取消待關閉/g) || []).length, 1);
+  assert.equal(getElement('admin-summary').innerHTML, '');
 });
 
 test('persists and validates the authenticated session for every user device', () => {

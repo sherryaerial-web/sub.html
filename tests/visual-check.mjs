@@ -300,7 +300,7 @@ async function capture(page, viewportName, name) {
 }
 
 async function login(page, teacherName) {
-  await page.locator("#login-teacher").fill(teacherName);
+  await page.locator("#login-teacher").selectOption(teacherName);
   await page.locator("#login-pin").fill("1234");
   await page.locator("#login-submit").click();
   await page.locator("#app-shell").waitFor({ state: "visible" });
@@ -348,9 +348,28 @@ try {
     if (adminHeaderOnly) {
       await login(page, "Ivy");
       await page.locator("#admin-entry").click();
-      await page.locator("#admin-summary .summary-item").first().waitFor();
+      await page.locator("#admin-reminders .summary-item").first().waitFor();
       await page.locator("#admin-sync").click();
       await page.locator("#admin-sync-status").getByText("已同步 1 筆").waitFor();
+      const adminHeaderLayout = await page.evaluate(() => {
+        const commandBar = document.querySelector(".admin-command-bar");
+        const commandActions = document.querySelector(".admin-command-actions");
+        const tabs = document.querySelector(".admin-tabs");
+        const summary = document.querySelector("#admin-summary");
+        const headerText = document.querySelector("#view-admin")?.innerText || "";
+        return {
+          hasCommandBar: Boolean(commandBar),
+          commandColumns: commandActions ? getComputedStyle(commandActions).gridTemplateColumns.split(" ").filter(Boolean).length : 0,
+          duplicateCancellationLabels: (headerText.match(/OB 已取消待關閉/g) || []).length,
+          summaryVisible: Boolean(summary && getComputedStyle(summary).display !== "none" && summary.getBoundingClientRect().height > 0),
+          tabsOverflow: tabs ? tabs.scrollWidth > tabs.clientWidth + 1 : true,
+        };
+      });
+      if (!adminHeaderLayout.hasCommandBar) throw new Error(`${viewport.name}: management command bar missing`);
+      if (adminHeaderLayout.duplicateCancellationLabels !== 1) throw new Error(`${viewport.name}: duplicated cancellation reminder`);
+      if (adminHeaderLayout.summaryVisible) throw new Error(`${viewport.name}: duplicate summary grid is still visible`);
+      if (viewport.width > 760 && adminHeaderLayout.tabsOverflow) throw new Error(`${viewport.name}: management tabs overflow instead of using two rows`);
+      if (viewport.width <= 760 && adminHeaderLayout.commandColumns !== 2) throw new Error(`${viewport.name}: management tools are not a two-column grid`);
       results.push(await capture(page, viewport.name, "admin-header"));
       if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
       await page.close();
@@ -412,7 +431,7 @@ try {
     await page.locator("#auth-shell").waitFor({ state: "visible" });
     await login(page, "Ivy");
     await page.locator("#admin-entry").click();
-    await page.locator("#admin-summary .summary-item").first().waitFor();
+    await page.locator("#admin-reminders .summary-item").first().waitFor();
     const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {
       const tab = adminTabs[index];

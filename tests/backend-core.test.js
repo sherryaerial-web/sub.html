@@ -884,6 +884,20 @@ test('teacher session cannot access administrator-only helpers', () => {
   assert.throws(() => backend.requireAdmin_(response.sessionToken), /管理權限/);
 });
 
+test('course admin can act as an active teacher while audit preserves the real actor', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend();
+
+  const acting = backend.resolveActingTeacherSession_(adminSession, '老師甲');
+
+  assert.equal(acting.teacherName, '老師甲');
+  assert.equal(acting.impersonatedBy, '管理員甲');
+  assert.equal(backend.getSessionAuditActor_(acting), '管理員甲（代 老師甲 操作）');
+  assert.throws(
+    () => backend.resolveActingTeacherSession_(teacherASession, '老師乙'),
+    /課程管理權限/
+  );
+});
+
 test('existing session immediately follows current account role capabilities and active state', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend, accountSheet, services } = createAuthBackend([
@@ -4699,6 +4713,83 @@ test('delay occupied admin work links its source while personal records keep onl
   assert.equal(personal[0]['延後分鐘數'], 30);
 });
 
+test('admin dashboard keeps pending and completed delay closures visible in one history queue', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [],
+    leaveRows: [
+      [
+        'stamp', '原老師甲', '2026/09/01', '20:00', 'A－空環 Lv.1',
+        '延後占用', '', '由代課編號 leave-source-a 延後占用', '待處理', 'leave-delay-open', 'cal-open',
+        '', '', '', '', '待關閉 OB', '', '', '延後占用／待管理員關閉 OB',
+        '', '', '', '', '', '', '', '', 'leave-source-a',
+      ],
+      [
+        'stamp', '原老師乙', '2026/09/02', '20:00', 'B－空環 Lv.1',
+        '延後占用', '', '由代課編號 leave-source-b 延後占用', '已完成', 'leave-delay-closed', 'cal-closed',
+        '', '', '', '', '已關閉', 'stamp', '', '延後占用／OB 已關閉',
+        '', '', '', '', '', '', '', '', 'leave-source-b',
+      ],
+      [
+        'stamp', '原老師丙', '2026/08/31', '20:00', 'C－空環 Lv.1',
+        '延後占用', '', '由代課編號 leave-source-c 延後占用', '已完成', 'leave-delay-old', 'cal-old',
+        '', '', '', '', '已關閉', 'stamp', '', '延後占用／OB 已關閉',
+        '', '', '', '', '', '', '', '', 'leave-source-c',
+      ],
+    ],
+  });
+
+  const dashboard = fixture.backend.getAdminDashboard_(fixture.adminSession);
+
+  assert.deepEqual(
+    dashboard.delayClosures.map((item) => item.substituteId),
+    ['leave-delay-open', 'leave-delay-closed']
+  );
+});
+
+test('course admin can correct difficulty and note on one claimed row and sends it back to OB review', () => {
+  const fixture = createInvitationBackend();
+  const target = fixture.leaveSheet.values.find((row) => row[9] === 'leave-claimed');
+  target[7] = '沿用原課程；難度：備註誤填；備註：Lv.2~3；實際開始：12:15';
+  target[13] = '備註誤填';
+  target[15] = '已核對';
+  target[16] = 'old-time';
+  target[17] = 'old-difference';
+  const unrelatedBefore = JSON.stringify(fixture.leaveSheet.values[1]);
+
+  assert.throws(
+    () => fixture.backend.correctClaimDetails_(fixture.teacherASession, 'leave-claimed', 'Lv.2~3', '請留意肩膀'),
+    /課程管理權限/
+  );
+
+  const result = fixture.backend.correctClaimDetails_(
+    fixture.adminSession,
+    'leave-claimed',
+    'Lv.2~3',
+    '請留意肩膀'
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    substituteId: 'leave-claimed',
+    difficulty: 'Lv.2~3',
+    note: '請留意肩膀',
+    verificationStatus: '待核對',
+  });
+  assert.equal(target[13], 'Lv.2~3');
+  assert.equal(target[15], '待核對');
+  assert.equal(target[16], '');
+  assert.equal(target[17], '');
+  assert.match(target[7], /沿用原課程；難度：Lv\.2~3；備註：請留意肩膀；實際開始：12:15/);
+  assert.equal(JSON.stringify(fixture.leaveSheet.values[1]), unrelatedBefore);
+  const audit = fixture.auditSheet.values.find((row) => row[2] === '管理員更正領課資料');
+  assert.equal(audit[1], '管理員甲');
+  assert.equal(audit[3], 'leave-claimed');
+  assert.throws(
+    () => fixture.backend.correctClaimDetails_(fixture.adminSession, 'leave-a', 'Lv.1', ''),
+    /只有已領取/
+  );
+});
+
 test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     courseRows: [
@@ -5495,6 +5586,18 @@ test('VVIP always targets next month and treats stale open settings as closed', 
   assert.equal(backend.getVvipActiveMonth_({ activeMonth: '2026-08' }), '2026-09');
   assert.equal(backend.isVvipSelectionOpen_({ activeMonth: '2026-08', isOpen: '是' }), false);
   assert.equal(backend.isVvipSelectionOpen_({ activeMonth: '2026-09', isOpen: '是' }), true);
+});
+
+test('VVIP closes exactly at the configured Taipei deadline', () => {
+  const { backend } = createVvipBackend();
+  const settings = {
+    activeMonth: '2026-09',
+    isOpen: '是',
+    closeAt: '2026-08-23 20:00:00',
+  };
+
+  assert.equal(backend.isVvipSelectionOpen_(settings, new Date('2026-08-23T11:59:59.000Z')), true);
+  assert.equal(backend.isVvipSelectionOpen_(settings, new Date('2026-08-23T12:00:00.000Z')), false);
 });
 
 test('VVIP reads an auto-formatted active month date as the intended month', () => {

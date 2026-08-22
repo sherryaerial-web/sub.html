@@ -395,6 +395,28 @@
     .admin-sync-status.error { color: var(--danger); }
     .record-actions, .admin-item-actions { margin-top: 12px; }
 
+    .acting-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 18px;
+      border-bottom: 1px solid #d7c5b4;
+      background: var(--amber-100);
+      color: var(--amber-700);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .admin-act-as-control {
+      display: flex;
+      min-width: 220px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .admin-act-as-control .admin-select { min-height: 40px; }
+
     .date-list {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -946,18 +968,15 @@
         <div class="field">
           <label for="login-teacher"><i data-lucide="user-round"></i>姓名</label>
           <div class="input-wrap">
-            <i data-lucide="search"></i>
-            <input
+            <i data-lucide="chevron-down"></i>
+            <select
               id="login-teacher"
               class="text-input"
-              type="text"
-              list="teacher-options"
-              autocomplete="name"
-              placeholder="搜尋或選擇姓名"
               required
             >
+              <option value="">請選擇姓名</option>
+            </select>
           </div>
-          <datalist id="teacher-options"></datalist>
         </div>
         <div class="field">
           <label for="login-pin"><i data-lucide="key-round"></i>身分證末四碼</label>
@@ -996,6 +1015,11 @@
         <button id="logout-button" class="icon-button" type="button" aria-label="登出" title="登出"><i data-lucide="log-out"></i></button>
       </div>
     </header>
+
+    <div id="acting-banner" class="acting-banner" hidden>
+      <span id="acting-banner-copy">目前為代老師操作模式</span>
+      <button id="acting-stop" class="compact-button" type="button"><i data-lucide="arrow-left"></i>返回管理平台</button>
+    </div>
 
     <div class="app-layout">
       <aside class="sidebar">
@@ -1121,6 +1145,10 @@
           <div class="view-header">
             <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
             <div class="admin-header-tools">
+              <label id="admin-act-as-control" class="admin-act-as-control" for="admin-act-as" hidden>
+                <span>代老師操作</span>
+                <select id="admin-act-as" class="admin-select"><option value="">選擇老師</option></select>
+              </label>
               <div class="admin-header-actions">
                 <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
                 <button id="admin-refresh" class="icon-button" type="button" aria-label="重新整理資料" title="重新整理資料"><i data-lucide="rotate-cw"></i></button>
@@ -1131,6 +1159,7 @@
               <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
             </div>
           </div>
+          <div id="admin-reminders" class="admin-summary" aria-live="polite"></div>
           <div id="admin-summary" class="admin-summary"></div>
           <div class="admin-workspace">
             <div class="admin-tabs" role="tablist" aria-label="管理工作區">
@@ -1138,6 +1167,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="missingObCancellations" data-capability="course_admin"><i data-lucide="calendar-x-2"></i>OB 已取消<span class="admin-tab-count" data-admin-count="missingObCancellations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="delayClosures" data-capability="course_admin"><i data-lucide="clock-arrow-down"></i>代關課程<span class="admin-tab-count" data-admin-count="delayClosures">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">—</span></button>
@@ -1159,6 +1189,11 @@
         <label for="request-amount">管理員加扣金額</label>
         <input id="request-amount" class="text-input" type="number" step="1" inputmode="numeric">
       </div>
+      <div id="request-difficulty-field" class="dialog-field" hidden>
+        <label for="request-difficulty">難度／等級</label>
+        <input id="request-difficulty" class="text-input" type="text" maxlength="40" placeholder="例如：Lv.2~3、Open level">
+      </div>
+      <label id="request-reason-label" for="request-reason" class="dialog-field-label">原因</label>
       <textarea id="request-reason" class="claim-control" maxlength="240" placeholder="請填寫原因"></textarea>
       <div class="dialog-actions">
         <button id="request-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
@@ -1187,7 +1222,7 @@
     const LAST_TEACHER_KEY = "sherry-substitute-last-teacher";
     const AUTH_SESSION_KEY = "sherry-substitute-auth-session";
 
-    const authState = { sessionToken: "", teacherName: "", role: "", managementCapabilities: [] };
+    const authState = { sessionToken: "", teacherName: "", actingTeacherName: "", role: "", managementCapabilities: [] };
     let globalCourseList = [];
     let pendingLeaves = [];
     let claimOptions = { capabilities: [], classes: [] };
@@ -1245,12 +1280,21 @@
     }
 
     const PUBLIC_GET_ACTIONS = new Set(["getTeachers"]);
+    const TEACHER_ACTING_ACTIONS = new Set([
+      "getAvailableSubstitutes", "getClaimPageData", "getClaimOptions", "getMySubs",
+      "getMyCourses", "getMyLeaves", "submitLeave", "claimSubstitute",
+      "claimSpecialCourse", "cancelLeave", "requestLeaveCancellation", "requestClaimWithdrawal"
+    ]);
 
     async function callApi(action, params = {}) {
-      if (!PUBLIC_GET_ACTIONS.has(action)) return callPostApi(action, params);
+      const effectiveParams = { ...params };
+      if (authState.actingTeacherName && TEACHER_ACTING_ACTIONS.has(action)) {
+        effectiveParams.actingTeacherName = authState.actingTeacherName;
+      }
+      if (!PUBLIC_GET_ACTIONS.has(action)) return callPostApi(action, effectiveParams);
 
       const query = new URLSearchParams({ action });
-      const requestParams = { ...params };
+      const requestParams = effectiveParams;
       delete requestParams.sessionToken;
       Object.entries(requestParams).forEach(([key, value]) => {
         query.set(key, typeof value === "string" ? value : JSON.stringify(value));
@@ -1739,12 +1783,56 @@
         : [];
     }
 
+    function resetTeacherViewSnapshots() {
+      globalCourseList = [];
+      pendingLeaves = [];
+      hasCourseSnapshot = false;
+      hasClaimSnapshot = false;
+      myLeavesSnapshotHtml = null;
+      mySubsSnapshotHtml = null;
+      selectedLeaveDates = new Set();
+      selectedLeaveCourses = new Set();
+    }
+
+    function updateActingMode() {
+      const target = authState.actingTeacherName;
+      byId("acting-banner").hidden = !target;
+      byId("acting-banner-copy").textContent = target
+        ? `${authState.teacherName} 正在代 ${target} 操作；送出的異動會保留管理者紀錄。`
+        : "目前為代老師操作模式";
+      byId("current-user").textContent = target
+        ? `${authState.teacherName} → ${target}`
+        : authState.teacherName;
+      byId("home-greeting").textContent = target
+        ? `${target}，您好（由 ${authState.teacherName} 代操作）。`
+        : `${authState.teacherName}，您好。`;
+    }
+
+    function startActingAsTeacher(teacherName) {
+      const target = String(teacherName || "").trim();
+      if (!authState.managementCapabilities.includes("course_admin")) {
+        throw new Error("需要課程管理權限。");
+      }
+      if (!target) throw new Error("請選擇要代操作的老師。");
+      authState.actingTeacherName = target;
+      resetTeacherViewSnapshots();
+      updateActingMode();
+      switchView("view-home");
+    }
+
+    function stopActingAsTeacher() {
+      authState.actingTeacherName = "";
+      resetTeacherViewSnapshots();
+      updateActingMode();
+      if (authState.managementCapabilities.length) switchView("view-admin");
+    }
+
     function showLoggedInApp() {
       byId("auth-shell").hidden = true;
       byId("app-shell").hidden = false;
-      byId("current-user").textContent = authState.teacherName;
-      byId("home-greeting").textContent = `${authState.teacherName}，您好。`;
+      updateActingMode();
       byId("admin-entry").hidden = !authState.managementCapabilities.length;
+      byId("admin-act-as-control").hidden = !authState.managementCapabilities.includes("course_admin");
       document.querySelectorAll(".admin-tab[data-capability]").forEach((button) => {
         button.hidden = !authState.managementCapabilities.includes(button.dataset.capability);
       });
@@ -1752,7 +1840,7 @@
       if (firstAdminTab) activeAdminTab = firstAdminTab.dataset.adminTab;
       const month = new Date().toISOString().slice(0, 7);
       byId("payroll-month").value = month;
-      switchView("view-home");
+      switchView(authState.managementCapabilities.length ? "view-admin" : "view-home");
       refreshIcons();
     }
 
@@ -1760,6 +1848,7 @@
       clearSavedSession();
       authState.sessionToken = "";
       authState.teacherName = "";
+      authState.actingTeacherName = "";
       authState.role = "";
       authState.managementCapabilities = [];
       globalCourseList = [];
@@ -1788,8 +1877,8 @@
         const teachers = await callApi("getTeachers");
         const names = [...new Set(teachers.map((item) => item["指導者"]).filter(Boolean))]
           .sort((a, b) => a.localeCompare(b, "zh-Hant"));
-        byId("teacher-options").innerHTML = names
-          .map((name) => `<option value="${escapeHtml(name)}"></option>`)
+        byId("login-teacher").innerHTML = '<option value="">請選擇姓名</option>' + names
+          .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
           .join("");
         byId("login-teacher").value = readRememberedTeacher();
       } catch (error) {
@@ -1866,7 +1955,10 @@
       if (viewId === "view-claim") fetchAvailableSubstitutes();
       if (viewId === "view-mysubs") fetchMySubs();
       if (viewId === "view-payroll") fetchMyPayroll();
-      if (viewId === "view-admin") fetchAdminDashboard();
+      if (viewId === "view-admin") {
+        fetchAdminDashboard();
+        if (authState.managementCapabilities.includes("vvip_admin")) fetchVvipReminderData();
+      }
       refreshIcons();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -2205,9 +2297,11 @@
         byId("claim-submit").disabled = true;
       } finally {
         endReadRefresh(list);
-        void callPostApi("recordInvitationFirstView").catch((error) => {
-          console.warn("首次查看時間記錄失敗，不影響代課清單使用。", error);
-        });
+        if (!authState.actingTeacherName) {
+          void callPostApi("recordInvitationFirstView").catch((error) => {
+            console.warn("首次查看時間記錄失敗，不影響代課清單使用。", error);
+          });
+        }
       }
     }
 
@@ -3106,7 +3200,11 @@
       byId("request-dialog-copy").textContent = options.copy || "";
       byId("request-amount-field").hidden = !options.showAmount;
       byId("request-amount").value = options.showAmount ? String(options.amount ?? 0) : "";
-      byId("request-reason").value = "";
+      byId("request-difficulty-field").hidden = !options.showDifficulty;
+      byId("request-difficulty").value = options.showDifficulty ? String(options.difficulty || "") : "";
+      byId("request-reason-label").textContent = options.reasonLabel || "原因";
+      byId("request-reason").placeholder = options.reasonPlaceholder || "請填寫原因";
+      byId("request-reason").value = String(options.reason || "");
       byId("request-reason").required = options.reasonRequired !== false;
       const dialog = byId("request-dialog");
       if (dialog.showModal) dialog.showModal();
@@ -3127,6 +3225,7 @@
       const reason = byId("request-reason").value.trim();
       if (state.reasonRequired !== false && !reason) return setNotice("請填寫原因。", "error");
       const adjustment = Number(byId("request-amount").value);
+      const difficulty = byId("request-difficulty").value.trim();
       if (state.showAmount && !Number.isFinite(adjustment)) return setNotice("請填寫正確的加扣金額。", "error");
       const button = byId("request-confirm");
       setButtonBusy(button, true, "處理中...");
@@ -3149,6 +3248,8 @@
           await resolvePayrollDispute(state.disputeId, reason);
         } else if (state.action === "adjust-payroll") {
           await adjustPayrollSummary(state.teacherName, state.version, adjustment, reason);
+        } else if (state.action === "correct-claim") {
+          await correctClaimDetails(state.substituteId, difficulty, reason);
         }
         closeRequestDialog();
       } catch (error) {
@@ -3469,6 +3570,15 @@
       }
     }
 
+    async function fetchVvipReminderData() {
+      try {
+        vvipDashboard = await callApi("getVvipAdminDashboard", { email: "" });
+        if (activeAdminTab !== "vvip") renderAdminDashboard();
+      } catch (error) {
+        setNotice(`VVIP 提醒更新失敗：${error.message}`, "error");
+      }
+    }
+
     async function refreshAdminData() {
       const button = byId("admin-refresh");
       setButtonBusy(button, true, "");
@@ -3482,6 +3592,12 @@
 
     function renderAdminDashboard() {
       const data = adminDashboard || {};
+      const actingSelect = byId("admin-act-as");
+      const teacherNames = (data.teachers || []).filter((name) => name && name !== authState.teacherName);
+      actingSelect.innerHTML = '<option value="">選擇老師</option>' + teacherNames
+        .slice().sort((a, b) => a.localeCompare(b, "zh-Hant"))
+        .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+        .join("");
       byId("admin-summary").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-sync").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
       byId("admin-reconcile").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
@@ -3494,6 +3610,10 @@
         ["待處理 OB", (data.obWork || []).length],
         ["待處理異動", (data.changeRequests || []).length]
       ].map(([label, count]) => `<div class="summary-item"><span>${label}</span><strong>${count}</strong></div>`).join("");
+      const reminders = buildAdminReminderItems();
+      byId("admin-reminders").innerHTML = reminders.length
+        ? reminders.map((item) => `<button class="summary-item" type="button" data-admin-reminder-tab="${escapeHtml(item.tab)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join("")
+        : '<div class="summary-item"><span>目前沒有待辦提醒</span><strong>✓</strong></div>';
       document.querySelectorAll(".admin-tab").forEach((button) => {
         const active = button.dataset.adminTab === activeAdminTab;
         button.classList.toggle("active", active);
@@ -3502,6 +3622,25 @@
       updateAdminTabCounts(data);
       renderAdminTab();
       refreshIcons();
+    }
+
+    function buildAdminReminderItems() {
+      const items = [];
+      const course = adminDashboard || {};
+      if (authState.managementCapabilities.includes("course_admin")) {
+        [
+          ["待處理 OB", (course.obWork || []).length, "obWork"],
+          ["待處理異動", (course.changeRequests || []).length, "changeRequests"],
+          ["OB 已取消待關閉", (course.missingObCancellations || []).length, "missingObCancellations"],
+        ].forEach(([label, count, tab]) => {
+          if (count > 0) items.push({ label, count, tab });
+        });
+      }
+      if (authState.managementCapabilities.includes("vvip_admin")) {
+        const count = Number(vvipDashboard && vvipDashboard.metrics && vvipDashboard.metrics.pendingSelections) || 0;
+        if (count > 0) items.push({ label: "VVIP 待確認", count, tab: "vvip" });
+      }
+      return items;
     }
 
     function updateAdminTabCounts(data = adminDashboard || {}) {
@@ -3579,6 +3718,8 @@
         content.innerHTML = items.length
           ? renderAdminObSections(items, data.replacementOptions || [])
           : `<div class="state">目前沒有${activeAdminTab === "obWork" ? "待處理 OB" : "核對異常"}</div>`;
+      } else if (activeAdminTab === "delayClosures") {
+        content.innerHTML = renderAdminItems(data.delayClosures, "目前沒有延後占用的代關課程紀錄");
       } else if (activeAdminTab === "changeRequests") {
         content.innerHTML = (data.changeRequests || []).map((item) => {
           const canResolve = ["申請取消中", "申請退出中"].includes(item.changeStatus);
@@ -3616,7 +3757,8 @@
         return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(course.date)} ${escapeHtml(course.time)}</div><div class="item-course">${escapeHtml(course.courseName)}</div><div class="item-meta">${escapeHtml(course.teacherName)}｜${labels.length} 人：${escapeHtml(labels.join("、"))}</div></div></article>`;
       }).join("") || '<div class="state">目前沒有有效登記</div>';
       const whitelist = (data.whitelist || []).map((member) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(member.name)}</div><div class="item-meta">${escapeHtml(member.email)}${member.note ? `｜${escapeHtml(member.note)}` : ""}</div><div class="admin-item-actions"><button class="${member.active ? "danger-button" : "compact-button"}" type="button" data-admin-action="toggle-vvip-member" data-vvip-id="${escapeHtml(member.id)}" data-vvip-active="${member.active ? "false" : "true"}">${member.active ? "停用" : "啟用"}</button></div></div></article>`).join("") || '<div class="state">尚未建立 VVIP 名單</div>';
-      content.innerHTML = `<div class="admin-control"><strong>${escapeHtml(data.month)} VVIP 選課：${data.isOpen ? "開放中" : "已關閉"}</strong><div class="item-meta">登記會員：${data.metrics.members}｜有效選課：${data.metrics.activeSelections}</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-vvip" data-vvip-open="${data.isOpen ? "false" : "true"}"><i data-lucide="${data.isOpen ? "lock" : "unlock"}"></i>${data.isOpen ? "關閉本期選課" : "開放本期選課"}</button><button class="compact-button" type="button" data-admin-action="export-vvip"><i data-lucide="download"></i>匯出 CSV</button></div></div><div class="admin-control"><strong>選課結果｜依課程查看</strong></div><div class="vvip-course-view">${courseView}</div><form id="vvip-admin-search-form" class="admin-control"><label for="vvip-admin-search">依 Email 查詢登記</label><div class="admin-item-actions"><input id="vvip-admin-search" class="text-input" type="email" value="" placeholder="name@example.com"><button class="compact-button" type="submit"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="clear-vvip-search"><i data-lucide="rotate-ccw"></i>顯示全部</button></div></form><div class="admin-control"><strong>會員登記</strong></div>${members}<div class="admin-control"><strong>VVIP 名單管理</strong></div><form id="vvip-member-form" class="admin-control"><strong>新增 VVIP 名單</strong><div class="admin-item-actions"><input id="vvip-member-name" class="text-input" type="text" placeholder="OB 名稱" required><input id="vvip-member-email" class="text-input" type="email" placeholder="Email" required><input id="vvip-member-note" class="text-input" type="text" placeholder="備註（選填）"><button class="compact-button" type="submit"><i data-lucide="user-plus"></i>新增</button></div></form>${whitelist}`;
+      const closeAtInput = escapeHtml(String(data.closeAt || "").replace(" ", "T").slice(0, 16));
+      content.innerHTML = `<div class="admin-control"><strong>${escapeHtml(data.month)} VVIP 選課：${data.isOpen ? "開放中" : "已關閉"}</strong><div class="item-meta">登記會員：${data.metrics.members}｜有效選課：${data.metrics.activeSelections}｜待確認：${data.metrics.pendingSelections || 0}${data.closeAt ? `｜截止：${escapeHtml(data.closeAt)}` : ""}</div><div class="admin-item-actions"><input id="vvip-close-at" class="text-input" type="datetime-local" value="${closeAtInput}" aria-label="VVIP 截止時間"><button class="compact-button" type="button" data-admin-action="toggle-vvip" data-vvip-open="${data.isOpen ? "false" : "true"}"><i data-lucide="${data.isOpen ? "lock" : "unlock"}"></i>${data.isOpen ? "關閉本期選課" : "開放本期選課"}</button><button class="compact-button" type="button" data-admin-action="export-vvip"><i data-lucide="download"></i>匯出 CSV</button></div></div><div class="admin-control"><strong>選課結果｜依課程查看</strong></div><div class="vvip-course-view">${courseView}</div><form id="vvip-admin-search-form" class="admin-control"><label for="vvip-admin-search">依 Email 查詢登記</label><div class="admin-item-actions"><input id="vvip-admin-search" class="text-input" type="email" value="" placeholder="name@example.com"><button class="compact-button" type="submit"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="clear-vvip-search"><i data-lucide="rotate-ccw"></i>顯示全部</button></div></form><div class="admin-control"><strong>會員登記</strong></div>${members}<div class="admin-control"><strong>VVIP 名單管理</strong></div><form id="vvip-member-form" class="admin-control"><strong>新增 VVIP 名單</strong><div class="admin-item-actions"><input id="vvip-member-name" class="text-input" type="text" placeholder="OB 名稱" required><input id="vvip-member-email" class="text-input" type="email" placeholder="Email" required><input id="vvip-member-note" class="text-input" type="text" placeholder="備註（選填）"><button class="compact-button" type="submit"><i data-lucide="user-plus"></i>新增</button></div></form>${whitelist}`;
       refreshIcons();
     }
 
@@ -3649,7 +3791,17 @@
     function groupAdminPendingItemsByDate(items) {
       const groups = [];
       const groupsByDate = new Map();
-      (Array.isArray(items) ? items : []).forEach((item) => {
+      (Array.isArray(items) ? items : []).slice().sort((a, b) => [
+        String((a && a.date) || ""),
+        String((a && a.time) || ""),
+        String((a && a.originalCourse) || ""),
+        String((a && a.substituteId) || ""),
+      ].join("|").localeCompare([
+        String((b && b.date) || ""),
+        String((b && b.time) || ""),
+        String((b && b.originalCourse) || ""),
+        String((b && b.substituteId) || ""),
+      ].join("|"))).forEach((item) => {
         const date = String((item && item.date) || "日期未設定");
         if (!groupsByDate.has(date)) {
           const group = { date, items: [] };
@@ -3808,7 +3960,10 @@
       const delayOccupancy = item.status === "延後占用"
         ? `<div class="item-meta">${escapeHtml(item.changeStatus || "延後占用／待管理員關閉 OB")}｜來源代課編號：${escapeHtml(item.delaySourceSubstituteId)}｜來源老師：${escapeHtml(item.delaySourceTeacher || "待確認")}</div>`
         : "";
-      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div>${timeChange}${delayOccupancy}<div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}${extraHtml}</div></article>`;
+      const correctionAction = item.status === "已領取" && item.substituteId
+        ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="correct-claim" data-substitute-id="${escapeHtml(item.substituteId)}" data-difficulty="${escapeHtml(item.difficulty || "")}" data-note="${escapeHtml(item.note || "")}"><i data-lucide="pencil-line"></i>修正難度／備註</button></div>`
+        : "";
+      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div>${timeChange}${delayOccupancy}<div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}${extraHtml}${correctionAction}</div></article>`;
     }
 
     function renderAdminObItem(item, options) {
@@ -3939,6 +4094,12 @@
       await fetchAdminDashboard();
     }
 
+    async function correctClaimDetails(substituteId, difficulty, note) {
+      await callPostApi("correctClaimDetails", { substituteId, difficulty, note });
+      setNotice("領課資料已修正，並重新列入 OB 待核對。已領取老師不變。");
+      await fetchAdminDashboard();
+    }
+
     async function resolveAdminChangeRequest(substituteId, decision, reason) {
       const result = await callPostApi("resolveChangeRequest", { substituteId, decision, reason });
       const needsObRestore = decision === "approve" && ["cancellation", "withdrawal"].includes(result.requestType);
@@ -3977,7 +4138,9 @@
     }
 
     async function setVvipSelectionOpen(open) {
-      await callPostApi("setVvipSelectionOpen", { open });
+      const closeAt = open ? String(byId("vvip-close-at").value || "").trim() : "";
+      if (open && !closeAt) throw new Error("請先設定 VVIP 截止時間。");
+      await callPostApi("setVvipSelectionOpen", { open, closeAt });
       setNotice(open ? "已開放本期 VVIP 選課。" : "已關閉本期 VVIP 選課。");
       await fetchVvipAdminDashboard();
     }
@@ -4085,6 +4248,17 @@ https://sherryaerial-web.github.io/sub.html/
 
     byId("login-form").addEventListener("submit", login);
     byId("logout-button").addEventListener("click", logout);
+    byId("acting-stop").addEventListener("click", stopActingAsTeacher);
+    byId("admin-act-as").addEventListener("change", (event) => {
+      if (event.target.value) startActingAsTeacher(event.target.value);
+    });
+    byId("admin-reminders").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-admin-reminder-tab]") : null;
+      if (!button) return;
+      activeAdminTab = button.dataset.adminReminderTab;
+      if (activeAdminTab === "vvip") fetchVvipAdminDashboard();
+      else renderAdminDashboard();
+    });
     byId("back-button").addEventListener("click", () => switchView("view-home"));
     byId("select-all-visible-dates").addEventListener("click", selectAllVisibleDates);
     byId("clear-leave-dates").addEventListener("click", clearLeaveDates);
@@ -4211,6 +4385,20 @@ https://sherryaerial-web.github.io/sub.html/
           const select = document.querySelector(`[data-special-replacement-select="${CSS.escape(groupId)}"]`);
           if (!select || !select.value) throw new Error("請先選擇替代 OB 課程。");
           await linkAdminSpecialReplacement(groupId, select.value);
+        }
+        if (action === "correct-claim") {
+          openRequestDialog({
+            action: "correct-claim",
+            substituteId: button.dataset.substituteId,
+            difficulty: button.dataset.difficulty,
+            reason: button.dataset.note,
+            showDifficulty: true,
+            reasonRequired: false,
+            reasonLabel: "備註（可留空）",
+            reasonPlaceholder: "只填其他補充，不要把難度寫在這裡",
+            title: "修正領課資料",
+            copy: "不需請老師退出；儲存後會保留原領課老師，並重新進入 OB 核對。"
+          });
         }
         if (action === "resolve") {
           openRequestDialog({

@@ -394,6 +394,61 @@ test('provides teacher login and sends credentials through form-encoded POST', a
   assert.equal(submittedForms[0].action.includes('1234'), false);
 });
 
+test('teacher login uses a native select that opens reliably on Safari', () => {
+  assert.match(html, /<select[^>]+id=["']login-teacher["']/s);
+  assert.doesNotMatch(html, /id=["']login-teacher["'][^>]+list=["']teacher-options["']/s);
+});
+
+test('management accounts land directly on the management workspace', () => {
+  const { context, requestActions } = createFrontendRuntime({
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], missingObCancellations: [], obWork: [],
+      changeRequests: [], exceptions: [], completed: [], teachers: [], replacementOptions: [],
+    },
+  });
+  vm.runInContext("authState.teacherName = 'Tako'; authState.managementCapabilities = ['course_admin'];", context);
+
+  context.showLoggedInApp();
+
+  assert.ok(requestActions.includes('getAdminDashboard'));
+});
+
+test('course-admin acting mode is sent only to teacher self-service actions', async () => {
+  const { context, submittedForms } = createFrontendRuntime({
+    getMyCourses: [],
+    getMyPayroll: { month: '2026-09', lines: [], summary: null, disputes: [] },
+  });
+  vm.runInContext("authState.teacherName = 'Tako'; authState.managementCapabilities = ['course_admin']; authState.actingTeacherName = 'Jina';", context);
+
+  await context.callApi('getMyCourses');
+  await context.callApi('getMyPayroll', { month: '2026-09' });
+
+  const courseRequest = submittedForms.find((item) => item.fields.action === 'getMyCourses');
+  const payrollRequest = submittedForms.find((item) => item.fields.action === 'getMyPayroll');
+  assert.equal(courseRequest.fields.actingTeacherName, 'Jina');
+  assert.equal(payrollRequest.fields.actingTeacherName, undefined);
+});
+
+test('course admins can enter and leave a clearly labelled teacher acting mode', () => {
+  const { context, getElement } = createFrontendRuntime({
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], missingObCancellations: [], obWork: [],
+      changeRequests: [], exceptions: [], completed: [], teachers: ['Jina'], replacementOptions: [],
+    },
+  });
+  vm.runInContext("authState.teacherName = 'Tako'; authState.managementCapabilities = ['course_admin'];", context);
+
+  context.startActingAsTeacher('Jina');
+
+  assert.equal(vm.runInContext('authState.actingTeacherName', context), 'Jina');
+  assert.equal(getElement('acting-banner').hidden, false);
+  assert.match(getElement('current-user').textContent, /Tako.*Jina/);
+
+  context.stopActingAsTeacher();
+  assert.equal(vm.runInContext('authState.actingTeacherName', context), '');
+  assert.equal(getElement('acting-banner').hidden, true);
+});
+
 test('sends authenticated POST data through an iframe relay without exposing the session token in the URL', async () => {
   const { context, submittedForms } = createFrontendRuntime({
     getSession: { teacherName: '老師甲', role: '老師', managementCapabilities: [] },
@@ -496,7 +551,7 @@ test('accepts the hyphenated Apps Script sandbox origin used by Safari', async (
 
 test('keeps session tokens out of URLs by routing every authenticated read through POST', () => {
   assert.match(html, /const PUBLIC_GET_ACTIONS\s*=\s*new Set\(\["getTeachers"\]\)/);
-  assert.match(html, /if \(!PUBLIC_GET_ACTIONS\.has\(action\)\) return callPostApi\(action, params\)/);
+  assert.match(html, /if \(!PUBLIC_GET_ACTIONS\.has\(action\)\) return callPostApi\(action, effectiveParams\)/);
   assert.doesNotMatch(html, /query\.set\([\s\S]{0,180}sessionToken/);
 });
 
@@ -2110,25 +2165,25 @@ test('ordinary claim notes direct teachers to the separate difficulty field', ()
   assert.doesNotMatch(html, /placeholder="可填改課原因、難度調整或其他事項"/);
 });
 
-test('groups admin pending courses by first-seen date and preserves row order', () => {
+test('groups admin pending courses chronologically by date and time', () => {
   const { context } = createFrontendRuntime();
   const groups = context.groupAdminPendingItemsByDate([
-    { substituteId: 'a', date: '2026/09/05', time: '12:30' },
+    { substituteId: 'a', date: '2026/09/05', time: '14:00', originalCourse: 'B' },
     { substituteId: 'b', date: '2026/09/04', time: '11:00' },
-    { substituteId: 'c', date: '2026/09/05', time: '14:00' },
+    { substituteId: 'c', date: '2026/09/05', time: '12:30', originalCourse: 'A' },
   ]);
 
   assert.deepEqual(JSON.parse(JSON.stringify(groups)), [
     {
-      date: '2026/09/05',
-      items: [
-        { substituteId: 'a', date: '2026/09/05', time: '12:30' },
-        { substituteId: 'c', date: '2026/09/05', time: '14:00' },
-      ],
-    },
-    {
       date: '2026/09/04',
       items: [{ substituteId: 'b', date: '2026/09/04', time: '11:00' }],
+    },
+    {
+      date: '2026/09/05',
+      items: [
+        { substituteId: 'c', date: '2026/09/05', time: '12:30', originalCourse: 'A' },
+        { substituteId: 'a', date: '2026/09/05', time: '14:00', originalCourse: 'B' },
+      ],
     },
   ]);
 });
@@ -2365,6 +2420,39 @@ test('VVIP admin renders selection results before whitelist maintenance', () => 
   assert.ok(rendered.indexOf('新增 VVIP 名單') < rendered.indexOf('data-admin-action="toggle-vvip-member"'));
 });
 
+test('opening VVIP selection sends the administrator-selected cutoff time', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({
+    setVvipSelectionOpen: { month: '2026-09', isOpen: true },
+    getVvipAdminDashboard: {
+      month: '2026-09', isOpen: true, closeAt: '2026-08-24 20:00:00',
+      metrics: { members: 0, activeSelections: 0, pendingSelections: 0 },
+      members: [], courseView: [], whitelist: [],
+    },
+  });
+  getElement('vvip-close-at').value = '2026-08-24T20:00';
+
+  await context.setVvipSelectionOpen(true);
+
+  const request = submittedForms.find((item) => item.fields.action === 'setVvipSelectionOpen');
+  assert.equal(request.fields.closeAt, '2026-08-24T20:00');
+});
+
+test('management reminders expose only queues authorized for the logged-in administrator', () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext(`
+    adminDashboard = { obWork: [{}, {}], changeRequests: [{}], missingObCancellations: [] };
+    vvipDashboard = { metrics: { pendingSelections: 3 } };
+    authState.managementCapabilities = ['course_admin'];
+  `, context);
+  const takoItems = JSON.parse(JSON.stringify(context.buildAdminReminderItems()));
+  assert.deepEqual(takoItems.map((item) => item.label), ['待處理 OB', '待處理異動']);
+
+  vm.runInContext("authState.managementCapabilities = ['course_admin', 'vvip_admin'];", context);
+  const crownItems = JSON.parse(JSON.stringify(context.buildAdminReminderItems()));
+  assert.deepEqual(crownItems.map((item) => item.label), ['待處理 OB', '待處理異動', 'VVIP 待確認']);
+  assert.equal(crownItems[2].count, 3);
+});
+
 test('persists and validates the authenticated session for every user device', () => {
   assert.match(html, /const\s+AUTH_SESSION_KEY\s*=/);
   assert.match(html, /function\s+saveSession\s*\(/);
@@ -2400,14 +2488,22 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the nine capability-scoped admin tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 9);
+test('keeps the ten capability-scoped admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 10);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);
   assert.match(html, /data-capability=["']payroll_admin["']/);
   assert.match(html, /data-capability=["']vvip_admin["']/);
   assert.match(html, /updateAdminTabCounts/);
+});
+
+test('admin can correct claimed difficulty and note without asking the teacher to withdraw', () => {
+  assert.match(html, /data-admin-tab=["']delayClosures["']/);
+  assert.match(html, /data-admin-action=["']correct-claim["']/);
+  assert.match(html, /id=["']request-difficulty["']/);
+  assert.match(html, /callPostApi\(["']correctClaimDetails["']/);
+  assert.match(html, /重新列入 OB 待核對/);
 });
 
 test('provides self-only payroll review and protected sync publish dispute controls', () => {

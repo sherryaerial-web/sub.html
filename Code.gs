@@ -1834,6 +1834,38 @@ function getCourseClosureTriggers_() {
   });
 }
 
+function isCourseClosureTriggerAuthorizationError_(error) {
+  var message = cleanText_(error && error.message ? error.message : error).toLowerCase();
+  return message.indexOf('script.scriptapp') >= 0 ||
+    (message.indexOf('getprojecttriggers') >= 0 &&
+      (message.indexOf('權限') >= 0 || message.indexOf('permission') >= 0 || message.indexOf('authorization') >= 0));
+}
+
+function getCourseClosureTriggerStatus_() {
+  try {
+    return {
+      triggerCount: getCourseClosureTriggers_().length,
+      authorizationRequired: false
+    };
+  } catch (error) {
+    if (!isCourseClosureTriggerAuthorizationError_(error)) throw error;
+    return {
+      triggerCount: 0,
+      authorizationRequired: true
+    };
+  }
+}
+
+function authorizeCourseClosureServices() {
+  var triggers = getCourseClosureTriggers_();
+  var remainingMailQuota = MailApp.getRemainingDailyQuota();
+  return {
+    authorized: true,
+    triggerCount: triggers.length,
+    remainingMailQuota: remainingMailQuota
+  };
+}
+
 function setCourseClosureAutomation_(session, enabledValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var enabled = enabledValue === true;
@@ -7554,10 +7586,12 @@ function getCourseClosureDashboard_(session) {
       actor: cleanText_(row[11])
     };
   }).reverse().slice(0, 50);
+  var triggerStatus = getCourseClosureTriggerStatus_();
   return {
     mode: settings.mode,
     automatic: settings.automatic,
-    triggerCount: getCourseClosureTriggers_().length,
+    triggerCount: triggerStatus.triggerCount,
+    triggerAuthorizationRequired: triggerStatus.authorizationRequired,
     targetDate: getTomorrowDate_(),
     unclaimedCandidates: getUnclaimedSubstituteClosureCandidates_(session),
     recentLogs: logs

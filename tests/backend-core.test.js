@@ -6735,6 +6735,63 @@ test('course closure automation requires a token, creates one scheduler trigger,
   assert.equal(triggers.length, 0);
 });
 
+test('course closure dashboard remains usable until trigger scope is authorized', () => {
+  const services = createAuthServices();
+  const settingSheet = createSheetFixture('關課設定', [
+    EXPECTED_COURSE_CLOSURE_SETTING_HEADERS,
+    ['executionMode', 'manual', '', '管理員甲', ''],
+  ]);
+  const logSheet = createSheetFixture('關課紀錄', [EXPECTED_COURSE_CLOSURE_LOG_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([settingSheet, logSheet]);
+  const backend = loadBackend({
+    ...services,
+    ScriptApp: {
+      getProjectTriggers() {
+        throw new Error('你沒有呼叫「ScriptApp.getProjectTriggers」的權限。必要權限：https://www.googleapis.com/auth/script.scriptapp。');
+      },
+    },
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  backend.getUnclaimedSubstituteClosureCandidates_ = () => [];
+  const admin = { teacherName: '管理員甲', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const result = backend.getCourseClosureDashboard_(admin);
+
+  assert.equal(result.mode, 'manual');
+  assert.equal(result.automatic, false);
+  assert.equal(result.triggerCount, 0);
+  assert.equal(result.triggerAuthorizationRequired, true);
+});
+
+test('course closure authorization helper requests trigger and mail scopes together', () => {
+  let triggerReads = 0;
+  let quotaReads = 0;
+  const backend = loadBackend({
+    ScriptApp: {
+      getProjectTriggers() {
+        triggerReads += 1;
+        return [];
+      },
+    },
+    MailApp: {
+      getRemainingDailyQuota() {
+        quotaReads += 1;
+        return 88;
+      },
+    },
+  });
+
+  const result = backend.authorizeCourseClosureServices();
+
+  assert.equal(triggerReads, 1);
+  assert.equal(quotaReads, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    authorized: true,
+    triggerCount: 0,
+    remainingMailQuota: 88,
+  });
+});
+
 test('course closure scheduler only opens bounded windows for the two approved stages', () => {
   const backend = loadBackend();
   assert.equal(backend.getCourseClosureDueStage_('22:29'), '');

@@ -364,6 +364,12 @@
       color: var(--ink);
     }
 
+    .compact-button[aria-disabled="true"],
+    .danger-button[aria-disabled="true"] {
+      opacity: 0.48;
+      cursor: not-allowed;
+    }
+
     .icon-button { width: 40px; padding: 8px; }
     .compact-button { padding: 7px 11px; font-size: 12px; }
     .secondary-button { width: 100%; padding: 9px 13px; }
@@ -3784,8 +3790,8 @@
             <div class="item-meta">現在時間：${escapeHtml(closure.currentTime || "—")}｜手動檢核只會在各時段到點後開放；時間到後請按「更新資料」。</div>
             <div class="admin-item-actions">
               <button class="compact-button" type="button" data-admin-action="toggle-course-closure-automation" data-enabled="${closure.automatic ? "false" : "true"}"><i data-lucide="${closure.automatic ? "hand" : "timer-reset"}"></i>${closure.automatic ? "改為手動" : "啟用自動關課"}</button>
-              <button class="compact-button" type="button" data-admin-action="execute-next-day-closure" data-stage="22:30" ${stage2230Available ? "" : "disabled"}><i data-lucide="user-round-x"></i>手動執行 22:30 檢核</button>
-              <button class="danger-button" type="button" data-admin-action="execute-next-day-closure" data-stage="23:40" ${stage2340Available ? "" : "disabled"}><i data-lucide="calendar-x-2"></i>手動執行 23:40 檢核</button>
+              <button class="compact-button" type="button" data-admin-action="execute-next-day-closure" data-stage="22:30" aria-disabled="${stage2230Available ? "false" : "true"}"><i data-lucide="user-round-x"></i>手動執行 22:30 檢核</button>
+              <button class="danger-button" type="button" data-admin-action="execute-next-day-closure" data-stage="23:40" aria-disabled="${stage2340Available ? "false" : "true"}"><i data-lucide="calendar-x-2"></i>手動執行 23:40 檢核</button>
             </div>
           </div>
           <div class="admin-control">
@@ -4126,6 +4132,10 @@
 
     async function executeNextDayClosure(button) {
       const stage = button.dataset.stage;
+      if (button.getAttribute("aria-disabled") === "true") {
+        setNotice(`${stage} 檢核尚未開放，請於今日 ${stage} 後再執行。`, "error");
+        return;
+      }
       const targetDate = adminDashboard && adminDashboard.courseClosure && adminDashboard.courseClosure.targetDate;
       if (!window.confirm(`確認手動執行 ${targetDate || "隔天"} ${stage} 關課檢核？取消前會再讀取 OB 最新預約人數。`)) return;
       setButtonBusy(button, true, "檢核中...");

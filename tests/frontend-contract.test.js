@@ -2561,9 +2561,12 @@ test('admin workspace exposes independent next-day and whole-month course closur
   assert.match(html, /item\.actor/);
 });
 
-test('course closure controls disable future manual stages and report prior cancellations', () => {
+test('course closure controls explain unavailable manual stages without calling the API', () => {
   assert.match(html, /manualStageAvailability/);
-  assert.match(html, /closure\.manualStageAvailability\["22:30"\][\s\S]*data-stage="22:30"[^>]*disabled/);
-  assert.match(html, /closure\.manualStageAvailability\["23:40"\][\s\S]*data-stage="23:40"[^>]*disabled/);
+  assert.match(html, /data-stage="22:30"[^>]*aria-disabled="\$\{stage2230Available \? "false" : "true"\}"/);
+  assert.match(html, /data-stage="23:40"[^>]*aria-disabled="\$\{stage2340Available \? "false" : "true"\}"/);
+  assert.match(html, /if \(button\.getAttribute\("aria-disabled"\) === "true"\)[\s\S]*setNotice\(`\$\{stage\} 檢核尚未開放，請於今日 \$\{stage\} 後再執行。`, "error"\)[\s\S]*return/);
+  assert.doesNotMatch(html, /data-stage="22:30"[^>]*\? "" : "disabled"/);
+  assert.doesNotMatch(html, /data-stage="23:40"[^>]*\? "" : "disabled"/);
   assert.match(html, /先前已取消 \$\{result\.alreadyProcessedCount \|\| 0\} 堂/);
 });

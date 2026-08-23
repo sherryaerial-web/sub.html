@@ -1734,7 +1734,7 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
       keptOpenCount: 0,
       manualReviewCount: 0,
       failedCount: 0,
-      alreadyProcessedCount: 0,
+      alreadyProcessedCount: Object.keys(processed).length,
       items: []
     };
 
@@ -1744,7 +1744,6 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
       var previewRule = getCourseClosureRule_(preview, stage);
       if (!previewRule.eligible && !previewRule.manualReview) return;
       if (processed[preview.calendarId]) {
-        result.alreadyProcessedCount += 1;
         return;
       }
       if (previewRule.manualReview) {
@@ -1920,6 +1919,29 @@ function getTomorrowDate_() {
   );
 }
 
+function getManualCourseClosureStageAvailability_() {
+  var currentTime = Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'HH:mm');
+  return {
+    currentTime: currentTime,
+    stages: {
+      '22:30': currentTime >= '22:30',
+      '23:40': currentTime >= '23:40'
+    }
+  };
+}
+
+function assertManualCourseClosureStageAvailable_(stageValue) {
+  var stage = cleanText_(stageValue);
+  if (['22:30', '23:40'].indexOf(stage) === -1) {
+    throw new Error('不支援的關課檢核時段：' + stage);
+  }
+  var availability = getManualCourseClosureStageAvailability_();
+  if (availability.stages[stage] !== true) {
+    throw new Error(stage + ' 檢核尚未到可執行時間，請於今日 ' + stage + ' 後再試。');
+  }
+  return availability.currentTime;
+}
+
 function notifyCourseClosureFailures_(result) {
   if (!result || !result.failedCount || typeof MailApp === 'undefined' || !MailApp.sendEmail) return;
   var failedItems = (result.items || []).filter(function(item) { return item.result === '執行失敗'; });
@@ -1934,6 +1956,7 @@ function notifyCourseClosureFailures_(result) {
 
 function executeNextDayClosures_(session, stageValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
+  assertManualCourseClosureStageAvailable_(stageValue);
   var result = executeNextDayClosuresCore_(actor, stageValue, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
   return result;
@@ -7621,12 +7644,15 @@ function getCourseClosureDashboard_(session) {
     };
   }).reverse().slice(0, 50);
   var triggerStatus = getCourseClosureTriggerStatus_();
+  var manualAvailability = getManualCourseClosureStageAvailability_();
   return {
     mode: settings.mode,
     automatic: settings.automatic,
     triggerCount: triggerStatus.triggerCount,
     triggerAuthorizationRequired: triggerStatus.authorizationRequired,
     targetDate: getTomorrowDate_(),
+    currentTime: manualAvailability.currentTime,
+    manualStageAvailability: manualAvailability.stages,
     unclaimedCandidates: getUnclaimedSubstituteClosureCandidates_(session),
     recentLogs: logs
   };

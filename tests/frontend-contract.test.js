@@ -2560,3 +2560,10 @@ test('admin workspace exposes independent next-day and whole-month course closur
   assert.match(html, /場地租借／場租不納入關課/);
   assert.match(html, /item\.actor/);
 });
+
+test('course closure controls disable future manual stages and report prior cancellations', () => {
+  assert.match(html, /manualStageAvailability/);
+  assert.match(html, /closure\.manualStageAvailability\["22:30"\][\s\S]*data-stage="22:30"[^>]*disabled/);
+  assert.match(html, /closure\.manualStageAvailability\["23:40"\][\s\S]*data-stage="23:40"[^>]*disabled/);
+  assert.match(html, /先前已取消 \$\{result\.alreadyProcessedCount \|\| 0\} 堂/);
+});

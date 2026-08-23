@@ -6676,6 +6676,7 @@ test('manual next-day closure derives the target date on the server instead of t
     received = { actor, stage, targetDate };
     return { cancelledCount: 0, failedCount: 0, items: [] };
   };
+  backend.assertManualCourseClosureStageAvailable_ = () => '23:40';
 
   backend.executeNextDayClosures_({}, '22:30', '瀏覽器送來的錯誤日期');
 
@@ -6684,6 +6685,77 @@ test('manual next-day closure derives the target date on the server instead of t
     stage: '22:30',
     targetDate: '2026/08/24',
   });
+});
+
+test('manual next-day closure cannot execute before its configured stage time', () => {
+  const services = createAuthServices();
+  services.Utilities.formatDate = (_value, _timezone, pattern) => {
+    if (pattern === 'HH:mm') return '23:10';
+    if (pattern === 'yyyy/MM/dd') return '2026/08/24';
+    return '';
+  };
+  const backend = loadBackend(services);
+  let coreCalls = 0;
+  backend.assertCapabilitySession_ = () => 'Tako';
+  backend.executeNextDayClosuresCore_ = () => {
+    coreCalls += 1;
+    return {};
+  };
+
+  assert.throws(
+    () => backend.executeNextDayClosures_({}, '23:40'),
+    /23:40 檢核尚未到可執行時間/,
+  );
+  assert.equal(coreCalls, 0);
+});
+
+test('manual next-day closure executes at or after its configured stage time', () => {
+  const services = createAuthServices();
+  services.Utilities.formatDate = (_value, _timezone, pattern) => {
+    if (pattern === 'HH:mm') return '23:40';
+    if (pattern === 'yyyy/MM/dd') return '2026/08/24';
+    return '';
+  };
+  const backend = loadBackend(services);
+  let received = null;
+  backend.assertCapabilitySession_ = () => 'Tako';
+  backend.executeNextDayClosuresCore_ = (actor, stage, targetDate) => {
+    received = { actor, stage, targetDate };
+    return { cancelledCount: 0, failedCount: 0, items: [] };
+  };
+
+  backend.executeNextDayClosures_({}, '23:40');
+
+  assert.deepEqual(received, {
+    actor: 'Tako',
+    stage: '23:40',
+    targetDate: '2026/08/24',
+  });
+});
+
+test('repeat closure reports prior cancellations even when cancelled rows disappear from OB list', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const closureSettingSheet = createSheetFixture('關課設定', [
+    EXPECTED_COURSE_CLOSURE_SETTING_HEADERS,
+    ['executionMode', 'manual', '', '管理員', ''],
+  ]);
+  const closureLogSheet = createSheetFixture('關課紀錄', [
+    EXPECTED_COURSE_CLOSURE_LOG_HEADERS,
+    ['2026-08-23 23:10:00', '2026/08/24', '23:40', '987', 'A－空瑜 Lv.0', 'Tako', 1, '一般課至少 2 人', '否', '已取消', '', 'Tako'],
+    ['2026-08-23 23:10:01', '2026/08/24', '23:40', '988', 'A－空瑜 Lv.1-2〈優惠〉', '妙妙 簡', 2, '指定老師／2 點課至少 3 人', '否', '已取消', '', 'Tako'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([closureSettingSheet, closureLogSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  backend.fetchCalendarPages_ = () => [];
+
+  const result = backend.executeNextDayClosuresCore_('Tako', '23:40', '2026/08/24');
+
+  assert.equal(result.cancelledCount, 0);
+  assert.equal(result.alreadyProcessedCount, 2);
 });
 
 test('closure idempotency ignores malformed historical log rows instead of blocking the run', () => {

@@ -3754,6 +3754,8 @@
         const candidates = Array.isArray(closure.unclaimedCandidates) ? closure.unclaimedCandidates : [];
         const recentLogs = Array.isArray(closure.recentLogs) ? closure.recentLogs : [];
         const modeLabel = closure.automatic ? "自動執行中" : "手動模式";
+        const stage2230Available = closure.manualStageAvailability && closure.manualStageAvailability["22:30"] === true;
+        const stage2340Available = closure.manualStageAvailability && closure.manualStageAvailability["23:40"] === true;
         const candidateRows = candidates.map((item) => `
           <article class="list-item single-column">
             <label class="ob-cancellation-row">
@@ -3779,10 +3781,11 @@
             <div class="item-meta">23:40：一般課 1 人以下；Jina／小美／卡拉／2 點課 2 人以下；課名含「雙人」3 人以下取消。</div>
             <div class="item-meta">場地租借／場租不納入關課，任何人數都會保留。</div>
             <div class="item-meta">每次取消前都會重新讀取 OB 最新人數；自動與手動執行共用同一份防重複紀錄。</div>
+            <div class="item-meta">現在時間：${escapeHtml(closure.currentTime || "—")}｜手動檢核只會在各時段到點後開放；時間到後請按「更新資料」。</div>
             <div class="admin-item-actions">
               <button class="compact-button" type="button" data-admin-action="toggle-course-closure-automation" data-enabled="${closure.automatic ? "false" : "true"}"><i data-lucide="${closure.automatic ? "hand" : "timer-reset"}"></i>${closure.automatic ? "改為手動" : "啟用自動關課"}</button>
-              <button class="compact-button" type="button" data-admin-action="execute-next-day-closure" data-stage="22:30"><i data-lucide="user-round-x"></i>手動執行 22:30 檢核</button>
-              <button class="danger-button" type="button" data-admin-action="execute-next-day-closure" data-stage="23:40"><i data-lucide="calendar-x-2"></i>手動執行 23:40 檢核</button>
+              <button class="compact-button" type="button" data-admin-action="execute-next-day-closure" data-stage="22:30" ${stage2230Available ? "" : "disabled"}><i data-lucide="user-round-x"></i>手動執行 22:30 檢核</button>
+              <button class="danger-button" type="button" data-admin-action="execute-next-day-closure" data-stage="23:40" ${stage2340Available ? "" : "disabled"}><i data-lucide="calendar-x-2"></i>手動執行 23:40 檢核</button>
             </div>
           </div>
           <div class="admin-control">
@@ -4128,7 +4131,7 @@
       setButtonBusy(button, true, "檢核中...");
       try {
         const result = await callPostApi("executeNextDayClosures", { stage });
-        setNotice(`檢核完成：已取消 ${result.cancelledCount || 0} 堂、保留 ${result.keptOpenCount || 0} 堂、待人工確認 ${result.manualReviewCount || 0} 堂、失敗 ${result.failedCount || 0} 堂。`, result.failedCount ? "error" : "success");
+        setNotice(`檢核完成：本次已取消 ${result.cancelledCount || 0} 堂、先前已取消 ${result.alreadyProcessedCount || 0} 堂、保留 ${result.keptOpenCount || 0} 堂、待人工確認 ${result.manualReviewCount || 0} 堂、失敗 ${result.failedCount || 0} 堂。`, result.failedCount ? "error" : "success");
         await fetchAdminDashboard();
       } finally {
         if (button.isConnected) setButtonBusy(button, false, "");

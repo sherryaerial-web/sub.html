@@ -1203,6 +1203,7 @@
               <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="missingObCancellations" data-capability="course_admin"><i data-lucide="calendar-x-2"></i>OB 已取消<span class="admin-tab-count" data-admin-count="missingObCancellations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="closureManagement" data-capability="course_admin"><i data-lucide="calendar-cog"></i>關課管理<span class="admin-tab-count" data-admin-count="courseClosureCandidates">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="delayClosures" data-capability="course_admin"><i data-lucide="clock-arrow-down"></i>代關課程<span class="admin-tab-count" data-admin-count="delayClosures">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
@@ -3683,6 +3684,11 @@
           badge.textContent = String((payrollDashboard && payrollDashboard.metrics && payrollDashboard.metrics.pendingConfirmations) || 0);
           return;
         }
+        if (badge.dataset.adminCount === "courseClosureCandidates") {
+          const candidates = data.courseClosure && data.courseClosure.unclaimedCandidates;
+          badge.textContent = Array.isArray(candidates) ? String(candidates.length) : "0";
+          return;
+        }
         const items = data[badge.dataset.adminCount];
         badge.textContent = Array.isArray(items) ? String(items.length) : "0";
       });
@@ -3738,10 +3744,57 @@
             </div>
           </div>
           ${items.map((item) => `<article class="list-item single-column"><label class="ob-cancellation-row"><input class="ob-cancellation-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}"><span><span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.originalCourse)}</span><span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.replacementCalendarId || item.originalCalendarId || "—")}</span></span></label></article>`).join("") || '<div class="state">目前沒有已從 OB 取消、等待關閉的代課課程</div>'}`;
+      } else if (activeAdminTab === "closureManagement") {
+        const closure = data.courseClosure || {};
+        const candidates = Array.isArray(closure.unclaimedCandidates) ? closure.unclaimedCandidates : [];
+        const recentLogs = Array.isArray(closure.recentLogs) ? closure.recentLogs : [];
+        const modeLabel = closure.automatic ? "自動執行中" : "手動模式";
+        const candidateRows = candidates.map((item) => `
+          <article class="list-item single-column">
+            <label class="ob-cancellation-row">
+              <input class="unclaimed-substitute-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}">
+              <span>
+                <span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.courseName)}</span>
+                <span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.calendarId)}</span>
+              </span>
+            </label>
+          </article>`).join("");
+        const logRows = recentLogs.slice(0, 20).map((item) => `
+          <article class="list-item single-column">
+            <div>
+              <div class="item-course">${escapeHtml(item.targetDate)} ${escapeHtml(item.stage)}｜${escapeHtml(item.courseName || "未取得課名")}</div>
+              <div class="item-meta">${escapeHtml(item.teacherName || "未取得老師")}｜${item.enrollmentCount == null ? "人數未取得" : `${escapeHtml(item.enrollmentCount)} 人`}｜${escapeHtml(item.ruleLabel || "未套用規則")}｜${escapeHtml(item.result || "未記錄結果")}${item.error ? `｜${escapeHtml(item.error)}` : ""}</div>
+            </div>
+          </article>`).join("");
+        content.innerHTML = `
+          <div class="admin-control">
+            <strong>隔天未達人數關課｜${modeLabel}</strong>
+            <div class="item-meta">目標日期：${escapeHtml(closure.targetDate || "—")}｜目前排程：${Number(closure.triggerCount) || 0} 個</div>
+            <div class="item-meta">22:30：隔天 0 人課程取消。</div>
+            <div class="item-meta">23:40：一般課 1 人以下；Jina／小美／卡拉／2 點課 2 人以下；課名含「雙人」3 人以下取消。</div>
+            <div class="item-meta">每次取消前都會重新讀取 OB 最新人數；自動與手動執行共用同一份防重複紀錄。</div>
+            <div class="admin-item-actions">
+              <button class="compact-button" type="button" data-admin-action="toggle-course-closure-automation" data-enabled="${closure.automatic ? "false" : "true"}"><i data-lucide="${closure.automatic ? "hand" : "timer-reset"}"></i>${closure.automatic ? "改為手動" : "啟用自動關課"}</button>
+              <button class="compact-button" type="button" data-admin-action="execute-next-day-closure" data-stage="22:30"><i data-lucide="user-round-x"></i>手動執行 22:30 檢核</button>
+              <button class="danger-button" type="button" data-admin-action="execute-next-day-closure" data-stage="23:40"><i data-lucide="calendar-x-2"></i>手動執行 23:40 檢核</button>
+            </div>
+          </div>
+          <div class="admin-control">
+            <strong>整月未領代課｜${candidates.length} 堂</strong>
+            <div class="item-meta">此區只列出下個月仍未領取的代課。取消前會重新確認 OB 人數；只有 0 人才會取消，成功後才會關閉對應代課需求。</div>
+            <div class="item-meta">此功能與上方隔天人數關課完全獨立，僅在管理員手動勾選並確認後執行。</div>
+            <div class="admin-item-actions">
+              <button class="compact-button" type="button" data-admin-action="select-all-unclaimed-substitutes" ${candidates.length ? "" : "disabled"}><i data-lucide="list-checks"></i>全選清單</button>
+              <button class="danger-button" type="button" data-admin-action="close-unclaimed-substitutes" ${candidates.length ? "" : "disabled"}><i data-lucide="circle-stop"></i>取消勾選的未領課程</button>
+            </div>
+          </div>
+          ${candidateRows || '<div class="state">目前沒有下個月未領取的代課課程</div>'}
+          <div class="admin-control"><strong>最近關課紀錄</strong><div class="item-meta">顯示最近 20 筆隔天關課檢核結果。</div></div>
+          ${logRows || '<div class="state">目前尚無關課紀錄</div>'}`;
       } else if (activeAdminTab === "activeInvitees") {
         const activeInvitees = data.activeInvitees || [];
         content.innerHTML = `
-          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="item-meta">結束本輪只會關閉目前邀請，不影響已領取課程；之後重新邀請即可開啟新一輪。</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button><button class="danger-button" type="button" data-admin-action="end-invitation-round" ${activeInvitees.length ? "" : "disabled"}><i data-lucide="circle-stop"></i>結束本輪邀請</button></div></div>
+          <div class="admin-control"><strong>全域狀態：${data.paused ? "已暫停領取" : "開放中"}</strong><div class="item-meta">結束本輪只會關閉目前邀請，不影響已領取課程；完成後會前往「關課管理」查看整月未領代課，不會自動取消。</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="toggle-pause"><i data-lucide="${data.paused ? "play" : "pause"}"></i>${data.paused ? "恢復全部領取" : "暫停全部領取"}</button><button class="danger-button" type="button" data-admin-action="end-invitation-round" ${activeInvitees.length ? "" : "disabled"}><i data-lucide="circle-stop"></i>結束本輪邀請／處理未領課程</button></div></div>
           ${activeInvitees.map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="item-meta">開放：${escapeHtml(item.openedAt)}｜首次查看：${escapeHtml(item.viewedAt || "尚未查看")}</div><div class="admin-item-actions"><button class="danger-button" type="button" data-admin-action="close-invitation" data-teacher-name="${escapeHtml(item.teacherName)}"><i data-lucide="user-x"></i>關閉邀請</button></div></div></article>`).join("") || '<div class="state">目前沒有邀請中的老師</div>'}`;
       } else if (activeAdminTab === "obWork" || activeAdminTab === "exceptions") {
         const items = data[activeAdminTab] || [];
@@ -4034,14 +4087,65 @@
     async function endAdminInvitationRound(button) {
       const activeCount = (adminDashboard && adminDashboard.activeInvitees || []).length;
       if (!activeCount) throw new Error("目前沒有邀請中的老師。");
-      if (!window.confirm(`確認結束本輪邀請？目前 ${activeCount} 位邀請中的老師將不能再領課，已領取課程不受影響。`)) return;
+      if (!window.confirm(`確認結束本輪邀請？目前 ${activeCount} 位邀請中的老師將不能再領課，已領取課程不受影響。完成後會前往整月未領代課清單，不會自動取消課程。`)) return;
       if (button) setButtonBusy(button, true, "結束中...");
       try {
         const result = await callPostApi("endInvitationRound");
         setNotice(`已結束本輪邀請，共關閉 ${result.closedTeachers} 位老師的邀請。`);
+        activeAdminTab = "closureManagement";
         await fetchAdminDashboard();
       } finally {
         if (button && button.isConnected) setButtonBusy(button, false, "");
+      }
+    }
+
+    async function toggleCourseClosureAutomation(button) {
+      const enabled = button.dataset.enabled === "true";
+      const copy = enabled
+        ? "確認啟用自動關課？系統會在每日 22:30 與 23:40 的檢核時段依規則處理隔天課程。"
+        : "確認改為手動模式？既有自動關課排程會移除。";
+      if (!window.confirm(copy)) return;
+      setButtonBusy(button, true, enabled ? "啟用中..." : "停用中...");
+      try {
+        const result = await callPostApi("setCourseClosureAutomation", { enabled });
+        setNotice(result.automatic ? "已啟用自動關課。" : "已改為手動關課。", "success");
+        await fetchAdminDashboard();
+      } finally {
+        if (button.isConnected) setButtonBusy(button, false, "");
+      }
+    }
+
+    async function executeNextDayClosure(button) {
+      const stage = button.dataset.stage;
+      const targetDate = adminDashboard && adminDashboard.courseClosure && adminDashboard.courseClosure.targetDate;
+      if (!window.confirm(`確認手動執行 ${targetDate || "隔天"} ${stage} 關課檢核？取消前會再讀取 OB 最新預約人數。`)) return;
+      setButtonBusy(button, true, "檢核中...");
+      try {
+        const result = await callPostApi("executeNextDayClosures", { stage, targetDate });
+        setNotice(`檢核完成：已取消 ${result.cancelledCount || 0} 堂、保留 ${result.keptOpenCount || 0} 堂、待人工確認 ${result.manualReviewCount || 0} 堂、失敗 ${result.failedCount || 0} 堂。`, result.failedCount ? "error" : "success");
+        await fetchAdminDashboard();
+      } finally {
+        if (button.isConnected) setButtonBusy(button, false, "");
+      }
+    }
+
+    function selectAllUnclaimedSubstitutes() {
+      const checkboxes = [...document.querySelectorAll(".unclaimed-substitute-checkbox")];
+      const shouldCheck = checkboxes.some((input) => !input.checked);
+      checkboxes.forEach((input) => { input.checked = shouldCheck; });
+    }
+
+    async function closeSelectedUnclaimedSubstitutes(button) {
+      const substituteIds = [...document.querySelectorAll(".unclaimed-substitute-checkbox:checked")].map((input) => input.value);
+      if (!substituteIds.length) throw new Error("請先勾選要處理的未領代課。");
+      if (!window.confirm(`確認處理 ${substituteIds.length} 堂整月未領代課？系統只會取消 OB 最新人數為 0 的課程；已有預約或執行失敗者會保留。`)) return;
+      setButtonBusy(button, true, "處理中...");
+      try {
+        const result = await callPostApi("closeUnclaimedSubstituteCourses", { substituteIds });
+        setNotice(`處理完成：已取消 ${result.closed || 0} 堂、已有預約 ${result.booked || 0} 堂、失敗 ${result.failed || 0} 堂。`, result.failed ? "error" : "success");
+        await fetchAdminDashboard();
+      } finally {
+        if (button.isConnected) setButtonBusy(button, false, "");
       }
     }
 
@@ -4347,6 +4451,22 @@ https://sherryaerial-web.github.io/sub.html/
         }
         if (action === "close-ob-cancellations") {
           await closeSelectedMissingObCancellations(button);
+          return;
+        }
+        if (action === "toggle-course-closure-automation") {
+          await toggleCourseClosureAutomation(button);
+          return;
+        }
+        if (action === "execute-next-day-closure") {
+          await executeNextDayClosure(button);
+          return;
+        }
+        if (action === "select-all-unclaimed-substitutes") {
+          selectAllUnclaimedSubstitutes();
+          return;
+        }
+        if (action === "close-unclaimed-substitutes") {
+          await closeSelectedUnclaimedSubstitutes(button);
           return;
         }
         if (action === "open-invitations") await openAdminInvitations();

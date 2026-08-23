@@ -18,7 +18,9 @@ var SHEETS = {
   PAYROLL_DISPUTES: '薪資異議',
   PAYROLL_PAYMENT_SETTINGS: '薪資付款設定',
   SHERRY_PAYROLL_FORMAT: '給雪莉的格式',
-  SPECIAL_COURSE_REQUESTS: '特別課安排'
+  SPECIAL_COURSE_REQUESTS: '特別課安排',
+  COURSE_CLOSURE_SETTINGS: '關課設定',
+  COURSE_CLOSURE_LOG: '關課紀錄'
 };
 
 var SHEET_HEADERS = {
@@ -79,15 +81,23 @@ var SHEET_HEADERS = {
     '異議 ID', '月份', '老師', '明細 ID', '問題說明', '狀態', '管理員回覆',
     '提出時間', '處理者', '處理時間'
   ],
-  PAYROLL_PAYMENT_SETTINGS: ['老師', '轉帳群組/銀行', '備註', '是否啟用']
+  PAYROLL_PAYMENT_SETTINGS: ['老師', '轉帳群組/銀行', '備註', '是否啟用'],
+  COURSE_CLOSURE_SETTINGS: ['設定鍵', '設定值', '更新時間', '操作者', '備註'],
+  COURSE_CLOSURE_LOG: [
+    '執行時間', '目標日期', '檢核時段', 'OB Calendar ID', '課程', '老師',
+    '最新人數', '套用規則', 'onlyEmpty', '結果', '錯誤訊息', '操作者'
+  ]
 };
 
 var CONFIG = {
   COURSE_SHEET: SHEETS.COURSE_LIST,
   LEAVE_SHEET: SHEETS.LEAVES,
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
+  API_BASE_URL: 'https://api.omceanbooking.com',
   CLASSES_API_URL: 'https://api.omceanbooking.com/v1/classes',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
+  OB_CANCEL_CALENDAR_PATH_PROPERTY: 'OMCEAN_CANCEL_CALENDAR_PATH',
+  OB_CANCEL_CALENDAR_DEFAULT_PATH: '/v1/calendar/{id}/cancel',
   OB_CLASS_CACHE_KEY: 'OB_ACTIVE_CLASS_CATALOG_V1',
   OB_CLASS_CACHE_SECONDS: 21600,
   PAGE_SIZE: 100,
@@ -116,6 +126,8 @@ var CONFIG = {
   VVIP_CANCELLED_STATUS: '已取消',
   VVIP_COURSE_CANCELLED_STATUS: '課程已取消',
   OB_CANCELLATION_BATCH_MAX: 100,
+  COURSE_CLOSURE_MODE_SETTING: 'executionMode',
+  COURSE_CLOSURE_FAILURE_EMAIL: 'takochang68@gmail.com',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
@@ -789,6 +801,7 @@ function ensureSystemStructure_() {
     ensureSupportingSheet_(ss, SHEETS.INVITATIONS, SHEET_HEADERS.INVITATIONS);
     ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
     ensureSupportingSheet_(ss, SHEETS.SETTINGS, SHEET_HEADERS.SETTINGS);
+    ensureCourseClosureStructureUnlocked_(ss);
     ensureSupportingSheet_(
       ss,
       SHEETS.SPECIAL_COURSE_REQUESTS,
@@ -804,6 +817,44 @@ function ensureSystemStructure_() {
       migration: migrateLegacyLeaveLinksUnlocked_(leaveSheet, courseSheet)
     };
   });
+}
+
+function ensureCourseClosureStructureUnlocked_(spreadsheet) {
+  var settingsSheet = ensureSupportingSheet_(
+    spreadsheet,
+    SHEETS.COURSE_CLOSURE_SETTINGS,
+    SHEET_HEADERS.COURSE_CLOSURE_SETTINGS
+  );
+  ensureSupportingSheet_(
+    spreadsheet,
+    SHEETS.COURSE_CLOSURE_LOG,
+    SHEET_HEADERS.COURSE_CLOSURE_LOG
+  );
+  var settings = getCourseClosureSettingsUnlocked_(settingsSheet);
+  if (!settings.hasExecutionMode) {
+    settingsSheet.getRange(settingsSheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.COURSE_CLOSURE_SETTINGS.length)
+      .setValues([[
+        CONFIG.COURSE_CLOSURE_MODE_SETTING,
+        'manual',
+        Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'),
+        '系統初始化',
+        '正式環境預設手動；確認 API 與排程後才可切換自動。'
+      ]]);
+    settings = getCourseClosureSettingsUnlocked_(settingsSheet);
+  }
+  return { mode: settings.mode };
+}
+
+function getCourseClosureSettingsUnlocked_(settingsSheet) {
+  var rows = settingsSheet.getDataRange().getValues().slice(1);
+  var mode = 'manual';
+  var hasExecutionMode = false;
+  rows.forEach(function(row) {
+    if (cleanText_(row[0]) !== CONFIG.COURSE_CLOSURE_MODE_SETTING) return;
+    hasExecutionMode = true;
+    mode = cleanText_(row[1]) === 'auto' ? 'auto' : 'manual';
+  });
+  return { mode: mode, automatic: mode === 'auto', hasExecutionMode: hasExecutionMode };
 }
 
 function ensureVvipStructure_() {
@@ -1185,6 +1236,21 @@ function doPost(e) {
       endInvitationRound: function() {
         return endInvitationRound_(session);
       },
+      setCourseClosureAutomation: function() {
+        return setCourseClosureAutomation_(
+          session,
+          parseBoolean_(parameters.enabled, '自動關課設定')
+        );
+      },
+      executeNextDayClosures: function() {
+        return executeNextDayClosures_(session, parameters.stage, parameters.targetDate);
+      },
+      closeUnclaimedSubstituteCourses: function() {
+        return closeUnclaimedSubstituteCourses_(
+          session,
+          parseJsonArray_(parameters.substituteIds, '整月未領代課清單')
+        );
+      },
       pauseClaims: function() {
         return pauseClaims_(session, parseBoolean_(parameters.paused, '暫停設定'));
       },
@@ -1410,6 +1476,425 @@ function normalizeCalendarItem_(item) {
     instructorId: instructorId,
     isSubstitute: instructor.isSubstitute === true ? '是' : '否'
   };
+}
+
+function normalizeClosureCalendarDetail_(item) {
+  if (!item || item.id == null || item.id === '') return null;
+
+  var classInfo = item['class'] || item.course || {};
+  var instructors = Array.isArray(item.instructors) ? item.instructors.filter(Boolean) : [];
+  var instructor = instructors.filter(function(person) {
+    return person.isSubstitute === true;
+  })[0] || instructors[0] || item.instructor || {};
+  var classTime = item.classTime || item.startAt || item.startTime || '';
+  var parsedTime = new Date(classTime);
+  var hasTime = classTime && !isNaN(parsedTime.getTime());
+  var attendanceValue = item.customersAttending;
+  var pointsValue = item.points;
+  var enrollmentCount = attendanceValue === '' || attendanceValue == null
+    ? null
+    : Number(attendanceValue);
+  var points = pointsValue === '' || pointsValue == null ? null : Number(pointsValue);
+  if (enrollmentCount !== null && (!isFinite(enrollmentCount) || enrollmentCount < 0)) {
+    enrollmentCount = null;
+  }
+  if (points !== null && (!isFinite(points) || points < 0)) points = null;
+
+  return {
+    calendarId: cleanText_(item.id),
+    classId: cleanText_(classInfo.id || classInfo.classId || ''),
+    date: hasTime ? Utilities.formatDate(parsedTime, getTimeZone_(), 'yyyy/MM/dd') : '',
+    time: hasTime ? Utilities.formatDate(parsedTime, getTimeZone_(), 'HH:mm') : '',
+    courseName: cleanText_(classInfo.nameZhHant || classInfo.nameEn || classInfo.name || ''),
+    teacherName: cleanText_(
+      instructor.name ||
+      [instructor.firstName, instructor.lastName].filter(Boolean).join(' ')
+    ),
+    enrollmentCount: enrollmentCount,
+    points: points,
+    cancelled: item.cancelled === true
+  };
+}
+
+function getCourseClosureRule_(detail, stageValue) {
+  var stage = cleanText_(stageValue);
+  var base = {
+    stage: stage,
+    ruleKey: '',
+    ruleLabel: '',
+    minimumEnrollment: null,
+    cancelAtOrBelow: null,
+    eligible: false,
+    onlyEmpty: false,
+    manualReview: false,
+    reason: ''
+  };
+  if (['22:30', '23:40'].indexOf(stage) === -1) {
+    throw new Error('不支援的關課檢核時段：' + stage);
+  }
+  if (!detail || !cleanText_(detail.calendarId) || !cleanText_(detail.date) ||
+      !cleanText_(detail.time) || !cleanText_(detail.courseName) ||
+      detail.enrollmentCount == null || !isFinite(Number(detail.enrollmentCount))) {
+    base.manualReview = true;
+    base.reason = 'OB 課程資料不完整，請人工確認。';
+    return base;
+  }
+  if (detail.cancelled === true) {
+    base.reason = 'OB 課程已取消。';
+    return base;
+  }
+
+  var enrollmentCount = Number(detail.enrollmentCount);
+  if (stage === '22:30') {
+    base.ruleKey = 'zero';
+    base.ruleLabel = '0 人關課';
+    base.minimumEnrollment = 1;
+    base.cancelAtOrBelow = 0;
+  } else {
+    var courseName = cleanText_(detail.courseName);
+    var teacherName = cleanText_(detail.teacherName);
+    if (courseName.indexOf('雙人') !== -1) {
+      base.ruleKey = 'pair';
+      base.ruleLabel = '雙人特別課至少 4 人';
+      base.minimumEnrollment = 4;
+      base.cancelAtOrBelow = 3;
+    } else if (!teacherName || detail.points == null || !isFinite(Number(detail.points))) {
+      base.manualReview = true;
+      base.reason = 'OB 課程資料不完整，請人工確認。';
+      return base;
+    } else if (['Jina', '小美', '卡拉', '卡拉 卡拉'].indexOf(teacherName) !== -1 ||
+               Number(detail.points) === 2) {
+      base.ruleKey = 'teacher-or-two-points';
+      base.ruleLabel = '指定老師／2 點課至少 3 人';
+      base.minimumEnrollment = 3;
+      base.cancelAtOrBelow = 2;
+    } else {
+      base.ruleKey = 'general';
+      base.ruleLabel = '一般課至少 2 人';
+      base.minimumEnrollment = 2;
+      base.cancelAtOrBelow = 1;
+    }
+  }
+  base.eligible = enrollmentCount <= base.cancelAtOrBelow;
+  base.onlyEmpty = enrollmentCount === 0;
+  return base;
+}
+
+function getObApiJson_(url, options, label) {
+  var response = UrlFetchApp.fetch(url, options);
+  var responseCode = response.getResponseCode();
+  var body = response.getContentText();
+  if (responseCode < 200 || responseCode >= 300) {
+    throw new Error((label || 'OB API') + '失敗（HTTP ' + responseCode + '）。');
+  }
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    throw new Error((label || 'OB API') + '回傳的 JSON 無法解析。');
+  }
+}
+
+function fetchCalendarDetail_(token, calendarIdValue) {
+  var apiToken = cleanText_(token);
+  var calendarId = cleanText_(calendarIdValue);
+  if (!apiToken) throw new Error('尚未設定 Omcean API 權杖。');
+  if (!calendarId) throw new Error('缺少 OB Calendar ID。');
+  var raw = getObApiJson_(CONFIG.API_URL + '/' + encodeURIComponent(calendarId), {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + apiToken },
+    muteHttpExceptions: true
+  }, '讀取 OB 課程');
+  var detail = normalizeClosureCalendarDetail_(raw);
+  if (!detail) throw new Error('OB 單堂課程回傳格式不正確。');
+  return detail;
+}
+
+function getObCancelCalendarPath_() {
+  var configured = '';
+  if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
+    configured = cleanText_(PropertiesService.getScriptProperties().getProperty(
+      CONFIG.OB_CANCEL_CALENDAR_PATH_PROPERTY
+    ));
+  }
+  var path = configured || CONFIG.OB_CANCEL_CALENDAR_DEFAULT_PATH;
+  if (path.indexOf('{id}') === -1 || !/^\/v1\//.test(path)) {
+    throw new Error('OMCEAN_CANCEL_CALENDAR_PATH 格式不正確。');
+  }
+  return path;
+}
+
+function cancelObCalendarItem_(token, calendarIdValue, reasonValue, onlyEmptyValue) {
+  var apiToken = cleanText_(token);
+  var calendarId = cleanText_(calendarIdValue);
+  var reason = cleanText_(reasonValue);
+  if (!apiToken) throw new Error('尚未設定 Omcean API 權杖。');
+  if (!calendarId) throw new Error('缺少 OB Calendar ID。');
+  if (!reason) throw new Error('取消原因不可空白。');
+  var path = getObCancelCalendarPath_().replace('{id}', encodeURIComponent(calendarId));
+  var raw = getObApiJson_(CONFIG.API_BASE_URL + path, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + apiToken },
+    payload: JSON.stringify({ reason: reason, onlyEmpty: onlyEmptyValue === true }),
+    muteHttpExceptions: true
+  }, '取消 OB 課程');
+  var detail = normalizeClosureCalendarDetail_(raw);
+  if (!detail) throw new Error('OB 取消課程回傳格式不正確。');
+  return detail;
+}
+
+function normalizeClosureTargetDate_(value) {
+  var text = cleanText_(value).replace(/-/g, '/');
+  if (!/^\d{4}\/\d{2}\/\d{2}$/.test(text)) throw new Error('關課目標日期格式不正確。');
+  return text;
+}
+
+function buildCourseClosureReason_(detail) {
+  return '您好，您所預約 ' + detail.date + ' ' + detail.time + ' ' +
+    detail.courseName + ' 課程因未達開課人數因此未開班🥹謝謝';
+}
+
+function getProcessedClosureKeysUnlocked_(logSheet, targetDate, stage) {
+  var keys = {};
+  logSheet.getDataRange().getValues().slice(1).forEach(function(row) {
+    var loggedDate = cleanText_(row[1]).replace(/-/g, '/');
+    if (loggedDate !== targetDate || cleanText_(row[2]) !== stage) return;
+    if (cleanText_(row[9]) !== '已取消') return;
+    var calendarId = cleanText_(row[3]);
+    if (calendarId) keys[calendarId] = true;
+  });
+  return keys;
+}
+
+function appendCourseClosureLogUnlocked_(logSheet, targetDate, stage, detail, rule, result, error, actor) {
+  var item = detail || {};
+  var policy = rule || {};
+  logSheet.getRange(logSheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.COURSE_CLOSURE_LOG.length)
+    .setValues([[
+      Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'),
+      targetDate,
+      stage,
+      cleanText_(item.calendarId),
+      cleanText_(item.courseName),
+      cleanText_(item.teacherName),
+      item.enrollmentCount == null ? '' : Number(item.enrollmentCount),
+      cleanText_(policy.ruleLabel),
+      policy.onlyEmpty === true ? '是' : '否',
+      cleanText_(result),
+      cleanText_(error),
+      cleanText_(actor)
+    ]]);
+}
+
+function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
+  var actor = cleanText_(actorValue) || '系統自動關課';
+  var stage = cleanText_(stageValue);
+  var targetDate = normalizeClosureTargetDate_(targetDateValue);
+  if (['22:30', '23:40'].indexOf(stage) === -1) throw new Error('不支援的關課檢核時段：' + stage);
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!cleanText_(token)) throw new Error('尚未設定 Omcean API 權杖。');
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureCourseClosureStructureUnlocked_(ss);
+    var logSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_LOG);
+    assertHeaders_(logSheet, SHEET_HEADERS.COURSE_CLOSURE_LOG);
+    var processed = getProcessedClosureKeysUnlocked_(logSheet, targetDate, stage);
+    var apiDate = targetDate.replace(/\//g, '-');
+    var rawItems = fetchCalendarPages_(token, apiDate, apiDate);
+    var result = {
+      targetDate: targetDate,
+      stage: stage,
+      cancelledCount: 0,
+      keptOpenCount: 0,
+      manualReviewCount: 0,
+      failedCount: 0,
+      alreadyProcessedCount: 0,
+      items: []
+    };
+
+    (rawItems || []).forEach(function(raw) {
+      var preview = normalizeClosureCalendarDetail_(raw);
+      if (!preview || preview.date !== targetDate) return;
+      var previewRule = getCourseClosureRule_(preview, stage);
+      if (!previewRule.eligible && !previewRule.manualReview) return;
+      if (processed[preview.calendarId]) {
+        result.alreadyProcessedCount += 1;
+        return;
+      }
+      if (previewRule.manualReview) {
+        appendCourseClosureLogUnlocked_(
+          logSheet, targetDate, stage, preview, previewRule,
+          '待人工確認', previewRule.reason, actor
+        );
+        result.manualReviewCount += 1;
+        result.items.push({ calendarId: preview.calendarId, result: '待人工確認' });
+        return;
+      }
+
+      try {
+        var latest = fetchCalendarDetail_(token, preview.calendarId);
+        var latestRule = getCourseClosureRule_(latest, stage);
+        if (latestRule.manualReview) {
+          appendCourseClosureLogUnlocked_(
+            logSheet, targetDate, stage, latest, latestRule,
+            '待人工確認', latestRule.reason, actor
+          );
+          result.manualReviewCount += 1;
+          result.items.push({ calendarId: latest.calendarId, result: '待人工確認' });
+          return;
+        }
+        if (!latestRule.eligible) {
+          appendCourseClosureLogUnlocked_(
+            logSheet, targetDate, stage, latest, latestRule,
+            '人數已足，保留開課', '', actor
+          );
+          result.keptOpenCount += 1;
+          result.items.push({ calendarId: latest.calendarId, result: '人數已足，保留開課' });
+          return;
+        }
+        var cancelled = cancelObCalendarItem_(
+          token,
+          latest.calendarId,
+          buildCourseClosureReason_(latest),
+          latestRule.onlyEmpty
+        );
+        if (!cancelled || cancelled.cancelled !== true) {
+          throw new Error('OB 回傳未確認課程已取消。');
+        }
+        appendCourseClosureLogUnlocked_(
+          logSheet, targetDate, stage, latest, latestRule,
+          '已取消', '', actor
+        );
+        processed[latest.calendarId] = true;
+        result.cancelledCount += 1;
+        result.items.push({ calendarId: latest.calendarId, result: '已取消' });
+      } catch (error) {
+        appendCourseClosureLogUnlocked_(
+          logSheet, targetDate, stage, preview, previewRule,
+          '執行失敗', error && error.message ? error.message : String(error), actor
+        );
+        result.failedCount += 1;
+        result.items.push({
+          calendarId: preview.calendarId,
+          result: '執行失敗',
+          error: error && error.message ? error.message : String(error)
+        });
+      }
+    });
+    return result;
+  });
+}
+
+function setCourseClosureModeUnlocked_(settingsSheet, modeValue, actorValue) {
+  var mode = cleanText_(modeValue) === 'auto' ? 'auto' : 'manual';
+  var actor = cleanText_(actorValue);
+  var rows = settingsSheet.getDataRange().getValues();
+  var rowNumber = 0;
+  for (var index = 1; index < rows.length; index++) {
+    if (cleanText_(rows[index][0]) === CONFIG.COURSE_CLOSURE_MODE_SETTING) {
+      rowNumber = index + 1;
+      break;
+    }
+  }
+  var values = [[
+    CONFIG.COURSE_CLOSURE_MODE_SETTING,
+    mode,
+    Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'),
+    actor,
+    mode === 'auto' ? '每 5 分鐘檢查一次，僅在 22:30／23:40 的執行窗口動作。' : '目前僅允許管理員手動執行。'
+  ]];
+  settingsSheet.getRange(
+    rowNumber || settingsSheet.getLastRow() + 1,
+    1,
+    1,
+    SHEET_HEADERS.COURSE_CLOSURE_SETTINGS.length
+  ).setValues(values);
+  return mode;
+}
+
+function getCourseClosureTriggers_() {
+  if (typeof ScriptApp === 'undefined' || !ScriptApp.getProjectTriggers) return [];
+  return ScriptApp.getProjectTriggers().filter(function(trigger) {
+    return trigger.getHandlerFunction && trigger.getHandlerFunction() === 'runCourseClosureScheduler';
+  });
+}
+
+function setCourseClosureAutomation_(session, enabledValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var enabled = enabledValue === true;
+  if (enabled && !cleanText_(
+    PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY)
+  )) {
+    throw new Error('尚未設定 Omcean API 權杖，不能啟用自動關課。');
+  }
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureCourseClosureStructureUnlocked_(ss);
+    var settingsSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS);
+    var triggers = getCourseClosureTriggers_();
+    if (enabled && !triggers.length) {
+      ScriptApp.newTrigger('runCourseClosureScheduler')
+        .timeBased()
+        .everyMinutes(5)
+        .create();
+      triggers = getCourseClosureTriggers_();
+    } else if (!enabled) {
+      triggers.forEach(function(trigger) { ScriptApp.deleteTrigger(trigger); });
+      triggers = [];
+    }
+    var mode = setCourseClosureModeUnlocked_(settingsSheet, enabled ? 'auto' : 'manual', actor);
+    return { mode: mode, automatic: mode === 'auto', triggerCount: triggers.length };
+  });
+}
+
+function getCourseClosureDueStage_(timeValue) {
+  var time = cleanText_(timeValue);
+  if (/^22:3\d$/.test(time)) return '22:30';
+  if (/^23:4\d$/.test(time)) return '23:40';
+  return '';
+}
+
+function getTomorrowDate_() {
+  return Utilities.formatDate(
+    new Date(currentTimeMs_() + 24 * 60 * 60 * 1000),
+    getTimeZone_(),
+    'yyyy/MM/dd'
+  );
+}
+
+function notifyCourseClosureFailures_(result) {
+  if (!result || !result.failedCount || typeof MailApp === 'undefined' || !MailApp.sendEmail) return;
+  var failedItems = (result.items || []).filter(function(item) { return item.result === '執行失敗'; });
+  MailApp.sendEmail({
+    to: CONFIG.COURSE_CLOSURE_FAILURE_EMAIL,
+    subject: '[Sherry Aerial] 關課執行失敗 ' + result.targetDate + ' ' + result.stage,
+    body: failedItems.map(function(item) {
+      return 'OB Calendar ID ' + cleanText_(item.calendarId) + '：' + cleanText_(item.error);
+    }).join('\n')
+  });
+}
+
+function executeNextDayClosures_(session, stageValue, targetDateValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var result = executeNextDayClosuresCore_(actor, stageValue, targetDateValue || getTomorrowDate_());
+  notifyCourseClosureFailures_(result);
+  return result;
+}
+
+function runCourseClosureScheduler() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureCourseClosureStructureUnlocked_(ss);
+  var settings = getCourseClosureSettingsUnlocked_(
+    requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS)
+  );
+  if (!settings.automatic) return { skipped: true, reason: 'manual' };
+  var time = Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'HH:mm');
+  var stage = getCourseClosureDueStage_(time);
+  if (!stage) return { skipped: true, reason: 'outside-window' };
+  var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
+  notifyCourseClosureFailures_(result);
+  return result;
 }
 
 function fetchCalendarPages_(token, dateFrom, dateTo) {
@@ -3736,6 +4221,115 @@ function endInvitationRound_(session) {
       closedInvitations: records.length,
       closedTeachers: Object.keys(teacherMap).length
     };
+  });
+}
+
+function getUnclaimedSubstituteClosureCandidates_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  var targetMonth = getNextMonthKey_();
+  var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), CONFIG.LEAVE_SHEET);
+  assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
+  return sheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return isOrdinaryOpenLeaveRow_(row) && isLeaveRowInMonth_(row, targetMonth);
+  }).map(function(row) {
+    return {
+      substituteId: cleanText_(row[9]),
+      calendarId: getEffectiveOpenLeaveCalendarId_(row),
+      date: formatMyDate(row[2]),
+      time: formatMyTime(row[3]),
+      courseName: cleanText_(row[4]),
+      originalTeacher: cleanText_(row[1])
+    };
+  }).sort(function(a, b) {
+    return [a.date, a.time, a.courseName].join('|').localeCompare(
+      [b.date, b.time, b.courseName].join('|')
+    );
+  });
+}
+
+function closeUnclaimedSubstituteCourses_(session, substituteIds) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var ids = normalizeMissingObCancellationIds_(substituteIds);
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!cleanText_(token)) throw new Error('尚未設定 Omcean API 權杖。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+    var auditSheet = requireSheet_(ss, SHEETS.AUDIT);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    assertHeaders_(auditSheet, SHEET_HEADERS.AUDIT);
+    var targetMonth = getNextMonthKey_();
+    var values = leaveSheet.getDataRange().getValues();
+    var recordById = {};
+    for (var index = 1; index < values.length; index++) {
+      var id = cleanText_(values[index][9]);
+      if (id) recordById[id] = { rowNumber: index + 1, row: values[index] };
+    }
+    var result = { targetMonth: targetMonth, closed: 0, booked: 0, failed: 0, items: [] };
+    ids.forEach(function(id) {
+      var record = recordById[id];
+      if (!record || !isOrdinaryOpenLeaveRow_(record.row) ||
+          !isLeaveRowInMonth_(record.row, targetMonth)) {
+        result.failed += 1;
+        result.items.push({ substituteId: id, result: '狀態已變更，未處理' });
+        return;
+      }
+      var calendarId = getEffectiveOpenLeaveCalendarId_(record.row);
+      try {
+        var latest = fetchCalendarDetail_(token, calendarId);
+        if (latest.cancelled === true) {
+          throw new Error('OB 課程已是取消狀態，請先重新同步確認。');
+        }
+        if (latest.enrollmentCount == null) {
+          throw new Error('OB 未回傳最新預約人數。');
+        }
+        if (Number(latest.enrollmentCount) > 0) {
+          result.booked += 1;
+          result.items.push({
+            substituteId: id,
+            calendarId: calendarId,
+            result: '已有預約，未取消',
+            enrollmentCount: Number(latest.enrollmentCount)
+          });
+          return;
+        }
+        var reason = '您好，您所預約 ' + latest.date + ' ' + latest.time + ' ' +
+          latest.courseName + ' 課程因未找到代課老師因此未開班🥹謝謝';
+        var cancelled = cancelObCalendarItem_(token, calendarId, reason, true);
+        if (!cancelled || cancelled.cancelled !== true) {
+          throw new Error('OB 回傳未確認課程已取消。');
+        }
+        var beforeStatus = cleanText_(record.row[5]);
+        var nextValues = record.row.slice(5, 19);
+        while (nextValues.length < 14) nextValues.push('');
+        nextValues[0] = '已取消';
+        nextValues[3] = '已完成';
+        nextValues[10] = '已關閉';
+        nextValues[11] = getTimestamp_();
+        nextValues[12] = '整月未領代課／OB 已取消';
+        nextValues[13] = '未找到代課老師／代課已關閉';
+        leaveSheet.getRange(record.rowNumber, 6, 1, 14).setValues([nextValues]);
+        appendAuditEventsUnlocked_(auditSheet, [{
+          actor: actor,
+          action: '整月未領代課批量關課',
+          targetId: id,
+          before: beforeStatus,
+          after: '已取消',
+          reason: calendarId
+        }]);
+        result.closed += 1;
+        result.items.push({ substituteId: id, calendarId: calendarId, result: '已取消' });
+      } catch (error) {
+        result.failed += 1;
+        result.items.push({
+          substituteId: id,
+          calendarId: calendarId,
+          result: '執行失敗',
+          error: error && error.message ? error.message : String(error)
+        });
+      }
+    });
+    return result;
   });
 }
 
@@ -6921,6 +7515,41 @@ function correctClaimDetails_(session, substituteId, difficultyValue, noteValue)
   });
 }
 
+function getCourseClosureDashboard_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureCourseClosureStructureUnlocked_(ss);
+  var settingSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS);
+  var logSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_LOG);
+  assertHeaders_(settingSheet, SHEET_HEADERS.COURSE_CLOSURE_SETTINGS);
+  assertHeaders_(logSheet, SHEET_HEADERS.COURSE_CLOSURE_LOG);
+  var settings = getCourseClosureSettingsUnlocked_(settingSheet);
+  var logs = logSheet.getDataRange().getValues().slice(1).map(function(row) {
+    return {
+      executedAt: cleanText_(row[0]),
+      targetDate: cleanText_(row[1]),
+      stage: cleanText_(row[2]),
+      calendarId: cleanText_(row[3]),
+      courseName: cleanText_(row[4]),
+      teacherName: cleanText_(row[5]),
+      enrollmentCount: row[6] === '' ? null : Number(row[6]),
+      ruleLabel: cleanText_(row[7]),
+      onlyEmpty: cleanText_(row[8]) === '是',
+      result: cleanText_(row[9]),
+      error: cleanText_(row[10]),
+      actor: cleanText_(row[11])
+    };
+  }).reverse().slice(0, 50);
+  return {
+    mode: settings.mode,
+    automatic: settings.automatic,
+    triggerCount: getCourseClosureTriggers_().length,
+    targetDate: getTomorrowDate_(),
+    unclaimedCandidates: getUnclaimedSubstituteClosureCandidates_(session),
+    recentLogs: logs
+  };
+}
+
 function getAdminDashboard_(session) {
   assertCapabilitySession_(session, 'course_admin');
   return (function() {
@@ -7054,6 +7683,7 @@ function getAdminDashboard_(session) {
       }).concat(ownSpecialRequests.filter(function(item) {
         return item.verificationStatus === '已核對';
       })),
+      courseClosure: getCourseClosureDashboard_(session),
       replacementOptions: replacementOptions
     };
   })();

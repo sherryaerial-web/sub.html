@@ -2506,8 +2506,8 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the ten capability-scoped admin tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 10);
+test('keeps the eleven capability-scoped admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 11);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);
@@ -2545,4 +2545,14 @@ test('optimizes login and navigation for the supplied four-digit PIN workflow', 
   assert.match(html, /id=["']login-pin["'][^>]*pattern=["']\[0-9\]\{4\}["']/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.primary-nav\s*\{[\s\S]*position:\s*static/);
   assert.doesNotMatch(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.primary-nav\s*\{[\s\S]*position:\s*fixed[\s\S]*bottom:\s*0/);
+});
+
+test('admin workspace exposes independent next-day and whole-month course closure controls', () => {
+  assert.match(html, /data-admin-tab=["']closureManagement["']/);
+  assert.match(html, /22:30.*0 人/s);
+  assert.match(html, /23:40.*雙人/s);
+  assert.match(html, /data-admin-action=["']toggle-course-closure-automation["']/);
+  assert.match(html, /data-admin-action=["']execute-next-day-closure["']/);
+  assert.match(html, /data-admin-action=["']close-unclaimed-substitutes["']/);
+  assert.match(html, /整月未領代課/);
 });

@@ -132,6 +132,13 @@ const EXPECTED_PAYROLL_DISPUTE_HEADERS = [
   '提出時間', '處理者', '處理時間',
 ];
 const EXPECTED_PAYROLL_PAYMENT_HEADERS = ['老師', '轉帳群組/銀行', '備註', '是否啟用'];
+const EXPECTED_COURSE_CLOSURE_SETTING_HEADERS = [
+  '設定鍵', '設定值', '更新時間', '操作者', '備註',
+];
+const EXPECTED_COURSE_CLOSURE_LOG_HEADERS = [
+  '執行時間', '目標日期', '檢核時段', 'OB Calendar ID', '課程', '老師',
+  '最新人數', '套用規則', 'onlyEmpty', '結果', '錯誤訊息', '操作者',
+];
 
 function createSheetFixture(name, values) {
   const protections = [];
@@ -1790,7 +1797,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       'CourseList', 'VVIP名單', 'VVIP選課紀錄', 'VVIP選課設定',
       '代課邀請', '操作紀錄', '登入帳號', '系統設定',
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
-      '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排'
+      '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
+      '關課設定', '關課紀錄'
     ].sort()
   );
   assert.deepEqual(
@@ -6404,4 +6412,371 @@ test('payroll manager adjustments require teacher reconfirmation and finalizatio
     }),
     /已完成管理員確認/
   );
+});
+
+test('next-day closure policy applies the approved thresholds with highest rule precedence', () => {
+  const backend = loadBackend();
+  const detail = (overrides = {}) => ({
+    calendarId: '987',
+    date: '2026/08/24',
+    time: '12:30',
+    courseName: 'A－空環 Lv.1',
+    teacherName: '一般老師',
+    enrollmentCount: 0,
+    points: 1,
+    cancelled: false,
+    ...overrides,
+  });
+  const policy = (item, stage) => JSON.parse(JSON.stringify(
+    backend.getCourseClosureRule_(item, stage),
+  ));
+
+  assert.deepEqual(policy(detail(), '22:30'), {
+    stage: '22:30', ruleKey: 'zero', ruleLabel: '0 人關課',
+    minimumEnrollment: 1, cancelAtOrBelow: 0, eligible: true,
+    onlyEmpty: true, manualReview: false, reason: '',
+  });
+  assert.equal(policy(detail({ enrollmentCount: 1 }), '22:30').eligible, false);
+
+  const ordinary = policy(detail({ enrollmentCount: 1 }), '23:40');
+  assert.equal(ordinary.ruleKey, 'general');
+  assert.equal(ordinary.minimumEnrollment, 2);
+  assert.equal(ordinary.cancelAtOrBelow, 1);
+  assert.equal(ordinary.eligible, true);
+  assert.equal(ordinary.onlyEmpty, false);
+
+  ['Jina', '小美', '卡拉', '卡拉 卡拉'].forEach((teacherName) => {
+    const rule = policy(detail({ teacherName, enrollmentCount: 2 }), '23:40');
+    assert.equal(rule.ruleKey, 'teacher-or-two-points');
+    assert.equal(rule.minimumEnrollment, 3);
+    assert.equal(rule.cancelAtOrBelow, 2);
+    assert.equal(rule.eligible, true);
+  });
+
+  const twoPoints = policy(detail({ points: 2, enrollmentCount: 2 }), '23:40');
+  assert.equal(twoPoints.ruleKey, 'teacher-or-two-points');
+  assert.equal(twoPoints.eligible, true);
+
+  const pair = policy(detail({
+    courseName: '空環雙人特別課', teacherName: 'Jina', points: 2, enrollmentCount: 3,
+  }), '23:40');
+  assert.equal(pair.ruleKey, 'pair');
+  assert.equal(pair.minimumEnrollment, 4);
+  assert.equal(pair.cancelAtOrBelow, 3);
+  assert.equal(pair.eligible, true);
+  assert.equal(policy(detail({
+    courseName: '雙人舞綢', teacherName: null, points: null, enrollmentCount: 3,
+  }), '23:40').ruleKey, 'pair');
+  assert.equal(policy(detail({ courseName: '雙人舞綢', enrollmentCount: 4 }), '23:40').eligible, false);
+});
+
+test('23:40 closure policy sends incomplete OB details to manual review instead of guessing', () => {
+  const backend = loadBackend();
+  const base = {
+    calendarId: '987', date: '2026/08/24', time: '12:30',
+    courseName: '空環', teacherName: '老師甲', enrollmentCount: 1,
+    points: 1, cancelled: false,
+  };
+  ['courseName', 'teacherName', 'enrollmentCount', 'points'].forEach((field) => {
+    const item = { ...base };
+    item[field] = null;
+    const rule = JSON.parse(JSON.stringify(backend.getCourseClosureRule_(item, '23:40')));
+    assert.equal(rule.manualReview, true, `${field} should require manual review`);
+    assert.equal(rule.eligible, false);
+    assert.match(rule.reason, /資料不完整/);
+  });
+});
+
+test('closure calendar detail normalization keeps live attendance, points and display fields', () => {
+  const backend = loadBackend();
+  const result = backend.normalizeClosureCalendarDetail_({
+    id: 987,
+    class: { id: 42, nameZhHant: 'A－空環 Lv.1' },
+    classTime: '2026-08-24T04:30:00.000Z',
+    customersAttending: 2,
+    points: 1,
+    cancelled: false,
+    instructors: [{ id: 7, firstName: 'Jina', lastName: '', isSubstitute: false }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    calendarId: '987', classId: '42', date: '2026/08/24', time: '12:30',
+    courseName: 'A－空環 Lv.1', teacherName: 'Jina', enrollmentCount: 2,
+    points: 1, cancelled: false,
+  });
+});
+
+test('OB cancellation API posts the guarded body and reads a single live calendar detail', () => {
+  const requests = [];
+  const backend = loadBackend({
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => key === 'OMCEAN_CANCEL_CALENDAR_PATH'
+          ? '/v1/calendar/{id}/cancel'
+          : '',
+      }),
+    },
+    UrlFetchApp: {
+      fetch(url, options) {
+        requests.push({ url, options });
+        const body = {
+          id: 987,
+          class: { id: 42, nameZhHant: 'A－空環 Lv.1' },
+          classTime: '2026-08-24T04:30:00.000Z',
+          customersAttending: 1,
+          points: 1,
+          cancelled: options.method === 'post',
+          instructors: [{ id: 7, firstName: 'Jina', lastName: '' }],
+        };
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify(body),
+        };
+      },
+    },
+  });
+
+  const before = backend.fetchCalendarDetail_('token-for-test', '987');
+  const cancelled = backend.cancelObCalendarItem_(
+    'token-for-test', '987', '未達開課人數', false,
+  );
+
+  assert.equal(before.enrollmentCount, 1);
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(requests[0].url, 'https://api.omceanbooking.com/v1/calendar/987');
+  assert.equal(requests[0].options.method, 'get');
+  assert.equal(requests[1].url, 'https://api.omceanbooking.com/v1/calendar/987/cancel');
+  assert.equal(requests[1].options.method, 'post');
+  assert.deepEqual(JSON.parse(requests[1].options.payload), {
+    reason: '未達開課人數', onlyEmpty: false,
+  });
+  assert.equal(requests[1].options.headers.Authorization, 'Bearer token-for-test');
+  assert.equal(JSON.stringify(cancelled).includes('token-for-test'), false);
+});
+
+test('course closure structure is additive and defaults to manual mode', () => {
+  const spreadsheet = createSpreadsheetFixture([]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  const result = backend.ensureCourseClosureStructureUnlocked_(spreadsheet);
+
+  assert.deepEqual(spreadsheet.getSheetByName('關課設定').values[0], EXPECTED_COURSE_CLOSURE_SETTING_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('關課紀錄').values[0], EXPECTED_COURSE_CLOSURE_LOG_HEADERS);
+  assert.equal(result.mode, 'manual');
+  assert.equal(spreadsheet.getSheetByName('關課設定').values[1][0], 'executionMode');
+  assert.equal(spreadsheet.getSheetByName('關課設定').values[1][1], 'manual');
+});
+
+test('next-day closure re-reads latest enrollment, logs idempotently, and preserves formal workflow sheets', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  services.Utilities.formatDate = (value, _timezone, pattern) => {
+    const date = new Date(value);
+    if (pattern === 'yyyy-MM-dd HH:mm:ss') return date.toISOString().replace('T', ' ').slice(0, 19);
+    if (pattern === 'yyyy/MM/dd') return '2026/08/24';
+    if (pattern === 'HH:mm') return '12:30';
+    return '';
+  };
+  const leaveSheet = createSheetFixture('請假代課紀錄', [
+    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS, EXPECTED_ORDINARY_DELAY_HEADERS),
+    ['formal-human-value', '老師甲', '2026/09/01', '12:30', '空環', '確認中'],
+  ]);
+  const invitationSheet = createSheetFixture('代課邀請', [
+    ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
+    ['invite-human-value', '老師乙', '', '', '開放中', ''],
+  ]);
+  const closureSettingSheet = createSheetFixture('關課設定', [
+    EXPECTED_COURSE_CLOSURE_SETTING_HEADERS,
+    ['executionMode', 'manual', '', '管理員', ''],
+  ]);
+  const closureLogSheet = createSheetFixture('關課紀錄', [EXPECTED_COURSE_CLOSURE_LOG_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([leaveSheet, invitationSheet, closureSettingSheet, closureLogSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  const leaveBefore = JSON.stringify(leaveSheet.values);
+  const invitationBefore = JSON.stringify(invitationSheet.values);
+  let detailReads = 0;
+  let cancellations = 0;
+  backend.fetchCalendarPages_ = () => [{
+    id: 987, classTime: '2026-08-24T04:30:00.000Z', customersAttending: 0, points: 1,
+    class: { id: 9, nameZhHant: 'A－空環 Lv.1' }, instructors: [{ id: 2, name: '老師甲' }],
+  }];
+  backend.fetchCalendarDetail_ = () => {
+    detailReads += 1;
+    return {
+      calendarId: '987', date: '2026/08/24', time: '12:30', courseName: 'A－空環 Lv.1',
+      teacherName: '老師甲', enrollmentCount: 0, points: 1, cancelled: false,
+    };
+  };
+  backend.cancelObCalendarItem_ = (_token, calendarId, reason, onlyEmpty) => {
+    cancellations += 1;
+    assert.equal(calendarId, '987');
+    assert.match(reason, /2026\/08\/24 12:30 A－空環 Lv\.1/);
+    assert.equal(onlyEmpty, true);
+    return { calendarId: '987', cancelled: true };
+  };
+
+  const first = backend.executeNextDayClosuresCore_('管理員甲', '22:30', '2026/08/24');
+  const second = backend.executeNextDayClosuresCore_('管理員甲', '22:30', '2026/08/24');
+
+  assert.equal(first.cancelledCount, 1);
+  assert.equal(second.cancelledCount, 0);
+  assert.equal(second.alreadyProcessedCount, 1);
+  assert.equal(detailReads, 1);
+  assert.equal(cancellations, 1);
+  assert.equal(closureLogSheet.values.length, 2);
+  assert.equal(closureLogSheet.values[1][9], '已取消');
+  assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);
+  assert.equal(JSON.stringify(invitationSheet.values), invitationBefore);
+});
+
+test('closure idempotency ignores malformed historical log rows instead of blocking the run', () => {
+  const backend = loadBackend();
+  const logSheet = createSheetFixture('關課紀錄', [
+    EXPECTED_COURSE_CLOSURE_LOG_HEADERS,
+    ['now', '', '22:30', 'bad-row', '', '', '', '', '', '已取消', '', ''],
+    ['now', '2026/08/24', '22:30', '987', '空環', '老師甲', 0, '0 人關課', '是', '已取消', '', '管理員'],
+  ]);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getProcessedClosureKeysUnlocked_(logSheet, '2026/08/24', '22:30'))),
+    { 987: true },
+  );
+});
+
+test('23:40 next-day closure keeps a class when the latest re-read reaches minimum enrollment', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  services.Utilities.formatDate = (value, _timezone, pattern) => {
+    const date = new Date(value);
+    if (pattern === 'yyyy-MM-dd HH:mm:ss') return date.toISOString().replace('T', ' ').slice(0, 19);
+    if (pattern === 'yyyy/MM/dd') return '2026/08/24';
+    if (pattern === 'HH:mm') return '12:30';
+    return '';
+  };
+  const closureSettingSheet = createSheetFixture('關課設定', [
+    EXPECTED_COURSE_CLOSURE_SETTING_HEADERS,
+    ['executionMode', 'manual', '', '管理員', ''],
+  ]);
+  const closureLogSheet = createSheetFixture('關課紀錄', [EXPECTED_COURSE_CLOSURE_LOG_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([closureSettingSheet, closureLogSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  backend.fetchCalendarPages_ = () => [{
+    id: 988, classTime: '2026-08-24T04:30:00.000Z', customersAttending: 1, points: 1,
+    class: { id: 9, nameZhHant: 'A－空環 Lv.1' }, instructors: [{ id: 2, name: '老師甲' }],
+  }];
+  backend.fetchCalendarDetail_ = () => ({
+    calendarId: '988', date: '2026/08/24', time: '12:30', courseName: 'A－空環 Lv.1',
+    teacherName: '老師甲', enrollmentCount: 2, points: 1, cancelled: false,
+  });
+  backend.cancelObCalendarItem_ = () => { throw new Error('must not cancel'); };
+
+  const result = backend.executeNextDayClosuresCore_('系統自動關課', '23:40', '2026/08/24');
+
+  assert.equal(result.cancelledCount, 0);
+  assert.equal(result.keptOpenCount, 1);
+  assert.equal(closureLogSheet.values.length, 2);
+  assert.equal(closureLogSheet.values[1][9], '人數已足，保留開課');
+});
+
+test('course closure automation requires a token, creates one scheduler trigger, and can return to manual', () => {
+  const services = createAuthServices();
+  const triggers = [];
+  const settingSheet = createSheetFixture('關課設定', [EXPECTED_COURSE_CLOSURE_SETTING_HEADERS]);
+  const logSheet = createSheetFixture('關課紀錄', [EXPECTED_COURSE_CLOSURE_LOG_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([settingSheet, logSheet]);
+  const ScriptApp = {
+    getProjectTriggers: () => triggers.slice(),
+    newTrigger(handler) {
+      const trigger = { handler, getHandlerFunction: () => handler };
+      return {
+        timeBased() { return this; },
+        everyMinutes(minutes) { trigger.minutes = minutes; return this; },
+        create() { triggers.push(trigger); return trigger; },
+      };
+    },
+    deleteTrigger(trigger) {
+      const index = triggers.indexOf(trigger);
+      if (index >= 0) triggers.splice(index, 1);
+    },
+  };
+  const backend = loadBackend({
+    ...services,
+    ScriptApp,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  const admin = { teacherName: '管理員甲', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(() => backend.setCourseClosureAutomation_(admin, true), /權杖/);
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const enabled = backend.setCourseClosureAutomation_(admin, true);
+  const enabledAgain = backend.setCourseClosureAutomation_(admin, true);
+  assert.equal(enabled.mode, 'auto');
+  assert.equal(enabledAgain.mode, 'auto');
+  assert.equal(triggers.length, 1);
+  assert.equal(triggers[0].handler, 'runCourseClosureScheduler');
+  assert.equal(triggers[0].minutes, 5);
+
+  const disabled = backend.setCourseClosureAutomation_(admin, false);
+  assert.equal(disabled.mode, 'manual');
+  assert.equal(triggers.length, 0);
+});
+
+test('course closure scheduler only opens bounded windows for the two approved stages', () => {
+  const backend = loadBackend();
+  assert.equal(backend.getCourseClosureDueStage_('22:29'), '');
+  assert.equal(backend.getCourseClosureDueStage_('22:30'), '22:30');
+  assert.equal(backend.getCourseClosureDueStage_('22:39'), '22:30');
+  assert.equal(backend.getCourseClosureDueStage_('22:40'), '');
+  assert.equal(backend.getCourseClosureDueStage_('23:40'), '23:40');
+  assert.equal(backend.getCourseClosureDueStage_('23:49'), '23:40');
+  assert.equal(backend.getCourseClosureDueStage_('23:50'), '');
+});
+
+test('next-month unclaimed substitute closure is manual, only-empty, and closes rows only after OB confirms cancellation', () => {
+  const leaveRows = [
+    ['2026-08-20', '老師甲', '2026/09/05', '10:00', 'A－空環', '確認中', '', '', '', 'leave-empty', 'cal-empty'],
+    ['2026-08-20', '老師乙', '2026/09/06', '11:00', 'B－舞綢', '確認中', '', '', '', 'leave-booked', 'cal-booked'],
+    ['2026-08-20', '老師丙', '2026/09/07', '12:00', 'C－空瑜', '已領取', '老師甲', '', '', 'leave-claimed', 'cal-claimed'],
+    ['2026-08-20', '老師丙', '2026/10/01', '13:00', 'D－空環', '確認中', '', '', '', 'leave-other-month', 'cal-other'],
+  ];
+  const fixture = createInvitationBackend({ leaveRows, nextMonth: '2026-09' });
+  fixture.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const cancelCalls = [];
+  fixture.backend.fetchCalendarDetail_ = (_token, calendarId) => ({
+    calendarId,
+    date: calendarId === 'cal-empty' ? '2026/09/05' : '2026/09/06',
+    time: calendarId === 'cal-empty' ? '10:00' : '11:00',
+    courseName: calendarId === 'cal-empty' ? 'A－空環' : 'B－舞綢',
+    teacherName: '老師甲',
+    enrollmentCount: calendarId === 'cal-empty' ? 0 : 1,
+    points: 1,
+    cancelled: false,
+  });
+  fixture.backend.cancelObCalendarItem_ = (_token, calendarId, _reason, onlyEmpty) => {
+    cancelCalls.push({ calendarId, onlyEmpty });
+    return { calendarId, cancelled: true };
+  };
+
+  const candidates = fixture.backend.getUnclaimedSubstituteClosureCandidates_(fixture.adminSession);
+  assert.deepEqual(candidates.map((item) => item.substituteId), ['leave-empty', 'leave-booked']);
+
+  const result = fixture.backend.closeUnclaimedSubstituteCourses_(
+    fixture.adminSession,
+    ['leave-empty', 'leave-booked']
+  );
+
+  assert.equal(result.closed, 1);
+  assert.equal(result.booked, 1);
+  assert.deepEqual(cancelCalls, [{ calendarId: 'cal-empty', onlyEmpty: true }]);
+  assert.equal(fixture.leaveSheet.values[1][5], '已取消');
+  assert.equal(fixture.leaveSheet.values[1][8], '已完成');
+  assert.equal(fixture.leaveSheet.values[2][5], '確認中');
+  assert.equal(fixture.leaveSheet.values[3][5], '已領取');
+  assert.equal(fixture.leaveSheet.values[4][5], '確認中');
 });

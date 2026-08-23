@@ -1243,7 +1243,7 @@ function doPost(e) {
         );
       },
       executeNextDayClosures: function() {
-        return executeNextDayClosures_(session, parameters.stage, parameters.targetDate);
+        return executeNextDayClosures_(session, parameters.stage);
       },
       closeUnclaimedSubstituteCourses: function() {
         return closeUnclaimedSubstituteCourses_(
@@ -1532,6 +1532,12 @@ function getCourseClosureRule_(detail, stageValue) {
   if (['22:30', '23:40'].indexOf(stage) === -1) {
     throw new Error('不支援的關課檢核時段：' + stage);
   }
+  if (detail && isVenueRentalCourseName_(detail.courseName)) {
+    base.ruleKey = 'venue-rental-excluded';
+    base.ruleLabel = '場地租借不關課';
+    base.reason = '場地租借／場租不納入未達人數關課。';
+    return base;
+  }
   if (!detail || !cleanText_(detail.calendarId) || !cleanText_(detail.date) ||
       !cleanText_(detail.time) || !cleanText_(detail.courseName) ||
       detail.enrollmentCount == null || !isFinite(Number(detail.enrollmentCount))) {
@@ -1578,6 +1584,11 @@ function getCourseClosureRule_(detail, stageValue) {
   base.eligible = enrollmentCount <= base.cancelAtOrBelow;
   base.onlyEmpty = enrollmentCount === 0;
   return base;
+}
+
+function isVenueRentalCourseName_(courseNameValue) {
+  var courseName = cleanText_(courseNameValue).replace(/\s+/g, '');
+  return /場地租借|場租/.test(courseName);
 }
 
 function getObApiJson_(url, options, label) {
@@ -1921,9 +1932,9 @@ function notifyCourseClosureFailures_(result) {
   });
 }
 
-function executeNextDayClosures_(session, stageValue, targetDateValue) {
+function executeNextDayClosures_(session, stageValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
-  var result = executeNextDayClosuresCore_(actor, stageValue, targetDateValue || getTomorrowDate_());
+  var result = executeNextDayClosuresCore_(actor, stageValue, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
   return result;
 }
@@ -4276,7 +4287,9 @@ function getUnclaimedSubstituteClosureCandidates_(session) {
   var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), CONFIG.LEAVE_SHEET);
   assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   return sheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return isOrdinaryOpenLeaveRow_(row) && isLeaveRowInMonth_(row, targetMonth);
+    return isOrdinaryOpenLeaveRow_(row) &&
+      isLeaveRowInMonth_(row, targetMonth) &&
+      !isVenueRentalCourseName_(row[4]);
   }).map(function(row) {
     return {
       substituteId: cleanText_(row[9]),
@@ -4311,7 +4324,14 @@ function closeUnclaimedSubstituteCourses_(session, substituteIds) {
       var id = cleanText_(values[index][9]);
       if (id) recordById[id] = { rowNumber: index + 1, row: values[index] };
     }
-    var result = { targetMonth: targetMonth, closed: 0, booked: 0, failed: 0, items: [] };
+    var result = {
+      targetMonth: targetMonth,
+      closed: 0,
+      booked: 0,
+      excluded: 0,
+      failed: 0,
+      items: []
+    };
     ids.forEach(function(id) {
       var record = recordById[id];
       if (!record || !isOrdinaryOpenLeaveRow_(record.row) ||
@@ -4320,9 +4340,23 @@ function closeUnclaimedSubstituteCourses_(session, substituteIds) {
         result.items.push({ substituteId: id, result: '狀態已變更，未處理' });
         return;
       }
+      if (isVenueRentalCourseName_(record.row[4])) {
+        result.excluded += 1;
+        result.items.push({ substituteId: id, result: '場地租借，未取消' });
+        return;
+      }
       var calendarId = getEffectiveOpenLeaveCalendarId_(record.row);
       try {
         var latest = fetchCalendarDetail_(token, calendarId);
+        if (isVenueRentalCourseName_(latest.courseName)) {
+          result.excluded += 1;
+          result.items.push({
+            substituteId: id,
+            calendarId: calendarId,
+            result: '場地租借，未取消'
+          });
+          return;
+        }
         if (latest.cancelled === true) {
           throw new Error('OB 課程已是取消狀態，請先重新同步確認。');
         }

@@ -1418,7 +1418,12 @@
         };
 
         window.addEventListener("message", handleMessage);
-        const timeoutMs = action === "closeMissingObCancellations" ? 120000 : 45000;
+        const longRunningActions = new Set([
+          "closeMissingObCancellations",
+          "executeNextDayClosures",
+          "closeUnclaimedSubstituteCourses"
+        ]);
+        const timeoutMs = longRunningActions.has(action) ? 180000 : 45000;
         timeoutId = window.setTimeout(() => {
           cleanup();
           reject(new Error("系統連線逾時，請重新整理後再試一次。"));
@@ -3763,7 +3768,7 @@
           <article class="list-item single-column">
             <div>
               <div class="item-course">${escapeHtml(item.targetDate)} ${escapeHtml(item.stage)}｜${escapeHtml(item.courseName || "未取得課名")}</div>
-              <div class="item-meta">${escapeHtml(item.teacherName || "未取得老師")}｜${item.enrollmentCount == null ? "人數未取得" : `${escapeHtml(item.enrollmentCount)} 人`}｜${escapeHtml(item.ruleLabel || "未套用規則")}｜${escapeHtml(item.result || "未記錄結果")}${item.error ? `｜${escapeHtml(item.error)}` : ""}</div>
+              <div class="item-meta">${escapeHtml(item.teacherName || "未取得老師")}｜${item.enrollmentCount == null ? "人數未取得" : `${escapeHtml(item.enrollmentCount)} 人`}｜${escapeHtml(item.ruleLabel || "未套用規則")}｜${escapeHtml(item.result || "未記錄結果")}｜執行：${escapeHtml(item.actor || "未記錄")}${item.error ? `｜${escapeHtml(item.error)}` : ""}</div>
             </div>
           </article>`).join("");
         content.innerHTML = `
@@ -3772,6 +3777,7 @@
             <div class="item-meta">目標日期：${escapeHtml(closure.targetDate || "—")}｜目前排程：${Number(closure.triggerCount) || 0} 個</div>
             <div class="item-meta">22:30：隔天 0 人課程取消。</div>
             <div class="item-meta">23:40：一般課 1 人以下；Jina／小美／卡拉／2 點課 2 人以下；課名含「雙人」3 人以下取消。</div>
+            <div class="item-meta">場地租借／場租不納入關課，任何人數都會保留。</div>
             <div class="item-meta">每次取消前都會重新讀取 OB 最新人數；自動與手動執行共用同一份防重複紀錄。</div>
             <div class="admin-item-actions">
               <button class="compact-button" type="button" data-admin-action="toggle-course-closure-automation" data-enabled="${closure.automatic ? "false" : "true"}"><i data-lucide="${closure.automatic ? "hand" : "timer-reset"}"></i>${closure.automatic ? "改為手動" : "啟用自動關課"}</button>
@@ -3781,7 +3787,7 @@
           </div>
           <div class="admin-control">
             <strong>整月未領代課｜${candidates.length} 堂</strong>
-            <div class="item-meta">此區只列出下個月仍未領取的代課。取消前會重新確認 OB 人數；只有 0 人才會取消，成功後才會關閉對應代課需求。</div>
+            <div class="item-meta">此區只列出下個月仍未領取的代課，場地租借／場租不會列入。取消前會重新確認 OB 人數與課名；只有 0 人且不是場租才會取消，成功後才會關閉對應代課需求。</div>
             <div class="item-meta">此功能與上方隔天人數關課完全獨立，僅在管理員手動勾選並確認後執行。</div>
             <div class="admin-item-actions">
               <button class="compact-button" type="button" data-admin-action="select-all-unclaimed-substitutes" ${candidates.length ? "" : "disabled"}><i data-lucide="list-checks"></i>全選清單</button>
@@ -4121,7 +4127,7 @@
       if (!window.confirm(`確認手動執行 ${targetDate || "隔天"} ${stage} 關課檢核？取消前會再讀取 OB 最新預約人數。`)) return;
       setButtonBusy(button, true, "檢核中...");
       try {
-        const result = await callPostApi("executeNextDayClosures", { stage, targetDate });
+        const result = await callPostApi("executeNextDayClosures", { stage });
         setNotice(`檢核完成：已取消 ${result.cancelledCount || 0} 堂、保留 ${result.keptOpenCount || 0} 堂、待人工確認 ${result.manualReviewCount || 0} 堂、失敗 ${result.failedCount || 0} 堂。`, result.failedCount ? "error" : "success");
         await fetchAdminDashboard();
       } finally {
@@ -4138,11 +4144,11 @@
     async function closeSelectedUnclaimedSubstitutes(button) {
       const substituteIds = [...document.querySelectorAll(".unclaimed-substitute-checkbox:checked")].map((input) => input.value);
       if (!substituteIds.length) throw new Error("請先勾選要處理的未領代課。");
-      if (!window.confirm(`確認處理 ${substituteIds.length} 堂整月未領代課？系統只會取消 OB 最新人數為 0 的課程；已有預約或執行失敗者會保留。`)) return;
+      if (!window.confirm(`確認處理 ${substituteIds.length} 堂整月未領代課？系統只會取消 OB 最新人數為 0 且不是場租的課程；已有預約、場租或執行失敗者會保留。`)) return;
       setButtonBusy(button, true, "處理中...");
       try {
         const result = await callPostApi("closeUnclaimedSubstituteCourses", { substituteIds });
-        setNotice(`處理完成：已取消 ${result.closed || 0} 堂、已有預約 ${result.booked || 0} 堂、失敗 ${result.failed || 0} 堂。`, result.failed ? "error" : "success");
+        setNotice(`處理完成：已取消 ${result.closed || 0} 堂、已有預約 ${result.booked || 0} 堂、場租保留 ${result.excluded || 0} 堂、失敗 ${result.failed || 0} 堂。`, result.failed ? "error" : "success");
         await fetchAdminDashboard();
       } finally {
         if (button.isConnected) setButtonBusy(button, false, "");

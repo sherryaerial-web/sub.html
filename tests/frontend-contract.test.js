@@ -2304,7 +2304,9 @@ test('OB-cancelled queue renders bulk-safe rows separately from pending invitati
   assert.match(rendered, /value="leave-missing"/);
   assert.match(rendered, /data-admin-action="select-all-ob-cancellations"/);
   assert.match(rendered, /data-admin-action="close-ob-cancellations"/);
-  assert.match(html, /action === "closeMissingObCancellations" \? 120000 : 45000/);
+  assert.match(html, /longRunningActions\.has\(action\) \? 180000 : 45000/);
+  assert.match(html, /"executeNextDayClosures"/);
+  assert.match(html, /"closeUnclaimedSubstituteCourses"/);
   assert.match(html, /button\.setAttribute\("aria-busy", "true"\)/);
   assert.match(html, /await closeSelectedMissingObCancellations\(button\);\s*return;/);
 });
@@ -2555,4 +2557,6 @@ test('admin workspace exposes independent next-day and whole-month course closur
   assert.match(html, /data-admin-action=["']execute-next-day-closure["']/);
   assert.match(html, /data-admin-action=["']close-unclaimed-substitutes["']/);
   assert.match(html, /整月未領代課/);
+  assert.match(html, /場地租借／場租不納入關課/);
+  assert.match(html, /item\.actor/);
 });

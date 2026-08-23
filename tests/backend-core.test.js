@@ -6470,6 +6470,33 @@ test('next-day closure policy applies the approved thresholds with highest rule 
   assert.equal(policy(detail({ courseName: '雙人舞綢', enrollmentCount: 4 }), '23:40').eligible, false);
 });
 
+test('next-day closure policy always excludes venue rentals at both stages', () => {
+  const backend = loadBackend();
+  const detail = (courseName) => ({
+    calendarId: 'rental-987',
+    date: '2026/08/24',
+    time: '12:30',
+    courseName,
+    teacherName: '',
+    enrollmentCount: 0,
+    points: null,
+    cancelled: false,
+  });
+
+  ['C－場地租借', 'A－場租'].forEach((courseName) => {
+    ['22:30', '23:40'].forEach((stage) => {
+      const rule = JSON.parse(JSON.stringify(
+        backend.getCourseClosureRule_(detail(courseName), stage),
+      ));
+      assert.equal(rule.ruleKey, 'venue-rental-excluded');
+      assert.equal(rule.eligible, false);
+      assert.equal(rule.onlyEmpty, false);
+      assert.equal(rule.manualReview, false);
+      assert.match(rule.reason, /不納入/);
+    });
+  });
+});
+
 test('23:40 closure policy sends incomplete OB details to manual review instead of guessing', () => {
   const backend = loadBackend();
   const base = {
@@ -6640,6 +6667,25 @@ test('next-day closure re-reads latest enrollment, logs idempotently, and preser
   assert.equal(JSON.stringify(invitationSheet.values), invitationBefore);
 });
 
+test('manual next-day closure derives the target date on the server instead of trusting the browser value', () => {
+  const backend = loadBackend();
+  let received = null;
+  backend.assertCapabilitySession_ = () => '管理員甲';
+  backend.getTomorrowDate_ = () => '2026/08/24';
+  backend.executeNextDayClosuresCore_ = (actor, stage, targetDate) => {
+    received = { actor, stage, targetDate };
+    return { cancelledCount: 0, failedCount: 0, items: [] };
+  };
+
+  backend.executeNextDayClosures_({}, '22:30', '瀏覽器送來的錯誤日期');
+
+  assert.deepEqual(received, {
+    actor: '管理員甲',
+    stage: '22:30',
+    targetDate: '2026/08/24',
+  });
+});
+
 test('closure idempotency ignores malformed historical log rows instead of blocking the run', () => {
   const backend = loadBackend();
   const logSheet = createSheetFixture('關課紀錄', [
@@ -6807,6 +6853,7 @@ test('next-month unclaimed substitute closure is manual, only-empty, and closes 
   const leaveRows = [
     ['2026-08-20', '老師甲', '2026/09/05', '10:00', 'A－空環', '確認中', '', '', '', 'leave-empty', 'cal-empty'],
     ['2026-08-20', '老師乙', '2026/09/06', '11:00', 'B－舞綢', '確認中', '', '', '', 'leave-booked', 'cal-booked'],
+    ['2026-08-20', '租借會員', '2026/09/06', '12:00', 'C－場地租借', '確認中', '', '', '', 'leave-rental', 'cal-rental'],
     ['2026-08-20', '老師丙', '2026/09/07', '12:00', 'C－空瑜', '已領取', '老師甲', '', '', 'leave-claimed', 'cal-claimed'],
     ['2026-08-20', '老師丙', '2026/10/01', '13:00', 'D－空環', '確認中', '', '', '', 'leave-other-month', 'cal-other'],
   ];
@@ -6842,6 +6889,40 @@ test('next-month unclaimed substitute closure is manual, only-empty, and closes 
   assert.equal(fixture.leaveSheet.values[1][5], '已取消');
   assert.equal(fixture.leaveSheet.values[1][8], '已完成');
   assert.equal(fixture.leaveSheet.values[2][5], '確認中');
-  assert.equal(fixture.leaveSheet.values[3][5], '已領取');
-  assert.equal(fixture.leaveSheet.values[4][5], '確認中');
+  assert.equal(fixture.leaveSheet.values[3][5], '確認中');
+  assert.equal(fixture.leaveSheet.values[4][5], '已領取');
+  assert.equal(fixture.leaveSheet.values[5][5], '確認中');
+});
+
+test('next-month unclaimed closure rechecks live OB name and never cancels a venue rental', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    leaveRows: [[
+      '2026-08-20', '老師甲', '2026/09/05', '10:00', 'A－空環',
+      '確認中', '', '', '', 'leave-stale-rental', 'cal-stale-rental',
+    ]],
+  });
+  fixture.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  fixture.backend.fetchCalendarDetail_ = () => ({
+    calendarId: 'cal-stale-rental', date: '2026/09/05', time: '10:00',
+    courseName: 'C－場地租借', teacherName: '', enrollmentCount: 0,
+    points: null, cancelled: false,
+  });
+  let cancellations = 0;
+  fixture.backend.cancelObCalendarItem_ = () => {
+    cancellations += 1;
+    return { calendarId: 'cal-stale-rental', cancelled: true };
+  };
+
+  const result = fixture.backend.closeUnclaimedSubstituteCourses_(
+    fixture.adminSession,
+    ['leave-stale-rental'],
+  );
+
+  assert.equal(result.excluded, 1);
+  assert.equal(result.closed, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(cancellations, 0);
+  assert.equal(fixture.leaveSheet.values[1][5], '確認中');
+  assert.equal(result.items[0].result, '場地租借，未取消');
 });

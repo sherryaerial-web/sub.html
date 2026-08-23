@@ -6599,10 +6599,14 @@ test('next-day closure re-reads latest enrollment, logs idempotently, and preser
   const invitationBefore = JSON.stringify(invitationSheet.values);
   let detailReads = 0;
   let cancellations = 0;
-  backend.fetchCalendarPages_ = () => [{
+  let fetchedWindow = null;
+  backend.fetchCalendarPages_ = (_token, dateFrom, dateTo) => {
+    fetchedWindow = { dateFrom, dateTo };
+    return [{
     id: 987, classTime: '2026-08-24T04:30:00.000Z', customersAttending: 0, points: 1,
     class: { id: 9, nameZhHant: 'A－空環 Lv.1' }, instructors: [{ id: 2, name: '老師甲' }],
-  }];
+    }];
+  };
   backend.fetchCalendarDetail_ = () => {
     detailReads += 1;
     return {
@@ -6626,6 +6630,10 @@ test('next-day closure re-reads latest enrollment, logs idempotently, and preser
   assert.equal(second.alreadyProcessedCount, 1);
   assert.equal(detailReads, 1);
   assert.equal(cancellations, 1);
+  assert.deepEqual(fetchedWindow, {
+    dateFrom: '2026-08-24',
+    dateTo: '2026-08-25',
+  });
   assert.equal(closureLogSheet.values.length, 2);
   assert.equal(closureLogSheet.values[1][9], '已取消');
   assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);

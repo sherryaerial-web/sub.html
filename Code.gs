@@ -1649,6 +1649,20 @@ function normalizeClosureTargetDate_(value) {
   return text;
 }
 
+function getClosureApiDateRange_(targetDateValue) {
+  var targetDate = normalizeClosureTargetDate_(targetDateValue);
+  var parts = targetDate.split('/').map(Number);
+  var nextDayUtc = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + 1));
+  return {
+    dateFrom: targetDate.replace(/\//g, '-'),
+    dateTo: [
+      nextDayUtc.getUTCFullYear(),
+      ('0' + (nextDayUtc.getUTCMonth() + 1)).slice(-2),
+      ('0' + nextDayUtc.getUTCDate()).slice(-2)
+    ].join('-')
+  };
+}
+
 function buildCourseClosureReason_(detail) {
   return '您好，您所預約 ' + detail.date + ' ' + detail.time + ' ' +
     detail.courseName + ' 課程因未達開課人數因此未開班🥹謝謝';
@@ -1700,8 +1714,8 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
     var logSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_LOG);
     assertHeaders_(logSheet, SHEET_HEADERS.COURSE_CLOSURE_LOG);
     var processed = getProcessedClosureKeysUnlocked_(logSheet, targetDate, stage);
-    var apiDate = targetDate.replace(/\//g, '-');
-    var rawItems = fetchCalendarPages_(token, apiDate, apiDate);
+    var apiRange = getClosureApiDateRange_(targetDate);
+    var rawItems = fetchCalendarPages_(token, apiRange.dateFrom, apiRange.dateTo);
     var result = {
       targetDate: targetDate,
       stage: stage,

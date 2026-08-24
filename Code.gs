@@ -127,6 +127,7 @@ var CONFIG = {
   VVIP_COURSE_CANCELLED_STATUS: '課程已取消',
   OB_CANCELLATION_BATCH_MAX: 100,
   COURSE_CLOSURE_MODE_SETTING: 'executionMode',
+  COURSE_CLOSURE_SCHEDULER_INSTALLED_PROPERTY: 'COURSE_CLOSURE_SCHEDULER_INSTALLED_AT',
   COURSE_CLOSURE_FAILURE_EMAIL: 'takochang68@gmail.com',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
@@ -1844,34 +1845,57 @@ function getCourseClosureTriggers_() {
   });
 }
 
-function isCourseClosureTriggerAuthorizationError_(error) {
-  var message = cleanText_(error && error.message ? error.message : error).toLowerCase();
-  return message.indexOf('script.scriptapp') >= 0 ||
-    (message.indexOf('getprojecttriggers') >= 0 &&
-      (message.indexOf('權限') >= 0 || message.indexOf('permission') >= 0 || message.indexOf('authorization') >= 0));
+function getCourseClosureSchedulerInstalledAt_() {
+  var properties = getScriptProperties_();
+  return properties
+    ? cleanText_(properties.getProperty(CONFIG.COURSE_CLOSURE_SCHEDULER_INSTALLED_PROPERTY))
+    : '';
 }
 
 function getCourseClosureTriggerStatus_() {
-  try {
-    return {
-      triggerCount: getCourseClosureTriggers_().length,
-      authorizationRequired: false
-    };
-  } catch (error) {
-    if (!isCourseClosureTriggerAuthorizationError_(error)) throw error;
-    return {
-      triggerCount: 0,
-      authorizationRequired: true
-    };
+  var installedAt = getCourseClosureSchedulerInstalledAt_();
+  return {
+    triggerCount: installedAt ? 1 : 0,
+    authorizationRequired: false,
+    installationRequired: !installedAt,
+    installedAt: installedAt
+  };
+}
+
+function installCourseClosureScheduler() {
+  var triggers = getCourseClosureTriggers_();
+  var created = false;
+  if (!triggers.length) {
+    ScriptApp.newTrigger('runCourseClosureScheduler')
+      .timeBased()
+      .everyMinutes(5)
+      .create();
+    created = true;
+    triggers = getCourseClosureTriggers_();
   }
+  if (!triggers.length) throw new Error('自動關課排程建立失敗，請稍後再試。');
+  var installedAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  PropertiesService.getScriptProperties().setProperty(
+    CONFIG.COURSE_CLOSURE_SCHEDULER_INSTALLED_PROPERTY,
+    installedAt
+  );
+  return {
+    installed: true,
+    created: created,
+    triggerCount: triggers.length,
+    installedAt: installedAt
+  };
 }
 
 function authorizeCourseClosureServices() {
-  var triggers = getCourseClosureTriggers_();
+  var installation = installCourseClosureScheduler();
   var remainingMailQuota = MailApp.getRemainingDailyQuota();
   return {
     authorized: true,
-    triggerCount: triggers.length,
+    installed: installation.installed,
+    created: installation.created,
+    triggerCount: installation.triggerCount,
+    installedAt: installation.installedAt,
     remainingMailQuota: remainingMailQuota
   };
 }
@@ -1884,23 +1908,24 @@ function setCourseClosureAutomation_(session, enabledValue) {
   )) {
     throw new Error('尚未設定 Omcean API 權杖，不能啟用自動關課。');
   }
+  var triggerStatus = getCourseClosureTriggerStatus_();
+  if (enabled && triggerStatus.installationRequired) {
+    throw new Error(
+      '尚未安裝自動關課排程。請由專案擁有者在 Apps Script 編輯器執行 ' +
+      'installCourseClosureScheduler（或 authorizeCourseClosureServices）一次。'
+    );
+  }
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureCourseClosureStructureUnlocked_(ss);
     var settingsSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS);
-    var triggers = getCourseClosureTriggers_();
-    if (enabled && !triggers.length) {
-      ScriptApp.newTrigger('runCourseClosureScheduler')
-        .timeBased()
-        .everyMinutes(5)
-        .create();
-      triggers = getCourseClosureTriggers_();
-    } else if (!enabled) {
-      triggers.forEach(function(trigger) { ScriptApp.deleteTrigger(trigger); });
-      triggers = [];
-    }
     var mode = setCourseClosureModeUnlocked_(settingsSheet, enabled ? 'auto' : 'manual', actor);
-    return { mode: mode, automatic: mode === 'auto', triggerCount: triggers.length };
+    return {
+      mode: mode,
+      automatic: mode === 'auto',
+      triggerCount: triggerStatus.triggerCount,
+      triggerInstalled: !triggerStatus.installationRequired
+    };
   });
 }
 
@@ -7650,6 +7675,8 @@ function getCourseClosureDashboard_(session) {
     automatic: settings.automatic,
     triggerCount: triggerStatus.triggerCount,
     triggerAuthorizationRequired: triggerStatus.authorizationRequired,
+    triggerInstallationRequired: triggerStatus.installationRequired,
+    triggerInstalledAt: triggerStatus.installedAt,
     targetDate: getTomorrowDate_(),
     currentTime: manualAvailability.currentTime,
     manualStageAvailability: manualAvailability.stages,

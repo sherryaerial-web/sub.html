@@ -6810,26 +6810,16 @@ test('23:40 next-day closure keeps a class when the latest re-read reaches minim
   assert.equal(closureLogSheet.values[1][9], '人數已足，保留開課');
 });
 
-test('course closure automation requires a token, creates one scheduler trigger, and can return to manual', () => {
+test('course closure mode switch never calls ScriptApp after the scheduler is installed', () => {
   const services = createAuthServices();
-  const triggers = [];
   const settingSheet = createSheetFixture('關課設定', [EXPECTED_COURSE_CLOSURE_SETTING_HEADERS]);
   const logSheet = createSheetFixture('關課紀錄', [EXPECTED_COURSE_CLOSURE_LOG_HEADERS]);
   const spreadsheet = createSpreadsheetFixture([settingSheet, logSheet]);
+  let scriptAppCalls = 0;
   const ScriptApp = {
-    getProjectTriggers: () => triggers.slice(),
-    newTrigger(handler) {
-      const trigger = { handler, getHandlerFunction: () => handler };
-      return {
-        timeBased() { return this; },
-        everyMinutes(minutes) { trigger.minutes = minutes; return this; },
-        create() { triggers.push(trigger); return trigger; },
-      };
-    },
-    deleteTrigger(trigger) {
-      const index = triggers.indexOf(trigger);
-      if (index >= 0) triggers.splice(index, 1);
-    },
+    getProjectTriggers() { scriptAppCalls += 1; throw new Error('web request must not read triggers'); },
+    newTrigger() { scriptAppCalls += 1; throw new Error('web request must not create triggers'); },
+    deleteTrigger() { scriptAppCalls += 1; throw new Error('web request must not delete triggers'); },
   };
   const backend = loadBackend({
     ...services,
@@ -6840,20 +6830,48 @@ test('course closure automation requires a token, creates one scheduler trigger,
 
   assert.throws(() => backend.setCourseClosureAutomation_(admin, true), /權杖/);
   services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  services.PropertiesService.getScriptProperties().setProperty(
+    'COURSE_CLOSURE_SCHEDULER_INSTALLED_AT',
+    '2026-08-24 22:00:00',
+  );
   const enabled = backend.setCourseClosureAutomation_(admin, true);
   const enabledAgain = backend.setCourseClosureAutomation_(admin, true);
   assert.equal(enabled.mode, 'auto');
   assert.equal(enabledAgain.mode, 'auto');
-  assert.equal(triggers.length, 1);
-  assert.equal(triggers[0].handler, 'runCourseClosureScheduler');
-  assert.equal(triggers[0].minutes, 5);
+  assert.equal(enabled.triggerCount, 1);
 
   const disabled = backend.setCourseClosureAutomation_(admin, false);
   assert.equal(disabled.mode, 'manual');
-  assert.equal(triggers.length, 0);
+  assert.equal(disabled.triggerCount, 1);
+  assert.equal(scriptAppCalls, 0);
+  assert.equal(
+    services.PropertiesService.getScriptProperties().getProperty('COURSE_CLOSURE_SCHEDULER_INSTALLED_AT'),
+    '2026-08-24 22:00:00',
+  );
 });
 
-test('course closure dashboard remains usable until trigger scope is authorized', () => {
+test('course closure auto mode gives a friendly instruction before scheduler installation', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const settingSheet = createSheetFixture('關課設定', [EXPECTED_COURSE_CLOSURE_SETTING_HEADERS]);
+  const logSheet = createSheetFixture('關課紀錄', [EXPECTED_COURSE_CLOSURE_LOG_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([settingSheet, logSheet]);
+  const backend = loadBackend({
+    ...services,
+    ScriptApp: {
+      getProjectTriggers() { throw new Error('web request must not read triggers'); },
+    },
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  const admin = { teacherName: '管理員甲', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(
+    () => backend.setCourseClosureAutomation_(admin, true),
+    /尚未安裝自動關課排程.*installCourseClosureScheduler/,
+  );
+});
+
+test('course closure dashboard reads scheduler installation state without ScriptApp scope', () => {
   const services = createAuthServices();
   const settingSheet = createSheetFixture('關課設定', [
     EXPECTED_COURSE_CLOSURE_SETTING_HEADERS,
@@ -6878,17 +6896,61 @@ test('course closure dashboard remains usable until trigger scope is authorized'
   assert.equal(result.mode, 'manual');
   assert.equal(result.automatic, false);
   assert.equal(result.triggerCount, 0);
-  assert.equal(result.triggerAuthorizationRequired, true);
+  assert.equal(result.triggerAuthorizationRequired, false);
+  assert.equal(result.triggerInstallationRequired, true);
+});
+
+test('course closure scheduler installer is idempotent and records successful installation', () => {
+  const services = createAuthServices();
+  const triggers = [];
+  const ScriptApp = {
+    getProjectTriggers: () => triggers.slice(),
+    newTrigger(handler) {
+      const trigger = { handler, getHandlerFunction: () => handler };
+      return {
+        timeBased() { return this; },
+        everyMinutes(minutes) { trigger.minutes = minutes; return this; },
+        create() { triggers.push(trigger); return trigger; },
+      };
+    },
+  };
+  const backend = loadBackend({ ...services, ScriptApp });
+
+  const installed = backend.installCourseClosureScheduler();
+  const installedAgain = backend.installCourseClosureScheduler();
+
+  assert.equal(triggers.length, 1);
+  assert.equal(triggers[0].handler, 'runCourseClosureScheduler');
+  assert.equal(triggers[0].minutes, 5);
+  assert.equal(installed.triggerCount, 1);
+  assert.equal(installed.created, true);
+  assert.equal(installedAgain.triggerCount, 1);
+  assert.equal(installedAgain.created, false);
+  assert.match(
+    services.PropertiesService.getScriptProperties().getProperty('COURSE_CLOSURE_SCHEDULER_INSTALLED_AT'),
+    /^\d{4}-\d{2}-\d{2} /,
+  );
 });
 
 test('course closure authorization helper requests trigger and mail scopes together', () => {
+  const services = createAuthServices();
   let triggerReads = 0;
   let quotaReads = 0;
+  const triggers = [];
   const backend = loadBackend({
+    ...services,
     ScriptApp: {
       getProjectTriggers() {
         triggerReads += 1;
-        return [];
+        return triggers.slice();
+      },
+      newTrigger(handler) {
+        const trigger = { handler, getHandlerFunction: () => handler };
+        return {
+          timeBased() { return this; },
+          everyMinutes(minutes) { trigger.minutes = minutes; return this; },
+          create() { triggers.push(trigger); return trigger; },
+        };
       },
     },
     MailApp: {
@@ -6901,13 +6963,17 @@ test('course closure authorization helper requests trigger and mail scopes toget
 
   const result = backend.authorizeCourseClosureServices();
 
-  assert.equal(triggerReads, 1);
+  assert.equal(triggerReads, 2);
   assert.equal(quotaReads, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    authorized: true,
-    triggerCount: 0,
-    remainingMailQuota: 88,
-  });
+  assert.equal(triggers.length, 1);
+  assert.equal(triggers[0].handler, 'runCourseClosureScheduler');
+  assert.equal(triggers[0].minutes, 5);
+  assert.equal(result.authorized, true);
+  assert.equal(result.installed, true);
+  assert.equal(result.created, true);
+  assert.equal(result.triggerCount, 1);
+  assert.equal(result.remainingMailQuota, 88);
+  assert.match(result.installedAt, /^\d{4}-\d{2}-\d{2} /);
 });
 
 test('course closure scheduler only opens bounded windows for the two approved stages', () => {

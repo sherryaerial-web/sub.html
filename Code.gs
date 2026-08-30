@@ -132,6 +132,7 @@ var CONFIG = {
   ONESIGNAL_APP_ID_PROPERTY: 'ONESIGNAL_APP_ID',
   ONESIGNAL_REST_API_KEY_PROPERTY: 'ONESIGNAL_REST_API_KEY',
   ONESIGNAL_NOTIFICATIONS_URL: 'https://api.onesignal.com/notifications',
+  PUBLIC_APP_URL: 'https://sherryaerial-web.github.io/sub.html/',
   PUSH_EXTERNAL_ID_SALT_PROPERTY: 'PUSH_EXTERNAL_ID_SALT',
   PUSH_SENT_KEY_PREFIX: 'PUSH_SENT_',
   COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
@@ -894,6 +895,22 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
       delivered: 0,
       error: 'OneSignal 推播失敗：' + getErrorMessage_(error)
     };
+  }
+}
+
+function buildAppViewUrl_(view, adminTab) {
+  var query = [];
+  if (cleanText_(view)) query.push('view=' + encodeURIComponent(cleanText_(view)));
+  if (cleanText_(adminTab)) query.push('tab=' + encodeURIComponent(cleanText_(adminTab)));
+  return CONFIG.PUBLIC_APP_URL + (query.length ? '?' + query.join('&') : '');
+}
+
+function sendPushAfterMutationSafely_(teacherNames, message) {
+  try {
+    return sendPushNotificationSafely_(teacherNames, message);
+  } catch (error) {
+    console.warn('操作已完成，但推播通知失敗。', error);
+    return { attempted: true, delivered: 0, error: getErrorMessage_(error) };
   }
 }
 
@@ -4278,9 +4295,10 @@ function getSessionAuditActor_(session) {
 function openInvitations_(session, teacherNames) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var teachers = normalizeTeacherNames_(teacherNames);
+  var openedTeachers = [];
   teachers.forEach(assertTeacherExists_);
 
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = requireSheet_(ss, SHEETS.INVITATIONS);
     assertHeaders_(sheet, SHEET_HEADERS.INVITATIONS);
@@ -4304,6 +4322,7 @@ function openInvitations_(session, teacherNames) {
         CONFIG.INVITATION_OPEN_STATUS,
         ''
       ]);
+      openedTeachers.push(teacher);
       activeTeachers[teacher] = true;
     });
     return runStateTransitionUnlocked_([sheet], function(appendAudits) {
@@ -4333,6 +4352,14 @@ function openInvitations_(session, teacherNames) {
       };
     });
   });
+  if (openedTeachers.length) {
+    sendPushAfterMutationSafely_(openedTeachers, {
+      heading: '新的代課邀請',
+      content: '教室已開放新一輪代課，點此查看目前可領取的課程。',
+      url: buildAppViewUrl_('claim')
+    });
+  }
+  return result;
 }
 
 function closeInvitations_(session, teacherNames) {
@@ -6327,6 +6354,7 @@ function claimSpecialCourse_(session, payload) {
 
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  var result;
   try {
     if (areClaimsPaused_()) throw new Error('目前暫停全部代課領取。');
     var invitationId = getActiveInvitationId_(teacher);
@@ -6462,7 +6490,7 @@ function claimSpecialCourse_(session, payload) {
       ''
     ];
 
-    return runStateTransitionUnlocked_([leaveSheet, specialRequestSheet], function(appendAudits) {
+    result = runStateTransitionUnlocked_([leaveSheet, specialRequestSheet], function(appendAudits) {
       updates.forEach(function(update) {
         leaveSheet.getRange(
           update.item.dataIndex + 1,
@@ -6524,6 +6552,12 @@ function claimSpecialCourse_(session, payload) {
   } finally {
     lock.releaseLock();
   }
+  sendPushAfterMutationSafely_([teacher], {
+    heading: '特別課領取成功',
+    content: slotPlan.date + ' ' + slotPlan.actualStartTime + '「' + courseName + '」已完成安排。',
+    url: buildAppViewUrl_('mysubs')
+  });
+  return result;
 }
 
 function claimSubstitute_(session, items) {
@@ -6534,6 +6568,7 @@ function claimSubstitute_(session, items) {
 
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
+  var result;
   try {
     if (areClaimsPaused_()) throw new Error('目前暫停全部代課領取。');
     var invitationId = getActiveInvitationId_(teacher);
@@ -6708,7 +6743,7 @@ function claimSubstitute_(session, items) {
       };
     });
 
-    return runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
+    result = runStateTransitionUnlocked_([leaveSheet], function(appendAudits) {
       primaryUpdates.concat(occupiedUpdates).forEach(function(update) {
         leaveSheet.getRange(
           update.sheetRow,
@@ -6751,6 +6786,14 @@ function claimSubstitute_(session, items) {
   } finally {
     lock.releaseLock();
   }
+  sendPushAfterMutationSafely_([teacher], {
+    heading: '代課領取成功',
+    content: result.count === 1
+      ? '已成功領取 1 堂代課，請到代課紀錄確認內容。'
+      : '已成功領取 ' + result.count + ' 堂代課，請到代課紀錄確認內容。',
+    url: buildAppViewUrl_('mysubs')
+  });
+  return result;
 }
 
 function cancelLeave_(session, substituteId) {
@@ -7001,9 +7044,11 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
   var id = requireSubstituteId_(substituteId);
   var normalizedDecision = normalizeResolutionDecision_(decision);
   var resolutionReason = cleanText_(reason);
+  var pushRecipient = '';
+  var pushMessage = null;
   if (normalizedDecision === 'reject' && !resolutionReason) throw new Error('駁回時請填寫原因。');
 
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var record = getLeaveRecordByIdUnlocked_(id);
     var row = record.row.slice();
     while (row.length < SHEET_HEADERS.LEAVES.length) row.push('');
@@ -7053,6 +7098,16 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
     if (requestType === 'withdrawal' && normalizedDecision === 'approve') {
       auditReason = ['原代課老師：' + priorSubstitute, resolutionReason].filter(Boolean).join('；');
     }
+    if (requestType === 'withdrawal' && priorSubstitute) {
+      pushRecipient = priorSubstitute;
+      pushMessage = {
+        heading: normalizedDecision === 'approve' ? '退出代課已核准' : '退出代課未核准',
+        content: normalizedDecision === 'approve'
+          ? '管理員已核准退出申請，該課將在 OB 回復後重新開放。'
+          : '管理員已駁回退出申請' + (resolutionReason ? '：' + resolutionReason : '。'),
+        url: buildAppViewUrl_('mysubs')
+      };
+    }
     return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
       record.sheet.getRange(record.rowNumber, 6, 1, 16).setValues([row.slice(5, 21)]);
       appendAudits([{
@@ -7071,6 +7126,10 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
       };
     });
   });
+  if (pushRecipient && pushMessage) {
+    sendPushAfterMutationSafely_([pushRecipient], pushMessage);
+  }
+  return result;
 }
 
 function reconcileObChanges_(session) {

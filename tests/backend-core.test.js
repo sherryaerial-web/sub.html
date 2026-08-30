@@ -2807,6 +2807,41 @@ test('admin can manually invite one or many teachers without duplicate active in
   assert.ok(auditSheet.values.slice(1).every((row) => row[0]));
 });
 
+test('invitation push targets only newly opened teachers and runs after the Sheet lock', () => {
+  const { backend, services, adminSession } = createInvitationBackend();
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    assert.equal(services.__lockState.depth, 0);
+    pushes.push({ names: names.slice(), message });
+    return { attempted: true, delivered: names.length, error: '' };
+  };
+
+  backend.openInvitations_(adminSession, ['老師甲']);
+  backend.openInvitations_(adminSession, ['老師甲', '老師乙']);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(pushes.map((item) => item.names))), [['老師甲'], ['老師乙']]);
+  assert.match(pushes[0].message.heading, /代課/);
+  assert.match(pushes[0].message.url, /view=claim/);
+});
+
+test('claim success survives a push failure and notifies only the claiming teacher after unlock', () => {
+  const { backend, services, leaveSheet, adminSession, teacherASession } = createInvitationBackend();
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    assert.equal(services.__lockState.depth, 0);
+    pushes.push({ names: names.slice(), message });
+    throw new Error('injected push outage');
+  };
+
+  const result = backend.claimSubstitute_(teacherASession, [{ substituteId: 'leave-c', changeNote: '' }]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { count: 1, occupiedSubstituteIds: [] });
+  assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-c')[5], '已領取');
+  assert.deepEqual(JSON.parse(JSON.stringify(pushes[0].names)), ['老師甲']);
+  assert.match(pushes[0].message.url, /view=mysubs/);
+});
+
 test('uninvited teacher cannot list pending substitutes', () => {
   const { backend, teacherASession } = createInvitationBackend();
 
@@ -3912,7 +3947,7 @@ test('mixed special slot planning accepts an own course followed by an open subs
 });
 
 test('own-only special claim appends one arrangement and never creates or changes leave rows', () => {
-  const { backend, courseSheet, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+  const { backend, services, courseSheet, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
     courseRows: [
       ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1', 'class-a', 'teacher-a', '否', ''],
       ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2', 'class-b', 'teacher-a', '否', ''],
@@ -3922,6 +3957,12 @@ test('own-only special claim appends one arrangement and never creates or change
   });
   backend.getTimestamp_ = () => '2026-08-15 12:00:00';
   backend.openInvitations_(adminSession, ['老師甲']);
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    assert.equal(services.__lockState.depth, 0);
+    pushes.push({ names: Array.from(names), message });
+    return { attempted: true, delivered: 1, error: '' };
+  };
   const beforeLeaves = JSON.stringify(leaveSheet.values);
 
   const result = backend.claimSpecialCourse_(teacherASession, {
@@ -3932,6 +3973,9 @@ test('own-only special claim appends one arrangement and never creates or change
   assert.equal(JSON.stringify(leaveSheet.values), beforeLeaves);
   assert.equal(specialRequestSheet.values.length, 2);
   assert.equal(result.count, 2);
+  assert.deepEqual(pushes[0].names, ['老師甲']);
+  assert.match(pushes[0].message.content, /舞綢中軸特別課/);
+  assert.match(pushes[0].message.url, /view=mysubs/);
   assert.deepEqual(JSON.parse(JSON.stringify(result.substituteIds)), []);
   assert.deepEqual(JSON.parse(JSON.stringify(result.occupiedSlotKeys)), ['own:cal-own-1', 'own:cal-own-2']);
   const request = specialRequestSheet.values[1];
@@ -4712,6 +4756,31 @@ test('admin-approved withdraw stays in OB restore work until reconciliation then
   assert.ok(afterRestore.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
   assert.ok(backend.getAvailableSubstitutes_(teacherASession)
     .some((item) => item['代課編號'] === 'leave-withdraw'));
+});
+
+test('withdraw approval or rejection notifies the requesting substitute without rolling back', () => {
+  const { backend, services, leaveSheet, adminSession, teacherBSession } = createInvitationBackend({
+    leaveRows: [[
+      '時間', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '已領取', '老師乙',
+      '沿用原課程', '待處理', 'leave-withdraw-push', 'calendar-c', '', '', '',
+      '沿用原課程', '待核對', '', '', '', '空環',
+    ]],
+  });
+  backend.requestClaimWithdrawal_(teacherBSession, 'leave-withdraw-push', '臨時有事');
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    assert.equal(services.__lockState.depth, 0);
+    pushes.push({ names: names.slice(), message });
+    return { attempted: true, delivered: 1, error: '' };
+  };
+
+  const result = backend.resolveChangeRequest_(adminSession, 'leave-withdraw-push', 'reject', '仍需由你代課');
+
+  assert.equal(result.decision, 'reject');
+  assert.equal(leaveSheet.values[1][18], '退出申請已駁回');
+  assert.deepEqual(JSON.parse(JSON.stringify(pushes[0].names)), ['老師乙']);
+  assert.match(pushes[0].message.content, /駁回/);
+  assert.match(pushes[0].message.url, /view=mysubs/);
 });
 
 test('stale claim cannot consume withdrawal restore work or clear its restore state', () => {

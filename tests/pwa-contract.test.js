@@ -69,3 +69,14 @@ test('PWA 只使用 OneSignal 推播 worker，不快取管理資料', () => {
   assert.equal(fs.existsSync(path.join(root, 'service-worker.js')), false);
   assert.equal(fs.existsSync(path.join(root, 'sw.js')), false);
 });
+
+test('deployment guide documents private OneSignal setup and device onboarding', () => {
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+
+  assert.match(readme, /ONESIGNAL_APP_ID/);
+  assert.match(readme, /ONESIGNAL_REST_API_KEY/);
+  assert.match(readme, /PUSH_EXTERNAL_ID_SALT.*自動/);
+  assert.match(readme, /iOS\/iPadOS 16\.4/);
+  assert.match(readme, /加入主畫面/);
+  assert.match(readme, /不會新增通知工作表|不新增通知工作表/);
+});

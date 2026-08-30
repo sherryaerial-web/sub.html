@@ -10,6 +10,27 @@ GitHub Pages 前端搭配 Google Apps Script、Google Sheets 與 Omcean Booking 
 - 管理員以管理員帳號登入同一個前端後，可開啟邀請、OB 待辦、異動申請、核對與 VVIP 選課後台。
 - 正式網址：`https://sherryaerial-web.github.io/sub.html/`
 
+## PWA 與即時通知
+
+網站可安裝到手機主畫面與電腦桌面，但不建立離線快取；每次打開仍讀取當下的正式課程、代課與管理資料，避免顯示過期待辦。`OneSignalSDKWorker.js` 只負責接收通知，不攔截或快取網頁請求。
+
+上線即時通知前，先在 OneSignal 建立 Web app，網站網址使用正式網址，Service Worker 檔案設為 `OneSignalSDKWorker.js`。關閉 OneSignal 自動詢問通知權限；本系統只會在使用者登入後按下「開啟通知」時請求系統權限。
+
+到 Apps Script「專案設定 → 指令碼屬性」設定：
+
+| 屬性 | 用途 |
+|---|---|
+| `ONESIGNAL_APP_ID` | OneSignal Web app 的 App ID，前端只會取得這個公開 ID。 |
+| `ONESIGNAL_REST_API_KEY` | OneSignal REST API Key，只能存在 GAS 指令碼屬性，不得放進前端、Git 或對話。 |
+| `PUSH_EXTERNAL_ID_SALT` | 不需手動填寫；前兩項完整後，後端會在第一次設定通知身分時自動產生。 |
+
+未設定 OneSignal 時，通知入口會安全隱藏，不影響原有功能。設定完成後，可收到新代課邀請、領課成功、退出核准／駁回與關課結果。第一輪 22:30 關課後仍只缺一人的課程，系統會在「關課管理」顯示可編輯、一鍵複製的社群文字；第二輪 23:40 完成或失敗也會通知課程管理員。
+
+- iPhone／iPad 需使用 iOS/iPadOS 16.4 以上，先用 Safari 「加入主畫面」，再從主畫面圖示開啟並登入。
+- Android 與支援的桌面瀏覽器可安裝網站後，由系統內的「開啟通知」進行設定。
+- 若曾選擇不允許，必須到手機或瀏覽器的網站通知設定重新開啟。
+- 通知不會新增通知工作表，也不會改動正式 Sheet 欄位；通知設定、去重與社群文字只保存在 Script Properties。
+
 ## 試算表契約
 
 部署前先建立試算表副本備份。既有欄位不移動，新欄位只追加在右側。
@@ -172,19 +193,21 @@ OB `calendar` API 可提供課程、完整指導者、容量與出席人數，�
 1. 建立正式 Google 試算表完整副本，記錄副本名稱與建立時間；同時記錄目前可用的 Apps Script 版本號、Web App deployment ID，以及正式前端 Git commit。三者必須視為同一組可回復版本。
 2. 開啟綁定該試算表的 Apps Script，將 repository 的 `Code.gs` 完整覆蓋舊程式並儲存。
 3. 在「指令碼屬性」設定 `OMCEAN_API_TOKEN`。請使用重新產生的新 token，不要沿用曾貼在對話或程式碼中的 token。
-4. 手動執行 `setupSystemStructure()` 一次，完成工作表改名、欄位追加與輔助工作表建立。
-5. 若同時看到「工作表1」與「請假代課紀錄」，立即停止，不要刪資料；先人工比對並只保留正確正式表。
-6. 依上一節建立第一位管理員。
-7. 依「37 位老師密碼一次性匯入」流程建立老師帳號。
-8. 確認 `登入帳號` 內所有應登入者都有完整 Salt、PIN 雜湊且「是否在職」為啟用，並在 H 欄補上可教授類別、I 欄補上功能權限。正式設定為冠蓉／IVY：`course_admin、payroll_admin、vvip_admin`；Sherry：不設定管理權限；Tako：`course_admin、vvip_admin`。未補類別前，跨道具領取判斷不完整。
-9. 到 Apps Script 左側「觸發條件」刪除舊版 `syncCourseListFromApi` 的時間觸發條件。新版只允許管理員手動同步。
-10. 部署 Apps Script Web App 的新版本；執行身分使用部署者，存取權沿用目前正式設定。
-11. 若 Web App URL 改變，更新 `index.html` 內的 `APP_URL`。
-12. 先以管理員登入並按「同步 OB 課表」，確認同步範圍為今天至下個月底，且 `CourseList` 筆數、日期及 OB Calendar ID 都合理。
-13. 首次同步成功後，再次手動執行 `setupSystemStructure()`，檢查回傳的 migration 計數 `assignedIds`、`linked`、`manualReview`。確認唯一完全相符的舊資料已安全連結，無法唯一判定者留在「待人工核對」。此步驟可安全重複執行，不會覆蓋既有 ID。
-14. 完成同步後 backfill，再用測試帳號測 Web App：登入、選日期、送出一堂測試請假、取消測試資料，最後檢查管理員後台。
-15. 將 `index.html` 與 `vvip.html` 一起發布到 GitHub Pages，等待 Pages 完成後再開正式網址測試桌機與手機。
-16. 以兩個老師帳號同時嘗試同一堂代課，確認只有第一位成功；再檢查邀請、改課、退出與 OB 核對流程。
+4. 依「PWA 與即時通知」設定 `ONESIGNAL_APP_ID` 與 `ONESIGNAL_REST_API_KEY`；金鑰不可貼入對話或提交到 Git。
+5. 手動執行 `setupSystemStructure()` 一次，完成工作表改名、欄位追加與輔助工作表建立。
+6. 若同時看到「工作表1」與「請假代課紀錄」，立即停止，不要刪資料；先人工比對並只保留正確正式表。
+7. 依上一節建立第一位管理員。
+8. 依「37 位老師密碼一次性匯入」流程建立老師帳號。
+9. 確認 `登入帳號` 內所有應登入者都有完整 Salt、PIN 雜湊且「是否在職」為啟用，並在 H 欄補上可教授類別、I 欄補上功能權限。正式設定為冠蓉／IVY：`course_admin、payroll_admin、vvip_admin`；Sherry：不設定管理權限；Tako：`course_admin、vvip_admin`。未補類別前，跨道具領取判斷不完整。
+10. 到 Apps Script 左側「觸發條件」刪除舊版 `syncCourseListFromApi` 的時間觸發條件。新版只允許管理員手動同步。
+11. 部署 Apps Script Web App 的新版本；執行身分使用部署者，存取權沿用目前正式設定。
+12. 若 Web App URL 改變，更新 `index.html` 內的 `APP_URL`。
+13. 先以管理員登入並按「同步 OB 課表」，確認同步範圍為今天至下個月底，且 `CourseList` 筆數、日期及 OB Calendar ID 都合理。
+14. 首次同步成功後，再次手動執行 `setupSystemStructure()`，檢查回傳的 migration 計數 `assignedIds`、`linked`、`manualReview`。確認唯一完全相符的舊資料已安全連結，無法唯一判定者留在「待人工核對」。此步驟可安全重複執行，不會覆蓋既有 ID。
+15. 完成同步後 backfill，再用測試帳號測 Web App：登入、選日期、送出一堂測試請假、取消測試資料，最後檢查管理員後台。
+16. 將 `index.html`、`vvip.html`、`manifest.webmanifest`、`OneSignalSDKWorker.js` 與圖示一起發布到 GitHub Pages，等待 Pages 完成後再開正式網址測試桌機與手機。
+17. 各以一個老師與管理員帳號登入已安裝的 PWA，手動開啟通知，再送出一則可辨識的測試代課邀請，確認只有目標老師與有對應權限的管理員收到。
+18. 以兩個老師帳號同時嘗試同一堂代課，確認只有第一位成功；再檢查邀請、改課、退出與 OB 核對流程。
 
 ## 必測情境
 

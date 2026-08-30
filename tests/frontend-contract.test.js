@@ -2690,6 +2690,43 @@ test('admin workspace exposes independent next-day and whole-month course closur
   assert.match(html, /item\.actor/);
 });
 
+test('closure manager renders an editable one-short community message with one-tap copy', async () => {
+  const dashboard = {
+    teachers: [], pendingInvitations: [], activeInvitees: [], missingObCancellations: [],
+    obWork: [], delayClosures: [], changeRequests: [], exceptions: [], completed: [],
+    courseClosure: {
+      targetDate: '2026/09/01', triggerCount: 1, automatic: true,
+      manualStageAvailability: { '22:30': true, '23:40': false },
+      unclaimedCandidates: [], recentLogs: [],
+      socialCopy: {
+        content: '明12:00劍潭蕃茄柔軟度開發\n各缺一，等到23:40',
+        updatedAt: '2026-08-31 22:30:00',
+      },
+    },
+  };
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext('authState.teacherName = "冠蓉"; authState.managementCapabilities = ["course_admin"];', context);
+  context.__dashboard = dashboard;
+  vm.runInContext('activeAdminTab = "closureManagement"; adminDashboard = __dashboard; renderAdminTab();', context);
+
+  assert.match(getElement('admin-tab-content').innerHTML, /id="closure-social-copy"/);
+  assert.match(getElement('admin-tab-content').innerHTML, /明12:00劍潭蕃茄柔軟度開發/);
+  assert.match(getElement('admin-tab-content').innerHTML, /data-admin-action="copy-closure-social"/);
+});
+
+test('notification deep links route to the requested teacher or authorized admin page', () => {
+  const { context } = createFrontendRuntime();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getInitialAppRoute('?view=claim'))),
+    { viewId: 'view-claim', adminTab: '' },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getInitialAppRoute('?view=admin&tab=closureManagement'))),
+    { viewId: 'view-admin', adminTab: 'closureManagement' },
+  );
+});
+
 test('course closure controls explain unavailable manual stages without calling the API', () => {
   assert.match(html, /manualStageAvailability/);
   assert.match(html, /data-stage="22:30"[^>]*aria-disabled="\$\{stage2230Available \? "false" : "true"\}"/);

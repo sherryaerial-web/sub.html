@@ -359,6 +359,7 @@
 
     .push-permission-title { display: block; margin-bottom: 2px; font-size: 13px; }
     .push-permission-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+    .closure-social-copy { min-height: 160px; margin-top: 10px; resize: vertical; }
 
     .home-actions {
       display: grid;
@@ -2028,6 +2029,30 @@
       byId("mobile-primary-label").textContent = targetView === "view-admin" ? "管理" : "首頁";
     }
 
+    function getInitialAppRoute(searchValue) {
+      const params = new URLSearchParams(String(searchValue || "").replace(/^\?/, ""));
+      const viewMap = {
+        home: "view-home",
+        leave: "view-leave",
+        myleaves: "view-myleaves",
+        claim: "view-claim",
+        mysubs: "view-mysubs",
+        payroll: "view-payroll",
+        admin: "view-admin"
+      };
+      const allowedAdminTabs = new Set([
+        "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
+        "delayClosures", "closureManagement", "changeRequests", "exceptions", "completed",
+        "payroll", "vvip"
+      ]);
+      const viewId = viewMap[params.get("view")] || "";
+      const requestedTab = params.get("tab") || "";
+      return {
+        viewId: viewId,
+        adminTab: viewId === "view-admin" && allowedAdminTabs.has(requestedTab) ? requestedTab : ""
+      };
+    }
+
     function syncMobileTabState(viewId) {
       const activeTab = viewId === "view-myleaves" || viewId === "view-mysubs"
         ? "records"
@@ -2255,7 +2280,16 @@
       if (firstAdminTab) activeAdminTab = firstAdminTab.dataset.adminTab;
       const month = new Date().toISOString().slice(0, 7);
       byId("payroll-month").value = month;
-      switchView(authState.managementCapabilities.length ? "view-admin" : "view-home");
+      const route = getInitialAppRoute(window.location && window.location.search);
+      const defaultView = authState.managementCapabilities.length ? "view-admin" : "view-home";
+      let targetView = route.viewId || defaultView;
+      if (targetView === "view-admin" && !authState.managementCapabilities.length) targetView = "view-home";
+      if (targetView === "view-admin" && route.adminTab) {
+        const tabCapability = route.adminTab === "payroll" ? "payroll_admin"
+          : route.adminTab === "vvip" ? "vvip_admin" : "course_admin";
+        if (authState.managementCapabilities.includes(tabCapability)) activeAdminTab = route.adminTab;
+      }
+      switchView(targetView);
       refreshIcons();
       initializePushForSession();
     }
@@ -4138,6 +4172,7 @@
           ${items.map((item) => `<article class="list-item single-column"><label class="ob-cancellation-row"><input class="ob-cancellation-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}"><span><span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.originalCourse)}</span><span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.replacementCalendarId || item.originalCalendarId || "—")}</span></span></label></article>`).join("") || '<div class="state">目前沒有已從 OB 取消、等待關閉的代課課程</div>'}`;
       } else if (activeAdminTab === "closureManagement") {
         const closure = data.courseClosure || {};
+        const socialCopy = closure.socialCopy && closure.socialCopy.content ? closure.socialCopy : null;
         const candidates = Array.isArray(closure.unclaimedCandidates) ? closure.unclaimedCandidates : [];
         const recentLogs = Array.isArray(closure.recentLogs) ? closure.recentLogs : [];
         const modeLabel = closure.automatic ? "自動執行中" : "手動模式";
@@ -4161,6 +4196,12 @@
             </div>
           </article>`).join("");
         content.innerHTML = `
+          ${socialCopy ? `<div class="admin-control">
+            <strong>22:30 社群提醒文字</strong>
+            <div class="item-meta">已依 23:40 最低人數整理「各缺一」課程，可直接修改後複製到社群。更新：${escapeHtml(socialCopy.updatedAt || "—")}</div>
+            <textarea id="closure-social-copy" class="claim-control closure-social-copy" rows="7">${escapeHtml(socialCopy.content)}</textarea>
+            <div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="copy-closure-social"><i data-lucide="copy"></i>複製社群文字</button></div>
+          </div>` : ""}
           <div class="admin-control">
             <strong>隔天未達人數關課｜${modeLabel}</strong>
             <div class="item-meta">目標日期：${escapeHtml(closure.targetDate || "—")}｜目前排程：${Number(closure.triggerCount) || 0} 個</div>
@@ -4530,6 +4571,16 @@
       }
     }
 
+    async function copyCourseClosureSocialCopy() {
+      const field = byId("closure-social-copy");
+      if (!field || !field.value.trim()) throw new Error("目前沒有可複製的社群文字。");
+      if (!window.navigator || !window.navigator.clipboard) {
+        throw new Error("此裝置無法直接複製，請長按文字後手動複製。");
+      }
+      await window.navigator.clipboard.writeText(field.value);
+      setNotice("社群提醒文字已複製。");
+    }
+
     function selectAllUnclaimedSubstitutes() {
       const checkboxes = [...document.querySelectorAll(".unclaimed-substitute-checkbox")];
       const shouldCheck = checkboxes.some((input) => !input.checked);
@@ -4868,6 +4919,10 @@ https://sherryaerial-web.github.io/sub.html/
         }
         if (action === "close-unclaimed-substitutes") {
           await closeSelectedUnclaimedSubstitutes(button);
+          return;
+        }
+        if (action === "copy-closure-social") {
+          await copyCourseClosureSocialCopy();
           return;
         }
         if (action === "open-invitations") await openAdminInvitations();

@@ -199,7 +199,19 @@ const fixtures = {
     changeRequests: [leaveChange],
     exceptions: [leaveException],
     completed: [leaveComplete],
-    replacementOptions: [{ calendarId: "cal-new", courseName: "空環基礎", teacherName: "Mina", date: "2026/08/14", time: "19:30" }]
+    replacementOptions: [{ calendarId: "cal-new", courseName: "空環基礎", teacherName: "Mina", date: "2026/08/14", time: "19:30" }],
+    courseClosure: {
+      targetDate: "2026/09/01",
+      triggerCount: 2,
+      automatic: true,
+      manualStageAvailability: { "22:30": true, "23:40": false },
+      unclaimedCandidates: [],
+      recentLogs: [],
+      socialCopy: {
+        content: "明12:00劍潭蕃茄柔軟度開發\n13:30晴光Lily舞綢\n各缺一，等到23:40",
+        updatedAt: "2026-08-31 22:30:00"
+      }
+    }
   }
 };
 
@@ -219,6 +231,9 @@ function apiPayload(request) {
     };
   }
   if (action === "logout") return { loggedOut: true };
+  if (action === "getPushConfiguration") {
+    return { configured: true, appId: "visual-test-app", externalId: "visual-test-user" };
+  }
   if (action === "getClaimPageData") {
     return {
       items: fixtures.getAvailableSubstitutes,
@@ -342,6 +357,29 @@ try {
     await page.route("https://unpkg.com/**", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/javascript", body: lucideScript });
     });
+    await page.route("https://cdn.onesignal.com/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/javascript",
+        body: `
+          window.OneSignalDeferred = window.OneSignalDeferred || [];
+          const visualPushSubscription = {
+            optedIn: false,
+            optIn: async () => { visualPushSubscription.optedIn = true; },
+            optOut: async () => { visualPushSubscription.optedIn = false; }
+          };
+          const visualOneSignal = {
+            init: async () => {},
+            login: async () => {},
+            logout: async () => {},
+            Notifications: { permission: false, isPushSupported: () => true, requestPermission: async () => {} },
+            User: { PushSubscription: visualPushSubscription }
+          };
+          window.OneSignalDeferred.splice(0).forEach((callback) => callback(visualOneSignal));
+          window.OneSignalDeferred.push = (callback) => Promise.resolve(callback(visualOneSignal));
+        `
+      });
+    });
     await page.route("https://script.google.com/**", async (route) => {
       const request = route.request();
       const payload = { status: "success", data: apiPayload(request) };
@@ -453,7 +491,7 @@ try {
     await login(page, "Ivy");
     await openView(page, "view-admin");
     await page.locator("#admin-reminders .summary-item").first().waitFor();
-    const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "changeRequests", "exceptions", "completed"];
+    const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "closureManagement", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {
       const tab = adminTabs[index];
       await page.locator(`[data-admin-tab="${tab}"]`).click();

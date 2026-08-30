@@ -57,10 +57,15 @@ test('輸出的 app icon 尺寸正確', () => {
   });
 });
 
-test('PWA 不註冊 service worker，避免管理資料被離線快取', () => {
+test('PWA 只使用 OneSignal 推播 worker，不快取管理資料', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const worker = fs.readFileSync(path.join(root, 'OneSignalSDKWorker.js'), 'utf8');
 
-  assert.doesNotMatch(html, /serviceWorker\s*\.\s*register/);
+  assert.match(html, /OneSignalSDK\.page\.js/);
+  assert.match(worker, /OneSignalSDK\.sw\.js/);
+  assert.doesNotMatch(worker, /addEventListener\s*\(\s*['"]fetch['"]/);
+  assert.doesNotMatch(worker, /caches\s*\.|CacheStorage|cache\.addAll/);
+  assert.doesNotMatch(html, /navigator\.serviceWorker\.register/);
   assert.equal(fs.existsSync(path.join(root, 'service-worker.js')), false);
   assert.equal(fs.existsSync(path.join(root, 'sw.js')), false);
 });

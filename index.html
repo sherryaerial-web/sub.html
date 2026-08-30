@@ -330,6 +330,36 @@
     .home-welcome > svg.lucide { width: 20px; height: 20px; }
     .home-welcome .section-copy { color: var(--sea-800); }
 
+    .push-permission-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 auto 18px;
+      padding: 14px 16px;
+      border: 1px solid #d8ccc5;
+      border-radius: var(--radius);
+      background: #fffaf5;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .push-permission-copy {
+      display: flex;
+      min-width: 0;
+      align-items: flex-start;
+      gap: 11px;
+    }
+
+    .push-permission-copy > svg.lucide {
+      width: 20px;
+      height: 20px;
+      margin-top: 1px;
+      color: var(--sea-700);
+    }
+
+    .push-permission-title { display: block; margin-bottom: 2px; font-size: 13px; }
+    .push-permission-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+
     .home-actions {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1068,6 +1098,9 @@
       .payroll-admin-actions .compact-button, .payroll-admin-actions .primary-button { flex: 1 1 150px; }
       .payroll-hero { padding: 19px; }
       .payroll-hero > strong { font-size: 31px; }
+      .push-permission-card { align-items: stretch; flex-direction: column; }
+      .push-permission-actions { width: 100%; }
+      .push-permission-actions > button { flex: 1; }
     }
   </style>
 </head>
@@ -1158,6 +1191,19 @@
       </aside>
 
       <main class="workspace">
+        <aside id="push-permission-card" class="push-permission-card" aria-live="polite" hidden>
+          <div class="push-permission-copy">
+            <i data-lucide="bell-ring"></i>
+            <div>
+              <strong class="push-permission-title">課程通知</strong>
+              <p id="push-status-copy" class="section-copy">iPhone／iPad 需使用 iOS 16.4 以上，並先將網站加入主畫面，才能開啟通知。</p>
+            </div>
+          </div>
+          <div class="push-permission-actions">
+            <button id="push-enable" class="primary-button inline-button" type="button">開啟通知</button>
+            <button id="push-disable" class="compact-button inline-button" type="button" hidden>關閉通知</button>
+          </div>
+        </aside>
         <section id="view-home" class="view active">
           <div class="view-header">
             <div>
@@ -1352,6 +1398,7 @@
     </div>
   </dialog>
 
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script src="assets/xlsx.full.min.js"></script>
   <script>
@@ -1378,6 +1425,13 @@
     const myPayrollSnapshotHtml = new Map();
     let activeAdminTab = "pendingInvitations";
     let requestDialogState = null;
+    let pushSdk = null;
+    let pushSdkAppId = "";
+    let pushIdentityExternalId = "";
+    let pushSessionTeacherName = "";
+    let pushInitializationPromise = null;
+
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
 
     const byId = (id) => document.getElementById(id);
     const MOBILE_VIEW_TITLES = {
@@ -2018,6 +2072,176 @@
       if (authState.managementCapabilities.length) switchView("view-admin");
     }
 
+    function isIosDevice() {
+      const navigatorInfo = window.navigator || {};
+      const userAgent = String(navigatorInfo.userAgent || "");
+      const platform = String(navigatorInfo.platform || "");
+      return /iPad|iPhone|iPod/i.test(userAgent) ||
+        (platform === "MacIntel" && Number(navigatorInfo.maxTouchPoints || 0) > 1);
+    }
+
+    function isStandalonePwa() {
+      const navigatorInfo = window.navigator || {};
+      return navigatorInfo.standalone === true ||
+        (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
+    }
+
+    function withOneSignal(callback) {
+      return new Promise((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => reject(new Error("通知服務暫時無法載入，請稍後再試。")), 10000);
+        window.OneSignalDeferred = window.OneSignalDeferred || [];
+        window.OneSignalDeferred.push(async (OneSignal) => {
+          try {
+            const result = await callback(OneSignal);
+            window.clearTimeout(timeoutId);
+            resolve(result);
+          } catch (error) {
+            window.clearTimeout(timeoutId);
+            reject(error);
+          }
+        });
+      });
+    }
+
+    async function ensureOneSignalInitialized(appId) {
+      if (pushSdk && pushSdkAppId === appId) return pushSdk;
+      return withOneSignal(async (OneSignal) => {
+        if (!pushSdk || pushSdkAppId !== appId) {
+          await OneSignal.init({
+            appId,
+            serviceWorkerPath: "OneSignalSDKWorker.js",
+            serviceWorkerParam: { scope: "./" },
+            notifyButton: { enable: false }
+          });
+          pushSdk = OneSignal;
+          pushSdkAppId = appId;
+        }
+        return pushSdk;
+      });
+    }
+
+    function renderPushPermissionCard(OneSignal = pushSdk) {
+      const card = byId("push-permission-card");
+      const enableButton = byId("push-enable");
+      const disableButton = byId("push-disable");
+      if (!card) return;
+      if (!OneSignal || !pushIdentityExternalId) {
+        card.hidden = true;
+        return;
+      }
+
+      card.hidden = false;
+      const isOptedIn = OneSignal.User && OneSignal.User.PushSubscription &&
+        OneSignal.User.PushSubscription.optedIn === true;
+      const browserPermission = window.Notification && window.Notification.permission;
+
+      if (isIosDevice() && !isStandalonePwa()) {
+        byId("push-status-copy").textContent = "iPhone／iPad 請先使用 Safari 將網站加入主畫面（需 iOS 16.4 以上），再從主畫面開啟並設定通知。";
+        enableButton.hidden = true;
+        disableButton.hidden = true;
+        return;
+      }
+      if (browserPermission === "denied") {
+        byId("push-status-copy").textContent = "通知已被系統封鎖，請到裝置或瀏覽器設定中允許通知後再回來。";
+        enableButton.hidden = true;
+        disableButton.hidden = true;
+        return;
+      }
+      if (isOptedIn) {
+        byId("push-status-copy").textContent = "通知已開啟，新的代課邀請與處理結果會直接提醒你。";
+        enableButton.hidden = true;
+        disableButton.hidden = false;
+        return;
+      }
+      byId("push-status-copy").textContent = "開啟後可收到代課邀請、領課結果與管理待辦提醒。";
+      enableButton.hidden = false;
+      disableButton.hidden = true;
+    }
+
+    async function initializePushForSession() {
+      const teacherName = String(authState.teacherName || "").trim();
+      if (!authState.sessionToken || !teacherName) return null;
+      if (pushSessionTeacherName === teacherName && pushInitializationPromise) {
+        return pushInitializationPromise;
+      }
+
+      pushSessionTeacherName = teacherName;
+      pushInitializationPromise = (async () => {
+        try {
+          const configuration = await callPostApi("getPushConfiguration");
+          if (!configuration || !configuration.configured || !configuration.appId || !configuration.externalId) {
+            byId("push-permission-card").hidden = true;
+            return null;
+          }
+          if (authState.teacherName !== teacherName || !authState.sessionToken) return null;
+          const OneSignal = await ensureOneSignalInitialized(configuration.appId);
+          await OneSignal.login(configuration.externalId);
+          if (authState.teacherName !== teacherName || !authState.sessionToken) {
+            await OneSignal.logout();
+            return null;
+          }
+          pushIdentityExternalId = configuration.externalId;
+          renderPushPermissionCard(OneSignal);
+          return OneSignal;
+        } catch (error) {
+          byId("push-permission-card").hidden = true;
+          console.warn("通知初始化失敗，其他功能不受影響。", error);
+          return null;
+        }
+      })();
+      return pushInitializationPromise;
+    }
+
+    async function requestPushPermission() {
+      const button = byId("push-enable");
+      setButtonBusy(button, true, "設定中...");
+      try {
+        const OneSignal = await (pushInitializationPromise || initializePushForSession());
+        if (!OneSignal) throw new Error("通知服務尚未設定完成。請稍後再試。");
+        if (isIosDevice() && !isStandalonePwa()) {
+          renderPushPermissionCard(OneSignal);
+          return;
+        }
+        await OneSignal.Notifications.requestPermission();
+        if (OneSignal.Notifications.permission === true &&
+            OneSignal.User && OneSignal.User.PushSubscription) {
+          await OneSignal.User.PushSubscription.optIn();
+        }
+        renderPushPermissionCard(OneSignal);
+      } catch (error) {
+        setNotice(error.message || "通知設定失敗。", "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function disablePushNotifications() {
+      const button = byId("push-disable");
+      setButtonBusy(button, true, "設定中...");
+      try {
+        const OneSignal = pushSdk;
+        if (OneSignal && OneSignal.User && OneSignal.User.PushSubscription) {
+          await OneSignal.User.PushSubscription.optOut();
+          renderPushPermissionCard(OneSignal);
+        }
+      } catch (error) {
+        setNotice(error.message || "通知設定失敗。", "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function logoutPushIdentity() {
+      const pendingInitialization = pushInitializationPromise;
+      const currentSdk = pushSdk;
+      try {
+        const OneSignal = currentSdk || (pendingInitialization && await pendingInitialization);
+        if (OneSignal && typeof OneSignal.logout === "function") await OneSignal.logout();
+      } catch (error) {
+        console.warn("通知身分解除失敗。", error);
+      }
+    }
+
     function showLoggedInApp() {
       byId("auth-shell").hidden = true;
       byId("app-shell").hidden = false;
@@ -2033,9 +2257,11 @@
       byId("payroll-month").value = month;
       switchView(authState.managementCapabilities.length ? "view-admin" : "view-home");
       refreshIcons();
+      initializePushForSession();
     }
 
     function clearSession() {
+      logoutPushIdentity();
       clearSavedSession();
       authState.sessionToken = "";
       authState.teacherName = "";
@@ -2055,6 +2281,10 @@
       adminDashboard = null;
       vvipDashboard = null;
       payrollDashboard = null;
+      pushIdentityExternalId = "";
+      pushSessionTeacherName = "";
+      pushInitializationPromise = null;
+      byId("push-permission-card").hidden = true;
       byId("admin-entry").hidden = true;
       byId("app-shell").hidden = true;
       byId("auth-shell").hidden = false;
@@ -4812,6 +5042,8 @@ https://sherryaerial-web.github.io/sub.html/
       updateSpecialSelectionConstraints();
       updateSpecialClaimSummary();
     });
+    byId("push-enable").addEventListener("click", requestPushPermission);
+    byId("push-disable").addEventListener("click", disablePushNotifications);
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.view));
     });

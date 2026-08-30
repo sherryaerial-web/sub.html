@@ -404,6 +404,67 @@ test('teacher login uses a native select that opens reliably on Safari', () => {
   assert.doesNotMatch(html, /id=["']login-teacher["'][^>]+list=["']teacher-options["']/s);
 });
 
+test('notification permission is requested only after the signed-in teacher taps enable', async () => {
+  assert.match(html, /id=["']push-permission-card["']/);
+  assert.match(html, /id=["']push-enable["']/);
+  assert.match(html, /OneSignal\.Notifications\.requestPermission/);
+  assert.match(html, /OneSignal\.User\.PushSubscription\.optIn/);
+
+  const calls = [];
+  const oneSignal = {
+    init: async (options) => calls.push(['init', options.appId]),
+    login: async (externalId) => calls.push(['login', externalId]),
+    logout: async () => calls.push(['logout']),
+    Notifications: {
+      permission: false,
+      requestPermission: async () => {
+        calls.push(['requestPermission']);
+        oneSignal.Notifications.permission = true;
+      },
+    },
+    User: {
+      PushSubscription: {
+        optedIn: false,
+        optIn: async () => {
+          calls.push(['optIn']);
+          oneSignal.User.PushSubscription.optedIn = true;
+        },
+        optOut: async () => calls.push(['optOut']),
+      },
+    },
+  };
+  const { context } = createFrontendRuntime({
+    getPushConfiguration: {
+      configured: true,
+      appId: 'onesignal-app-id',
+      externalId: 'teacher_opaque_actual_user',
+    },
+  });
+  context.window.OneSignalDeferred = {
+    push(callback) { return Promise.resolve(callback(oneSignal)); },
+  };
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = 'Tako'; authState.actingTeacherName = 'Jina';", context);
+
+  await context.initializePushForSession();
+
+  assert.deepEqual(calls, [
+    ['init', 'onesignal-app-id'],
+    ['login', 'teacher_opaque_actual_user'],
+  ]);
+  assert.equal(calls.some(([name]) => name === 'requestPermission'), false);
+
+  await context.requestPushPermission();
+  assert.equal(calls.some(([name]) => name === 'requestPermission'), true);
+  assert.equal(calls.some(([name]) => name === 'optIn'), true);
+});
+
+test('notification setup explains iPhone Home Screen requirement and logs out push identity', () => {
+  assert.match(html, /iPhone[\s\S]{0,160}主畫面/);
+  assert.match(html, /iOS 16\.4/);
+  assert.match(html, /OneSignal\.logout\(\)/);
+  assert.match(html, /logoutPushIdentity/);
+});
+
 test('management accounts land directly on the management workspace', () => {
   const { context, requestActions } = createFrontendRuntime({
     getAdminDashboard: {

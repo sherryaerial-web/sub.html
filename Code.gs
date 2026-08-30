@@ -129,6 +129,12 @@ var CONFIG = {
   COURSE_CLOSURE_MODE_SETTING: 'executionMode',
   COURSE_CLOSURE_SCHEDULER_INSTALLED_PROPERTY: 'COURSE_CLOSURE_SCHEDULER_INSTALLED_AT',
   COURSE_CLOSURE_FAILURE_EMAIL: 'takochang68@gmail.com',
+  ONESIGNAL_APP_ID_PROPERTY: 'ONESIGNAL_APP_ID',
+  ONESIGNAL_REST_API_KEY_PROPERTY: 'ONESIGNAL_REST_API_KEY',
+  ONESIGNAL_NOTIFICATIONS_URL: 'https://api.onesignal.com/notifications',
+  PUSH_EXTERNAL_ID_SALT_PROPERTY: 'PUSH_EXTERNAL_ID_SALT',
+  PUSH_SENT_KEY_PREFIX: 'PUSH_SENT_',
+  COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
@@ -761,6 +767,136 @@ function getScriptProperties_() {
   return typeof PropertiesService === 'undefined' ? null : PropertiesService.getScriptProperties();
 }
 
+function bytesToHex_(bytes) {
+  return (bytes || []).map(function(byte) {
+    var value = byte < 0 ? byte + 256 : byte;
+    return ('0' + value.toString(16)).slice(-2);
+  }).join('');
+}
+
+function getPushExternalId_(teacherNameValue) {
+  var teacherName = cleanText_(teacherNameValue);
+  var properties = getScriptProperties_();
+  var salt = properties
+    ? cleanText_(properties.getProperty(CONFIG.PUSH_EXTERNAL_ID_SALT_PROPERTY))
+    : '';
+  if (!teacherName || !salt) return '';
+  return 'teacher_' + bytesToHex_(Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    salt + ':' + teacherName,
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function getPushConfiguration_(session) {
+  var teacherName = getSessionTeacherName_(session);
+  var properties = getScriptProperties_();
+  var appId = properties
+    ? cleanText_(properties.getProperty(CONFIG.ONESIGNAL_APP_ID_PROPERTY))
+    : '';
+  var restApiKey = properties
+    ? cleanText_(properties.getProperty(CONFIG.ONESIGNAL_REST_API_KEY_PROPERTY))
+    : '';
+  if (!appId || !restApiKey) return { configured: false, appId: '', externalId: '' };
+
+  var salt = cleanText_(properties.getProperty(CONFIG.PUSH_EXTERNAL_ID_SALT_PROPERTY));
+  if (!salt) {
+    salt = createRandomToken_();
+    properties.setProperty(CONFIG.PUSH_EXTERNAL_ID_SALT_PROPERTY, salt);
+  }
+  return {
+    configured: true,
+    appId: appId,
+    externalId: getPushExternalId_(teacherName)
+  };
+}
+
+function getActiveCourseAdminNames_() {
+  var sheet = getAccountsSheet_();
+  var headers = getHeaderMap_(sheet);
+  var values = sheet.getDataRange().getValues();
+  var names = [];
+  var seen = {};
+  for (var index = 1; index < values.length; index++) {
+    var row = values[index];
+    var teacherName = cleanText_(row[headers['指導者'] - 1]);
+    if (!teacherName || seen[teacherName] || !isAccountActive_(row[headers['是否在職'] - 1])) continue;
+    var account = {
+      role: row[headers['角色'] - 1],
+      managementCapabilities: row[headers['功能權限'] - 1]
+    };
+    if (getAccountManagementCapabilities_(account).indexOf('course_admin') === -1) continue;
+    seen[teacherName] = true;
+    names.push(teacherName);
+  }
+  return names;
+}
+
+function sendPushNotificationSafely_(teacherNames, messageValue) {
+  var names = Array.isArray(teacherNames) ? teacherNames.map(cleanText_).filter(Boolean) : [];
+  var seen = {};
+  names = names.filter(function(name) {
+    if (seen[name]) return false;
+    seen[name] = true;
+    return true;
+  });
+  var properties = getScriptProperties_();
+  var appId = properties
+    ? cleanText_(properties.getProperty(CONFIG.ONESIGNAL_APP_ID_PROPERTY))
+    : '';
+  var restApiKey = properties
+    ? cleanText_(properties.getProperty(CONFIG.ONESIGNAL_REST_API_KEY_PROPERTY))
+    : '';
+  if (!names.length || !appId || !restApiKey || typeof UrlFetchApp === 'undefined') {
+    return { attempted: false, delivered: 0, error: '' };
+  }
+
+  var externalIds = names.map(getPushExternalId_).filter(Boolean);
+  if (!externalIds.length) return { attempted: false, delivered: 0, error: '' };
+  var message = messageValue || {};
+  var payload = {
+    app_id: appId,
+    include_aliases: { external_id: externalIds },
+    target_channel: 'push',
+    headings: { en: cleanText_(message.heading) },
+    contents: { en: cleanText_(message.content) },
+    url: cleanText_(message.url)
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(CONFIG.ONESIGNAL_NOTIFICATIONS_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: 'Key ' + restApiKey },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    var responseCode = response.getResponseCode();
+    if (responseCode < 200 || responseCode >= 300) {
+      return {
+        attempted: true,
+        delivered: 0,
+        error: 'OneSignal 推播失敗（HTTP ' + responseCode + '）。'
+      };
+    }
+    var body = {};
+    try {
+      body = JSON.parse(response.getContentText() || '{}');
+    } catch (ignore) {}
+    return {
+      attempted: true,
+      delivered: Number(body.recipients) || 0,
+      error: ''
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      delivered: 0,
+      error: 'OneSignal 推播失敗：' + getErrorMessage_(error)
+    };
+  }
+}
+
 function cleanupExpiredPropertySessions_(properties) {
   if (!properties || typeof properties.getProperties !== 'function') return;
   var now = currentTimeMs_();
@@ -1164,6 +1300,9 @@ function doPost(e) {
           role: session.role,
           managementCapabilities: session.managementCapabilities || []
         };
+      },
+      getPushConfiguration: function() {
+        return getPushConfiguration_(session);
       },
       getAvailableSubstitutes: function() {
         return getAvailableSubstitutes_(actingSession());

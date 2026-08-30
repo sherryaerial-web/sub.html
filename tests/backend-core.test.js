@@ -905,6 +905,116 @@ test('course admin can act as an active teacher while audit preserves the real a
   );
 });
 
+test('push configuration exposes only app id and opaque external id', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_APP_ID', 'public-app-id');
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_REST_API_KEY', 'private-rest-key');
+  services.PropertiesService.getScriptProperties().setProperty('PUSH_EXTERNAL_ID_SALT', 'private-salt');
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, 'Jina', '1234').concat('地板課程', ''),
+  ], services);
+
+  const config = backend.getPushConfiguration_({ teacherName: 'Jina' });
+
+  assert.equal(config.configured, true);
+  assert.equal(config.appId, 'public-app-id');
+  assert.match(config.externalId, /^teacher_[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(config), /private-rest-key|private-salt|Jina/);
+});
+
+test('push configuration disables cleanly when OneSignal properties are absent', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, 'Jina', '1234').concat('地板課程', ''),
+  ]);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getPushConfiguration_({ teacherName: 'Jina' }))),
+    { configured: false, appId: '', externalId: '' },
+  );
+});
+
+test('OneSignal push targets only active course administrators by opaque external id', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const requests = [];
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_APP_ID', 'public-app-id');
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_REST_API_KEY', 'private-rest-key');
+  services.PropertiesService.getScriptProperties().setProperty('PUSH_EXTERNAL_ID_SALT', 'private-salt');
+  services.UrlFetchApp = {
+    fetch(url, options) {
+      requests.push({ url, options });
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ id: 'notification-1', recipients: 2 }),
+      };
+    },
+  };
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '冠蓉', '1234', { role: '管理員' }).concat('', 'course_admin,vvip_admin'),
+    createAccount(bootstrap, 'Tako', '2345').concat('空環', 'course_admin'),
+    createAccount(bootstrap, 'Sherry❤雪莉', '3456').concat('舞綢', ''),
+    createAccount(bootstrap, '停用管理員', '4567', { active: '否' }).concat('', 'course_admin'),
+  ], services);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getActiveCourseAdminNames_())),
+    ['冠蓉', 'Tako'],
+  );
+  const result = backend.sendPushNotificationSafely_(
+    backend.getActiveCourseAdminNames_(),
+    {
+      eventKey: 'closure-20260831-2230',
+      heading: '22:30 關課完成',
+      content: '已取消 2 堂。',
+      url: 'https://sherryaerial-web.github.io/sub.html/?view=admin&tab=closureManagement',
+    },
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    attempted: true, delivered: 2, error: '',
+  });
+  assert.equal(requests[0].url, 'https://api.onesignal.com/notifications');
+  assert.equal(requests[0].options.headers.Authorization, 'Key private-rest-key');
+  const payload = JSON.parse(requests[0].options.payload);
+  assert.deepEqual(payload.include_aliases.external_id, [
+    backend.getPushExternalId_('冠蓉'),
+    backend.getPushExternalId_('Tako'),
+  ]);
+  assert.equal(payload.target_channel, 'push');
+  assert.equal(payload.url, 'https://sherryaerial-web.github.io/sub.html/?view=admin&tab=closureManagement');
+  assert.doesNotMatch(JSON.stringify(requests[0]), /private-salt|Sherry❤雪莉|停用管理員/);
+});
+
+test('OneSignal failure returns a safe result without throwing or exposing the key', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_APP_ID', 'public-app-id');
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_REST_API_KEY', 'private-rest-key');
+  services.PropertiesService.getScriptProperties().setProperty('PUSH_EXTERNAL_ID_SALT', 'private-salt');
+  services.UrlFetchApp = {
+    fetch() {
+      return {
+        getResponseCode: () => 500,
+        getContentText: () => JSON.stringify({ errors: ['service unavailable'] }),
+      };
+    },
+  };
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, 'Jina', '1234').concat('地板課程', ''),
+  ], services);
+
+  const result = backend.sendPushNotificationSafely_(['Jina'], {
+    heading: '測試通知', content: '測試內容', url: 'https://example.test/',
+  });
+
+  assert.equal(result.attempted, true);
+  assert.equal(result.delivered, 0);
+  assert.match(result.error, /HTTP 500/);
+  assert.doesNotMatch(JSON.stringify(result), /private-rest-key|private-salt/);
+});
+
 test('existing session immediately follows current account role capabilities and active state', () => {
   const bootstrap = loadBackend(createAuthServices());
   const { backend, accountSheet, services } = createAuthBackend([

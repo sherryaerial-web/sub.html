@@ -1926,6 +1926,11 @@
       try { window.localStorage.removeItem(AUTH_SESSION_KEY); } catch (error) { /* Storage may be disabled. */ }
     }
 
+    function isInvalidSessionError(error) {
+      const message = String(error && error.message || "");
+      return /請先登入|登入狀態(?:無效|已逾期)|登入帳號不存在|帳號目前未啟用/.test(message);
+    }
+
     function applySession(session, sessionToken = "") {
       authState.sessionToken = sessionToken || session.sessionToken || authState.sessionToken;
       authState.teacherName = session.teacherName || "";
@@ -2059,6 +2064,12 @@
 
     async function initialize() {
       refreshIcons();
+      const savedSession = readSavedSession();
+      if (savedSession) {
+        applySession(savedSession, savedSession.sessionToken);
+        showLoggedInApp();
+      }
+
       try {
         const teachers = await callApi("getTeachers");
         const names = [...new Set(teachers.map((item) => item["指導者"]).filter(Boolean))]
@@ -2071,17 +2082,19 @@
         setNotice(error.message, "error");
       }
 
-      const savedSession = readSavedSession();
       if (!savedSession) return;
-      applySession(savedSession, savedSession.sessionToken);
       try {
         const currentSession = await callPostApi("getSession");
         applySession(currentSession, savedSession.sessionToken);
         saveSession();
         showLoggedInApp();
       } catch (error) {
-        clearSession();
-        setNotice("登入已逾期，請重新登入。", "error");
+        if (isInvalidSessionError(error)) {
+          clearSession();
+          setNotice("登入已逾期，請重新登入。", "error");
+          return;
+        }
+        setNotice("目前連線不穩定，已保留登入狀態；請稍後重新整理。", "error");
       }
     }
 

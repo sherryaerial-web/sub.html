@@ -14,6 +14,11 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
   const bodyChildren = [];
   let claimSubmitted = false;
   let requestCounter = 0;
+  const localStorage = options.localStorage || {
+    getItem() { return ''; },
+    setItem() {},
+    removeItem() {},
+  };
   const getElement = (id) => {
     if (!elements.has(id)) {
       elements.set(id, {
@@ -220,7 +225,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     URLSearchParams,
     CSS: { escape: (value) => String(value) },
     window: {
-      localStorage: { getItem() { return ''; }, setItem() {} },
+      localStorage,
       scrollTo() {},
       crypto: {
         randomUUID: () => {
@@ -2480,6 +2485,69 @@ test('persists and validates the authenticated session for every user device', (
   assert.match(html, /function\s+clearSavedSession\s*\(/);
   assert.match(html, /callPostApi\(["']getSession["']/);
   assert.match(html, /window\.localStorage\.removeItem\(AUTH_SESSION_KEY\)/);
+});
+
+test('cold app start keeps the saved login when session validation only has a connection failure', async () => {
+  const storage = new Map([
+    ['sherry-substitute-auth-session', JSON.stringify({
+      sessionToken: 'saved-session-token',
+      teacherName: 'Ariel Lu',
+      role: '老師',
+      managementCapabilities: [],
+    })],
+  ]);
+  const localStorage = {
+    getItem(key) { return storage.get(key) || ''; },
+    setItem(key, value) { storage.set(key, value); },
+    removeItem(key) { storage.delete(key); },
+  };
+  const { getElement, requestActions } = createFrontendRuntime(
+    { getTeachers: [{ '指導者': 'Ariel Lu' }] },
+    {
+      localStorage,
+      errorActions: ['getSession'],
+      errorMessages: { getSession: '系統連線逾時，請重新整理後再試一次。' },
+    },
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(requestActions.includes('getSession'));
+  assert.ok(storage.has('sherry-substitute-auth-session'));
+  assert.equal(getElement('app-shell').hidden, false);
+  assert.equal(getElement('auth-shell').hidden, true);
+});
+
+test('cold app start still clears a session that the backend explicitly reports as expired', async () => {
+  const storage = new Map([
+    ['sherry-substitute-auth-session', JSON.stringify({
+      sessionToken: 'expired-session-token',
+      teacherName: 'Ariel Lu',
+      role: '老師',
+      managementCapabilities: [],
+    })],
+  ]);
+  const localStorage = {
+    getItem(key) { return storage.get(key) || ''; },
+    setItem(key, value) { storage.set(key, value); },
+    removeItem(key) { storage.delete(key); },
+  };
+  const { getElement } = createFrontendRuntime(
+    { getTeachers: [{ '指導者': 'Ariel Lu' }] },
+    {
+      localStorage,
+      errorActions: ['getSession'],
+      errorMessages: { getSession: '登入狀態已逾期，請重新登入。' },
+    },
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(storage.has('sherry-substitute-auth-session'), false);
+  assert.equal(getElement('app-shell').hidden, true);
+  assert.equal(getElement('auth-shell').hidden, false);
 });
 
 test('management entry stays hidden without capabilities and is enabled by authenticated capabilities', () => {

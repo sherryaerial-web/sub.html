@@ -306,6 +306,20 @@ async function login(page, teacherName) {
   await page.locator("#app-shell").waitFor({ state: "visible" });
 }
 
+async function openView(page, viewId) {
+  const target = page.locator(`[data-view="${viewId}"]:visible`);
+  if (await target.count()) {
+    await target.first().click();
+    return;
+  }
+  if (viewId === "view-mysubs") {
+    await page.locator('.mobile-tab-item[data-view="view-myleaves"]:visible').click();
+    await page.locator('.mobile-record-button[data-view="view-mysubs"]:visible').click();
+    return;
+  }
+  throw new Error(`No visible navigation control for ${viewId}`);
+}
+
 const browser = await chromium.launch({
   headless: true,
   executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -344,11 +358,12 @@ try {
       });
     });
 
-    await page.setContent(visualHtml, { waitUntil: "networkidle", timeout: 10000 });
+    await page.setContent(visualHtml, { waitUntil: "domcontentloaded", timeout: 10000 });
+    await page.waitForTimeout(120);
     if (errors.length) throw new Error(`${viewport.name}: browser startup errors: ${errors.join(" | ")}`);
     if (adminHeaderOnly) {
       await login(page, "Ivy");
-      await page.locator("#admin-entry").click();
+      await openView(page, "view-admin");
       await page.locator("#admin-reminders .summary-item").first().waitFor();
       await page.locator("#admin-sync").click();
       await page.locator("#admin-sync-status").getByText("已同步 1 筆").waitFor();
@@ -383,7 +398,7 @@ try {
     }
     if (payrollOnly) {
       await login(page, "Ivy");
-      await page.locator("#admin-entry").click();
+      await openView(page, "view-admin");
       await page.locator('[data-admin-tab="payroll"]').click();
       await page.locator(".payroll-toolbar").waitFor();
       results.push(await capture(page, viewport.name, "admin-7-payroll"));
@@ -394,7 +409,7 @@ try {
     results.push(await capture(page, viewport.name, "01-login"));
     await login(page, "Ariel Lu");
 
-    await page.locator('.nav-item[data-view="view-leave"]').click();
+    await openView(page, "view-leave");
     await page.locator(".leave-date-checkbox").first().waitFor();
     await page.locator("#select-all-visible-dates").click();
     await page.locator(".leave-course-checkbox").nth(0).check();
@@ -402,11 +417,11 @@ try {
     await page.locator("#leave-confirmation-count").getByText("已選 2 堂").waitFor();
     results.push(await capture(page, viewport.name, "02-leave-confirmation"));
 
-    await page.locator('.nav-item[data-view="view-myleaves"]').click();
+    await openView(page, "view-myleaves");
     await page.locator("#my-leaves-list .list-item").first().waitFor();
     results.push(await capture(page, viewport.name, "03-leave-history"));
 
-    await page.locator('.nav-item[data-view="view-claim"]').click();
+    await openView(page, "view-claim");
     await page.locator('[data-claim-date-toggle="2026/08/11"]').click();
     const delayedCard = page.locator('[data-claim-card-id="leave:sub-delay"]');
     await delayedCard.waitFor();
@@ -425,18 +440,18 @@ try {
     await page.locator("#pending-leaves-list").getByText("本輪代課領取已結束").waitFor();
     results.push(await capture(page, viewport.name, "04b-invitation-round-ended"));
 
-    await page.locator('.nav-item[data-view="view-mysubs"]').click();
+    await openView(page, "view-mysubs");
     await page.locator("#my-subs-list .list-item").first().waitFor();
     results.push(await capture(page, viewport.name, "05-substitute-history"));
 
-    await page.locator('.nav-item[data-view="view-payroll"]').click();
+    await openView(page, "view-payroll");
     await page.locator(".payroll-hero").waitFor();
     results.push(await capture(page, viewport.name, "06-payroll"));
 
     await page.locator("#logout-button").click();
     await page.locator("#auth-shell").waitFor({ state: "visible" });
     await login(page, "Ivy");
-    await page.locator("#admin-entry").click();
+    await openView(page, "view-admin");
     await page.locator("#admin-reminders .summary-item").first().waitFor();
     const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {

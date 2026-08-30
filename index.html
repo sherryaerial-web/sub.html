@@ -3,7 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f3f0eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="教室管理">
   <title>Sherry Aerial | 教室管理</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./assets/app-icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./assets/app-icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="./assets/app-icon-512.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;600;700&amp;family=Noto+Sans+TC:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
@@ -200,6 +208,16 @@
     }
 
     .brand { display: flex; min-width: 0; align-items: center; gap: 10px; }
+    .app-icon-mark {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      border-radius: 10px;
+      object-fit: cover;
+      box-shadow: 0 1px 4px rgba(64, 57, 54, .14);
+    }
+    .login-brand .app-icon-mark { width: 54px; height: 54px; border-radius: 14px; }
+    .mobile-page-title { display: none; }
     .topbar .brand-mark { width: 34px; height: 34px; box-shadow: none; }
     .topbar .brand-mark svg.lucide { width: 19px; height: 19px; }
 
@@ -238,6 +256,17 @@
       display: grid;
       gap: 4px;
       padding: 16px 12px;
+    }
+
+    .mobile-tabbar { display: none; }
+    .mobile-record-switcher { display: none; }
+
+    .mobile-tab-item {
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
     }
 
     .nav-item {
@@ -407,7 +436,11 @@
       background: var(--surface);
       box-shadow: var(--shadow-sm);
     }
-    .admin-command-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .admin-command-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
     .admin-command-actions .compact-button { min-height: 42px; }
     .admin-sync-status { grid-column: 1 / -1; min-height: 0; color: var(--success); font-size: 12px; font-weight: 700; text-align: right; }
     .admin-sync-status.working { color: var(--muted); }
@@ -840,32 +873,61 @@
     }
 
     @media (max-width: 760px) {
-      .app-shell { border: 0; box-shadow: none; }
-      .topbar { min-height: 58px; padding: 8px 12px; }
-      .topbar .brand-mark { width: 32px; height: 32px; }
-      .brand-name { font-size: 13px; }
-      .brand-subtitle { font-size: 10px; }
-      .current-user { max-width: 102px; padding: 5px 7px; }
-      .app-layout { display: block; min-height: calc(100vh - 58px); }
-      .sidebar { border: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
-      .primary-nav {
-        position: static;
-        display: flex;
-        min-height: 62px;
-        gap: 0;
-        padding: 4px 5px;
-        overflow-x: auto;
-        background: var(--surface);
+      html { scroll-padding-top: 68px; }
+      body { background: var(--page); }
+      .app-shell { min-height: 100dvh; padding-bottom: calc(70px + env(safe-area-inset-bottom)); border: 0; box-shadow: none; }
+      .topbar {
+        min-height: 60px;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, .16);
+        box-shadow: 0 2px 14px rgba(64, 57, 54, .12);
       }
-
-      .nav-item { display: grid; min-width: 62px; min-height: 55px; flex: 1 0 62px; place-items: center; align-content: center; gap: 3px; padding: 4px 3px; border: 0; font-size: 10px; text-align: center; }
-      .nav-item.active { border: 0; background: var(--aqua-100); }
-      .nav-item svg.lucide { width: 19px; height: 19px; }
-      .workspace { min-height: calc(100vh - 120px); padding: 20px 14px 40px; }
+      .topbar .app-icon-mark { width: 38px; height: 38px; border-radius: 11px; }
+      .brand-copy { display: none; }
+      .mobile-page-title { display: block; overflow: hidden; color: #fffdf9; font-size: 16px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+      .current-user { max-width: 104px; padding: 5px 7px; }
+      .app-layout { display: block; min-height: calc(100dvh - 60px); }
+      .sidebar { display: none; }
+      .workspace { min-height: calc(100dvh - 60px); padding: 18px 14px calc(96px + env(safe-area-inset-bottom)); }
+      .mobile-tabbar {
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 40;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        min-height: 64px;
+        padding: 6px 8px;
+        padding-bottom: env(safe-area-inset-bottom);
+        border-top: 1px solid rgba(191, 180, 170, .8);
+        background: rgba(255, 253, 249, .96);
+        box-shadow: 0 -8px 26px rgba(64, 57, 54, .10);
+        backdrop-filter: blur(16px);
+      }
+      .mobile-tab-item {
+        position: relative;
+        display: grid;
+        min-height: 54px;
+        place-items: center;
+        align-content: center;
+        gap: 3px;
+        padding: 4px 2px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .mobile-tab-item svg.lucide { width: 20px; height: 20px; }
+      .mobile-tab-item.active { background: var(--aqua-100); color: var(--sea-800); }
+      .mobile-tab-item.active::after { position: absolute; bottom: 3px; width: 18px; height: 2px; border-radius: 999px; background: #ad8175; content: ""; }
       #back-button.visible { display: inline-flex; }
       .button-label { display: none; }
+      .view-header { margin-bottom: 14px; padding-bottom: 0; border-bottom: 0; }
+      .view-header .eyebrow { display: none; }
+      .section-heading { font-size: 24px; }
       .home-actions { grid-template-columns: 1fr; }
-      .action-button { min-height: 82px; }
+      .action-button { min-height: 76px; padding: 12px 13px; border-radius: 12px; }
+      .list-item, .admin-control, .confirmation, .special-claim-panel, .admin-command-bar { border-radius: 12px; }
       .date-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .handling-options { grid-template-columns: 1fr; }
       .claim-fields { grid-template-columns: 1fr; }
@@ -877,15 +939,29 @@
       .admin-command-bar { gap: 12px; margin-bottom: 12px; padding: 12px; }
       .admin-act-as-control { grid-template-columns: 1fr; gap: 8px; }
       .admin-act-as-copy small { white-space: normal; }
-      .admin-command-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-      .admin-command-actions .compact-button { width: 100%; min-width: 0; gap: 5px; padding: 8px 6px; font-size: 11px; white-space: nowrap; }
-      .admin-command-actions #admin-export { grid-column: 1 / -1; }
+      .admin-command-actions { display: flex; width: calc(100% + 24px); margin-right: -12px; margin-left: -12px; padding: 0 12px 2px; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+      .admin-command-actions::-webkit-scrollbar { display: none; }
+      .admin-command-actions .compact-button { width: auto; min-width: max-content; flex: 0 0 auto; gap: 5px; padding: 8px 10px; font-size: 11px; white-space: nowrap; }
       .admin-reminders { grid-template-columns: 1fr; margin-bottom: 12px; }
       .teacher-round-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .invite-teacher-panel summary { padding: 11px 12px; }
       .invite-teacher-body { padding: 0 12px 12px; }
-      .admin-tabs { display: flex; overflow-x: auto; margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; border-right: 0; border-left: 0; border-radius: 0; }
+      .admin-tabs { position: sticky; top: 60px; z-index: 18; display: flex; overflow-x: auto; margin-right: -14px; margin-left: -14px; padding: 8px 14px; border-right: 0; border-left: 0; border-radius: 0; background: rgba(243, 240, 235, .96); backdrop-filter: blur(12px); }
       .admin-tab { flex: 0 0 auto; }
+      .mobile-record-switcher {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px;
+        margin-bottom: 16px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      .mobile-record-button { min-height: 40px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 750; }
+      .mobile-record-button.active { background: var(--aqua-100); color: var(--sea-800); }
+      #claim-submit,
+      #leave-submit { position: sticky; bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 16; box-shadow: 0 8px 28px rgba(64, 57, 54, .20); }
     }
 
     @media (max-width: 380px) {
@@ -981,7 +1057,7 @@
     @media (max-width: 760px) {
       .topbar { background: #786c64; }
       .sidebar { border-bottom-color: #d8d0c7; background: #ebe5dd; }
-      .primary-nav { padding: 6px 5px; background: #ebe5dd; }
+      .primary-nav { position: static; padding: 6px 5px; background: #ebe5dd; }
       .nav-item.active { background: #fffdf9; }
       .nav-item.active::after { right: auto; bottom: 0; width: 24px; height: 2px; }
       .section-heading { font-size: 25px; }
@@ -1001,6 +1077,7 @@
   <section id="auth-shell" class="auth-shell">
     <div class="login-panel">
       <div class="login-brand">
+        <img class="app-icon-mark" src="./assets/app-icon-180.png" alt="">
         <div>
           <h1>Sherry Aerial Studio</h1>
           <p>教室管理系統</p>
@@ -1048,10 +1125,12 @@
   <div id="app-shell" class="app-shell" hidden>
     <header class="topbar">
       <div class="brand">
-        <div>
+        <img class="app-icon-mark" src="./assets/app-icon-180.png" alt="">
+        <div class="brand-copy">
           <h1 class="brand-name">Sherry Aerial Studio</h1>
           <div class="brand-subtitle">教室管理</div>
         </div>
+        <strong id="mobile-page-title" class="mobile-page-title">首頁</strong>
       </div>
       <div class="topbar-actions">
         <span id="current-user" class="current-user"></span>
@@ -1141,6 +1220,10 @@
         </section>
 
         <section id="view-myleaves" class="view">
+          <div class="mobile-record-switcher" role="tablist" aria-label="紀錄類型">
+            <button class="mobile-record-button active" type="button" data-view="view-myleaves">請假紀錄</button>
+            <button class="mobile-record-button" type="button" data-view="view-mysubs">代課紀錄</button>
+          </div>
           <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的請假紀錄</h2><p class="section-copy">請假、代課與 OB 核對進度</p></div></div>
           <div id="my-leaves-list" class="list"><div class="state">載入中...</div></div>
         </section>
@@ -1173,6 +1256,10 @@
         </section>
 
         <section id="view-mysubs" class="view">
+          <div class="mobile-record-switcher" role="tablist" aria-label="紀錄類型">
+            <button class="mobile-record-button" type="button" data-view="view-myleaves">請假紀錄</button>
+            <button class="mobile-record-button active" type="button" data-view="view-mysubs">代課紀錄</button>
+          </div>
           <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的代課紀錄</h2><p class="section-copy">已領取課程與改課內容</p></div></div>
           <div id="my-subs-list" class="list"><div class="state">載入中...</div></div>
         </section>
@@ -1223,6 +1310,13 @@
         </section>
       </main>
     </div>
+    <nav id="mobile-tabbar" class="mobile-tabbar" aria-label="手機主要功能">
+      <button id="mobile-primary-entry" class="mobile-tab-item active" type="button" data-mobile-tab="primary" data-view="view-home"><i data-lucide="layout-dashboard"></i><span id="mobile-primary-label">首頁</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="leave" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="claim" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="records" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>紀錄</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="payroll" data-view="view-payroll"><i data-lucide="receipt-text"></i><span>薪資</span></button>
+    </nav>
   </div>
 
   <dialog id="request-dialog">
@@ -1286,6 +1380,15 @@
     let requestDialogState = null;
 
     const byId = (id) => document.getElementById(id);
+    const MOBILE_VIEW_TITLES = {
+      "view-home": "首頁",
+      "view-leave": "請假登記",
+      "view-myleaves": "我的紀錄",
+      "view-claim": "領取代課",
+      "view-mysubs": "我的紀錄",
+      "view-payroll": "我的薪資",
+      "view-admin": "管理工作台"
+    };
 
     function beginReadRefresh(element, hasSnapshot, loadingHtml) {
       if (!hasSnapshot) element.innerHTML = loadingHtml;
@@ -1855,6 +1958,40 @@
       byId("home-greeting").textContent = target
         ? `${target}，您好（由 ${authState.teacherName} 代操作）。`
         : `${authState.teacherName}，您好。`;
+      updateMobileNavigation();
+    }
+
+    function updateMobileNavigation() {
+      const defaultView = authState.managementCapabilities.length ? "view-admin" : "view-home";
+      const targetView = authState.actingTeacherName ? "view-home" : defaultView;
+      const primaryButton = byId("mobile-primary-entry");
+      primaryButton.dataset.view = targetView;
+      byId("mobile-primary-label").textContent = targetView === "view-admin" ? "管理" : "首頁";
+    }
+
+    function syncMobileTabState(viewId) {
+      const activeTab = viewId === "view-myleaves" || viewId === "view-mysubs"
+        ? "records"
+        : ({
+          "view-home": "primary",
+          "view-admin": "primary",
+          "view-leave": "leave",
+          "view-claim": "claim",
+          "view-payroll": "payroll"
+        })[viewId] || "";
+
+      document.querySelectorAll(".mobile-tab-item").forEach((button) => {
+        const active = button.dataset.mobileTab === activeTab;
+        button.classList.toggle("active", active);
+        if (active) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+      });
+      document.querySelectorAll(".mobile-record-button").forEach((button) => {
+        const active = button.dataset.view === viewId;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      byId("mobile-page-title").textContent = MOBILE_VIEW_TITLES[viewId] || "教室管理";
     }
 
     function startActingAsTeacher(teacherName) {
@@ -1997,7 +2134,8 @@
         if (active) button.setAttribute("aria-current", "page");
         else button.removeAttribute("aria-current");
       });
-      byId("back-button").classList.toggle("visible", viewId !== "view-home");
+      syncMobileTabState(viewId);
+      byId("back-button").classList.toggle("visible", viewId !== "view-home" && viewId !== "view-admin");
 
       if (viewId === "view-leave") loadMyCourses();
       if (viewId === "view-myleaves") fetchMyLeaves();

@@ -1748,6 +1748,86 @@ function isVenueRentalCourseName_(courseNameValue) {
   return /場地租借|場租/.test(courseName);
 }
 
+function getCourseClosureLocation_(courseNameValue) {
+  var room = getCourseRoom_(courseNameValue);
+  if (room === 'A' || room === 'B') return '晴光';
+  if (room === 'C' || room === 'D') return '劍潭';
+  return '';
+}
+
+function getCourseClosureDisplayName_(courseNameValue) {
+  var parsed = parseClaimCourseOption_(courseNameValue);
+  return cleanText_(parsed.courseTypeName || stripCourseRoom_(courseNameValue));
+}
+
+function buildCourseClosureSocialCopy_(targetDateValue, details) {
+  var targetDate = normalizeClosureTargetDate_(targetDateValue);
+  var items = (details || []).filter(function(detail) {
+    var detailDate = cleanText_(detail && detail.date).replace(/-/g, '/');
+    if (!detail || detailDate !== targetDate) return false;
+    var rule = getCourseClosureRule_(detail, '23:40');
+    return !rule.manualReview && rule.minimumEnrollment != null &&
+      Number(detail.enrollmentCount) === Number(rule.minimumEnrollment) - 1;
+  }).sort(function(left, right) {
+    return [cleanText_(left.time), cleanText_(left.calendarId)].join('|')
+      .localeCompare([cleanText_(right.time), cleanText_(right.calendarId)].join('|'));
+  });
+  var lines = items.map(function(item, index) {
+    return (index === 0 ? '明' : '') + cleanText_(item.time) +
+      getCourseClosureLocation_(item.courseName) +
+      cleanText_(item.teacherName) +
+      getCourseClosureDisplayName_(item.courseName);
+  });
+  if (lines.length) lines.push('各缺一，等到23:40');
+  return {
+    targetDate: targetDate,
+    content: lines.join('\n'),
+    calendarIds: items.map(function(item) { return cleanText_(item.calendarId); }),
+    items: items.map(function(item) {
+      return {
+        calendarId: cleanText_(item.calendarId),
+        time: cleanText_(item.time),
+        location: getCourseClosureLocation_(item.courseName),
+        teacherName: cleanText_(item.teacherName),
+        courseName: getCourseClosureDisplayName_(item.courseName)
+      };
+    })
+  };
+}
+
+function getCourseClosureSocialCopyKey_(targetDateValue) {
+  var targetDate = cleanText_(targetDateValue).replace(/-/g, '/');
+  if (!/^\d{4}\/\d{2}\/\d{2}$/.test(targetDate)) return '';
+  return CONFIG.COURSE_CLOSURE_SOCIAL_COPY_PREFIX + targetDate.replace(/\//g, '');
+}
+
+function saveCourseClosureSocialCopy_(copyValue) {
+  var copy = copyValue || {};
+  var properties = getScriptProperties_();
+  if (!properties || !copy.targetDate) return copy;
+  var propertyKey = getCourseClosureSocialCopyKey_(copy.targetDate);
+  if (!propertyKey) return copy;
+  var stored = Object.assign({}, copy, {
+    updatedAt: Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss')
+  });
+  properties.setProperty(propertyKey, JSON.stringify(stored));
+  return stored;
+}
+
+function getCourseClosureSocialCopy_(targetDateValue) {
+  var properties = getScriptProperties_();
+  if (!properties) return null;
+  var propertyKey = getCourseClosureSocialCopyKey_(targetDateValue);
+  if (!propertyKey) return null;
+  var raw = properties.getProperty(propertyKey);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
 function getObApiJson_(url, options, label) {
   var response = UrlFetchApp.fetch(url, options);
   var responseCode = response.getResponseCode();
@@ -1892,12 +1972,15 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
       manualReviewCount: 0,
       failedCount: 0,
       alreadyProcessedCount: Object.keys(processed).length,
-      items: []
+      items: [],
+      socialCopy: null
     };
+    var targetDetails = [];
 
     (rawItems || []).forEach(function(raw) {
       var preview = normalizeClosureCalendarDetail_(raw);
       if (!preview || preview.date !== targetDate) return;
+      targetDetails.push(preview);
       var previewRule = getCourseClosureRule_(preview, stage);
       if (!previewRule.eligible && !previewRule.manualReview) return;
       if (processed[preview.calendarId]) {
@@ -1909,7 +1992,12 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
           '待人工確認', previewRule.reason, actor
         );
         result.manualReviewCount += 1;
-        result.items.push({ calendarId: preview.calendarId, result: '待人工確認' });
+        result.items.push({
+          calendarId: preview.calendarId,
+          time: preview.time,
+          courseName: preview.courseName,
+          result: '待人工確認'
+        });
         return;
       }
 
@@ -1922,7 +2010,12 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
             '待人工確認', latestRule.reason, actor
           );
           result.manualReviewCount += 1;
-          result.items.push({ calendarId: latest.calendarId, result: '待人工確認' });
+          result.items.push({
+            calendarId: latest.calendarId,
+            time: latest.time,
+            courseName: latest.courseName,
+            result: '待人工確認'
+          });
           return;
         }
         if (!latestRule.eligible) {
@@ -1931,7 +2024,12 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
             '人數已足，保留開課', '', actor
           );
           result.keptOpenCount += 1;
-          result.items.push({ calendarId: latest.calendarId, result: '人數已足，保留開課' });
+          result.items.push({
+            calendarId: latest.calendarId,
+            time: latest.time,
+            courseName: latest.courseName,
+            result: '人數已足，保留開課'
+          });
           return;
         }
         var cancelled = cancelObCalendarItem_(
@@ -1949,7 +2047,12 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
         );
         processed[latest.calendarId] = true;
         result.cancelledCount += 1;
-        result.items.push({ calendarId: latest.calendarId, result: '已取消' });
+        result.items.push({
+          calendarId: latest.calendarId,
+          time: latest.time,
+          courseName: latest.courseName,
+          result: '已取消'
+        });
       } catch (error) {
         appendCourseClosureLogUnlocked_(
           logSheet, targetDate, stage, preview, previewRule,
@@ -1958,11 +2061,18 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
         result.failedCount += 1;
         result.items.push({
           calendarId: preview.calendarId,
+          time: preview.time,
+          courseName: preview.courseName,
           result: '執行失敗',
           error: error && error.message ? error.message : String(error)
         });
       }
     });
+    if (stage === '22:30') {
+      result.socialCopy = saveCourseClosureSocialCopy_(
+        buildCourseClosureSocialCopy_(targetDate, targetDetails)
+      );
+    }
     return result;
   });
 }
@@ -2135,11 +2245,69 @@ function notifyCourseClosureFailures_(result) {
   });
 }
 
+function sendPushOnceSafely_(eventKeyValue, teacherNames, message) {
+  var eventKey = cleanText_(eventKeyValue).replace(/[^A-Za-z0-9_-]/g, '_');
+  var properties = getScriptProperties_();
+  var propertyKey = CONFIG.PUSH_SENT_KEY_PREFIX + eventKey;
+  if (properties && properties.getProperty(propertyKey)) {
+    return { attempted: false, delivered: 0, error: '', duplicate: true };
+  }
+  var result = sendPushAfterMutationSafely_(teacherNames, message);
+  if (properties && result && result.attempted && !result.error) {
+    properties.setProperty(
+      propertyKey,
+      Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss')
+    );
+  }
+  return result;
+}
+
+function notifyCourseClosureResult_(resultValue) {
+  var result = resultValue || {};
+  if (!result.targetDate || !result.stage) return { attempted: false, delivered: 0, error: '' };
+  var failedItems = (result.items || []).filter(function(item) {
+    return cleanText_(item.result) === '執行失敗';
+  });
+  var hasFailures = failedItems.length > 0 || Number(result.failedCount) > 0;
+  var heading;
+  var content;
+  if (hasFailures) {
+    heading = result.stage + ' 關課有 ' + Math.max(failedItems.length, Number(result.failedCount) || 0) + ' 堂失敗';
+    content = failedItems.map(function(item) {
+      return [
+        cleanText_(item.time),
+        cleanText_(item.courseName) || '課程',
+        '（' + cleanText_(item.calendarId) + '）',
+        '：' + cleanText_(item.error)
+      ].join('');
+    }).join('；');
+    if (!content) content = '有課程關閉失敗，請進管理平台查看關課紀錄。';
+  } else {
+    heading = result.stage + ' 關課完成';
+    content = '已取消 ' + (Number(result.cancelledCount) || 0) + ' 堂；' +
+      '保留 ' + (Number(result.keptOpenCount) || 0) + ' 堂；' +
+      '待人工確認 ' + (Number(result.manualReviewCount) || 0) + ' 堂。';
+  }
+  if (result.stage === '22:30' && result.socialCopy && cleanText_(result.socialCopy.content)) {
+    content += ' 社群提醒文字已整理完成。';
+  }
+  return sendPushOnceSafely_(
+    ['closure', String(result.targetDate).replace(/\D/g, ''), String(result.stage).replace(/\D/g, ''), hasFailures ? 'failed' : 'success'].join('_'),
+    getActiveCourseAdminNames_(),
+    {
+      heading: heading,
+      content: content,
+      url: buildAppViewUrl_('admin', 'closureManagement')
+    }
+  );
+}
+
 function executeNextDayClosures_(session, stageValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   assertManualCourseClosureStageAvailable_(stageValue);
   var result = executeNextDayClosuresCore_(actor, stageValue, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
+  notifyCourseClosureResult_(result);
   return result;
 }
 
@@ -2155,6 +2323,7 @@ function runCourseClosureScheduler() {
   if (!stage) return { skipped: true, reason: 'outside-window' };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
+  notifyCourseClosureResult_(result);
   return result;
 }
 
@@ -7876,6 +8045,7 @@ function getCourseClosureDashboard_(session) {
     triggerInstallationRequired: triggerStatus.installationRequired,
     triggerInstalledAt: triggerStatus.installedAt,
     targetDate: getTomorrowDate_(),
+    socialCopy: getCourseClosureSocialCopy_(getTomorrowDate_()),
     currentTime: manualAvailability.currentTime,
     manualStageAvailability: manualAvailability.stages,
     unclaimedCandidates: getUnclaimedSubstituteClosureCandidates_(session),

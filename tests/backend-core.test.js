@@ -6676,6 +6676,53 @@ test('next-day closure policy always excludes venue rentals at both stages', () 
   });
 });
 
+test('22:30 community copy lists only courses one person short of the 23:40 minimum', () => {
+  const backend = loadBackend();
+  const copy = backend.buildCourseClosureSocialCopy_('2026/09/01', [
+    { calendarId: '1', date: '2026/09/01', time: '12:00', courseName: 'C－柔軟度開發', teacherName: '蕃茄', enrollmentCount: 1, points: 1 },
+    { calendarId: '2', date: '2026/09/01', time: '13:30', courseName: 'A－舞綢 Lv.2', teacherName: 'Lily Yellow', enrollmentCount: 1, points: 1 },
+    { calendarId: '3', date: '2026/09/01', time: '18:30', courseName: 'D－空環雙人特別課', teacherName: 'Ariel', enrollmentCount: 3, points: 1 },
+    { calendarId: '4', date: '2026/09/01', time: '20:00', courseName: 'B－空瑜', teacherName: 'Jina', enrollmentCount: 2, points: 1 },
+    { calendarId: '5', date: '2026/09/01', time: '21:00', courseName: 'A－場地租借', teacherName: '', enrollmentCount: 0, points: 1 },
+    { calendarId: '6', date: '2026/09/01', time: '21:30', courseName: 'A－空環', teacherName: '老師甲', enrollmentCount: 2, points: 1 },
+  ]);
+
+  assert.equal(copy.content, [
+    '明12:00劍潭蕃茄柔軟度開發',
+    '13:30晴光Lily Yellow舞綢',
+    '18:30劍潭Ariel空環雙人特別課',
+    '20:00晴光Jina空瑜',
+    '各缺一，等到23:40',
+  ].join('\n'));
+  assert.deepEqual(JSON.parse(JSON.stringify(copy.calendarIds)), ['1', '2', '3', '4']);
+});
+
+test('closure result push targets course admins once and includes failure details', () => {
+  const services = createAuthServices();
+  const backend = loadBackend(services);
+  const pushes = [];
+  backend.getActiveCourseAdminNames_ = () => ['冠蓉', 'Tako'];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    pushes.push({ names: Array.from(names), message });
+    return { attempted: true, delivered: names.length, error: '' };
+  };
+  const result = {
+    targetDate: '2026/09/01', stage: '22:30', cancelledCount: 1,
+    keptOpenCount: 0, manualReviewCount: 0, failedCount: 1,
+    socialCopy: { content: '明12:00劍潭蕃茄柔軟度開發\n各缺一，等到23:40' },
+    items: [{ calendarId: 'cal-fail', time: '13:30', courseName: 'A－舞綢', result: '執行失敗', error: 'OB timeout' }],
+  };
+
+  backend.notifyCourseClosureResult_(result);
+  backend.notifyCourseClosureResult_(result);
+
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(pushes[0].names, ['冠蓉', 'Tako']);
+  assert.match(pushes[0].message.heading, /失敗/);
+  assert.match(pushes[0].message.content, /A－舞綢.*cal-fail.*OB timeout/);
+  assert.match(pushes[0].message.url, /view=admin&tab=closureManagement/);
+});
+
 test('23:40 closure policy sends incomplete OB details to manual review instead of guessing', () => {
   const backend = loadBackend();
   const base = {

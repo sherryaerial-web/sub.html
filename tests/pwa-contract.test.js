@@ -62,6 +62,10 @@ test('PWA 只使用 OneSignal 推播 worker，不快取管理資料', () => {
   const worker = fs.readFileSync(path.join(root, 'OneSignalSDKWorker.js'), 'utf8');
 
   assert.match(html, /OneSignalSDK\.page\.js/);
+  assert.match(html, /serviceWorkerPath:\s*["']\/sub\.html\/OneSignalSDKWorker\.js["']/);
+  assert.match(html, /serviceWorkerParam:\s*\{\s*scope:\s*["']\/sub\.html\/["']\s*\}/);
+  assert.doesNotMatch(html, /serviceWorkerPath:\s*["']OneSignalSDKWorker\.js["']/);
+  assert.doesNotMatch(html, /serviceWorkerParam:\s*\{\s*scope:\s*["']\.\/["']\s*\}/);
   assert.match(worker, /OneSignalSDK\.sw\.js/);
   assert.doesNotMatch(worker, /addEventListener\s*\(\s*['"]fetch['"]/);
   assert.doesNotMatch(worker, /caches\s*\.|CacheStorage|cache\.addAll/);

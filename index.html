@@ -2134,8 +2134,8 @@
         if (!pushSdk || pushSdkAppId !== appId) {
           await OneSignal.init({
             appId,
-            serviceWorkerPath: "OneSignalSDKWorker.js",
-            serviceWorkerParam: { scope: "./" },
+            serviceWorkerPath: "/sub.html/OneSignalSDKWorker.js",
+            serviceWorkerParam: { scope: "/sub.html/" },
             notifyButton: { enable: false }
           });
           pushSdk = OneSignal;

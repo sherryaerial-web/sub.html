@@ -433,7 +433,7 @@ test('notification permission is requested only after the signed-in teacher taps
       },
     },
   };
-  const { context } = createFrontendRuntime({
+  const { context, getElement } = createFrontendRuntime({
     getPushConfiguration: {
       configured: true,
       appId: 'onesignal-app-id',
@@ -456,6 +456,7 @@ test('notification permission is requested only after the signed-in teacher taps
   await context.requestPushPermission();
   assert.equal(calls.some(([name]) => name === 'requestPermission'), true);
   assert.equal(calls.some(([name]) => name === 'optIn'), true);
+  assert.equal(getElement('push-permission-card').hidden, true);
 });
 
 test('notification setup explains iPhone Home Screen requirement and logs out push identity', () => {
@@ -463,6 +464,30 @@ test('notification setup explains iPhone Home Screen requirement and logs out pu
   assert.match(html, /iOS 16\.4/);
   assert.match(html, /OneSignal\.logout\(\)/);
   assert.match(html, /logoutPushIdentity/);
+});
+
+test('course administrators have one notification center for manual sends schedules and history', async () => {
+  assert.match(html, /data-admin-tab=["']notifications["']/);
+  const { context, requestActions, getElement } = createFrontendRuntime({
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉', 'Tako', 'Jina'],
+      administrators: ['冠蓉', 'Tako'],
+      closureWindows: [
+        { stage: '第一輪', time: '22:30–22:34' },
+        { stage: '第二輪', time: '23:40–23:44' },
+      ],
+      schedules: [],
+      history: [],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications';", context);
+
+  await context.fetchNotificationAdminDashboard();
+
+  assert.ok(requestActions.includes('getNotificationAdminDashboard'));
+  assert.match(getElement('admin-tab-content').innerHTML, /id=["']manual-notification-form["']/);
+  assert.match(getElement('admin-tab-content').innerHTML, /22:30–22:34/);
+  assert.match(getElement('admin-tab-content').innerHTML, /23:40–23:44/);
 });
 
 test('management accounts land directly on the management workspace', () => {
@@ -2637,8 +2662,8 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the eleven capability-scoped admin tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 11);
+test('keeps the twelve capability-scoped admin tabs accessible and exposes their queue counts', () => {
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 12);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);

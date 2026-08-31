@@ -135,6 +135,7 @@ var CONFIG = {
   PUBLIC_APP_URL: 'https://sherryaerial-web.github.io/sub.html/',
   PUSH_EXTERNAL_ID_SALT_PROPERTY: 'PUSH_EXTERNAL_ID_SALT',
   PUSH_SENT_KEY_PREFIX: 'PUSH_SENT_',
+  NOTIFICATION_SCHEDULES_PROPERTY: 'NOTIFICATION_SCHEDULES_V1',
   COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
@@ -849,11 +850,11 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
     ? cleanText_(properties.getProperty(CONFIG.ONESIGNAL_REST_API_KEY_PROPERTY))
     : '';
   if (!names.length || !appId || !restApiKey || typeof UrlFetchApp === 'undefined') {
-    return { attempted: false, delivered: 0, error: '' };
+    return { attempted: false, accepted: false, delivered: 0, messageId: '', error: '' };
   }
 
   var externalIds = names.map(getPushExternalId_).filter(Boolean);
-  if (!externalIds.length) return { attempted: false, delivered: 0, error: '' };
+  if (!externalIds.length) return { attempted: false, accepted: false, delivered: 0, messageId: '', error: '' };
   var message = messageValue || {};
   var payload = {
     app_id: appId,
@@ -876,7 +877,9 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
     if (responseCode < 200 || responseCode >= 300) {
       return {
         attempted: true,
+        accepted: false,
         delivered: 0,
+        messageId: '',
         error: 'OneSignal 推播失敗（HTTP ' + responseCode + '）。'
       };
     }
@@ -886,16 +889,329 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
     } catch (ignore) {}
     return {
       attempted: true,
-      delivered: Number(body.recipients) || 0,
+      accepted: true,
+      delivered: body.recipients == null ? null : (Number(body.recipients) || 0),
+      messageId: cleanText_(body.id),
       error: ''
     };
   } catch (error) {
     return {
       attempted: true,
+      accepted: false,
       delivered: 0,
+      messageId: '',
       error: 'OneSignal 推播失敗：' + getErrorMessage_(error)
     };
   }
+}
+
+function isNotificationScheduleDue_(scheduleValue, dateKeyValue, timeValue) {
+  var schedule = scheduleValue || {};
+  if (schedule.enabled === false) return false;
+  var dateKey = cleanText_(dateKeyValue);
+  var parts = dateKey.split('-').map(Number);
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return false;
+  var scheduleDay = cleanText_(schedule.day);
+  var nextDay = new Date(parts[0], parts[1] - 1, parts[2] + 1);
+  var isLastDay = nextDay.getMonth() !== parts[1] - 1;
+  if (scheduleDay === 'last') {
+    if (!isLastDay) return false;
+  } else if (Number(scheduleDay) !== parts[2]) {
+    return false;
+  }
+  var scheduledTime = cleanText_(schedule.time);
+  var currentTime = cleanText_(timeValue);
+  if (!/^\d{2}:\d{2}$/.test(scheduledTime) || !/^\d{2}:\d{2}$/.test(currentTime)) return false;
+  var scheduledMinutes = Number(scheduledTime.slice(0, 2)) * 60 + Number(scheduledTime.slice(3));
+  var currentMinutes = Number(currentTime.slice(0, 2)) * 60 + Number(currentTime.slice(3));
+  return currentMinutes >= scheduledMinutes && currentMinutes <= scheduledMinutes + 4;
+}
+
+function getActiveAccountTeacherNames_() {
+  var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.ACCOUNTS);
+  assertHeaders_(sheet, SHEET_HEADERS.ACCOUNTS);
+  var values = sheet.getDataRange().getValues();
+  var headers = getHeaderMap_(sheet);
+  var seen = {};
+  var names = [];
+  for (var index = 1; index < values.length; index++) {
+    var row = values[index];
+    var name = cleanText_(row[headers['指導者'] - 1]);
+    if (!name || seen[name] || !isAccountActive_(row[headers['是否在職'] - 1])) continue;
+    seen[name] = true;
+    names.push(name);
+  }
+  return names;
+}
+
+function getNotificationSchedules_() {
+  var properties = getScriptProperties_();
+  var raw = properties ? properties.getProperty(CONFIG.NOTIFICATION_SCHEDULES_PROPERTY) : '';
+  if (!raw) return [];
+  try {
+    var schedules = JSON.parse(raw);
+    return Array.isArray(schedules) ? schedules : [];
+  } catch (error) {
+    console.warn('通知排程設定無法解析，已改用空清單。', error);
+    return [];
+  }
+}
+
+function saveNotificationSchedules_(schedules) {
+  var properties = getScriptProperties_();
+  if (!properties) throw new Error('目前無法儲存通知排程。');
+  properties.setProperty(CONFIG.NOTIFICATION_SCHEDULES_PROPERTY, JSON.stringify(schedules || []));
+}
+
+function normalizeNotificationAudienceMode_(modeValue) {
+  var mode = cleanText_(modeValue) || 'selected';
+  if (['selected', 'admins', 'all'].indexOf(mode) === -1) {
+    throw new Error('通知收件人設定不正確。');
+  }
+  return mode;
+}
+
+function resolveNotificationAudience_(modeValue, teacherNamesValue) {
+  var mode = normalizeNotificationAudienceMode_(modeValue);
+  var activeNames = getActiveAccountTeacherNames_();
+  var activeMap = {};
+  activeNames.forEach(function(name) { activeMap[name] = true; });
+  var names;
+  if (mode === 'admins') {
+    names = getActiveCourseAdminNames_();
+  } else if (mode === 'all') {
+    names = activeNames;
+  } else {
+    var requested = Array.isArray(teacherNamesValue) ? teacherNamesValue : [];
+    var seen = {};
+    names = requested.map(cleanText_).filter(function(name) {
+      if (!name || !activeMap[name] || seen[name]) return false;
+      seen[name] = true;
+      return true;
+    });
+  }
+  if (!names.length) throw new Error('請至少選擇一位目前在職的通知收件人。');
+  return names;
+}
+
+function validateNotificationCopy_(headingValue, contentValue) {
+  var heading = cleanText_(headingValue);
+  var content = cleanText_(contentValue);
+  if (!heading) throw new Error('請填寫通知標題。');
+  if (!content) throw new Error('請填寫通知內容。');
+  if (heading.length > 80) throw new Error('通知標題最多 80 個字。');
+  if (content.length > 500) throw new Error('通知內容最多 500 個字。');
+  return { heading: heading, content: content };
+}
+
+function normalizeNotificationSchedule_(scheduleValue, actorName, existingValue) {
+  var input = scheduleValue || {};
+  var copy = validateNotificationCopy_(input.heading, input.content);
+  var name = cleanText_(input.name);
+  if (!name) throw new Error('請填寫排程名稱。');
+  var day = cleanText_(input.day);
+  if (day !== 'last' && (!/^\d{1,2}$/.test(day) || Number(day) < 1 || Number(day) > 31)) {
+    throw new Error('每月日期請填 1–31，或選擇月底。');
+  }
+  var time = cleanText_(input.time);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('通知時間格式不正確。');
+  var audienceMode = normalizeNotificationAudienceMode_(input.audienceMode);
+  var selectedNames = audienceMode === 'selected'
+    ? resolveNotificationAudience_(audienceMode, input.teacherNames)
+    : [];
+  var existing = existingValue || {};
+  return {
+    id: cleanText_(existing.id) || cleanText_(input.id) || Utilities.getUuid(),
+    name: name,
+    day: day,
+    time: time,
+    heading: copy.heading,
+    content: copy.content,
+    audienceMode: audienceMode,
+    teacherNames: selectedNames,
+    enabled: input.enabled == null ? existing.enabled !== false : input.enabled !== false,
+    createdAt: cleanText_(existing.createdAt) || Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'),
+    updatedAt: Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'),
+    updatedBy: cleanText_(actorName)
+  };
+}
+
+function appendNotificationAuditSafely_(event) {
+  try {
+    appendAudit_(event);
+  } catch (error) {
+    console.warn('推播已處理，但通知紀錄寫入失敗。', error);
+  }
+}
+
+function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode, teacherNames, heading, content) {
+  var copy = validateNotificationCopy_(heading, content);
+  var recipients = resolveNotificationAudience_(audienceMode, teacherNames);
+  var result = sendPushAfterMutationSafely_(recipients, {
+    heading: copy.heading,
+    content: copy.content,
+    url: buildAppViewUrl_('', '')
+  });
+  var accepted = Boolean(result && result.accepted === true && !result.error);
+  appendNotificationAuditSafely_({
+    actor: cleanText_(actorName),
+    action: '推播通知：' + cleanText_(sourceLabel),
+    targetId: cleanText_(sourceId),
+    before: recipients.join('、'),
+    after: accepted ? '已送出' : '失敗',
+    reason: JSON.stringify({
+      heading: copy.heading,
+      recipients: recipients.length,
+      messageId: cleanText_(result && result.messageId),
+      error: cleanText_(result && result.error)
+    })
+  });
+  return {
+    attempted: Boolean(result && result.attempted),
+    accepted: accepted,
+    delivered: result ? result.delivered : 0,
+    messageId: cleanText_(result && result.messageId),
+    error: cleanText_(result && result.error),
+    recipientCount: recipients.length,
+    recipientNames: recipients
+  };
+}
+
+function sendManualNotification_(session, requestValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var request = requestValue || {};
+  return sendManagedNotification_(
+    actor,
+    '手動',
+    Utilities.getUuid(),
+    request.audienceMode,
+    request.teacherNames,
+    request.heading,
+    request.content
+  );
+}
+
+function saveNotificationSchedule_(session, requestValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var request = requestValue || {};
+  var schedules = getNotificationSchedules_();
+  var requestId = cleanText_(request.id);
+  var existingIndex = -1;
+  schedules.some(function(schedule, index) {
+    if (cleanText_(schedule.id) !== requestId || !requestId) return false;
+    existingIndex = index;
+    return true;
+  });
+  var normalized = normalizeNotificationSchedule_(
+    request,
+    actor,
+    existingIndex >= 0 ? schedules[existingIndex] : null
+  );
+  if (existingIndex >= 0) schedules[existingIndex] = normalized;
+  else schedules.push(normalized);
+  saveNotificationSchedules_(schedules);
+  return normalized;
+}
+
+function setNotificationScheduleEnabled_(session, scheduleIdValue, enabledValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var scheduleId = cleanText_(scheduleIdValue);
+  var schedules = getNotificationSchedules_();
+  var found = null;
+  schedules.forEach(function(schedule) {
+    if (cleanText_(schedule.id) !== scheduleId) return;
+    schedule.enabled = enabledValue === true;
+    schedule.updatedAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    schedule.updatedBy = actor;
+    found = schedule;
+  });
+  if (!found) throw new Error('找不到這筆通知排程。');
+  saveNotificationSchedules_(schedules);
+  return found;
+}
+
+function sendNotificationScheduleNow_(session, scheduleIdValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var scheduleId = cleanText_(scheduleIdValue);
+  var schedule = getNotificationSchedules_().filter(function(item) {
+    return cleanText_(item.id) === scheduleId;
+  })[0];
+  if (!schedule) throw new Error('找不到這筆通知排程。');
+  return sendManagedNotification_(
+    actor,
+    '排程手動送出',
+    schedule.id,
+    schedule.audienceMode,
+    schedule.teacherNames,
+    schedule.heading,
+    schedule.content
+  );
+}
+
+function getNotificationHistory_() {
+  var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.AUDIT);
+  assertHeaders_(sheet, SHEET_HEADERS.AUDIT);
+  var values = sheet.getDataRange().getValues();
+  var headers = getHeaderMap_(sheet);
+  return values.slice(1).filter(function(row) {
+    return cleanText_(row[headers['操作類型'] - 1]).indexOf('推播通知：') === 0;
+  }).slice(-50).reverse().map(function(row) {
+    return {
+      sentAt: cleanText_(row[headers['操作時間'] - 1]),
+      actor: cleanText_(row[headers['操作者'] - 1]),
+      type: cleanText_(row[headers['操作類型'] - 1]).replace(/^推播通知：/, ''),
+      targetId: cleanText_(row[headers['目標編號'] - 1]),
+      recipients: cleanText_(row[headers['舊狀態'] - 1]),
+      status: cleanText_(row[headers['新狀態'] - 1]),
+      detail: cleanText_(row[headers['原因'] - 1])
+    };
+  });
+}
+
+function getNotificationAdminDashboard_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  return {
+    teachers: getActiveAccountTeacherNames_(),
+    administrators: getActiveCourseAdminNames_(),
+    schedules: getNotificationSchedules_(),
+    history: getNotificationHistory_(),
+    closureWindows: [
+      { stage: '第一輪', time: '22:30–22:34' },
+      { stage: '第二輪', time: '23:40–23:44' }
+    ]
+  };
+}
+
+function runScheduledNotifications_(dateKeyValue, timeValue) {
+  var dateKey = cleanText_(dateKeyValue);
+  var time = cleanText_(timeValue);
+  var properties = getScriptProperties_();
+  var sentCount = 0;
+  var failedCount = 0;
+  var results = [];
+  getNotificationSchedules_().forEach(function(schedule) {
+    if (!isNotificationScheduleDue_(schedule, dateKey, time)) return;
+    var eventKey = 'schedule_' + cleanText_(schedule.id).replace(/[^A-Za-z0-9_-]/g, '_') + '_' + dateKey.replace(/\D/g, '');
+    var propertyKey = CONFIG.PUSH_SENT_KEY_PREFIX + eventKey;
+    if (properties && properties.getProperty(propertyKey)) return;
+    var result = sendManagedNotification_(
+      '系統通知排程',
+      '排程',
+      schedule.id,
+      schedule.audienceMode,
+      schedule.teacherNames,
+      schedule.heading,
+      schedule.content
+    );
+    results.push({ scheduleId: schedule.id, result: result });
+    if (result.accepted) {
+      sentCount += 1;
+      if (properties) properties.setProperty(propertyKey, dateKey + ' ' + time);
+    } else {
+      failedCount += 1;
+    }
+  });
+  return { sentCount: sentCount, failedCount: failedCount, items: results };
 }
 
 function buildAppViewUrl_(view, adminTab) {
@@ -1348,6 +1664,31 @@ function doPost(e) {
       },
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
+      },
+      getNotificationAdminDashboard: function() {
+        return getNotificationAdminDashboard_(session);
+      },
+      sendManualNotification: function() {
+        return sendManualNotification_(
+          session,
+          parseJsonObject_(parameters.notification, '推播通知')
+        );
+      },
+      saveNotificationSchedule: function() {
+        return saveNotificationSchedule_(
+          session,
+          parseJsonObject_(parameters.schedule, '通知排程')
+        );
+      },
+      setNotificationScheduleEnabled: function() {
+        return setNotificationScheduleEnabled_(
+          session,
+          parameters.scheduleId,
+          parseBoolean_(parameters.enabled, '通知排程啟用設定')
+        );
+      },
+      sendNotificationScheduleNow: function() {
+        return sendNotificationScheduleNow_(session, parameters.scheduleId);
       },
       getPayrollAdminDashboard: function() {
         return getPayrollAdminDashboard_(session, parameters.month);
@@ -2312,18 +2653,22 @@ function executeNextDayClosures_(session, stageValue) {
 }
 
 function runCourseClosureScheduler() {
+  var now = new Date(currentTimeMs_());
+  var dateKey = Utilities.formatDate(now, getTimeZone_(), 'yyyy-MM-dd');
+  var time = Utilities.formatDate(now, getTimeZone_(), 'HH:mm');
+  var notificationResult = runScheduledNotifications_(dateKey, time);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureCourseClosureStructureUnlocked_(ss);
   var settings = getCourseClosureSettingsUnlocked_(
     requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS)
   );
-  if (!settings.automatic) return { skipped: true, reason: 'manual' };
-  var time = Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'HH:mm');
+  if (!settings.automatic) return { skipped: true, reason: 'manual', notifications: notificationResult };
   var stage = getCourseClosureDueStage_(time);
-  if (!stage) return { skipped: true, reason: 'outside-window' };
+  if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
   notifyCourseClosureResult_(result);
+  result.notifications = notificationResult;
   return result;
 }
 

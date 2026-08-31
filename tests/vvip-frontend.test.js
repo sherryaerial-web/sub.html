@@ -223,7 +223,7 @@ test('VVIP search exposes matching ordinary dates without losing manual expansio
 });
 
 test('VVIP admin workspace remains a protected tab with management actions', () => {
-  assert.equal((adminHtml.match(/role=["']tab["']/g) || []).length, 11);
+  assert.equal((adminHtml.match(/role=["']tab["']/g) || []).length, 12);
   assert.match(adminHtml, /data-admin-tab=["']vvip["']/);
   assert.match(adminHtml, /data-capability=["']vvip_admin["']/);
   assert.match(adminHtml, /VVIP 選課/);

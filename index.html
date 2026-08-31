@@ -784,6 +784,21 @@
     .admin-tab-count { display: inline-grid; min-width: 20px; height: 20px; place-items: center; padding: 0 5px; border-radius: 4px; background: var(--soft); color: var(--muted); font-size: 10px; }
     .admin-tab.active .admin-tab-count { background: var(--surface); color: var(--sea-700); }
     .admin-tab-content { margin-top: 12px; }
+    .notification-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+    .notification-panel { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .notification-panel.full { grid-column: 1 / -1; }
+    .notification-panel h3 { margin: 0 0 4px; font-size: 15px; }
+    .notification-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
+    .notification-form-grid .full { grid-column: 1 / -1; }
+    .notification-field { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .notification-field textarea { min-height: 92px; resize: vertical; }
+    .notification-recipient-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; max-height: 210px; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .notification-recipient { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 6px; background: var(--surface); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+    .notification-schedule-list, .notification-history-list { display: grid; gap: 8px; margin-top: 12px; }
+    .notification-schedule-card, .notification-history-row { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .notification-schedule-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .notification-window-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .notification-window-strip span { padding: 6px 8px; border-radius: 6px; background: var(--aqua-100); color: var(--sea-800); font-size: 11px; font-weight: 750; }
     .ob-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
     .queue-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 2px 10px; }
     .queue-section-heading strong { font-size: 14px; }
@@ -979,6 +994,11 @@
       .invite-teacher-body { padding: 0 12px 12px; }
       .admin-tabs { position: sticky; top: 60px; z-index: 18; display: flex; overflow-x: auto; margin-right: -14px; margin-left: -14px; padding: 8px 14px; border-right: 0; border-left: 0; border-radius: 0; background: rgba(243, 240, 235, .96); backdrop-filter: blur(12px); }
       .admin-tab { flex: 0 0 auto; }
+      .notification-layout { grid-template-columns: 1fr; }
+      .notification-panel.full { grid-column: auto; }
+      .notification-form-grid { grid-template-columns: 1fr; }
+      .notification-form-grid .full { grid-column: auto; }
+      .notification-recipient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .mobile-record-switcher {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1346,6 +1366,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="closureManagement" data-capability="course_admin"><i data-lucide="calendar-cog"></i>關課管理<span class="admin-tab-count" data-admin-count="courseClosureCandidates">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="delayClosures" data-capability="course_admin"><i data-lucide="clock-arrow-down"></i>代關課程<span class="admin-tab-count" data-admin-count="delayClosures">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知中心</button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">—</span></button>
@@ -1419,6 +1440,7 @@
     let adminDashboard = null;
     let vvipDashboard = null;
     let payrollDashboard = null;
+    let notificationDashboard = null;
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
@@ -1947,6 +1969,140 @@
       refreshIcons();
     }
 
+    function notificationAudienceLabel(mode, teacherNames = []) {
+      if (mode === "admins") return "冠蓉＋Tako 管理員";
+      if (mode === "all") return "全部在職老師";
+      return `${teacherNames.length} 位指定老師`;
+    }
+
+    function renderNotificationRecipientGrid(prefix, selectedNames = []) {
+      const teachers = (notificationDashboard && notificationDashboard.teachers) || [];
+      const selected = new Set(selectedNames || []);
+      return `<div class="notification-recipient-grid">${teachers.map((name) => `
+        <label class="notification-recipient">
+          <input type="checkbox" name="${escapeHtml(prefix)}-recipient" value="${escapeHtml(name)}"${selected.has(name) ? " checked" : ""}>
+          <span>${escapeHtml(name)}</span>
+        </label>`).join("")}</div>`;
+    }
+
+    function renderNotificationAdminTab() {
+      const content = byId("admin-tab-content");
+      const data = notificationDashboard;
+      if (!data) {
+        content.innerHTML = '<div class="state">載入通知中心中...</div>';
+        return;
+      }
+      const schedules = (data.schedules || []).map((schedule) => `
+        <article class="notification-schedule-card">
+          <div class="notification-schedule-head">
+            <div><strong>${escapeHtml(schedule.name)}</strong><div class="item-meta">每月 ${schedule.day === "last" ? "月底" : `${escapeHtml(schedule.day)} 日`} ${escapeHtml(schedule.time)}｜${escapeHtml(notificationAudienceLabel(schedule.audienceMode, schedule.teacherNames))}</div></div>
+            <span class="status-pill">${schedule.enabled ? "啟用中" : "已暫停"}</span>
+          </div>
+          <div class="item-meta">${escapeHtml(schedule.heading)}｜${escapeHtml(schedule.content)}</div>
+          <div class="admin-item-actions">
+            <button class="compact-button" type="button" data-admin-action="edit-notification-schedule" data-schedule-id="${escapeHtml(schedule.id)}"><i data-lucide="pencil"></i>編輯</button>
+            <button class="compact-button" type="button" data-admin-action="send-notification-schedule-now" data-schedule-id="${escapeHtml(schedule.id)}"><i data-lucide="send"></i>現在送出</button>
+            <button class="${schedule.enabled ? "danger-button" : "compact-button"}" type="button" data-admin-action="toggle-notification-schedule" data-schedule-id="${escapeHtml(schedule.id)}" data-enabled="${schedule.enabled ? "false" : "true"}">${schedule.enabled ? "暫停" : "啟用"}</button>
+          </div>
+        </article>`).join("") || '<div class="state">尚未建立每月通知排程</div>';
+      const history = (data.history || []).map((item) => `
+        <div class="notification-history-row">
+          <div class="notification-schedule-head"><strong>${escapeHtml(item.type)}</strong><span class="status-pill">${escapeHtml(item.status)}</span></div>
+          <div class="item-meta">${escapeHtml(item.sentAt)}｜${escapeHtml(item.actor)}｜${escapeHtml(item.recipients || "未記錄收件人")}</div>
+        </div>`).join("") || '<div class="state">目前尚無推播紀錄</div>';
+      const closureWindows = (data.closureWindows || []).map((item) => `<span>${escapeHtml(item.stage)} ${escapeHtml(item.time)}</span>`).join("");
+      content.innerHTML = `
+        <div class="notification-layout">
+          <section class="notification-panel">
+            <h3>手動推播</h3>
+            <div class="item-meta">勾選收件人後可直接從這裡送出，不必再到 OneSignal。</div>
+            <form id="manual-notification-form" class="notification-form-grid">
+              <label class="notification-field full">通知標題<input id="manual-notification-heading" class="text-input" type="text" maxlength="80" required></label>
+              <label class="notification-field full">通知內容<textarea id="manual-notification-content" class="text-input" maxlength="500" required></textarea></label>
+              <label class="notification-field full">收件方式<select id="manual-notification-audience" class="admin-select"><option value="selected">指定老師</option><option value="admins">冠蓉＋Tako 管理員</option><option value="all">全部在職老師</option></select></label>
+              <div class="notification-field full">指定老師${renderNotificationRecipientGrid("manual")}</div>
+              <div class="admin-item-actions full"><button class="primary-button inline-button" type="submit"><i data-lucide="send"></i>確認並送出</button></div>
+            </form>
+          </section>
+          <section class="notification-panel">
+            <h3>固定排程</h3>
+            <div class="item-meta">現有每 5 分鐘觸發器會在下列容許時間內執行，不會重複送出。</div>
+            <div class="notification-window-strip">${closureWindows}</div>
+            <form id="notification-schedule-form" class="notification-form-grid">
+              <input id="notification-schedule-id" type="hidden">
+              <label class="notification-field">排程名稱<input id="notification-schedule-name" class="text-input" type="text" maxlength="60" required></label>
+              <label class="notification-field">每月日期<select id="notification-schedule-day" class="admin-select"><option value="last">月底</option>${Array.from({ length: 31 }, (_, index) => `<option value="${index + 1}">${index + 1} 日</option>`).join("")}</select></label>
+              <label class="notification-field">時間<input id="notification-schedule-time" class="text-input" type="time" required></label>
+              <label class="notification-field">收件方式<select id="notification-schedule-audience" class="admin-select"><option value="admins">冠蓉＋Tako 管理員</option><option value="all">全部在職老師</option><option value="selected">指定老師</option></select></label>
+              <label class="notification-field full">通知標題<input id="notification-schedule-heading" class="text-input" type="text" maxlength="80" required></label>
+              <label class="notification-field full">通知內容<textarea id="notification-schedule-content" class="text-input" maxlength="500" required></textarea></label>
+              <div class="notification-field full">指定老師${renderNotificationRecipientGrid("schedule")}</div>
+              <div class="admin-item-actions full"><button class="primary-button inline-button" type="submit"><i data-lucide="save"></i>儲存排程</button><button class="compact-button" type="button" data-admin-action="clear-notification-schedule"><i data-lucide="rotate-ccw"></i>清空表單</button></div>
+            </form>
+          </section>
+          <section class="notification-panel full"><h3>已設定排程</h3><div class="notification-schedule-list">${schedules}</div></section>
+          <section class="notification-panel full"><h3>最近發送紀錄</h3><div class="notification-history-list">${history}</div></section>
+        </div>`;
+      refreshIcons();
+    }
+
+    function selectedNotificationRecipients(prefix) {
+      return [...document.querySelectorAll(`input[name="${prefix}-recipient"]:checked`)].map((input) => input.value);
+    }
+
+    function clearNotificationScheduleForm() {
+      const form = byId("notification-schedule-form");
+      if (!form) return;
+      form.reset();
+      byId("notification-schedule-id").value = "";
+      byId("notification-schedule-day").value = "last";
+      document.querySelectorAll('input[name="schedule-recipient"]').forEach((input) => { input.checked = false; });
+    }
+
+    function populateNotificationScheduleForm(scheduleId) {
+      const schedule = ((notificationDashboard && notificationDashboard.schedules) || []).find((item) => item.id === scheduleId);
+      if (!schedule) throw new Error("找不到這筆通知排程。");
+      byId("notification-schedule-id").value = schedule.id;
+      byId("notification-schedule-name").value = schedule.name;
+      byId("notification-schedule-day").value = schedule.day;
+      byId("notification-schedule-time").value = schedule.time;
+      byId("notification-schedule-heading").value = schedule.heading;
+      byId("notification-schedule-content").value = schedule.content;
+      byId("notification-schedule-audience").value = schedule.audienceMode;
+      const selected = new Set(schedule.teacherNames || []);
+      document.querySelectorAll('input[name="schedule-recipient"]').forEach((input) => { input.checked = selected.has(input.value); });
+      byId("notification-schedule-form").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    async function submitManualNotification() {
+      const heading = byId("manual-notification-heading").value.trim();
+      const content = byId("manual-notification-content").value.trim();
+      const audienceMode = byId("manual-notification-audience").value;
+      const teacherNames = selectedNotificationRecipients("manual");
+      const audience = notificationAudienceLabel(audienceMode, teacherNames);
+      if (!window.confirm(`確定要將「${heading}」推播給${audience}？`)) return;
+      const result = await callApi("sendManualNotification", { notification: { heading, content, audienceMode, teacherNames } });
+      if (!result.accepted) throw new Error(result.error || "通知送出失敗，請稍後重試。");
+      setNotice(`通知已送出給 ${result.recipientCount} 位。`);
+      await fetchNotificationAdminDashboard();
+    }
+
+    async function submitNotificationSchedule() {
+      const schedule = {
+        id: byId("notification-schedule-id").value,
+        name: byId("notification-schedule-name").value.trim(),
+        day: byId("notification-schedule-day").value,
+        time: byId("notification-schedule-time").value,
+        heading: byId("notification-schedule-heading").value.trim(),
+        content: byId("notification-schedule-content").value.trim(),
+        audienceMode: byId("notification-schedule-audience").value,
+        teacherNames: selectedNotificationRecipients("schedule")
+      };
+      await callApi("saveNotificationSchedule", { schedule });
+      setNotice("通知排程已儲存。");
+      await fetchNotificationAdminDashboard();
+    }
+
     function rememberTeacher(name) {
       try { window.localStorage.setItem(LAST_TEACHER_KEY, name); } catch (error) { /* Storage may be disabled. */ }
     }
@@ -2043,7 +2199,7 @@
       const allowedAdminTabs = new Set([
         "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
         "delayClosures", "closureManagement", "changeRequests", "exceptions", "completed",
-        "payroll", "vvip"
+        "payroll", "vvip", "notifications"
       ]);
       const viewId = viewMap[params.get("view")] || "";
       const requestedTab = params.get("tab") || "";
@@ -2173,9 +2329,7 @@
         return;
       }
       if (isOptedIn) {
-        byId("push-status-copy").textContent = "通知已開啟，新的代課邀請與處理結果會直接提醒你。";
-        enableButton.hidden = true;
-        disableButton.hidden = false;
+        card.hidden = true;
         return;
       }
       byId("push-status-copy").textContent = "開啟後可收到代課邀請、領課結果與管理待辦提醒。";
@@ -3986,6 +4140,7 @@
     async function fetchAdminDashboard(rethrow = false) {
       if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
+      if (activeAdminTab === "notifications") return fetchNotificationAdminDashboard(rethrow);
       const content = byId("admin-tab-content");
       const hadSnapshot = adminDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
@@ -4008,6 +4163,23 @@
           const button = byId(id);
           if (button) button.disabled = false;
         });
+      }
+    }
+
+    async function fetchNotificationAdminDashboard(rethrow = false) {
+      const content = byId("admin-tab-content");
+      const hadSnapshot = notificationDashboard !== null;
+      if (hadSnapshot) renderAdminDashboard();
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入通知中心中...</div>');
+      try {
+        notificationDashboard = await callApi("getNotificationAdminDashboard");
+        renderAdminDashboard();
+      } catch (error) {
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`通知中心更新失敗：${error.message}`, "error");
+        if (rethrow) throw error;
+      } finally {
+        endReadRefresh(content);
       }
     }
 
@@ -4062,10 +4234,11 @@
         .slice().sort((a, b) => a.localeCompare(b, "zh-Hant"))
         .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
         .join("");
-      byId("admin-sync").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
-      byId("admin-reconcile").hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
+      const isSpecialAdminTab = ["payroll", "vvip", "notifications"].includes(activeAdminTab);
+      byId("admin-sync").hidden = isSpecialAdminTab;
+      byId("admin-reconcile").hidden = isSpecialAdminTab;
       const leavePauseButton = byId("admin-leave-pause");
-      leavePauseButton.hidden = activeAdminTab === "payroll" || activeAdminTab === "vvip";
+      leavePauseButton.hidden = isSpecialAdminTab;
       leavePauseButton.innerHTML = `<i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}`;
       const reminders = buildAdminReminderItems();
       byId("admin-reminders").innerHTML = reminders.length
@@ -4127,6 +4300,8 @@
         renderVvipAdminTab();
       } else if (activeAdminTab === "payroll") {
         renderPayrollAdminTab();
+      } else if (activeAdminTab === "notifications") {
+        renderNotificationAdminTab();
       } else if (activeAdminTab === "pendingInvitations") {
         const pendingItems = data.pendingInvitations || [];
         const invitationRounds = buildAdminInvitationRounds(data.teachers, data.activeInvitees);
@@ -4843,6 +5018,7 @@ https://sherryaerial-web.github.io/sub.html/
       if (!button) return;
       activeAdminTab = button.dataset.adminReminderTab;
       if (activeAdminTab === "vvip") fetchVvipAdminDashboard();
+      else if (activeAdminTab === "notifications") fetchNotificationAdminDashboard();
       else renderAdminDashboard();
     });
     byId("back-button").addEventListener("click", () => switchView("view-home"));
@@ -4885,6 +5061,7 @@ https://sherryaerial-web.github.io/sub.html/
         activeAdminTab = button.dataset.adminTab;
         if (activeAdminTab === "vvip") fetchVvipAdminDashboard();
         else if (activeAdminTab === "payroll") fetchPayrollAdminDashboard();
+        else if (activeAdminTab === "notifications") fetchNotificationAdminDashboard();
         else renderAdminDashboard();
       });
     });
@@ -4895,6 +5072,33 @@ https://sherryaerial-web.github.io/sub.html/
         const action = button.dataset.adminAction;
         if (action === "toggle-teacher-round") {
           toggleAdminTeacherRound(button);
+          return;
+        }
+        if (action === "edit-notification-schedule") {
+          populateNotificationScheduleForm(button.dataset.scheduleId);
+          return;
+        }
+        if (action === "clear-notification-schedule") {
+          clearNotificationScheduleForm();
+          return;
+        }
+        if (action === "toggle-notification-schedule") {
+          await callApi("setNotificationScheduleEnabled", {
+            scheduleId: button.dataset.scheduleId,
+            enabled: button.dataset.enabled === "true"
+          });
+          setNotice(button.dataset.enabled === "true" ? "通知排程已啟用。" : "通知排程已暫停。");
+          await fetchNotificationAdminDashboard();
+          return;
+        }
+        if (action === "send-notification-schedule-now") {
+          const schedule = ((notificationDashboard && notificationDashboard.schedules) || []).find((item) => item.id === button.dataset.scheduleId);
+          if (!schedule) throw new Error("找不到這筆通知排程。");
+          if (!window.confirm(`確定現在送出「${schedule.name}」？`)) return;
+          const result = await callApi("sendNotificationScheduleNow", { scheduleId: schedule.id });
+          if (!result.accepted) throw new Error(result.error || "通知送出失敗，請稍後重試。");
+          setNotice(`通知已送出給 ${result.recipientCount} 位。`);
+          await fetchNotificationAdminDashboard();
           return;
         }
         if (action === "select-all-ob-cancellations") {
@@ -5029,6 +5233,8 @@ https://sherryaerial-web.github.io/sub.html/
           await fetchVvipAdminDashboard(byId("vvip-admin-search").value.trim());
         }
         if (event.target.id === "vvip-member-form") await saveVvipMember();
+        if (event.target.id === "manual-notification-form") await submitManualNotification();
+        if (event.target.id === "notification-schedule-form") await submitNotificationSchedule();
       } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-sync").addEventListener("click", async () => {

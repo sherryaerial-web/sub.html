@@ -973,7 +973,7 @@ test('OneSignal push targets only active course administrators by opaque externa
   );
 
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
-    attempted: true, delivered: 2, error: '',
+    attempted: true, accepted: true, delivered: 2, messageId: 'notification-1', error: '',
   });
   assert.equal(requests[0].url, 'https://api.onesignal.com/notifications');
   assert.equal(requests[0].options.headers.Authorization, 'Key private-rest-key');
@@ -985,6 +985,125 @@ test('OneSignal push targets only active course administrators by opaque externa
   assert.equal(payload.target_channel, 'push');
   assert.equal(payload.url, 'https://sherryaerial-web.github.io/sub.html/?view=admin&tab=closureManagement');
   assert.doesNotMatch(JSON.stringify(requests[0]), /private-salt|Sherry❤雪莉|停用管理員/);
+});
+
+test('OneSignal accepted response without recipient count remains a successful send', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_APP_ID', 'public-app-id');
+  services.PropertiesService.getScriptProperties().setProperty('ONESIGNAL_REST_API_KEY', 'private-rest-key');
+  services.PropertiesService.getScriptProperties().setProperty('PUSH_EXTERNAL_ID_SALT', 'private-salt');
+  services.UrlFetchApp = {
+    fetch() {
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ id: 'notification-accepted' }),
+      };
+    },
+  };
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, 'Jina', '1234').concat('地板課程', ''),
+  ], services);
+
+  const result = backend.sendPushNotificationSafely_(['Jina'], {
+    heading: '測試通知', content: '測試內容', url: 'https://example.test/',
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    attempted: true,
+    accepted: true,
+    delivered: null,
+    messageId: 'notification-accepted',
+    error: '',
+  });
+});
+
+test('notification schedule windows support delayed five-minute trigger execution without overlap', () => {
+  const backend = loadBackend();
+
+  assert.equal(backend.isNotificationScheduleDue_({ day: '31', time: '22:30', enabled: true }, '2026-08-31', '22:34'), true);
+  assert.equal(backend.isNotificationScheduleDue_({ day: '31', time: '22:30', enabled: true }, '2026-08-31', '22:35'), false);
+  assert.equal(backend.isNotificationScheduleDue_({ day: '31', time: '23:40', enabled: true }, '2026-08-31', '23:44'), true);
+  assert.equal(backend.isNotificationScheduleDue_({ day: '31', time: '23:40', enabled: true }, '2026-08-31', '22:34'), false);
+  assert.equal(backend.isNotificationScheduleDue_({ day: 'last', time: '22:30', enabled: true }, '2026-08-31', '22:34'), true);
+});
+
+function createNotificationBackend() {
+  const services = createAuthServices();
+  const bootstrap = loadBackend(services);
+  const accountSheet = createSheetFixture('登入帳號', [
+    EXPECTED_ACCOUNT_HEADERS,
+    createAccount(bootstrap, '冠蓉', '1234', { role: '管理員' }).concat('', 'course_admin,vvip_admin'),
+    createAccount(bootstrap, 'Tako', '2345').concat('空環', 'course_admin,vvip_admin'),
+    createAccount(bootstrap, 'Jina', '3456').concat('地板課程', ''),
+    createAccount(bootstrap, '停用老師', '4567', { active: '否' }).concat('空環', ''),
+  ]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, auditSheet]);
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  return {
+    backend,
+    services,
+    auditSheet,
+    adminSession: backend.requireSession_(backend.authenticate_('冠蓉', '1234').sessionToken),
+  };
+}
+
+test('course administrators can manually notify selected active teachers and the send is audited', () => {
+  const { backend, auditSheet, adminSession } = createNotificationBackend();
+  const deliveries = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    deliveries.push({ names: Array.from(names), message: { ...message } });
+    return { attempted: true, accepted: true, delivered: null, messageId: 'manual-1', error: '' };
+  };
+
+  const result = backend.sendManualNotification_(adminSession, {
+    heading: '請記得請假',
+    content: '九月請假登記今晚截止。',
+    audienceMode: 'selected',
+    teacherNames: ['Jina', '停用老師'],
+  });
+
+  assert.equal(result.accepted, true);
+  assert.deepEqual(deliveries[0].names, ['Jina']);
+  assert.equal(deliveries[0].message.url, 'https://sherryaerial-web.github.io/sub.html/');
+  assert.equal(auditSheet.values.length, 2);
+  assert.equal(auditSheet.values[1][1], '冠蓉');
+  assert.equal(auditSheet.values[1][2], '推播通知：手動');
+  assert.equal(auditSheet.values[1][5], '已送出');
+});
+
+test('fixed notification schedules send once in the five-minute window even when closure automation is manual', () => {
+  const { backend, adminSession } = createNotificationBackend();
+  const deliveries = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    deliveries.push({ names: Array.from(names), message: { ...message } });
+    return { attempted: true, accepted: true, delivered: 2, messageId: 'scheduled-1', error: '' };
+  };
+  const saved = backend.saveNotificationSchedule_(adminSession, {
+    name: '月底請假提醒',
+    day: 'last',
+    time: '22:30',
+    heading: '請假提醒',
+    content: '請記得完成下月請假登記。',
+    audienceMode: 'admins',
+    teacherNames: [],
+    enabled: true,
+  });
+
+  const first = backend.runScheduledNotifications_('2026-08-31', '22:34');
+  const second = backend.runScheduledNotifications_('2026-08-31', '22:34');
+
+  assert.equal(saved.name, '月底請假提醒');
+  assert.equal(first.sentCount, 1);
+  assert.equal(second.sentCount, 0);
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual(deliveries[0].names, ['冠蓉', 'Tako']);
 });
 
 test('OneSignal failure returns a safe result without throwing or exposing the key', () => {

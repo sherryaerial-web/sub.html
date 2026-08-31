@@ -6434,6 +6434,44 @@ test('payroll special courses pay sixty percent or split Sherry and one partner 
   assert.equal(collaboration.reduce((total, line) => total + line.amount, 0), 10001);
 });
 
+test('payroll non-Sherry dual-teacher special course rounds each equal share like the legacy workbook', () => {
+  const backend = loadBackend();
+  const lines = backend.calculatePayrollLinesForCourse_({
+    calendarId: 'special-duo-teachers',
+    courseName: 'A－空環 雙人舞碼特別課',
+    instructors: [{ name: 'Angela Chuang' }, { name: 'Lydia 慕恩' }],
+    attendanceCount: 2,
+    courseIncome: 3305,
+  }, []);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(lines)), [
+    {
+      teacherName: 'Angela Chuang', amount: 992, ruleType: '雙人特別課各半',
+      ruleDetail: '課程收入 3305 × 60% ÷ 2',
+    },
+    {
+      teacherName: 'Lydia 慕恩', amount: 992, ruleType: '雙人特別課各半',
+      ruleDetail: '課程收入 3305 × 60% ÷ 2',
+    },
+  ]);
+});
+
+test('payroll student self-practice remains visible but pays zero salary', () => {
+  const backend = loadBackend();
+  const lines = backend.calculatePayrollLinesForCourse_({
+    calendarId: 'self-practice',
+    courseName: '學員自主練習(小編專用）',
+    instructors: [{ name: '共用帳號' }],
+    attendanceCount: 11,
+    courseIncome: 3227,
+  }, []);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(lines)), [{
+    teacherName: '共用帳號', amount: 0, ruleType: '學員自主練習',
+    ruleDetail: '學員自主練習不計薪',
+  }]);
+});
+
 test('payroll general courses prefer teacher keyword rates then exact attendance tiers', () => {
   const backend = loadBackend();
   const settings = [

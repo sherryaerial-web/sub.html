@@ -3848,6 +3848,17 @@ function calculatePayrollLinesForCourse_(course, ruleValues) {
   if (!calendarId || !courseName) throw new Error('薪資課程缺少 Calendar ID 或課程名稱。');
   if (!instructors.length) throw new Error('薪資課程缺少指導者。');
 
+  if (courseName.indexOf('學員自主練習') !== -1) {
+    return instructors.map(function(teacherName) {
+      return {
+        teacherName: teacherName,
+        amount: 0,
+        ruleType: '學員自主練習',
+        ruleDetail: '學員自主練習不計薪'
+      };
+    });
+  }
+
   if (courseName.indexOf('場地租借') !== -1) {
     return instructors.map(function(teacherName) {
       return { teacherName: teacherName, amount: 0, ruleType: '場地租借', ruleDetail: '場地租借不計鐘點費' };
@@ -3886,6 +3897,17 @@ function calculatePayrollLinesForCourse_(course, ruleValues) {
           ruleDetail: '課程收入 ' + courseIncome + ' × 40%'
         }
       ];
+    }
+    if (instructors.indexOf(sherryName) === -1 && instructors.length === 2) {
+      var equalShare = Math.round(courseIncome * 0.6 / 2);
+      return instructors.map(function(teacherName) {
+        return {
+          teacherName: teacherName,
+          amount: equalShare,
+          ruleType: '雙人特別課各半',
+          ruleDetail: '課程收入 ' + courseIncome + ' × 60% ÷ 2'
+        };
+      });
     }
     throw new Error('特別課指導者組合無法自動分配薪資。');
   }

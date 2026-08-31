@@ -3990,6 +3990,15 @@ function getPayrollMonthRange_(monthValue) {
   };
 }
 
+function normalizePayrollMonthValue_(value) {
+  if (value instanceof Date) {
+    return formatMyDate(value).slice(0, 7).replace('/', '-');
+  }
+  var text = cleanText_(value);
+  var match = text.match(/^(\d{4})[-\/]([01]\d)(?:[-\/]\d{1,2})?/);
+  return match ? match[1] + '-' + match[2] : text;
+}
+
 function getPayrollInstructorName_(instructor) {
   var person = instructor || {};
   return cleanText_(
@@ -4127,7 +4136,7 @@ function getPayrollSourceMapUnlocked_(spreadsheet, month) {
   var byId = {};
   var byDetails = {};
   sheet.getDataRange().getValues().slice(1).forEach(function(row) {
-    if (cleanText_(row[0]) !== month) return;
+    if (normalizePayrollMonthValue_(row[0]) !== month) return;
     var dateTime = row[2] instanceof Date ? row[2] : new Date(row[2]);
     var date = isNaN(dateTime.getTime()) ? formatMyDate(row[2]) : formatMyDate(dateTime);
     var time = isNaN(dateTime.getTime()) ? formatMyTime(row[2]) : formatMyTime(dateTime);
@@ -4269,12 +4278,12 @@ function publishPayroll_(session, monthValue, versionValue) {
     var summaryRows = [];
     var lineRows = [];
     summaryValues.slice(1).forEach(function(row, index) {
-      if (cleanText_(row[0]) === month && cleanText_(row[8]) === version && cleanText_(row[9]) === CONFIG.PAYROLL_DRAFT_STATUS) {
+      if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[8]) === version && cleanText_(row[9]) === CONFIG.PAYROLL_DRAFT_STATUS) {
         summaryRows.push(index + 2);
       }
     });
     lineValues.slice(1).forEach(function(row, index) {
-      if (cleanText_(row[0]) === month && cleanText_(row[2]) === version && cleanText_(row[16]) === CONFIG.PAYROLL_DRAFT_STATUS) {
+      if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[2]) === version && cleanText_(row[16]) === CONFIG.PAYROLL_DRAFT_STATUS) {
         lineRows.push(index + 2);
       }
     });
@@ -4298,7 +4307,7 @@ function publishPayroll_(session, monthValue, versionValue) {
 
 function getPayrollLineObject_(row) {
   return {
-    month: cleanText_(row[0]), lineId: cleanText_(row[1]), version: cleanText_(row[2]),
+    month: normalizePayrollMonthValue_(row[0]), lineId: cleanText_(row[1]), version: cleanText_(row[2]),
     calendarId: cleanText_(row[3]), teacherName: cleanText_(row[4]), date: formatMyDate(row[5]),
     time: formatMyTime(row[6]), courseName: cleanText_(row[7]), billingType: cleanText_(row[8]),
     attendanceCount: row[9], courseIncome: row[10], ruleDetail: cleanText_(row[12]),
@@ -4309,7 +4318,7 @@ function getPayrollLineObject_(row) {
 
 function getPayrollSummaryObject_(row) {
   return {
-    month: cleanText_(row[0]), teacherName: cleanText_(row[1]), subtotal: Number(row[2]) || 0,
+    month: normalizePayrollMonthValue_(row[0]), teacherName: cleanText_(row[1]), subtotal: Number(row[2]) || 0,
     bonusRate: Number(row[3]) || 0, bonusAmount: Number(row[4]) || 0,
     fixedAdjustment: Number(row[5]) || 0, totalSalary: Number(row[6]) || 0,
     profit: Number(row[7]) || 0, version: cleanText_(row[8]), status: cleanText_(row[9]),
@@ -4331,20 +4340,20 @@ function getMyPayroll_(session, monthValue) {
   assertHeaders_(disputeSheet, SHEET_HEADERS.PAYROLL_DISPUTES);
   var summaries = summarySheet.getDataRange().getValues().slice(1).filter(function(row) {
     return cleanText_(row[1]) === teacher && cleanText_(row[9]) !== CONFIG.PAYROLL_DRAFT_STATUS &&
-      (!month || cleanText_(row[0]) === month);
+      (!month || normalizePayrollMonthValue_(row[0]) === month);
   });
   if (!summaries.length) return { month: month, summary: null, lines: [], disputes: [] };
   var summaryRow = summaries[summaries.length - 1];
   var summary = getPayrollSummaryObject_(summaryRow);
   var lines = lineSheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return cleanText_(row[0]) === summary.month && cleanText_(row[2]) === summary.version &&
+    return normalizePayrollMonthValue_(row[0]) === summary.month && cleanText_(row[2]) === summary.version &&
       cleanText_(row[4]) === teacher && cleanText_(row[16]) !== CONFIG.PAYROLL_DRAFT_STATUS;
   }).map(getPayrollLineObject_);
   var disputes = disputeSheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return cleanText_(row[1]) === summary.month && cleanText_(row[2]) === teacher;
+    return normalizePayrollMonthValue_(row[1]) === summary.month && cleanText_(row[2]) === teacher;
   }).map(function(row) {
     return {
-      id: cleanText_(row[0]), month: cleanText_(row[1]), lineId: cleanText_(row[3]),
+      id: cleanText_(row[0]), month: normalizePayrollMonthValue_(row[1]), lineId: cleanText_(row[3]),
       message: cleanText_(row[4]), status: cleanText_(row[5]), reply: cleanText_(row[6]),
       createdAt: cleanText_(row[7]), resolvedAt: cleanText_(row[9])
     };
@@ -4363,7 +4372,7 @@ function confirmPayroll_(session, monthValue, versionValue) {
     var values = sheet.getDataRange().getValues();
     for (var index = values.length - 1; index > 0; index--) {
       var row = values[index];
-      if (cleanText_(row[0]) === month && cleanText_(row[1]) === teacher && cleanText_(row[8]) === version) {
+      if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[1]) === teacher && cleanText_(row[8]) === version) {
         var status = cleanText_(row[9]);
         if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('薪資異議尚未處理，暫時不能確認。');
         if (status === CONFIG.PAYROLL_DRAFT_STATUS) throw new Error('薪資尚未發布。');
@@ -4398,7 +4407,7 @@ function submitPayrollDispute_(session, payload) {
     var summaryValues = summarySheet.getDataRange().getValues();
     var summaryRow = null;
     for (var summaryIndex = summaryValues.length - 1; summaryIndex > 0; summaryIndex--) {
-      if (cleanText_(summaryValues[summaryIndex][0]) === month &&
+      if (normalizePayrollMonthValue_(summaryValues[summaryIndex][0]) === month &&
           cleanText_(summaryValues[summaryIndex][1]) === teacher &&
           cleanText_(summaryValues[summaryIndex][8]) === version) {
         summaryRow = summaryValues[summaryIndex];
@@ -4410,7 +4419,7 @@ function submitPayrollDispute_(session, payload) {
       throw new Error('薪資已完成管理員確認，請直接聯絡管理員。');
     }
     var lineExists = lineSheet.getDataRange().getValues().slice(1).some(function(row) {
-      return cleanText_(row[0]) === month && cleanText_(row[1]) === lineId &&
+      return normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[1]) === lineId &&
         cleanText_(row[2]) === version && cleanText_(row[4]) === teacher &&
         cleanText_(row[16]) !== CONFIG.PAYROLL_DRAFT_STATUS;
     });
@@ -4422,7 +4431,7 @@ function submitPayrollDispute_(session, payload) {
     ]]);
     var summaries = summarySheet.getDataRange().getValues();
     for (var index = summaries.length - 1; index > 0; index--) {
-      if (cleanText_(summaries[index][0]) === month && cleanText_(summaries[index][1]) === teacher && cleanText_(summaries[index][8]) === version) {
+      if (normalizePayrollMonthValue_(summaries[index][0]) === month && cleanText_(summaries[index][1]) === teacher && cleanText_(summaries[index][8]) === version) {
         summarySheet.getRange(index + 1, 10).setValue(CONFIG.PAYROLL_REVIEW_STATUS);
         summarySheet.getRange(index + 1, 11).setValue('');
         break;
@@ -4453,12 +4462,12 @@ function resolvePayrollDispute_(session, payload) {
       sheet.getRange(index + 1, 7).setValue(reply);
       sheet.getRange(index + 1, 9).setValue(actor);
       sheet.getRange(index + 1, 10).setValue(now);
-      var month = cleanText_(values[index][1]);
+      var month = normalizePayrollMonthValue_(values[index][1]);
       var teacher = cleanText_(values[index][2]);
       var summarySheet = requireSheet_(ss, SHEETS.PAYROLL_SUMMARIES);
       var summaries = summarySheet.getDataRange().getValues();
       for (var summaryIndex = summaries.length - 1; summaryIndex > 0; summaryIndex--) {
-        if (cleanText_(summaries[summaryIndex][0]) === month &&
+        if (normalizePayrollMonthValue_(summaries[summaryIndex][0]) === month &&
             cleanText_(summaries[summaryIndex][1]) === teacher &&
             cleanText_(summaries[summaryIndex][9]) === CONFIG.PAYROLL_REVIEW_STATUS) {
           summarySheet.getRange(summaryIndex + 1, 10).setValue(CONFIG.PAYROLL_PUBLISHED_STATUS);
@@ -4496,7 +4505,7 @@ function adjustPayrollSummary_(session, payload) {
     var values = summarySheet.getDataRange().getValues();
     for (var index = values.length - 1; index > 0; index--) {
       var row = values[index];
-      if (cleanText_(row[0]) !== month || cleanText_(row[1]) !== teacher || cleanText_(row[8]) !== version) continue;
+      if (normalizePayrollMonthValue_(row[0]) !== month || cleanText_(row[1]) !== teacher || cleanText_(row[8]) !== version) continue;
       var status = cleanText_(row[9]);
       if (status === CONFIG.PAYROLL_FINALIZED_STATUS) throw new Error('薪資已完成管理員確認，不能再調整。');
       if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('請先處理這位老師尚未完成的薪資異議。');
@@ -4557,14 +4566,14 @@ function finalizePayroll_(session, monthValue, versionValue, teacherNames) {
     var disputeValues = disputeSheet.getDataRange().getValues();
     var openDisputes = {};
     disputeValues.slice(1).forEach(function(row) {
-      if (cleanText_(row[1]) === month && cleanText_(row[5]) === '待處理') {
+      if (normalizePayrollMonthValue_(row[1]) === month && cleanText_(row[5]) === '待處理') {
         openDisputes[cleanText_(row[2])] = true;
       }
     });
 
     var candidates = [];
     summaryValues.slice(1).forEach(function(row, index) {
-      if (cleanText_(row[0]) !== month || cleanText_(row[8]) !== version) return;
+      if (normalizePayrollMonthValue_(row[0]) !== month || cleanText_(row[8]) !== version) return;
       var teacher = cleanText_(row[1]);
       if (requestedTeachers.length && !requestedMap[teacher]) return;
       candidates.push({ rowNumber: index + 2, row: row, teacher: teacher });
@@ -4599,7 +4608,7 @@ function finalizePayroll_(session, monthValue, versionValue, teacherNames) {
         summarySheet.getRange(item.rowNumber, 10, 1, 7).setValues([row.slice(9, 16)]);
       });
       lineValues.slice(1).forEach(function(row, index) {
-        if (cleanText_(row[0]) === month && cleanText_(row[2]) === version && finalizedTeachers[cleanText_(row[4])]) {
+        if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[2]) === version && finalizedTeachers[cleanText_(row[4])]) {
           lineSheet.getRange(index + 2, 17).setValue(CONFIG.PAYROLL_FINALIZED_STATUS);
         }
       });
@@ -4631,7 +4640,7 @@ function refreshSherryPayrollFormatUnlocked_(spreadsheet, month, version) {
   var summarySheet = requireSheet_(spreadsheet, SHEETS.PAYROLL_SUMMARIES);
   var finalizedByTeacher = {};
   summarySheet.getDataRange().getValues().slice(1).forEach(function(row) {
-    if (cleanText_(row[0]) === month && cleanText_(row[8]) === version &&
+    if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[8]) === version &&
         cleanText_(row[9]) === CONFIG.PAYROLL_FINALIZED_STATUS) {
       finalizedByTeacher[cleanText_(row[1])] = Number(row[6]) || 0;
     }
@@ -4660,19 +4669,19 @@ function getPayrollAdminDashboard_(session, monthValue) {
   var snapshotSheet = requireSheet_(ss, SHEETS.PAYROLL_SNAPSHOT);
   var disputeSheet = requireSheet_(ss, SHEETS.PAYROLL_DISPUTES);
   var summaryRows = summarySheet.getDataRange().getValues().slice(1);
-  if (!month && summaryRows.length) month = cleanText_(summaryRows[summaryRows.length - 1][0]);
+  if (!month && summaryRows.length) month = normalizePayrollMonthValue_(summaryRows[summaryRows.length - 1][0]);
   if (!month) month = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM');
-  var monthRows = summaryRows.filter(function(row) { return cleanText_(row[0]) === month; });
+  var monthRows = summaryRows.filter(function(row) { return normalizePayrollMonthValue_(row[0]) === month; });
   var version = monthRows.length ? cleanText_(monthRows[monthRows.length - 1][8]) : '';
   var summaries = monthRows.filter(function(row) { return cleanText_(row[8]) === version; }).map(getPayrollSummaryObject_);
   var lines = lineSheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return cleanText_(row[0]) === month && cleanText_(row[2]) === version;
+    return normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[2]) === version;
   }).map(getPayrollLineObject_);
   var snapshotRows = snapshotSheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return cleanText_(row[1]) === month && cleanText_(row[0]) === version;
+    return normalizePayrollMonthValue_(row[1]) === month && cleanText_(row[0]) === version;
   });
   var disputes = disputeSheet.getDataRange().getValues().slice(1).filter(function(row) {
-    return cleanText_(row[1]) === month;
+    return normalizePayrollMonthValue_(row[1]) === month;
   }).map(function(row) {
     return {
       id: cleanText_(row[0]), teacherName: cleanText_(row[2]), lineId: cleanText_(row[3]),

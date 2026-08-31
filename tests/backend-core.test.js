@@ -6640,16 +6640,50 @@ test('payroll sync fetches one extra day but only drafts courses inside the requ
   assert.equal(snapshot.values.some((row) => row[1] === '2026-09'), false);
 });
 
-test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {
+test('payroll dashboard recognizes month cells stored as Google Sheets dates', () => {
+  const augustSheetDate = new Date('2026-08-01T00:00:00+08:00');
+  const rules = createSheetFixture('薪項設定', [EXPECTED_PAYROLL_RULE_HEADERS]);
+  const source = createSheetFixture('薪資來源資料', [EXPECTED_PAYROLL_SOURCE_HEADERS]);
+  const snapshot = createSheetFixture('薪資同步快照', [
+    EXPECTED_PAYROLL_SNAPSHOT_HEADERS,
+    ['version-1', augustSheetDate, 'cal-1', '2026/08/01', '10:00', '空環', '["老師甲"]', 4, 8, '', '', 'A', '晴光', 'now', '完成'],
+  ]);
   const lines = createSheetFixture('薪資明細', [
     EXPECTED_PAYROLL_LINE_HEADERS,
-    ['2026-08', 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '草稿', 'now'],
-    ['2026-08', 'cal-2:老師乙', 'version-1', 'cal-2', '老師乙', '2026/08/02', '11:00', '舞綢', '人數階梯', 5, '', '人數階梯', '5 人', 1000, 0, '', '草稿', 'now'],
+    [augustSheetDate, 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '待確認', 'now'],
   ]);
   const summaries = createSheetFixture('薪資結算', [
     EXPECTED_PAYROLL_SUMMARY_HEADERS,
-    ['2026-08', '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '草稿', '', 'now'],
-    ['2026-08', '老師乙', 1000, 0, 0, 0, 1000, 1300, 'version-1', '草稿', '', 'now'],
+    [augustSheetDate, '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '待確認', '', 'now', 0, '', '', ''],
+  ]);
+  const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
+  const payment = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([rules, source, snapshot, lines, summaries, disputes, payment]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  const result = backend.getPayrollAdminDashboard_({
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['payroll_admin'],
+  }, '2026-08');
+
+  assert.equal(result.month, '2026-08');
+  assert.equal(result.version, 'version-1');
+  assert.equal(result.metrics.teachers, 1);
+  assert.equal(result.metrics.totalSalary, 900);
+  assert.equal(result.metrics.pendingConfirmations, 1);
+  assert.equal(result.lines.length, 1);
+});
+
+test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {
+  const augustSheetDate = new Date('2026-08-01T00:00:00+08:00');
+  const lines = createSheetFixture('薪資明細', [
+    EXPECTED_PAYROLL_LINE_HEADERS,
+    [augustSheetDate, 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '草稿', 'now'],
+    [augustSheetDate, 'cal-2:老師乙', 'version-1', 'cal-2', '老師乙', '2026/08/02', '11:00', '舞綢', '人數階梯', 5, '', '人數階梯', '5 人', 1000, 0, '', '草稿', 'now'],
+  ]);
+  const summaries = createSheetFixture('薪資結算', [
+    EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    [augustSheetDate, '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '草稿', '', 'now'],
+    [augustSheetDate, '老師乙', 1000, 0, 0, 0, 1000, 1300, 'version-1', '草稿', '', 'now'],
   ]);
   const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
   const audit = createSheetFixture('操作紀錄', [['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因']]);

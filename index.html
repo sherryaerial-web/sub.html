@@ -454,6 +454,7 @@
     }
 
     .admin-header-actions { justify-content: flex-end; margin: 0; }
+    .admin-report-action .compact-button { min-height: 42px; white-space: nowrap; }
     #view-admin > .view-header { margin-bottom: 14px; }
     .admin-command-bar {
       display: grid;
@@ -913,6 +914,8 @@
       .teacher-round-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .view-header { flex-direction: column; }
       .admin-header-actions { justify-content: flex-start; }
+      .admin-report-action { width: 100%; }
+      .admin-report-action .compact-button { width: 100%; justify-content: center; }
       .admin-command-bar { grid-template-columns: 1fr; align-items: stretch; }
       .admin-command-actions { justify-content: flex-start; }
       .admin-sync-status { text-align: left; }
@@ -1091,6 +1094,7 @@
     .payroll-note { margin-top: 10px; padding: 12px 14px; border-left: 3px solid #9b6d77; background: #f4e6e8; color: #70454f; font-size: 13px; }
     .payroll-actions { margin-top: 18px; }
     .payroll-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+    .payroll-export-button { margin-left: auto; }
     .payroll-admin-list { display: grid; gap: 10px; }
     .payroll-admin-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 17px 18px; }
     .payroll-admin-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; }
@@ -1117,6 +1121,7 @@
       .payroll-admin-head { grid-template-columns: minmax(0, 1fr) auto; }
       .payroll-admin-head .status-pill { grid-column: 1 / -1; }
       .payroll-admin-actions .compact-button, .payroll-admin-actions .primary-button { flex: 1 1 150px; }
+      .payroll-export-button { width: 100%; margin-left: 0; justify-content: center; }
       .payroll-hero { padding: 19px; }
       .payroll-hero > strong { font-size: 31px; }
       .push-permission-card { align-items: stretch; flex-direction: column; }
@@ -1342,6 +1347,9 @@
         <section id="view-admin" class="view">
           <div class="view-header">
             <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
+            <div class="admin-header-actions admin-report-action">
+              <button id="admin-export-all" class="compact-button" type="button"><i data-lucide="file-spreadsheet"></i>匯出全部管理報表</button>
+            </div>
           </div>
           <div class="admin-command-bar">
             <label id="admin-act-as-control" class="admin-act-as-control" for="admin-act-as" hidden>
@@ -1353,7 +1361,6 @@
               <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
               <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
               <button id="admin-leave-pause" class="compact-button" type="button"><i data-lucide="pause"></i>暫停請假登記</button>
-              <button id="admin-export" class="compact-button" type="button"><i data-lucide="file-spreadsheet"></i>匯出 Excel</button>
             </div>
             <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
           </div>
@@ -4077,21 +4084,28 @@
       return `${parts.year}-${parts.month}-${parts.day}`;
     }
 
-    async function exportAdminExcel() {
-      const button = byId("admin-export");
+    async function exportAdminExcel(scope = "all", triggerButton = null) {
+      const exportScope = scope === "payroll" ? "payroll" : "all";
+      const button = triggerButton || byId(exportScope === "payroll" ? "payroll-export" : "admin-export-all");
       setButtonBusy(button, true, "整理中...");
       try {
         if (!window.XLSX || !window.XLSX.utils) throw new Error("Excel 元件載入失敗，請重新整理後再試。");
-        const capabilities = authState.managementCapabilities.slice();
-        if (!capabilities.length) throw new Error("目前帳號沒有可匯出的管理權限。");
+        const availableCapabilities = authState.managementCapabilities.slice();
+        const capabilities = exportScope === "payroll"
+          ? availableCapabilities.filter((capability) => capability === "payroll_admin")
+          : availableCapabilities;
+        if (!capabilities.length) {
+          throw new Error(exportScope === "payroll" ? "目前帳號沒有薪資匯出權限。" : "目前帳號沒有可匯出的管理權限。");
+        }
         const payload = { capabilities };
         const requests = [];
+        let payrollMonth = "";
         if (capabilities.includes("course_admin")) {
           requests.push(callApi("getAdminDashboard").then((data) => { payload.course = data; }));
         }
         if (capabilities.includes("payroll_admin")) {
-          const month = byId("payroll-admin-month")?.value || payrollDashboard?.month || new Date().toISOString().slice(0, 7);
-          requests.push(callApi("getPayrollAdminDashboard", { month }).then((data) => { payload.payroll = data; }));
+          payrollMonth = byId("payroll-admin-month")?.value || payrollDashboard?.month || new Date().toISOString().slice(0, 7);
+          requests.push(callApi("getPayrollAdminDashboard", { month: payrollMonth }).then((data) => { payload.payroll = data; }));
         }
         if (capabilities.includes("vvip_admin")) {
           requests.push(callApi("getVvipAdminDashboard", { email: "" }).then((data) => { payload.vvip = data; }));
@@ -4111,7 +4125,9 @@
           }
           window.XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
         });
-        const filename = `Sherry教室管理_${getTaipeiDateStamp()}.xlsx`;
+        const filename = exportScope === "payroll"
+          ? `Sherry薪資_${payrollMonth}.xlsx`
+          : `Sherry教室管理_${getTaipeiDateStamp()}.xlsx`;
         window.XLSX.writeFile(workbook, filename, { compression: true });
         setNotice(`已匯出 ${sheets.length} 個工作表。`);
       } finally {
@@ -4476,7 +4492,7 @@
       }).join("") || '<div class="state">此月份尚無薪資草稿</div>';
       const disputes = (data.disputes || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}｜${escapeHtml(item.status)}</div><div class="item-meta">${escapeHtml(item.message)}</div>${item.reply ? `<div class="item-meta">回覆：${escapeHtml(item.reply)}</div>` : ""}${item.status === "待處理" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve-payroll-dispute" data-dispute-id="${escapeHtml(item.id)}"><i data-lucide="message-square-reply"></i>回覆異議</button></div>` : ""}</div></article>`).join("") || '<div class="state">目前沒有薪資異議</div>';
       const allDraft = (data.summaries || []).length > 0 && data.summaries.every((item) => item.status === "草稿");
-      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><input id="payroll-admin-month" class="text-input month-input" type="month" value="${escapeHtml(data.month)}"><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && allDraft && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}${data.version && (data.metrics.teacherConfirmed || 0) > 0 ? `<button class="primary-button inline-button" type="button" data-admin-action="finalize-payroll-batch" data-version="${escapeHtml(data.version)}"><i data-lucide="list-checks"></i>確認全部已核對</button>` : ""}</div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待老師確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>待管理確認</span><strong>${data.metrics.teacherConfirmed || 0}</strong></div><div class="summary-item"><span>已結案</span><strong>${data.metrics.finalized || 0}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div><div class="payroll-admin-list">${summaries}</div><div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
+      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><input id="payroll-admin-month" class="text-input month-input" type="month" value="${escapeHtml(data.month)}"><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && allDraft && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}${data.version && (data.metrics.teacherConfirmed || 0) > 0 ? `<button class="primary-button inline-button" type="button" data-admin-action="finalize-payroll-batch" data-version="${escapeHtml(data.version)}"><i data-lucide="list-checks"></i>確認全部已核對</button>` : ""}<button id="payroll-export" class="compact-button payroll-export-button" type="button" data-admin-action="export-payroll"><i data-lucide="file-spreadsheet"></i>匯出本月薪資 Excel</button></div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待老師確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>待管理確認</span><strong>${data.metrics.teacherConfirmed || 0}</strong></div><div class="summary-item"><span>已結案</span><strong>${data.metrics.finalized || 0}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div><div class="payroll-admin-list">${summaries}</div><div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
       refreshIcons();
     }
 
@@ -5145,6 +5161,7 @@ https://sherryaerial-web.github.io/sub.html/
         if (action === "clear-vvip-search") await fetchVvipAdminDashboard();
         if (action === "refresh-payroll") await fetchPayrollAdminDashboard();
         if (action === "sync-payroll") await syncPayrollMonth();
+        if (action === "export-payroll") await exportAdminExcel("payroll", button);
         if (action === "publish-payroll") await publishPayroll(button.dataset.version);
         if (action === "adjust-payroll") {
           openRequestDialog({
@@ -5243,8 +5260,8 @@ https://sherryaerial-web.github.io/sub.html/
     byId("admin-refresh").addEventListener("click", async () => {
       try { await refreshAdminData(); } catch (error) { setNotice(error.message, "error"); }
     });
-    byId("admin-export").addEventListener("click", async () => {
-      try { await exportAdminExcel(); } catch (error) { setNotice(error.message, "error"); }
+    byId("admin-export-all").addEventListener("click", async (event) => {
+      try { await exportAdminExcel("all", event.currentTarget); } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-reconcile").addEventListener("click", async () => {
       try { await reconcileAdminObChanges(); } catch (error) { setNotice(error.message, "error"); }

@@ -2084,11 +2084,54 @@ test('OB restore work explains the two required administrator steps', () => {
   assert.match(rendered, /核對完成後才會重新開放/);
 });
 
-test('admin Excel export exposes one action and a pinned publishable workbook writer', () => {
-  assert.match(html, /id=["']admin-export["']/);
+test('admin Excel export exposes clearly separated all-data and monthly payroll actions', () => {
+  assert.match(html, /id=["']admin-export-all["']/);
+  assert.match(html, /匯出全部管理報表/);
   assert.match(html, /assets\/xlsx\.full\.min\.js/);
   assert.doesNotMatch(html, /src=["']vendor\//);
-  assert.match(html, /匯出 Excel/);
+
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext(`payrollDashboard = {
+    month: '2026-08', version: '', summaries: [], lines: [], disputes: [],
+    metrics: { teachers: 0, totalSalary: 0, pendingConfirmations: 0, teacherConfirmed: 0, finalized: 0, openDisputes: 0, errors: 0 }
+  }`, context);
+  context.renderPayrollAdminTab();
+  assert.match(getElement('admin-tab-content').innerHTML, /data-admin-action="export-payroll"/);
+  assert.match(getElement('admin-tab-content').innerHTML, /匯出本月薪資 Excel/);
+});
+
+test('monthly payroll export fetches only the selected payroll month', async () => {
+  const payroll = {
+    month: '2026-08', summaries: [], lines: [], disputes: [],
+    metrics: { teachers: 0, totalSalary: 0, pendingConfirmations: 0, teacherConfirmed: 0, finalized: 0, openDisputes: 0, errors: 0 },
+  };
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    getAdminDashboard: { pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [], exceptions: [], completed: [] },
+    getPayrollAdminDashboard: payroll,
+    getVvipAdminDashboard: { members: [] },
+  });
+  const written = [];
+  context.window.XLSX = {
+    utils: {
+      book_new() { return { sheetNames: [] }; },
+      aoa_to_sheet(rows) { return { rows }; },
+      encode_range() { return 'A1:A1'; },
+      book_append_sheet(workbook, worksheet, name) { workbook.sheetNames.push(name); },
+    },
+    writeFile(workbook, filename) { written.push({ workbook, filename }); },
+  };
+  getElement('payroll-admin-month').value = '2026-08';
+  vm.runInContext(`
+    authState.sessionToken = 'admin-session';
+    authState.managementCapabilities = ['course_admin', 'payroll_admin', 'vvip_admin'];
+  `, context);
+  const exportRequestStart = requestActions.length;
+
+  await context.exportAdminExcel('payroll', getElement('payroll-export'));
+
+  assert.deepEqual(requestActions.slice(exportRequestStart), ['getPayrollAdminDashboard']);
+  assert.deepEqual(written[0].workbook.sheetNames, ['薪資總表', '薪資明細', '薪資異議']);
+  assert.equal(written[0].filename, 'Sherry薪資_2026-08.xlsx');
 });
 
 test('admin Excel export builds capability-scoped worksheets with complete results', () => {

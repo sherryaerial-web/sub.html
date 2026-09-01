@@ -7887,3 +7887,136 @@ test('practice join and leave notify the current creator after Sheet writes fini
     { teacherNames: ['小琪'], heading: '有人退出自主練習' },
   ]);
 });
+
+test('practice API requires login, ignores forged teachers, and permits course-admin acting mode', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '冠蓉', '1234', { role: '管理員' }).concat('', 'course_admin'),
+    createAccount(bootstrap, '小琪', '2345').concat('空環', ''),
+  ], services);
+  backend.console = { error() {} };
+  const calls = [];
+  backend.getPracticeDay_ = (session, date) => {
+    calls.push(['day', session.teacherName, session.impersonatedBy || '', date]);
+    return { date, teacherName: session.teacherName };
+  };
+  backend.createPracticeBooking_ = (session, input) => {
+    calls.push(['create', session.teacherName, session.impersonatedBy || '', input.room]);
+    return { bookingId: 'practice-1' };
+  };
+  backend.getPracticeAdminDashboard_ = (session) => {
+    backend.assertCapabilitySession_(session, 'course_admin');
+    calls.push(['admin', session.teacherName]);
+    return { bookings: [] };
+  };
+
+  const missing = JSON.parse(backend.doPost({ parameter: {
+    action: 'getPracticeDay', date: '2026/09/10', teacherName: '偽造老師',
+  } }).text);
+  assert.equal(missing.status, 'error');
+  assert.match(missing.message, /請先登入/);
+
+  const teacherToken = backend.authenticate_('小琪', '2345').sessionToken;
+  const teacherResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'createPracticeBooking',
+    sessionToken: teacherToken,
+    teacherName: '偽造老師',
+    practice: JSON.stringify({ date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00' }),
+  } }).text);
+  assert.equal(teacherResult.status, 'success');
+
+  const adminToken = backend.authenticate_('冠蓉', '1234').sessionToken;
+  const actingResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getPracticeDay',
+    sessionToken: adminToken,
+    actingTeacherName: '小琪',
+    date: '2026/09/10',
+  } }).text);
+  assert.equal(actingResult.status, 'success');
+  const dashboardResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getPracticeAdminDashboard', sessionToken: adminToken,
+  } }).text);
+  assert.equal(dashboardResult.status, 'success');
+  assert.deepEqual(calls, [
+    ['create', '小琪', '', 'A'],
+    ['day', '小琪', '冠蓉', '2026/09/10'],
+    ['admin', '冠蓉'],
+  ]);
+});
+
+test('practice day service returns the signed-in teacher and canonical room timeline', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '13:00', 'A－空環 Lv.1', '老師甲', 'cal-1', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'B', startTime: '15:00', endTime: '16:00', recurrence: 'once',
+  });
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(result.teacherName, '小琪');
+  assert.equal(result.date, '2026/09/10');
+  assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].type, 'course');
+  assert.equal(result.rooms.find((room) => room.room === 'B').blocks[0].type, 'practice');
+  assert.deepEqual(Array.from(result.quickDurations), [60, 90, 120]);
+});
+
+test('practice update and cancellation enforce ownership and administrator reasons', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  const admin = {
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  };
+
+  assert.throws(() => fixture.backend.updatePracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A', startTime: '14:30', endTime: '15:30',
+  }), /只能調整自己/);
+  assert.throws(() => fixture.backend.updatePracticeBooking_(admin, {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A', startTime: '14:30', endTime: '15:30',
+  }), /請填寫原因/);
+
+  const updated = fixture.backend.updatePracticeBooking_(admin, {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'B', startTime: '14:30', endTime: '15:30',
+    reason: '管理員依老師需求調整',
+  });
+  assert.equal(updated.room, 'B');
+  assert.equal(updated.startTime, '14:30');
+
+  assert.throws(() => fixture.backend.cancelPracticeBooking_(admin, {
+    bookingId: created.bookingId,
+  }), /請填寫原因/);
+  const cancelled = fixture.backend.cancelPracticeBooking_(admin, {
+    bookingId: created.bookingId, reason: '臨時開課', scope: 'once',
+  });
+  assert.equal(cancelled.status, '已取消');
+  assert.equal(fixture.bookingSheet.values[1][6], '已取消');
+  assert.equal(fixture.participantSheet.values[1][8], '已取消');
+});
+
+test('practice administrator dashboard is course-admin only and includes participants and failures', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.recordPracticeNotificationFailure_({
+    bookingId: created.bookingId,
+    teacherNames: ['小琪'],
+    message: { heading: '測試' },
+    error: '測試推播失敗',
+  });
+  assert.throws(() => fixture.backend.getPracticeAdminDashboard_(fixture.teacher('小琪'), {}), /課程管理權限/);
+
+  const result = fixture.backend.getPracticeAdminDashboard_({
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  }, { dateFrom: '2026/09/01', dateTo: '2026/09/30' });
+
+  assert.equal(result.bookings.length, 1);
+  assert.equal(result.bookings[0].participants[0].teacherName, '小琪');
+  assert.equal(result.notificationFailures.length, 1);
+  assert.equal(result.notificationFailures[0].reason, '測試推播失敗');
+});

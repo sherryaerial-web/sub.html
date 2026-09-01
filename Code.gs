@@ -1547,6 +1547,140 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
   };
 }
 
+function getPracticeDay_(session, dateValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var date = cleanText_(dateValue).replace(/-/g, '/');
+  parsePracticeDateTime_(date, '00:00');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensurePracticeStructureUnlocked_(ss);
+  var records = getPracticeRecordsUnlocked_(ss);
+  var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  var view = buildPracticeDayView_(records, courseSheet.getDataRange().getValues().slice(1), date);
+  view.teacherName = teacherName;
+  view.actingBy = cleanText_(session && session.impersonatedBy);
+  view.quickDurations = [60, 90, 120];
+  view.rooms.forEach(function(room) {
+    room.blocks.forEach(function(block) {
+      if (block.type !== 'practice' && block.type !== 'waitlist') return;
+      block.isMine = block.participants.some(function(participant) {
+        return participant.teacherName === teacherName &&
+          participant.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+      });
+      block.isCreator = block.creatorName === teacherName;
+    });
+  });
+  return view;
+}
+
+function parsePracticeAuditJson_(value) {
+  var text = cleanText_(value);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return text;
+  }
+}
+
+function getPracticeAdminDashboard_(session, filtersValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  var filters = filtersValue || {};
+  var dateFrom = cleanText_(filters.dateFrom).replace(/-/g, '/');
+  var dateTo = cleanText_(filters.dateTo).replace(/-/g, '/');
+  if (dateFrom) parsePracticeDateTime_(dateFrom, '00:00');
+  if (dateTo) parsePracticeDateTime_(dateTo, '00:00');
+  if (dateFrom && dateTo && dateFrom > dateTo) throw new Error('結束日期不可早於開始日期。');
+  var roomFilter = cleanText_(filters.room).toUpperCase();
+  if (roomFilter) requirePracticeRoom_(roomFilter);
+  var statusFilter = cleanText_(filters.status);
+  var teacherFilter = cleanText_(filters.teacherName);
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensurePracticeStructureUnlocked_(ss);
+  var records = getPracticeRecordsUnlocked_(ss);
+  var auditSheet = requireSheet_(ss, SHEETS.PRACTICE_AUDIT);
+  assertHeaders_(auditSheet, SHEET_HEADERS.PRACTICE_AUDIT);
+  var audits = auditSheet.getDataRange().getValues().slice(1).map(function(row) {
+    return {
+      time: cleanText_(row[0]),
+      actor: cleanText_(row[1]),
+      action: cleanText_(row[2]),
+      targetType: cleanText_(row[3]),
+      targetId: cleanText_(row[4]),
+      before: parsePracticeAuditJson_(row[5]),
+      after: parsePracticeAuditJson_(row[6]),
+      reason: cleanText_(row[7])
+    };
+  });
+  var participantsByBooking = {};
+  records.participants.forEach(function(participant) {
+    if (!participantsByBooking[participant.bookingId]) participantsByBooking[participant.bookingId] = [];
+    participantsByBooking[participant.bookingId].push({
+      participantId: participant.participantId,
+      teacherName: participant.teacherName,
+      role: participant.role,
+      startTime: participant.startTime,
+      endTime: participant.endTime,
+      joinScope: participant.joinScope,
+      status: participant.status,
+      joinedAt: participant.joinedAt,
+      leftAt: participant.leftAt
+    });
+  });
+  var auditsByBooking = {};
+  audits.forEach(function(item) {
+    if (!auditsByBooking[item.targetId]) auditsByBooking[item.targetId] = [];
+    auditsByBooking[item.targetId].push(item);
+  });
+  var bookings = records.bookings.filter(function(booking) {
+    if (dateFrom && booking.date < dateFrom) return false;
+    if (dateTo && booking.date > dateTo) return false;
+    if (roomFilter && booking.room !== roomFilter) return false;
+    if (statusFilter && booking.status !== statusFilter) return false;
+    if (teacherFilter) {
+      var hasTeacher = (participantsByBooking[booking.bookingId] || []).some(function(participant) {
+        return participant.teacherName === teacherFilter;
+      });
+      if (!hasTeacher) return false;
+    }
+    return true;
+  }).map(function(booking) {
+    return {
+      bookingId: booking.bookingId,
+      seriesId: booking.seriesId,
+      date: booking.date,
+      room: booking.room,
+      startTime: booking.startTime,
+      endTime: booking.endTime,
+      status: booking.status,
+      creatorName: booking.creatorName,
+      waitlistCalendarId: booking.waitlistCalendarId,
+      reason: booking.reason,
+      participants: (participantsByBooking[booking.bookingId] || []).sort(function(left, right) {
+        return [left.status, left.startTime, left.teacherName].join('|')
+          .localeCompare([right.status, right.startTime, right.teacherName].join('|'));
+      }),
+      audits: (auditsByBooking[booking.bookingId] || []).slice().reverse()
+    };
+  }).sort(function(left, right) {
+    return [left.date, left.startTime, left.room, left.bookingId].join('|')
+      .localeCompare([right.date, right.startTime, right.room, right.bookingId].join('|'));
+  });
+  return {
+    bookings: bookings,
+    notificationFailures: audits.filter(function(item) { return item.action === '推播失敗'; }).reverse(),
+    summary: {
+      total: bookings.length,
+      active: bookings.filter(function(item) { return item.status === PRACTICE_STATUS.ACTIVE; }).length,
+      waitlisted: bookings.filter(function(item) { return item.status === PRACTICE_STATUS.WAITLISTED; }).length,
+      cancelled: bookings.filter(function(item) {
+        return [PRACTICE_STATUS.CANCELLED, PRACTICE_STATUS.CONFLICT_CANCELLED].indexOf(item.status) !== -1;
+      }).length
+    }
+  };
+}
+
 function getPracticeRecordsUnlocked_(spreadsheet) {
   var seriesSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_SERIES);
   var bookingSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_BOOKINGS);
@@ -2244,6 +2378,211 @@ function leavePracticeBooking_(session, inputValue) {
   return result;
 }
 
+function updatePracticeBooking_(session, inputValue) {
+  var actor = getSessionTeacherName_(session);
+  var input = inputValue || {};
+  var bookingId = cleanText_(input.bookingId);
+  if (!bookingId) throw new Error('缺少自主練習場次編號。');
+  var result = withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var booking = records.bookings.filter(function(item) { return item.bookingId === bookingId; })[0];
+    if (!booking || [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) === -1) {
+      throw new Error('這筆自主練習目前無法調整。');
+    }
+    var canManage = getSessionManagementCapabilities_(session).indexOf('course_admin') !== -1;
+    var isOwner = booking.creatorName === actor;
+    if (!isOwner && !canManage) throw new Error('只能調整自己建立的自主練習。');
+    if (!isOwner && !cleanText_(input.reason)) throw new Error('管理員代為調整時請填寫原因。');
+
+    var room = requirePracticeRoom_(input.room || booking.room);
+    var interval = normalizePracticeInterval_(
+      input.date || booking.date,
+      input.startTime || booking.startTime,
+      input.endTime || booking.endTime
+    );
+    var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    assertPracticeIntervalAvailable_({
+      room: room,
+      interval: interval,
+      excludeBookingId: bookingId,
+      excludeCalendarId: booking.waitlistCalendarId
+    }, records, courseSheet.getDataRange().getValues().slice(1));
+
+    var activeParticipants = records.participants.filter(function(item) {
+      return item.bookingId === bookingId && item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    });
+    activeParticipants.forEach(function(participant) {
+      if (participant.role === PRACTICE_ROLE.CREATOR) return;
+      var participantInterval = normalizePracticeInterval_(booking.date, participant.startTime, participant.endTime);
+      if (participantInterval.startMs < interval.startMs || participantInterval.endMs > interval.endMs) {
+        throw new Error('調整後的時間無法容納 ' + participant.teacherName + '目前加入的時段。');
+      }
+    });
+    var now = getTimestamp_();
+    return runStateTransitionUnlocked_([
+      records.sheets.bookings,
+      records.sheets.participants,
+      records.sheets.audit
+    ], function(appendAudits) {
+      records.sheets.bookings.getRange(booking.rowNumber, 3, 1, 11).setValues([[
+        interval.date, room, interval.startTime, interval.endTime,
+        booking.status, booking.creatorName, booking.waitlistCalendarId,
+        booking.reason, booking.createdAt, now, actor
+      ]]);
+      activeParticipants.forEach(function(participant) {
+        if (participant.role !== PRACTICE_ROLE.CREATOR) return;
+        records.sheets.participants.getRange(participant.rowNumber, 6, 1, 2)
+          .setValues([[interval.startTime, interval.endTime]]);
+      });
+      appendPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: actor,
+        action: '調整自主練習',
+        targetType: '場次',
+        targetId: bookingId,
+        before: { date: booking.date, room: booking.room, startTime: booking.startTime, endTime: booking.endTime },
+        after: { date: interval.date, room: room, startTime: interval.startTime, endTime: interval.endTime },
+        reason: cleanText_(input.reason)
+      });
+      appendAudits([{
+        actor: actor,
+        action: '調整自主練習',
+        targetId: bookingId,
+        before: booking.date + ' ' + booking.room + ' ' + booking.startTime + '–' + booking.endTime,
+        after: interval.date + ' ' + room + ' ' + interval.startTime + '–' + interval.endTime,
+        reason: cleanText_(input.reason)
+      }]);
+      return {
+        bookingId: bookingId,
+        status: booking.status,
+        date: interval.date,
+        room: room,
+        startTime: interval.startTime,
+        endTime: interval.endTime,
+        teacherNames: activeParticipants.map(function(item) { return item.teacherName; })
+      };
+    });
+  });
+  var recipients = result.teacherNames.filter(function(name, index, all) {
+    return name && name !== actor && all.indexOf(name) === index;
+  });
+  if (recipients.length) {
+    sendPushAfterMutationSafely_(recipients, {
+      heading: '自主練習時間已調整',
+      content: result.date + ' ' + result.room + '教室已調整為 ' +
+        result.startTime + '–' + result.endTime + '。',
+      url: buildAppViewUrl_('practice')
+    });
+  }
+  delete result.teacherNames;
+  return result;
+}
+
+function cancelPracticeBooking_(session, inputValue) {
+  var actor = getSessionTeacherName_(session);
+  var input = inputValue || {};
+  var bookingId = cleanText_(input.bookingId);
+  if (!bookingId) throw new Error('缺少自主練習場次編號。');
+  var result = withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var booking = records.bookings.filter(function(item) { return item.bookingId === bookingId; })[0];
+    if (!booking || [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) === -1) {
+      throw new Error('這筆自主練習目前無法取消。');
+    }
+    var canManage = getSessionManagementCapabilities_(session).indexOf('course_admin') !== -1;
+    var isOwner = booking.creatorName === actor;
+    if (!isOwner && !canManage) throw new Error('只能取消自己建立的自主練習。');
+    if (!isOwner && !cleanText_(input.reason)) throw new Error('管理員代為取消時請填寫原因。');
+    var cancelFuture = cleanText_(input.scope) === 'future' && !!booking.seriesId;
+    var targetBookings = cancelFuture
+      ? records.bookings.filter(function(item) {
+          return item.seriesId === booking.seriesId && item.date >= booking.date &&
+            [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(item.status) !== -1;
+        })
+      : [booking];
+    var targetIds = {};
+    targetBookings.forEach(function(item) { targetIds[item.bookingId] = true; });
+    var targetParticipants = records.participants.filter(function(item) {
+      return targetIds[item.bookingId] && item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    });
+    var now = getTimestamp_();
+    return runStateTransitionUnlocked_([
+      records.sheets.series,
+      records.sheets.bookings,
+      records.sheets.participants,
+      records.sheets.exceptions,
+      records.sheets.audit
+    ], function(appendAudits) {
+      targetBookings.forEach(function(target) {
+        records.sheets.bookings.getRange(target.rowNumber, 7, 1, 7).setValues([[
+          PRACTICE_STATUS.CANCELLED, '', target.waitlistCalendarId,
+          cleanText_(input.reason) || '建立者取消', target.createdAt, now, actor
+        ]]);
+      });
+      targetParticipants.forEach(function(participant) {
+        records.sheets.participants.getRange(participant.rowNumber, 9, 1, 3).setValues([[
+          PRACTICE_PARTICIPANT_STATUS.CANCELLED, participant.joinedAt, now
+        ]]);
+      });
+      if (booking.seriesId) {
+        var series = records.series.filter(function(item) { return item.seriesId === booking.seriesId; })[0];
+        if (cancelFuture && series) {
+          records.sheets.series.getRange(series.rowNumber, 8, 1, 5).setValues([[
+            booking.date, '已停止', series.createdAt, now, actor
+          ]]);
+        } else if (!cancelFuture) {
+          appendPracticeRowUnlocked_(records.sheets.exceptions, SHEET_HEADERS.PRACTICE_EXCEPTIONS, [
+            Utilities.getUuid(), booking.seriesId, booking.date, '取消本次',
+            cleanText_(input.reason), now, actor
+          ]);
+        }
+      }
+      appendPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: actor,
+        action: cancelFuture ? '取消本次及往後自主練習' : '取消自主練習',
+        targetType: '場次',
+        targetId: bookingId,
+        before: { status: booking.status },
+        after: { status: PRACTICE_STATUS.CANCELLED, affectedOccurrences: targetBookings.length },
+        reason: cleanText_(input.reason)
+      });
+      appendAudits([{
+        actor: actor,
+        action: '取消自主練習',
+        targetId: bookingId,
+        before: booking.status,
+        after: PRACTICE_STATUS.CANCELLED,
+        reason: cleanText_(input.reason)
+      }]);
+      return {
+        bookingId: bookingId,
+        status: PRACTICE_STATUS.CANCELLED,
+        affectedOccurrences: targetBookings.length,
+        date: booking.date,
+        room: booking.room,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        teacherNames: targetParticipants.map(function(item) { return item.teacherName; })
+      };
+    });
+  });
+  var recipients = result.teacherNames.filter(function(name, index, all) {
+    return name && name !== actor && all.indexOf(name) === index;
+  });
+  if (recipients.length) {
+    sendPushAfterMutationSafely_(recipients, {
+      heading: '自主練習已取消',
+      content: result.date + ' ' + result.room + '教室 ' + result.startTime + '–' +
+        result.endTime + '的自主練習已取消。',
+      url: buildAppViewUrl_('practice')
+    });
+  }
+  delete result.teacherNames;
+  return result;
+}
+
 function expandPracticeSeries_(seriesIdValue, throughDateValue) {
   var seriesId = cleanText_(seriesIdValue);
   if (!seriesId) throw new Error('缺少自主練習系列編號。');
@@ -2868,6 +3207,54 @@ function doPost(e) {
       },
       getMyCourses: function() {
         return getMyCourses_(actingSession());
+      },
+      getPracticeDay: function() {
+        return getPracticeDay_(actingSession(), parameters.date);
+      },
+      createPracticeBooking: function() {
+        return createPracticeBooking_(
+          actingSession(),
+          parseJsonObject_(parameters.practice, '自主練習')
+        );
+      },
+      createPracticeWaitlist: function() {
+        return createPracticeWaitlist_(
+          actingSession(),
+          parseJsonObject_(parameters.practice, '候補自主練習')
+        );
+      },
+      joinPracticeBooking: function() {
+        return joinPracticeBooking_(
+          actingSession(),
+          parseJsonObject_(parameters.practice, '加入自主練習')
+        );
+      },
+      leavePracticeBooking: function() {
+        return leavePracticeBooking_(
+          actingSession(),
+          parseJsonObject_(parameters.practice, '退出自主練習')
+        );
+      },
+      updatePracticeBooking: function() {
+        return updatePracticeBooking_(
+          session,
+          parseJsonObject_(parameters.practice, '調整自主練習')
+        );
+      },
+      cancelPracticeBooking: function() {
+        return cancelPracticeBooking_(
+          session,
+          parseJsonObject_(parameters.practice, '取消自主練習')
+        );
+      },
+      getPracticeAdminDashboard: function() {
+        return getPracticeAdminDashboard_(session, {
+          dateFrom: parameters.dateFrom,
+          dateTo: parameters.dateTo,
+          room: parameters.room,
+          status: parameters.status,
+          teacherName: parameters.teacherName
+        });
       },
       getMyLeaves: function() {
         return getMyLeaves_(actingSession(), parameters.recordMonth);

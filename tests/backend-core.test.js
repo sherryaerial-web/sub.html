@@ -7775,3 +7775,115 @@ test('practice future join and creator exit preserve participants across the wee
   assert.equal(fixture.seriesSheet.values[1][1], 'Ariel Lu');
   assert.equal(fixture.seriesSheet.values[1][8], '啟用中');
 });
+
+test('practice candidate activates only after a successful OB check confirms the linked course is gone', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  const candidate = fixture.backend.createPracticeWaitlist_(fixture.teacher('小琪'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.activated, 1);
+  assert.equal(result.cancelled, 0);
+  assert.equal(fixture.bookingSheet.values[1][0], candidate.bookingId);
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+});
+
+test('practice candidate stays pending while its linked OB course still exists', () => {
+  const courseRow = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [courseRow] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('小琪'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [courseRow];
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.activated, 0);
+  assert.equal(result.pending, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+});
+
+test('practice reconciliation fails closed when OB cannot be verified', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('小琪'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('injected OB outage'); };
+
+  assert.throws(
+    () => fixture.backend.reconcilePracticeBookings_({
+      today: '2026/09/10', throughDate: '2026/09/10',
+    }),
+    /無法確認 OB/
+  );
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+});
+
+test('practice reconciliation cancels a revived conflict and records push failure for managers', () => {
+  const fixture = createPracticeBackend();
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [[
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-revived', 'class-1', 'teacher-1', '否', 'stamp',
+  ]];
+  fixture.backend.sendPushAfterMutationSafely_ = () => ({
+    attempted: true, accepted: false, delivered: 0, error: 'injected push outage',
+  });
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.cancelled, 1);
+  assert.equal(result.notificationFailures, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '衝突取消');
+  assert.equal(fixture.participantSheet.values[1][8], '已取消');
+  assert.ok(fixture.practiceAuditSheet.values.some((row) => row[2] === '推播失敗'));
+});
+
+test('practice join and leave notify the current creator after Sheet writes finish', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'once',
+  });
+  const deliveries = [];
+  fixture.backend.sendPushAfterMutationSafely_ = (teacherNames, message) => {
+    deliveries.push({ teacherNames: Array.from(teacherNames), heading: message.heading });
+    return { attempted: true, accepted: true, delivered: teacherNames.length, error: '' };
+  };
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'once',
+  });
+  fixture.backend.leavePracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, scope: 'once',
+  });
+
+  assert.deepEqual(deliveries, [
+    { teacherNames: ['小琪'], heading: '有人加入自主練習' },
+    { teacherNames: ['小琪'], heading: '有人退出自主練習' },
+  ]);
+});

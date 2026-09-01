@@ -1876,6 +1876,23 @@ test('keeps the last leave records visible while a repeat refresh is pending', a
   assert.match(getElement('my-leaves-list').innerHTML, /目前沒有請假紀錄/);
 });
 
+test('teacher record archive queries send the selected month while recent queries omit it', async () => {
+  const { context, submittedForms } = createFrontendRuntime({
+    getMyLeaves: [],
+    getMySubs: [],
+  });
+
+  await context.fetchMyLeaves('2026-06');
+  await context.fetchMySubs('2026-07');
+  await context.fetchMyLeaves();
+
+  const recordRequests = submittedForms.filter((request) =>
+    ['getMyLeaves', 'getMySubs'].includes(request.fields.action));
+  assert.equal(recordRequests[0].fields.recordMonth, '2026-06');
+  assert.equal(recordRequests[1].fields.recordMonth, '2026-07');
+  assert.equal(Object.prototype.hasOwnProperty.call(recordRequests[2].fields, 'recordMonth'), false);
+});
+
 test('direct claim hides all fields while adjustment shows independent selectors', () => {
   const { context, claimCard, claimControls } = createFrontendRuntime();
 

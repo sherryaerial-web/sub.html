@@ -1651,13 +1651,13 @@ function doPost(e) {
         return getClaimOptions_(actingSession());
       },
       getMySubs: function() {
-        return getMySubs_(getSessionTeacherName_(actingSession()));
+        return getMySubs_(getSessionTeacherName_(actingSession()), parameters.recordMonth);
       },
       getMyCourses: function() {
         return getMyCourses_(actingSession());
       },
       getMyLeaves: function() {
-        return getMyLeaves_(actingSession());
+        return getMyLeaves_(actingSession(), parameters.recordMonth);
       },
       getMyPayroll: function() {
         return getMyPayroll_(session, parameters.month);
@@ -3114,6 +3114,26 @@ function getNextMonthKey_(now) {
     month = 1;
   }
   return year + '-' + ('0' + month).slice(-2);
+}
+
+function getTeacherRecordMonthKeys_(recordMonth) {
+  var requestedMonth = cleanText_(recordMonth);
+  if (requestedMonth) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)) {
+      throw new Error('紀錄月份格式應為 YYYY-MM。');
+    }
+    return [requestedMonth];
+  }
+
+  var nextMonth = getNextMonthKey_();
+  var parts = nextMonth.split('-').map(Number);
+  var year = parts[0];
+  var month = parts[1] - 1;
+  if (month === 0) {
+    year -= 1;
+    month = 12;
+  }
+  return [year + '-' + ('0' + month).slice(-2), nextMonth];
 }
 
 function getVvipMonthFromDate_(value) {
@@ -4745,15 +4765,17 @@ function getMyCourses_(session) {
   });
 }
 
-function getMyLeaves_(session) {
+function getMyLeaves_(session, recordMonth) {
   var teacher = getSessionTeacherName_(session);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
 
   var auditByTarget = getAuditHistoryMap_();
+  var recordMonths = getTeacherRecordMonthKeys_(recordMonth);
   return sheet.getDataRange().getValues().slice(1).filter(function(r) {
-    return cleanText_(r[1]) === teacher;
+    return cleanText_(r[1]) === teacher &&
+      recordMonths.indexOf(getVvipMonthFromDate_(r[2])) !== -1;
   }).map(function(r) {
     return {
       '登記時間': cleanText_(r[0]),
@@ -6592,7 +6614,7 @@ function getSpecialCourseActualStartTime_(durationMinutes, endTime) {
   return minutesToTimeText_(endMinutes - duration);
 }
 
-function getMySubs_(teacherName) {
+function getMySubs_(teacherName, recordMonth) {
   var name = cleanText_(teacherName);
   if (!name) throw new Error('請選擇查詢老師。');
   assertTeacherExists_(name);
@@ -6601,11 +6623,11 @@ function getMySubs_(teacherName) {
   var sheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
   assertHeaders_(sheet, SHEET_HEADERS.LEAVES);
   var auditByTarget = getAuditHistoryMap_();
-  var targetMonth = getNextMonthKey_();
+  var recordMonths = getTeacherRecordMonthKeys_(recordMonth);
   var substituteItems = sheet.getDataRange().getValues().slice(1).filter(function(r) {
     return cleanText_(r[6]) === name &&
       cleanText_(r[5]) === '已領取' &&
-      isLeaveRowInMonth_(r, targetMonth);
+      recordMonths.indexOf(getVvipMonthFromDate_(r[2])) !== -1;
   }).map(function(r) {
     return {
       '代課編號': cleanText_(r[9]),
@@ -6639,7 +6661,7 @@ function getMySubs_(teacherName) {
   var specialItems = specialRequestSheet.getDataRange().getValues().slice(1).filter(function(row) {
     return cleanText_(row[2]) === name &&
       specialRequestHasOwnSlot_(row) &&
-      isSpecialRequestRowInMonth_(row, targetMonth);
+      recordMonths.indexOf(getVvipMonthFromDate_(row[3])) !== -1;
   }).map(function(row) {
     var sourceSlots = getSpecialRequestSourceSlots_(row);
     var groupId = cleanText_(row[1]);

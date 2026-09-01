@@ -1761,6 +1761,32 @@ test('getMyLeaves returns personal status, substitute, intended course, verifica
   });
 });
 
+test('teacher leave records default to current plus next month and allow one archived month', () => {
+  const { backend } = createLeaveBackend({
+    courseRows: [],
+    leaveRows: [
+      ['stamp', '老師甲', '2026/06/30', '18:30', '六月課', '已取消', '', '', '', 'leave-jun'],
+      ['stamp', '老師甲', '2026/07/01', '18:30', '七月課', '已取消', '', '', '', 'leave-jul'],
+      ['stamp', '老師甲', '2026/08/31', '18:30', '八月課', '已取消', '', '', '', 'leave-aug'],
+      ['stamp', '老師甲', '2026/09/01', '18:30', '九月課', '已取消', '', '', '', 'leave-sep'],
+    ],
+  });
+  backend.getNextMonthKey_ = () => '2026-08';
+
+  assert.deepEqual(
+    backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' }).map((row) => row['代課編號']),
+    ['leave-aug', 'leave-jul'],
+  );
+  assert.deepEqual(
+    backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' }, '2026-06').map((row) => row['代課編號']),
+    ['leave-jun'],
+  );
+  assert.throws(
+    () => backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' }, '2026-6'),
+    /月份格式/,
+  );
+});
+
 test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact counts', () => {
   const { backend, courseSheet, leaveSheet } = createLeaveBackend();
   const items = courseSheet.values.slice(1).map((row) => ({
@@ -3030,7 +3056,7 @@ test('teacher substitute list only exposes open courses from the target month', 
   );
 });
 
-test('teacher substitute records only include ordinary and special courses from the target month', () => {
+test('teacher substitute records default to current plus next month and allow one archived month', () => {
   const ownSource = (date, calendarId) => JSON.stringify([{
     sourceType: 'own', date, time: '11:00', courseName: 'A－原始瑜伽',
     originalTeacher: '老師甲', calendarId,
@@ -3038,18 +3064,31 @@ test('teacher substitute records only include ordinary and special courses from 
   const { backend } = createInvitationBackend({
     nextMonth: '2026-09',
     leaveRows: [
+      ['stamp', '老師乙', '2026/07/30', '10:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-jul', 'calendar-jul'],
       ['stamp', '老師乙', '2026/08/30', '10:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-aug', 'calendar-aug'],
       ['stamp', '老師乙', '2026/09/05', '10:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-sep', 'calendar-sep'],
+      ['stamp', '老師乙', '2026/10/05', '10:00', '空環 Lv.1', '已領取', '老師甲', '', '', 'leave-oct', 'calendar-oct'],
     ],
     specialRequestRows: [
+      ['stamp', 'special-jul', '老師甲', '2026/07/26', 'A', ownSource('2026/07/26', 'own-jul'), '[]', '11:00', '七月特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
       ['stamp', 'special-aug', '老師甲', '2026/08/26', 'A', ownSource('2026/08/26', 'own-aug'), '[]', '11:00', '八月特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
       ['stamp', 'special-sep', '老師甲', '2026/09/26', 'A', ownSource('2026/09/26', 'own-sep'), '[]', '11:00', '九月特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
+      ['stamp', 'special-oct', '老師甲', '2026/10/26', 'A', ownSource('2026/10/26', 'own-oct'), '[]', '11:00', '十月特別課', '', 120, '13:00', '使用連續時段', '', '待處理'],
     ],
   });
 
   assert.deepEqual(
     backend.getMySubs_('老師甲').map((row) => [row['日期'], row['實際課程名稱']]),
-    [['2026/09/05', ''], ['2026/09/26', '九月特別課']],
+    [
+      ['2026/08/26', '八月特別課'],
+      ['2026/08/30', ''],
+      ['2026/09/05', ''],
+      ['2026/09/26', '九月特別課'],
+    ],
+  );
+  assert.deepEqual(
+    backend.getMySubs_('老師甲', '2026-07').map((row) => [row['日期'], row['實際課程名稱']]),
+    [['2026/07/26', '七月特別課'], ['2026/07/30', '']],
   );
 });
 

@@ -182,6 +182,15 @@
       border-color: var(--sea-600);
       outline: 3px solid rgba(173, 129, 117, 0.18);
     }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      clip-path: inset(50%);
+    }
 
     .app-shell {
       width: min(100%, 1180px);
@@ -454,6 +463,23 @@
     }
 
     .admin-header-actions { justify-content: flex-end; margin: 0; }
+    .record-period-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .record-period-copy { display: grid; gap: 2px; }
+    .record-period-copy strong { font-size: 13px; }
+    .record-period-copy span { color: var(--muted); font-size: 11px; }
+    .record-period-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+    .record-period-actions .month-input { min-height: 38px; }
     .admin-report-action .compact-button { min-height: 42px; white-space: nowrap; }
     #view-admin > .view-header { margin-bottom: 14px; }
     .admin-command-bar {
@@ -914,6 +940,8 @@
       .teacher-round-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .view-header { flex-direction: column; }
       .admin-header-actions { justify-content: flex-start; }
+      .record-period-bar { align-items: stretch; flex-direction: column; }
+      .record-period-actions { justify-content: flex-start; }
       .admin-report-action { width: 100%; }
       .admin-report-action .compact-button { width: 100%; justify-content: center; }
       .admin-command-bar { grid-template-columns: 1fr; align-items: stretch; }
@@ -1014,6 +1042,8 @@
       }
       .mobile-record-button { min-height: 40px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 750; }
       .mobile-record-button.active { background: var(--aqua-100); color: var(--sea-800); }
+      .record-period-actions .month-input { width: 100%; flex: 1 1 100%; }
+      .record-period-actions .compact-button { flex: 1 1 120px; justify-content: center; }
       #claim-submit,
       #leave-submit { position: sticky; bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 16; box-shadow: 0 8px 28px rgba(64, 57, 54, .20); }
     }
@@ -1122,6 +1152,8 @@
       .payroll-admin-head .status-pill { grid-column: 1 / -1; }
       .payroll-admin-actions .compact-button, .payroll-admin-actions .primary-button { flex: 1 1 150px; }
       .payroll-export-button { width: 100%; margin-left: 0; justify-content: center; }
+      .record-period-actions .month-input { width: 100%; flex: 1 1 100%; }
+      .record-period-actions .compact-button { flex: 1 1 120px; justify-content: center; }
       .payroll-hero { padding: 19px; }
       .payroll-hero > strong { font-size: 31px; }
       .push-permission-card { align-items: stretch; flex-direction: column; }
@@ -1297,6 +1329,15 @@
             <button class="mobile-record-button" type="button" data-view="view-mysubs">代課紀錄</button>
           </div>
           <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的請假紀錄</h2><p class="section-copy">請假、代課與 OB 核對進度</p></div></div>
+          <div class="record-period-bar">
+            <div class="record-period-copy"><strong id="my-leaves-period-label">顯示本月＋下個月</strong><span>舊紀錄仍完整保留，可按月份查詢。</span></div>
+            <div class="record-period-actions">
+              <label class="sr-only" for="my-leaves-month">請假紀錄月份</label>
+              <input id="my-leaves-month" class="text-input month-input" type="month">
+              <button id="my-leaves-month-search" class="compact-button" type="button"><i data-lucide="search"></i>查月份</button>
+              <button id="my-leaves-recent" class="compact-button" type="button"><i data-lucide="calendar-range"></i>回近期</button>
+            </div>
+          </div>
           <div id="my-leaves-list" class="list"><div class="state">載入中...</div></div>
         </section>
 
@@ -1333,6 +1374,15 @@
             <button class="mobile-record-button active" type="button" data-view="view-mysubs">代課紀錄</button>
           </div>
           <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的代課紀錄</h2><p class="section-copy">已領取課程與改課內容</p></div></div>
+          <div class="record-period-bar">
+            <div class="record-period-copy"><strong id="my-subs-period-label">顯示本月＋下個月</strong><span>舊紀錄仍完整保留，可按月份查詢。</span></div>
+            <div class="record-period-actions">
+              <label class="sr-only" for="my-subs-month">代課紀錄月份</label>
+              <input id="my-subs-month" class="text-input month-input" type="month">
+              <button id="my-subs-month-search" class="compact-button" type="button"><i data-lucide="search"></i>查月份</button>
+              <button id="my-subs-recent" class="compact-button" type="button"><i data-lucide="calendar-range"></i>回近期</button>
+            </div>
+          </div>
           <div id="my-subs-list" class="list"><div class="state">載入中...</div></div>
         </section>
 
@@ -1452,6 +1502,10 @@
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
     let mySubsSnapshotHtml = null;
+    let myLeavesSnapshotMonth = "";
+    let mySubsSnapshotMonth = "";
+    let myLeavesRecordMonth = "";
+    let mySubsRecordMonth = "";
     const myPayrollSnapshotHtml = new Map();
     let activeAdminTab = "pendingInvitations";
     let requestDialogState = null;
@@ -2165,6 +2219,10 @@
       hasClaimSnapshot = false;
       myLeavesSnapshotHtml = null;
       mySubsSnapshotHtml = null;
+      myLeavesSnapshotMonth = "";
+      mySubsSnapshotMonth = "";
+      myLeavesRecordMonth = "";
+      mySubsRecordMonth = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
     }
@@ -2470,6 +2528,10 @@
       hasClaimSnapshot = false;
       myLeavesSnapshotHtml = null;
       mySubsSnapshotHtml = null;
+      myLeavesSnapshotMonth = "";
+      mySubsSnapshotMonth = "";
+      myLeavesRecordMonth = "";
+      mySubsRecordMonth = "";
       myPayrollSnapshotHtml.clear();
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
@@ -2850,16 +2912,22 @@
       return "";
     }
 
-    async function fetchMyLeaves() {
+    async function fetchMyLeaves(recordMonth = "") {
       const list = byId("my-leaves-list");
-      const hadSnapshot = myLeavesSnapshotHtml !== null;
+      const normalizedMonth = String(recordMonth || "").trim();
+      myLeavesRecordMonth = normalizedMonth;
+      const hadSnapshot = myLeavesSnapshotHtml !== null && myLeavesSnapshotMonth === normalizedMonth;
       if (hadSnapshot) list.innerHTML = myLeavesSnapshotHtml;
       beginReadRefresh(list, hadSnapshot, '<div class="state">查詢中...</div>');
       try {
-        const items = await callApi("getMyLeaves");
+        const items = await callApi("getMyLeaves", normalizedMonth ? { recordMonth: normalizedMonth } : {});
+        byId("my-leaves-period-label").textContent = normalizedMonth
+          ? `顯示 ${normalizedMonth.replace("-", " 年 ")} 月`
+          : "顯示本月＋下個月";
         if (!items.length) {
           list.innerHTML = '<div class="state">目前沒有請假紀錄</div>';
           myLeavesSnapshotHtml = list.innerHTML;
+          myLeavesSnapshotMonth = normalizedMonth;
           return;
         }
         list.innerHTML = items.map((item) => {
@@ -2892,6 +2960,7 @@
           `;
         }).join("");
         myLeavesSnapshotHtml = list.innerHTML;
+        myLeavesSnapshotMonth = normalizedMonth;
         refreshIcons();
       } catch (error) {
         if (!hadSnapshot) list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
@@ -3769,20 +3838,27 @@
       return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${sourceCount} 堂</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${sourceCount}）</summary>${sourceRows}</details>${exitHint}<div class="record-actions">${actions}</div></div></article>`;
     }
 
-    async function fetchMySubs() {
+    async function fetchMySubs(recordMonth = "") {
       const list = byId("my-subs-list");
-      const hadSnapshot = mySubsSnapshotHtml !== null;
+      const normalizedMonth = String(recordMonth || "").trim();
+      mySubsRecordMonth = normalizedMonth;
+      const hadSnapshot = mySubsSnapshotHtml !== null && mySubsSnapshotMonth === normalizedMonth;
       if (hadSnapshot) list.innerHTML = mySubsSnapshotHtml;
       beginReadRefresh(list, hadSnapshot, '<div class="state">查詢中...</div>');
       try {
-        const items = await callApi("getMySubs");
+        const items = await callApi("getMySubs", normalizedMonth ? { recordMonth: normalizedMonth } : {});
+        byId("my-subs-period-label").textContent = normalizedMonth
+          ? `顯示 ${normalizedMonth.replace("-", " 年 ")} 月`
+          : "顯示本月＋下個月";
         if (!items.length) {
           list.innerHTML = '<div class="state">目前沒有代課紀錄</div>';
           mySubsSnapshotHtml = list.innerHTML;
+          mySubsSnapshotMonth = normalizedMonth;
           return;
         }
         list.innerHTML = groupSpecialCourseItems(items).map(renderMySubGroup).join("");
         mySubsSnapshotHtml = list.innerHTML;
+        mySubsSnapshotMonth = normalizedMonth;
         refreshIcons();
       } catch (error) {
         if (!hadSnapshot) list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
@@ -3804,19 +3880,19 @@
       if (!window.confirm("確定取消這堂請假嗎？")) return;
       await callPostApi("cancelLeave", { substituteId });
       setNotice("請假已取消。");
-      await fetchMyLeaves();
+      await fetchMyLeaves(myLeavesRecordMonth);
     }
 
     async function requestOwnLeaveCancellation(substituteId, reason) {
       await callPostApi("requestLeaveCancellation", { substituteId, reason });
       setNotice("取消申請已送出。");
-      await fetchMyLeaves();
+      await fetchMyLeaves(myLeavesRecordMonth);
     }
 
     async function requestOwnClaimWithdrawal(substituteId, reason) {
       await callPostApi("requestClaimWithdrawal", { substituteId, reason });
       setNotice("退出代課申請已送出。");
-      await fetchMySubs();
+      await fetchMySubs(mySubsRecordMonth);
     }
 
     function openRequestDialog(options) {
@@ -5046,6 +5122,30 @@ https://sherryaerial-web.github.io/sub.html/
     byId("claim-success-records").addEventListener("click", openClaimRecordsFromSuccess);
     byId("request-form").addEventListener("submit", submitRequestDialog);
     byId("request-cancel").addEventListener("click", closeRequestDialog);
+    byId("my-leaves-month-search").addEventListener("click", async () => {
+      const month = byId("my-leaves-month").value;
+      if (!month) {
+        setNotice("請先選擇要查詢的請假紀錄月份。", "error");
+        return;
+      }
+      await fetchMyLeaves(month);
+    });
+    byId("my-leaves-recent").addEventListener("click", async () => {
+      byId("my-leaves-month").value = "";
+      await fetchMyLeaves();
+    });
+    byId("my-subs-month-search").addEventListener("click", async () => {
+      const month = byId("my-subs-month").value;
+      if (!month) {
+        setNotice("請先選擇要查詢的代課紀錄月份。", "error");
+        return;
+      }
+      await fetchMySubs(month);
+    });
+    byId("my-subs-recent").addEventListener("click", async () => {
+      byId("my-subs-month").value = "";
+      await fetchMySubs();
+    });
     byId("my-leaves-list").addEventListener("click", async (event) => {
       const button = event.target.closest ? event.target.closest("[data-leave-action]") : null;
       if (!button) return;

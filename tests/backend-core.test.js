@@ -2053,7 +2053,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '代課邀請', '操作紀錄', '登入帳號', '系統設定',
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
-      '關課設定', '關課紀錄'
+      '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
+      '自主練習參與者', '自主練習例外', '自主練習操作紀錄'
     ].sort()
   );
   assert.deepEqual(
@@ -7576,4 +7577,50 @@ test('practice quick durations expose only sixty ninety and one hundred twenty m
       { minutes: 120, available: false, reason: '與 A－空環 的前後 15 分鐘緩衝衝突' },
     ]
   );
+});
+
+test('practice structure is isolated and preserves formal course rows across reruns', () => {
+  const courseRow = ['2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲', 'cal-1', 'class-1', 'teacher-1', '否', 'stamp'];
+  const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, courseRow]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensurePracticeStructure_();
+  backend.ensurePracticeStructure_();
+
+  assert.deepEqual(courseSheet.values, [EXPECTED_COURSE_HEADERS, courseRow]);
+  assert.deepEqual(
+    spreadsheet.sheets.map((sheet) => sheet.getName()).sort(),
+    ['CourseList', '自主練習系列', '自主練習場次', '自主練習參與者', '自主練習例外', '自主練習操作紀錄'].sort()
+  );
+});
+
+test('practice day view separates OB classes rentals and shared practice by room', () => {
+  const backend = loadBackend();
+  const day = backend.buildPracticeDayView_(
+    {
+      bookings: [{
+        bookingId: 'practice-1', seriesId: '', date: '2026/09/10', room: 'A',
+        startTime: '16:00', endTime: '17:00', status: '已成立', creatorName: '小琪',
+        waitlistCalendarId: '', reason: ''
+      }],
+      participants: [
+        { participantId: 'part-1', bookingId: 'practice-1', teacherName: '小琪', role: '建立者', startTime: '16:00', endTime: '17:00', status: '有效' },
+        { participantId: 'part-2', bookingId: 'practice-1', teacherName: 'Ariel Lu', role: '參與者', startTime: '16:30', endTime: '17:00', status: '有效' },
+      ],
+    },
+    [
+      ['2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲', 'cal-class'],
+      ['2026/09/10', '18:00', 'B－場地租借', '租借者', 'cal-rental'],
+      ['2026/09/11', '14:00', 'C－舞綢 Lv.1', '老師乙', 'cal-other-day'],
+    ],
+    '2026/09/10'
+  );
+
+  assert.equal(day.date, '2026/09/10');
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms.map((room) => room.room))), ['A', 'B', 'C', 'D']);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[0].blocks.map((block) => block.type))), ['course', 'practice']);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[0].blocks[1].participants.map((item) => item.teacherName))), ['小琪', 'Ariel Lu']);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[1].blocks.map((block) => block.type))), ['rental']);
+  assert.equal(day.rooms[2].blocks.length, 0);
 });

@@ -3400,6 +3400,20 @@ function doPost(e) {
           parameters.replacementCalendarId
         );
       },
+      confirmCourseAdjustment: function() {
+        return confirmCourseAdjustment_(
+          session,
+          parameters.adjustmentGroupId,
+          parseJsonArray_(parameters.manualMappings || '[]', '手動調課配對')
+        );
+      },
+      dismissCourseAdjustment: function() {
+        return dismissCourseAdjustment_(
+          session,
+          parameters.adjustmentGroupId,
+          parameters.reason
+        );
+      },
       correctClaimDetails: function() {
         return correctClaimDetails_(
           session,
@@ -4476,6 +4490,259 @@ function persistCourseAdjustmentCandidatesUnlocked_(sheet, candidates) {
     ).setValues(rows);
   }
   return rows;
+}
+
+function parseCourseAdjustmentJson_(value, label) {
+  try {
+    var parsed = JSON.parse(cleanText_(value) || '[]');
+    if (!Array.isArray(parsed)) throw new Error('not array');
+    return parsed;
+  } catch (error) {
+    throw new Error('課程調整的' + label + '資料已損壞，請勿繼續操作。');
+  }
+}
+
+function getCourseAdjustmentRecordUnlocked_(sheet, adjustmentGroupId) {
+  assertHeaders_(sheet, SHEET_HEADERS.COURSE_ADJUSTMENTS);
+  var wantedId = cleanText_(adjustmentGroupId);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][0]) === wantedId) {
+      return { rowNumber: index + 1, row: values[index] };
+    }
+  }
+  throw new Error('找不到這筆課程調整，請重新整理。');
+}
+
+function toAdminCourseAdjustmentItem_(row) {
+  return {
+    groupId: cleanText_(row[0]),
+    detectionVersion: cleanText_(row[1]),
+    date: formatMyDate(row[2]),
+    roomPair: cleanText_(row[3]),
+    before: parseCourseAdjustmentJson_(row[4], '調整前'),
+    after: parseCourseAdjustmentJson_(row[5], '調整後'),
+    mappings: parseCourseAdjustmentJson_(row[6], '建議配對'),
+    status: cleanText_(row[7]),
+    reason: cleanText_(row[8]),
+    createdAt: cleanText_(row[9]),
+    confirmedAt: cleanText_(row[10]),
+    confirmedBy: cleanText_(row[11]),
+    dismissedReason: cleanText_(row[12]),
+    notificationStatus: cleanText_(row[13]),
+    notificationError: cleanText_(row[14])
+  };
+}
+
+function getPendingCourseAdjustments_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEETS.COURSE_ADJUSTMENTS);
+  if (!sheet) return [];
+  assertHeaders_(sheet, SHEET_HEADERS.COURSE_ADJUSTMENTS);
+  return sheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return cleanText_(row[0]) && cleanText_(row[7]) === '待確認';
+  }).map(toAdminCourseAdjustmentItem_).sort(function(a, b) {
+    return [a.date, a.createdAt, a.groupId].join('|')
+      .localeCompare([b.date, b.createdAt, b.groupId].join('|'));
+  });
+}
+
+function buildCourseAdjustmentNotification_(teacherName, updates, groupId) {
+  var lines = (updates || []).map(function(update) {
+    return [
+      update.date,
+      update.originalTime + ' ' + update.originalCourse,
+      '→',
+      update.effectiveTime + ' ' + update.effectiveCourse
+    ].join(' ');
+  });
+  return {
+    heading: '代課教室／時間已調整',
+    content: teacherName + '，你已領取的代課安排有變更：\n' + lines.join('\n'),
+    url: buildAppViewUrl_('records', ''),
+    eventKey: 'course_adjustment_' + cleanText_(groupId) + '_' + cleanText_(teacherName)
+  };
+}
+
+function confirmCourseAdjustment_(session, adjustmentGroupId, manualMappings) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var groupId = cleanText_(adjustmentGroupId);
+  var requestedMappings = Array.isArray(manualMappings) ? manualMappings : [];
+  var notificationGroups = {};
+  var result = withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var adjustmentSheet = requireSheet_(ss, SHEETS.COURSE_ADJUSTMENTS);
+    var leaveSheet = requireSheet_(ss, SHEETS.LEAVES);
+    var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
+    assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    var adjustmentRecord = getCourseAdjustmentRecordUnlocked_(adjustmentSheet, groupId);
+    if (cleanText_(adjustmentRecord.row[7]) !== '待確認') {
+      throw new Error('這筆課程調整已經處理過。');
+    }
+    var suggestedMappings = parseCourseAdjustmentJson_(adjustmentRecord.row[6], '建議配對');
+    var afterItems = parseCourseAdjustmentJson_(adjustmentRecord.row[5], '調整後');
+    var coursesByCalendarId = {};
+    courseSheet.getDataRange().getValues().slice(1).forEach(function(row) {
+      var calendarId = cleanText_(row[4]);
+      if (!calendarId) return;
+      coursesByCalendarId[calendarId] = {
+        calendarId: calendarId,
+        date: formatMyDate(row[0]),
+        time: formatMyTime(row[1]),
+        courseName: cleanText_(row[2]),
+        teacherName: cleanText_(row[3])
+      };
+    });
+    afterItems.forEach(function(item) {
+      var current = coursesByCalendarId[cleanText_(item.calendarId)];
+      if (!current || current.date !== formatMyDate(item.date) ||
+          current.time !== formatMyTime(item.time) ||
+          current.courseName !== cleanText_(item.courseName)) {
+        throw new Error('OB 課表已再次變更，請重新同步後再確認。');
+      }
+    });
+
+    var mappingsBySourceCalendarId = {};
+    suggestedMappings.forEach(function(mapping) {
+      var sourceId = cleanText_(mapping.fromCalendarId);
+      var targetId = cleanText_(mapping.effectiveCalendarId);
+      if (sourceId && targetId) mappingsBySourceCalendarId[sourceId] = targetId;
+    });
+    var manualBySubstituteId = {};
+    requestedMappings.forEach(function(mapping) {
+      var substituteId = cleanText_(mapping && mapping.substituteId);
+      var targetId = cleanText_(mapping && mapping.effectiveCalendarId);
+      if (!substituteId || !targetId) throw new Error('手動調課配對不完整。');
+      manualBySubstituteId[substituteId] = targetId;
+    });
+
+    var leaveValues = leaveSheet.getDataRange().getValues();
+    var updates = [];
+    for (var index = 1; index < leaveValues.length; index++) {
+      var row = leaveValues[index];
+      var substituteId = cleanText_(row[9]);
+      var currentCalendarId = getEffectiveOpenLeaveCalendarId_(row);
+      var targetCalendarId = manualBySubstituteId[substituteId] || mappingsBySourceCalendarId[currentCalendarId];
+      if (!targetCalendarId) continue;
+      var targetCourse = coursesByCalendarId[targetCalendarId];
+      if (!targetCourse) throw new Error('找不到調課後的 OB 課程，請重新同步。');
+      if (targetCourse.date !== formatMyDate(row[2])) {
+        throw new Error('調課不可跨日期。');
+      }
+      var nextRow = row.slice();
+      while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
+      var originalMinutes = timeTextToMinutes_(row[3]);
+      var effectiveMinutes = timeTextToMinutes_(targetCourse.time);
+      var timeDifference = originalMinutes >= 0 && effectiveMinutes >= 0
+        ? effectiveMinutes - originalMinutes
+        : 0;
+      nextRow[20] = targetCalendarId === cleanText_(row[10]) ? '' : targetCalendarId;
+      nextRow[25] = targetCourse.time;
+      nextRow[26] = [-30, -15, 0, 15, 30].indexOf(timeDifference) !== -1
+        ? timeDifference
+        : '';
+      nextRow[28] = groupId;
+      nextRow[29] = getTimestamp_();
+      nextRow[30] = actor;
+      updates.push({ rowNumber: index + 1, before: row, after: nextRow });
+      var substituteTeacher = cleanText_(row[6]);
+      if (cleanText_(row[5]) === '已領取' && substituteTeacher) {
+        if (!notificationGroups[substituteTeacher]) notificationGroups[substituteTeacher] = [];
+        notificationGroups[substituteTeacher].push({
+          date: formatMyDate(row[2]),
+          originalTime: formatMyTime(row[3]),
+          originalCourse: cleanText_(row[4]),
+          effectiveTime: targetCourse.time,
+          effectiveCourse: targetCourse.courseName
+        });
+      }
+    }
+    if (!updates.length) throw new Error('這組調課沒有找到可更新的請假／代課紀錄。');
+
+    var confirmedAt = getTimestamp_();
+    var transitionResult = runStateTransitionUnlocked_([leaveSheet, adjustmentSheet], function(appendAudits) {
+      updates.forEach(function(update) {
+        leaveSheet.getRange(
+          update.rowNumber,
+          1,
+          1,
+          SHEET_HEADERS.LEAVES.length
+        ).setValues([update.after]);
+      });
+      var nextAdjustmentRow = adjustmentRecord.row.slice();
+      while (nextAdjustmentRow.length < SHEET_HEADERS.COURSE_ADJUSTMENTS.length) nextAdjustmentRow.push('');
+      nextAdjustmentRow[7] = '已確認';
+      nextAdjustmentRow[10] = confirmedAt;
+      nextAdjustmentRow[11] = actor;
+      nextAdjustmentRow[12] = '';
+      nextAdjustmentRow[13] = Object.keys(notificationGroups).length ? '待通知' : '無需通知';
+      nextAdjustmentRow[14] = '';
+      adjustmentSheet.getRange(
+        adjustmentRecord.rowNumber,
+        1,
+        1,
+        SHEET_HEADERS.COURSE_ADJUSTMENTS.length
+      ).setValues([nextAdjustmentRow]);
+      appendAudits(updates.map(function(update) {
+        return {
+          actor: actor,
+          action: '確認課程調整',
+          targetId: cleanText_(update.after[9]),
+          before: getEffectiveOpenLeaveCalendarId_(update.before),
+          after: getEffectiveOpenLeaveCalendarId_(update.after),
+          reason: '調課群組：' + groupId
+        };
+      }));
+      return { adjustmentGroupId: groupId, status: '已確認', updatedLeaves: updates.length };
+    });
+    return transitionResult;
+  });
+
+  var notificationErrors = [];
+  Object.keys(notificationGroups).forEach(function(teacherName) {
+    var pushResult = sendPushAfterMutationSafely_([
+      teacherName
+    ], buildCourseAdjustmentNotification_(teacherName, notificationGroups[teacherName], groupId));
+    if (pushResult && pushResult.error) notificationErrors.push(teacherName + '：' + pushResult.error);
+  });
+  try {
+    var adjustmentSheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.COURSE_ADJUSTMENTS);
+    var record = getCourseAdjustmentRecordUnlocked_(adjustmentSheet, groupId);
+    adjustmentSheet.getRange(record.rowNumber, 14, 1, 2).setValues([[
+      notificationErrors.length ? '通知失敗' : (Object.keys(notificationGroups).length ? '已通知' : '無需通知'),
+      notificationErrors.join('；')
+    ]]);
+  } catch (notificationRecordError) {
+    result.notificationRecordError = getErrorMessage_(notificationRecordError);
+  }
+  result.notificationErrors = notificationErrors;
+  return result;
+}
+
+function dismissCourseAdjustment_(session, adjustmentGroupId, reasonValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var groupId = cleanText_(adjustmentGroupId);
+  var reason = cleanText_(reasonValue);
+  if (!reason) throw new Error('請填寫忽略原因。');
+  return withScriptLock_(function() {
+    var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.COURSE_ADJUSTMENTS);
+    var record = getCourseAdjustmentRecordUnlocked_(sheet, groupId);
+    if (cleanText_(record.row[7]) !== '待確認') throw new Error('這筆課程調整已經處理過。');
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(record.rowNumber, 8).setValue('已忽略');
+      sheet.getRange(record.rowNumber, 13).setValue(reason);
+      appendAudits([{
+        actor: actor,
+        action: '忽略課程調整',
+        targetId: groupId,
+        before: '待確認',
+        after: '已忽略',
+        reason: reason
+      }]);
+      return { adjustmentGroupId: groupId, status: '已忽略' };
+    });
+  });
 }
 
 function validateAppendOnlyHeaders_(sheet, expectedHeaders) {
@@ -10375,6 +10642,7 @@ function getAdminDashboard_(session) {
         return item.verificationStatus === '已核對';
       })),
       courseClosure: getCourseClosureDashboard_(session),
+      courseAdjustments: getPendingCourseAdjustments_(session),
       replacementOptions: replacementOptions
     };
   })();
@@ -10412,6 +10680,9 @@ function toAdminLeaveItem_(row, auditHistory, courseRows, newTeacherMonthMap) {
     actualStartTime: formatMyTime(row[25]) || formatMyTime(row[3]),
     startDelayMinutes: Number(row[26]) || 0,
     delaySourceSubstituteId: cleanText_(row[27]),
+    courseAdjustmentGroupId: cleanText_(row[28]),
+    courseAdjustmentConfirmedAt: cleanText_(row[29]),
+    courseAdjustmentConfirmedBy: cleanText_(row[30]),
     auditHistory: auditHistory
   };
 }

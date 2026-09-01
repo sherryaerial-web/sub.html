@@ -20,7 +20,12 @@ var SHEETS = {
   SHERRY_PAYROLL_FORMAT: '給雪莉的格式',
   SPECIAL_COURSE_REQUESTS: '特別課安排',
   COURSE_CLOSURE_SETTINGS: '關課設定',
-  COURSE_CLOSURE_LOG: '關課紀錄'
+  COURSE_CLOSURE_LOG: '關課紀錄',
+  PRACTICE_SERIES: '自主練習系列',
+  PRACTICE_BOOKINGS: '自主練習場次',
+  PRACTICE_PARTICIPANTS: '自主練習參與者',
+  PRACTICE_EXCEPTIONS: '自主練習例外',
+  PRACTICE_AUDIT: '自主練習操作紀錄'
 };
 
 var SHEET_HEADERS = {
@@ -86,7 +91,38 @@ var SHEET_HEADERS = {
   COURSE_CLOSURE_LOG: [
     '執行時間', '目標日期', '檢核時段', 'OB Calendar ID', '課程', '老師',
     '最新人數', '套用規則', 'onlyEmpty', '結果', '錯誤訊息', '操作者'
+  ],
+  PRACTICE_SERIES: [
+    '系列 ID', '建立者', '教室', '星期', '開始時間', '結束時間', '生效日期',
+    '停止日期', '狀態', '建立時間', '更新時間', '更新者'
+  ],
+  PRACTICE_BOOKINGS: [
+    '場次 ID', '系列 ID', '日期', '教室', '開始時間', '結束時間', '狀態',
+    '建立者', '候補 OB Calendar ID', '狀態原因', '建立時間', '更新時間', '更新者'
+  ],
+  PRACTICE_PARTICIPANTS: [
+    '參與 ID', '場次 ID', '系列 ID', '老師', '角色', '開始時間', '結束時間',
+    '加入範圍', '狀態', '加入時間', '退出時間'
+  ],
+  PRACTICE_EXCEPTIONS: [
+    '例外 ID', '系列 ID', '日期', '類型', '原因', '建立時間', '建立者'
+  ],
+  PRACTICE_AUDIT: [
+    '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON',
+    '修改後 JSON', '原因'
   ]
+};
+
+var PRACTICE_STATUS = {
+  WAITLISTED: '候補',
+  ACTIVE: '已成立',
+  CANCELLED: '已取消',
+  CONFLICT_CANCELLED: '衝突取消'
+};
+
+var PRACTICE_ROLE = {
+  CREATOR: '建立者',
+  PARTICIPANT: '參與者'
 };
 
 var CONFIG = {
@@ -145,6 +181,102 @@ var CONFIG = {
 };
 
 var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin'];
+
+function parsePracticeDateTime_(dateValue, timeValue) {
+  var dateText = cleanText_(dateValue);
+  var timeText = cleanText_(timeValue);
+  var dateMatch = dateText.match(/^(\d{4})[\/-](\d{2})[\/-](\d{2})$/);
+  var timeMatch = timeText.match(/^(\d{2}):(\d{2})$/);
+  if (!dateMatch || !timeMatch) throw new Error('自主練習日期或時間格式不正確。');
+
+  var hour = Number(timeMatch[1]);
+  var minute = Number(timeMatch[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    throw new Error('自主練習時間格式不正確。');
+  }
+
+  var canonicalDate = [dateMatch[1], dateMatch[2], dateMatch[3]].join('/');
+  var value = new Date(
+    dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3] +
+    'T' + timeMatch[1] + ':' + timeMatch[2] + ':00+08:00'
+  );
+  if (!isFinite(value.getTime()) ||
+      Utilities.formatDate(value, 'Asia/Taipei', 'yyyy/MM/dd') !== canonicalDate ||
+      Utilities.formatDate(value, 'Asia/Taipei', 'HH:mm') !== timeText) {
+    throw new Error('自主練習日期或時間不存在。');
+  }
+  return value;
+}
+
+function normalizePracticeInterval_(dateValue, startTimeValue, endTimeValue) {
+  var dateText = cleanText_(dateValue).replace(/-/g, '/');
+  var startTime = cleanText_(startTimeValue);
+  var endTime = cleanText_(endTimeValue);
+  var startMinutes = timeTextToMinutes_(startTime);
+  var endMinutes = timeTextToMinutes_(endTime);
+  if (startMinutes < 0 || endMinutes < 0) throw new Error('自主練習時間格式不正確。');
+  if (startMinutes % 5 !== 0 || endMinutes % 5 !== 0) {
+    throw new Error('自主練習時間必須以 5 分鐘為單位。');
+  }
+  if (endMinutes <= startMinutes) throw new Error('自主練習結束時間必須晚於開始時間。');
+  if (endMinutes - startMinutes < 15) throw new Error('自主練習至少 15 分鐘。');
+
+  var start = parsePracticeDateTime_(dateText, startTime);
+  var end = parsePracticeDateTime_(dateText, endTime);
+  return {
+    date: dateText,
+    startTime: startTime,
+    endTime: endTime,
+    startMs: start.getTime(),
+    endMs: end.getTime(),
+    durationMinutes: endMinutes - startMinutes
+  };
+}
+
+function practiceIntervalsConflict_(leftValue, rightValue, bufferMinutesValue) {
+  var left = leftValue || {};
+  var right = rightValue || {};
+  var bufferMs = Math.max(0, Number(bufferMinutesValue) || 0) * 60 * 1000;
+  var leftStart = Number(left.startMs);
+  var leftEnd = Number(left.endMs);
+  var rightStart = Number(right.startMs);
+  var rightEnd = Number(right.endMs);
+  if (![leftStart, leftEnd, rightStart, rightEnd].every(isFinite)) {
+    throw new Error('無法判斷自主練習時間衝突。');
+  }
+  return leftStart < rightEnd + bufferMs && rightStart < leftEnd + bufferMs;
+}
+
+function getPracticeQuickDurationOptions_(requestValue, blockersValue) {
+  var request = requestValue || {};
+  var blockers = Array.isArray(blockersValue) ? blockersValue : [];
+  var startMinutes = timeTextToMinutes_(request.startTime);
+  if (startMinutes < 0 || startMinutes % 5 !== 0) {
+    throw new Error('自主練習時間必須以 5 分鐘為單位。');
+  }
+  return [60, 90, 120].map(function(minutes) {
+    var endMinutes = startMinutes + minutes;
+    if (endMinutes > 24 * 60) {
+      return { minutes: minutes, available: false, reason: '超過當日可登記時間' };
+    }
+    var candidate = normalizePracticeInterval_(
+      request.date,
+      minutesToTimeText_(startMinutes),
+      minutesToTimeText_(endMinutes)
+    );
+    var conflict = blockers.find(function(blocker) {
+      return blocker && blocker.interval &&
+        practiceIntervalsConflict_(candidate, blocker.interval, 15);
+    });
+    return {
+      minutes: minutes,
+      available: !conflict,
+      reason: conflict
+        ? '與 ' + cleanText_(conflict.label || '既有行程') + ' 的前後 15 分鐘緩衝衝突'
+        : ''
+    };
+  });
+}
 
 function setupSystemStructure() {
   return ensureSystemStructure_();

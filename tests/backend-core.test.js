@@ -7520,3 +7520,60 @@ test('next-month unclaimed closure rechecks live OB name and never cancels a ven
   assert.equal(fixture.leaveSheet.values[1][5], '確認中');
   assert.equal(result.items[0].result, '場地租借，未取消');
 });
+
+test('practice intervals enforce five-minute steps and a fifteen-minute minimum', () => {
+  const backend = loadBackend();
+
+  const interval = backend.normalizePracticeInterval_('2026/09/10', '14:05', '14:20');
+
+  assert.equal(interval.date, '2026/09/10');
+  assert.equal(interval.startTime, '14:05');
+  assert.equal(interval.endTime, '14:20');
+  assert.equal(interval.durationMinutes, 15);
+  assert.throws(
+    () => backend.normalizePracticeInterval_('2026/09/10', '14:03', '14:20'),
+    /5 分鐘/
+  );
+  assert.throws(
+    () => backend.normalizePracticeInterval_('2026/09/10', '14:05', '14:15'),
+    /至少 15 分鐘/
+  );
+});
+
+test('practice intervals use Taipei timestamps independent of the device timezone', () => {
+  const backend = loadBackend();
+
+  const interval = backend.normalizePracticeInterval_('2026/09/10', '00:05', '01:05');
+
+  assert.equal(new Date(interval.startMs).toISOString(), '2026-09-09T16:05:00.000Z');
+  assert.equal(new Date(interval.endMs).toISOString(), '2026-09-09T17:05:00.000Z');
+});
+
+test('practice conflicts include an exact fifteen-minute turnover buffer', () => {
+  const backend = loadBackend();
+  const practice = backend.normalizePracticeInterval_('2026/09/10', '14:00', '15:00');
+  const blocked = backend.normalizePracticeInterval_('2026/09/10', '15:10', '16:10');
+  const allowed = backend.normalizePracticeInterval_('2026/09/10', '15:15', '16:15');
+
+  assert.equal(backend.practiceIntervalsConflict_(practice, blocked, 15), true);
+  assert.equal(backend.practiceIntervalsConflict_(practice, allowed, 15), false);
+});
+
+test('practice quick durations expose only sixty ninety and one hundred twenty minutes', () => {
+  const backend = loadBackend();
+  const blocker = backend.normalizePracticeInterval_('2026/09/10', '15:40', '17:00');
+
+  const options = backend.getPracticeQuickDurationOptions_(
+    { date: '2026/09/10', startTime: '14:00' },
+    [{ interval: blocker, label: 'A－空環' }]
+  );
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(options)),
+    [
+      { minutes: 60, available: true, reason: '' },
+      { minutes: 90, available: false, reason: '與 A－空環 的前後 15 分鐘緩衝衝突' },
+      { minutes: 120, available: false, reason: '與 A－空環 的前後 15 分鐘緩衝衝突' },
+    ]
+  );
+});

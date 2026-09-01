@@ -1054,6 +1054,32 @@ function createNotificationBackend() {
   };
 }
 
+function createPracticeBackend(options = {}) {
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ...(options.courseRows || []),
+  ]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet, auditSheet]);
+  const backend = loadBackend({
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  backend.ensurePracticeStructure_();
+  return {
+    backend,
+    spreadsheet,
+    courseSheet,
+    bookingSheet: spreadsheet.getSheetByName('自主練習場次'),
+    seriesSheet: spreadsheet.getSheetByName('自主練習系列'),
+    participantSheet: spreadsheet.getSheetByName('自主練習參與者'),
+    exceptionSheet: spreadsheet.getSheetByName('自主練習例外'),
+    practiceAuditSheet: spreadsheet.getSheetByName('自主練習操作紀錄'),
+    teacher(name) { return { teacherName: name, role: '老師', managementCapabilities: [] }; },
+  };
+}
+
 test('course administrators can manually notify selected active teachers and the send is audited', () => {
   const { backend, auditSheet, adminSession } = createNotificationBackend();
   const deliveries = [];
@@ -7623,4 +7649,129 @@ test('practice day view separates OB classes rentals and shared practice by room
   assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[0].blocks[1].participants.map((item) => item.teacherName))), ['小琪', 'Ariel Lu']);
   assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[1].blocks.map((block) => block.type))), ['rental']);
   assert.equal(day.rooms[2].blocks.length, 0);
+});
+
+test('practice create stores one UUID booking and its creator without touching CourseList', () => {
+  const fixture = createPracticeBackend();
+  const beforeCourses = JSON.parse(JSON.stringify(fixture.courseSheet.values));
+
+  const result = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+
+  assert.equal(result.status, '已成立');
+  assert.ok(result.bookingId);
+  assert.equal(fixture.bookingSheet.values.length, 2);
+  assert.equal(fixture.bookingSheet.values[1][0], result.bookingId);
+  assert.equal(fixture.bookingSheet.values[1][7], '小琪');
+  assert.equal(fixture.participantSheet.values.length, 2);
+  assert.equal(fixture.participantSheet.values[1][3], '小琪');
+  assert.equal(fixture.participantSheet.values[1][4], '建立者');
+  assert.deepEqual(fixture.courseSheet.values, beforeCourses);
+});
+
+test('practice join keeps participant-specific times and creator exit hands ownership over', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'once',
+  });
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'once',
+  });
+  const result = fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: created.bookingId, scope: 'once',
+  });
+
+  assert.equal(result.bookingStatus, '已成立');
+  assert.equal(result.newCreatorName, 'Ariel Lu');
+  assert.equal(fixture.bookingSheet.values[1][7], 'Ariel Lu');
+  assert.equal(fixture.participantSheet.values[1][8], '已退出');
+  assert.equal(fixture.participantSheet.values[2][3], 'Ariel Lu');
+  assert.equal(fixture.participantSheet.values[2][4], '建立者');
+  assert.equal(fixture.participantSheet.values[2][5], '15:00');
+});
+
+test('practice creation rejects formal blockers and points overlapping teachers to join', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      'cal-1', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+
+  assert.throws(
+    () => fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+      date: '2026/09/10', room: 'A', startTime: '15:10', endTime: '16:10', recurrence: 'once',
+    }),
+    /正式課程.*15 分鐘/
+  );
+
+  const first = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'B', startTime: '16:00', endTime: '17:00', recurrence: 'once',
+  });
+  assert.ok(first.bookingId);
+  assert.throws(
+    () => fixture.backend.createPracticeBooking_(fixture.teacher('Ariel Lu'), {
+      date: '2026/09/10', room: 'B', startTime: '16:30', endTime: '17:30', recurrence: 'once',
+    }),
+    /已有.*自主練習.*加入/
+  );
+});
+
+test('practice weekly recurrence keeps a cancelled occurrence as an exception', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [
+      ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-1'],
+      ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-2'],
+      ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-3'],
+    ],
+  });
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'weekly',
+  });
+  const occurrence = fixture.bookingSheet.values.find((row) => row[2] === '2026/09/17');
+
+  fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: occurrence[0], scope: 'once',
+  });
+  fixture.backend.expandPracticeSeries_(created.seriesId, '2026/09/24');
+
+  assert.equal(fixture.bookingSheet.values.filter((row) => row[1] === created.seriesId).length, 3);
+  assert.equal(occurrence[6], '已取消');
+  assert.equal(fixture.exceptionSheet.values.length, 2);
+  assert.equal(fixture.exceptionSheet.values[1][2], '2026/09/17');
+});
+
+test('practice future join and creator exit preserve participants across the weekly series', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [
+      ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-1'],
+      ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-2'],
+      ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-3'],
+    ],
+  });
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'weekly',
+  });
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'future',
+  });
+  fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: created.bookingId, scope: 'future',
+  });
+
+  const bookings = fixture.bookingSheet.values.slice(1).filter((row) => row[1] === created.seriesId);
+  const activeAriel = fixture.participantSheet.values.slice(1).filter((row) => (
+    row[2] === created.seriesId && row[3] === 'Ariel Lu' && row[8] === '有效'
+  ));
+  const leftCreator = fixture.participantSheet.values.slice(1).filter((row) => (
+    row[2] === created.seriesId && row[3] === '小琪' && row[8] === '已退出'
+  ));
+  assert.equal(activeAriel.length, 3);
+  assert.equal(leftCreator.length, 3);
+  assert.ok(bookings.every((row) => row[6] === '已成立' && row[7] === 'Ariel Lu'));
+  assert.equal(fixture.seriesSheet.values[1][1], 'Ariel Lu');
+  assert.equal(fixture.seriesSheet.values[1][8], '啟用中');
 });

@@ -125,6 +125,12 @@ var PRACTICE_ROLE = {
   PARTICIPANT: '參與者'
 };
 
+var PRACTICE_PARTICIPANT_STATUS = {
+  ACTIVE: '有效',
+  LEFT: '已退出',
+  CANCELLED: '已取消'
+};
+
 var CONFIG = {
   COURSE_SHEET: SHEETS.COURSE_LIST,
   LEAVE_SHEET: SHEETS.LEAVES,
@@ -1539,6 +1545,591 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
       return roomsByName[room];
     })
   };
+}
+
+function getPracticeRecordsUnlocked_(spreadsheet) {
+  var seriesSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_SERIES);
+  var bookingSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_BOOKINGS);
+  var participantSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_PARTICIPANTS);
+  var exceptionSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_EXCEPTIONS);
+  assertHeaders_(seriesSheet, SHEET_HEADERS.PRACTICE_SERIES);
+  assertHeaders_(bookingSheet, SHEET_HEADERS.PRACTICE_BOOKINGS);
+  assertHeaders_(participantSheet, SHEET_HEADERS.PRACTICE_PARTICIPANTS);
+  assertHeaders_(exceptionSheet, SHEET_HEADERS.PRACTICE_EXCEPTIONS);
+
+  return {
+    sheets: {
+      series: seriesSheet,
+      bookings: bookingSheet,
+      participants: participantSheet,
+      exceptions: exceptionSheet,
+      audit: requireSheet_(spreadsheet, SHEETS.PRACTICE_AUDIT)
+    },
+    series: seriesSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+      return {
+        rowNumber: index + 2,
+        seriesId: cleanText_(row[0]),
+        creatorName: cleanText_(row[1]),
+        room: cleanText_(row[2]),
+        weekday: Number(row[3]),
+        startTime: formatMyTime(row[4]),
+        endTime: formatMyTime(row[5]),
+        startDate: formatMyDate(row[6]),
+        stopDate: formatMyDate(row[7]),
+        status: cleanText_(row[8]),
+        createdAt: cleanText_(row[9]),
+        updatedAt: cleanText_(row[10]),
+        updatedBy: cleanText_(row[11])
+      };
+    }).filter(function(item) { return item.seriesId; }),
+    bookings: bookingSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+      return {
+        rowNumber: index + 2,
+        bookingId: cleanText_(row[0]),
+        seriesId: cleanText_(row[1]),
+        date: formatMyDate(row[2]),
+        room: cleanText_(row[3]),
+        startTime: formatMyTime(row[4]),
+        endTime: formatMyTime(row[5]),
+        status: cleanText_(row[6]),
+        creatorName: cleanText_(row[7]),
+        waitlistCalendarId: cleanText_(row[8]),
+        reason: cleanText_(row[9]),
+        createdAt: cleanText_(row[10]),
+        updatedAt: cleanText_(row[11]),
+        updatedBy: cleanText_(row[12])
+      };
+    }).filter(function(item) { return item.bookingId; }),
+    participants: participantSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+      return {
+        rowNumber: index + 2,
+        participantId: cleanText_(row[0]),
+        bookingId: cleanText_(row[1]),
+        seriesId: cleanText_(row[2]),
+        teacherName: cleanText_(row[3]),
+        role: cleanText_(row[4]),
+        startTime: formatMyTime(row[5]),
+        endTime: formatMyTime(row[6]),
+        joinScope: cleanText_(row[7]),
+        status: cleanText_(row[8]),
+        joinedAt: cleanText_(row[9]),
+        leftAt: cleanText_(row[10])
+      };
+    }).filter(function(item) { return item.participantId; }),
+    exceptions: exceptionSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+      return {
+        rowNumber: index + 2,
+        exceptionId: cleanText_(row[0]),
+        seriesId: cleanText_(row[1]),
+        date: formatMyDate(row[2]),
+        type: cleanText_(row[3]),
+        reason: cleanText_(row[4]),
+        createdAt: cleanText_(row[5]),
+        createdBy: cleanText_(row[6])
+      };
+    }).filter(function(item) { return item.exceptionId; })
+  };
+}
+
+function appendPracticeRowUnlocked_(sheet, headers, row) {
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length).setValues([row]);
+}
+
+function appendPracticeAuditUnlocked_(sheet, eventValue) {
+  var event = eventValue || {};
+  appendPracticeRowUnlocked_(sheet, SHEET_HEADERS.PRACTICE_AUDIT, [
+    getTimestamp_(),
+    cleanText_(event.actor),
+    cleanText_(event.action),
+    cleanText_(event.targetType),
+    cleanText_(event.targetId),
+    event.before == null ? '' : JSON.stringify(event.before),
+    event.after == null ? '' : JSON.stringify(event.after),
+    cleanText_(event.reason)
+  ]);
+}
+
+function requirePracticeRoom_(value) {
+  var room = cleanText_(value).toUpperCase();
+  if (['A', 'B', 'C', 'D'].indexOf(room) === -1) throw new Error('請選擇 A、B、C 或 D 教室。');
+  return room;
+}
+
+function findPracticeConflictsUnlocked_(requestValue, recordsValue, courseRowsValue) {
+  var request = requestValue || {};
+  var interval = request.interval || normalizePracticeInterval_(
+    request.date,
+    request.startTime,
+    request.endTime
+  );
+  var room = requirePracticeRoom_(request.room);
+  var excludeBookingId = cleanText_(request.excludeBookingId);
+  var conflicts = [];
+
+  (courseRowsValue || []).forEach(function(row) {
+    var date = formatMyDate(row && row[0]);
+    var startTime = formatMyTime(row && row[1]);
+    var courseName = cleanText_(row && row[2]);
+    var courseRoom = getCourseRoom_(courseName);
+    if (date !== interval.date || courseRoom !== room || !startTime) return;
+    var startMinutes = timeTextToMinutes_(startTime);
+    if (startMinutes < 0) return;
+    var endTime = minutesToTimeText_(startMinutes + getScheduledCourseDurationMinutes_(courseName));
+    var blockerInterval = normalizePracticeInterval_(date, startTime, endTime);
+    if (!practiceIntervalsConflict_(interval, blockerInterval, 15)) return;
+    conflicts.push({
+      type: courseName.indexOf('場地租借') !== -1 ? 'rental' : 'course',
+      id: cleanText_(row && row[4]),
+      label: courseName,
+      interval: blockerInterval
+    });
+  });
+
+  ((recordsValue && recordsValue.bookings) || []).forEach(function(booking) {
+    if (booking.bookingId === excludeBookingId || booking.date !== interval.date ||
+        booking.room !== room || booking.status !== PRACTICE_STATUS.ACTIVE) return;
+    var blockerInterval = normalizePracticeInterval_(
+      booking.date,
+      booking.startTime,
+      booking.endTime
+    );
+    if (!practiceIntervalsConflict_(interval, blockerInterval, 15)) return;
+    conflicts.push({
+      type: 'practice',
+      id: booking.bookingId,
+      label: booking.creatorName + '的自主練習',
+      interval: blockerInterval
+    });
+  });
+  return conflicts;
+}
+
+function assertPracticeIntervalAvailable_(request, records, courseRows) {
+  var conflicts = findPracticeConflictsUnlocked_(request, records, courseRows);
+  if (!conflicts.length) return [];
+  var conflict = conflicts[0];
+  if (conflict.type === 'practice') {
+    throw new Error('這個時段已有' + conflict.label + '，請改用「加入一起練習」。');
+  }
+  throw new Error(
+    (conflict.type === 'rental' ? '場地租借' : '正式課程') +
+    '與自主練習的前後 15 分鐘緩衝衝突。'
+  );
+}
+
+function getPracticeSeriesHorizonDate_(courseRows, startDateValue) {
+  var startDate = cleanText_(startDateValue);
+  return (courseRows || []).reduce(function(latest, row) {
+    var date = formatMyDate(row && row[0]);
+    return date && date > latest ? date : latest;
+  }, startDate);
+}
+
+function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits) {
+  var existing = records.bookings.some(function(booking) {
+    return booking.seriesId === series.seriesId && booking.date === date;
+  });
+  var excluded = records.exceptions.some(function(exception) {
+    return exception.seriesId === series.seriesId && exception.date === date;
+  });
+  if (existing || excluded) return { created: false, skipped: true };
+
+  var interval = normalizePracticeInterval_(date, series.startTime, series.endTime);
+  var conflicts = findPracticeConflictsUnlocked_({
+    date: date,
+    room: series.room,
+    interval: interval
+  }, records, requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.COURSE_LIST).getDataRange().getValues().slice(1));
+  if (conflicts.length) {
+    var exceptionId = Utilities.getUuid();
+    appendPracticeRowUnlocked_(records.sheets.exceptions, SHEET_HEADERS.PRACTICE_EXCEPTIONS, [
+      exceptionId, series.seriesId, date, '衝突跳過', conflicts[0].label, getTimestamp_(), actor
+    ]);
+    records.exceptions.push({ exceptionId: exceptionId, seriesId: series.seriesId, date: date });
+    return { created: false, skipped: true, conflict: conflicts[0] };
+  }
+
+  var bookingId = Utilities.getUuid();
+  var participantId = Utilities.getUuid();
+  var now = getTimestamp_();
+  appendPracticeRowUnlocked_(records.sheets.bookings, SHEET_HEADERS.PRACTICE_BOOKINGS, [
+    bookingId, series.seriesId, date, series.room, series.startTime, series.endTime,
+    PRACTICE_STATUS.ACTIVE, series.creatorName, '', '', now, now, actor
+  ]);
+  appendPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.PRACTICE_PARTICIPANTS, [
+    participantId, bookingId, series.seriesId, series.creatorName, PRACTICE_ROLE.CREATOR,
+    series.startTime, series.endTime, '每週', PRACTICE_PARTICIPANT_STATUS.ACTIVE, now, ''
+  ]);
+  records.bookings.push({
+    bookingId: bookingId, seriesId: series.seriesId, date: date, room: series.room,
+    startTime: series.startTime, endTime: series.endTime, status: PRACTICE_STATUS.ACTIVE,
+    creatorName: series.creatorName
+  });
+  if (appendAudits) appendAudits([{
+    actor: actor,
+    action: '建立循環自主練習場次',
+    targetId: bookingId,
+    before: '',
+    after: date + ' ' + series.room + ' ' + series.startTime + '–' + series.endTime,
+    reason: series.seriesId
+  }]);
+  appendPracticeAuditUnlocked_(records.sheets.audit, {
+    actor: actor,
+    action: '建立循環場次',
+    targetType: '場次',
+    targetId: bookingId,
+    after: { date: date, room: series.room, startTime: series.startTime, endTime: series.endTime },
+    reason: series.seriesId
+  });
+  return { created: true, bookingId: bookingId };
+}
+
+function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor, appendAudits) {
+  var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
+  parsePracticeDateTime_(throughDate, '00:00');
+  var cursor = parsePracticeDateTime_(series.startDate, '00:00');
+  var end = parsePracticeDateTime_(throughDate, '00:00');
+  var created = 0;
+  var skipped = 0;
+  while (cursor.getTime() <= end.getTime()) {
+    var date = Utilities.formatDate(cursor, 'Asia/Taipei', 'yyyy/MM/dd');
+    var result = createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits);
+    if (result.created) created += 1;
+    else skipped += 1;
+    cursor = new Date(cursor.getTime() + 7 * 24 * 60 * 60 * 1000);
+  }
+  return { created: created, skipped: skipped };
+}
+
+function createPracticeBooking_(session, inputValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var input = inputValue || {};
+  var room = requirePracticeRoom_(input.room);
+  var interval = normalizePracticeInterval_(input.date, input.startTime, input.endTime);
+  var recurrence = cleanText_(input.recurrence) === 'weekly' ? 'weekly' : 'once';
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var courseRows = requireSheet_(ss, SHEETS.COURSE_LIST).getDataRange().getValues().slice(1);
+    assertPracticeIntervalAvailable_({ room: room, interval: interval }, records, courseRows);
+    var businessSheets = [
+      records.sheets.series,
+      records.sheets.bookings,
+      records.sheets.participants,
+      records.sheets.exceptions,
+      records.sheets.audit
+    ];
+    return runStateTransitionUnlocked_(businessSheets, function(appendAudits) {
+      var now = getTimestamp_();
+      if (recurrence === 'weekly') {
+        var seriesId = Utilities.getUuid();
+        var weekday = new Date(
+          parsePracticeDateTime_(interval.date, '00:00').getTime() + 8 * 60 * 60 * 1000
+        ).getUTCDay();
+        appendPracticeRowUnlocked_(records.sheets.series, SHEET_HEADERS.PRACTICE_SERIES, [
+          seriesId, teacherName, room, weekday, interval.startTime, interval.endTime,
+          interval.date, '', '啟用中', now, now, teacherName
+        ]);
+        var series = {
+          seriesId: seriesId,
+          creatorName: teacherName,
+          room: room,
+          startTime: interval.startTime,
+          endTime: interval.endTime,
+          startDate: interval.date,
+          status: '啟用中'
+        };
+        var horizon = getPracticeSeriesHorizonDate_(courseRows, interval.date);
+        var expansion = expandPracticeSeriesUnlocked_(
+          records,
+          series,
+          horizon,
+          teacherName,
+          appendAudits
+        );
+        appendPracticeAuditUnlocked_(records.sheets.audit, {
+          actor: teacherName,
+          action: '建立每週循環',
+          targetType: '系列',
+          targetId: seriesId,
+          after: series
+        });
+        return {
+          seriesId: seriesId,
+          bookingId: records.bookings.filter(function(item) {
+            return item.seriesId === seriesId && item.date === interval.date;
+          })[0].bookingId,
+          status: PRACTICE_STATUS.ACTIVE,
+          createdOccurrences: expansion.created
+        };
+      }
+
+      var bookingId = Utilities.getUuid();
+      var participantId = Utilities.getUuid();
+      appendPracticeRowUnlocked_(records.sheets.bookings, SHEET_HEADERS.PRACTICE_BOOKINGS, [
+        bookingId, '', interval.date, room, interval.startTime, interval.endTime,
+        PRACTICE_STATUS.ACTIVE, teacherName, '', '', now, now, teacherName
+      ]);
+      appendPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.PRACTICE_PARTICIPANTS, [
+        participantId, bookingId, '', teacherName, PRACTICE_ROLE.CREATOR,
+        interval.startTime, interval.endTime, '單次', PRACTICE_PARTICIPANT_STATUS.ACTIVE, now, ''
+      ]);
+      appendPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: teacherName,
+        action: '建立單次自主練習',
+        targetType: '場次',
+        targetId: bookingId,
+        after: { date: interval.date, room: room, startTime: interval.startTime, endTime: interval.endTime }
+      });
+      appendAudits([{
+        actor: teacherName,
+        action: '建立自主練習',
+        targetId: bookingId,
+        before: '',
+        after: interval.date + ' ' + room + ' ' + interval.startTime + '–' + interval.endTime,
+        reason: ''
+      }]);
+      return { bookingId: bookingId, seriesId: '', status: PRACTICE_STATUS.ACTIVE };
+    });
+  });
+}
+
+function joinPracticeBooking_(session, inputValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var input = inputValue || {};
+  var bookingId = cleanText_(input.bookingId);
+  if (!bookingId) throw new Error('缺少自主練習場次編號。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var booking = records.bookings.filter(function(item) { return item.bookingId === bookingId; })[0];
+    if (!booking || [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) === -1) {
+      throw new Error('這筆自主練習目前無法加入。');
+    }
+    var interval = normalizePracticeInterval_(booking.date, input.startTime, input.endTime);
+    var bookingInterval = normalizePracticeInterval_(booking.date, booking.startTime, booking.endTime);
+    if (interval.startMs < bookingInterval.startMs || interval.endMs > bookingInterval.endMs) {
+      throw new Error('加入時間必須在現有自主練習時段內。');
+    }
+    if (records.participants.some(function(item) {
+      return item.bookingId === bookingId && item.teacherName === teacherName &&
+        item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    })) throw new Error('你已加入這筆自主練習。');
+
+    var now = getTimestamp_();
+    var joinFuture = cleanText_(input.scope) === 'future' && !!booking.seriesId;
+    var targetBookings = joinFuture
+      ? records.bookings.filter(function(item) {
+          return item.seriesId === booking.seriesId && item.date >= booking.date &&
+            [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(item.status) !== -1;
+        })
+      : [booking];
+    return runStateTransitionUnlocked_([
+      records.sheets.participants,
+      records.sheets.bookings,
+      records.sheets.audit
+    ], function(appendAudits) {
+      var participantIds = [];
+      targetBookings.forEach(function(targetBooking) {
+        var alreadyJoined = records.participants.some(function(item) {
+          return item.bookingId === targetBooking.bookingId && item.teacherName === teacherName &&
+            item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+        });
+        if (alreadyJoined) return;
+        var participantId = Utilities.getUuid();
+        participantIds.push(participantId);
+        appendPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.PRACTICE_PARTICIPANTS, [
+          participantId, targetBooking.bookingId, targetBooking.seriesId, teacherName,
+          PRACTICE_ROLE.PARTICIPANT, interval.startTime, interval.endTime,
+          joinFuture ? '本次及往後每週' : '單次',
+          PRACTICE_PARTICIPANT_STATUS.ACTIVE, now, ''
+        ]);
+        records.sheets.bookings.getRange(targetBooking.rowNumber, 12, 1, 2)
+          .setValues([[now, teacherName]]);
+      });
+      appendPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: teacherName,
+        action: '加入自主練習',
+        targetType: '場次',
+        targetId: bookingId,
+        after: { startTime: interval.startTime, endTime: interval.endTime }
+      });
+      appendAudits([{
+        actor: teacherName,
+        action: '加入自主練習',
+        targetId: bookingId,
+        before: '',
+        after: interval.startTime + '–' + interval.endTime,
+        reason: ''
+      }]);
+      return {
+        bookingId: bookingId,
+        participantId: participantIds[0],
+        joinedOccurrences: participantIds.length,
+        creatorName: booking.creatorName,
+        status: booking.status
+      };
+    });
+  });
+}
+
+function leavePracticeBooking_(session, inputValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var input = inputValue || {};
+  var bookingId = cleanText_(input.bookingId);
+  if (!bookingId) throw new Error('缺少自主練習場次編號。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var booking = records.bookings.filter(function(item) { return item.bookingId === bookingId; })[0];
+    if (!booking || [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) === -1) {
+      throw new Error('這筆自主練習目前無法退出。');
+    }
+    var leaveFuture = cleanText_(input.scope) === 'future' && !!booking.seriesId;
+    var targetBookings = leaveFuture
+      ? records.bookings.filter(function(item) {
+          return item.seriesId === booking.seriesId && item.date >= booking.date &&
+            [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(item.status) !== -1;
+        })
+      : [booking];
+    var targetBookingIds = {};
+    targetBookings.forEach(function(item) { targetBookingIds[item.bookingId] = true; });
+    var leavingParticipants = records.participants.filter(function(item) {
+      return targetBookingIds[item.bookingId] && item.teacherName === teacherName &&
+        item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    });
+    if (!leavingParticipants.length) throw new Error('你目前不在這筆自主練習中。');
+    var leavingByBooking = {};
+    leavingParticipants.forEach(function(item) { leavingByBooking[item.bookingId] = item; });
+    var now = getTimestamp_();
+    return runStateTransitionUnlocked_([
+      records.sheets.series,
+      records.sheets.bookings,
+      records.sheets.participants,
+      records.sheets.exceptions,
+      records.sheets.audit
+    ], function(appendAudits) {
+      var resultByBooking = {};
+      var firstNewCreator = '';
+      var everyOccurrenceEmpty = true;
+      targetBookings.forEach(function(targetBooking) {
+        var participant = leavingByBooking[targetBooking.bookingId];
+        if (!participant) return;
+        records.sheets.participants.getRange(participant.rowNumber, 9, 1, 3)
+          .setValues([[PRACTICE_PARTICIPANT_STATUS.LEFT, participant.joinedAt, now]]);
+        var remaining = records.participants.filter(function(item) {
+          return item.bookingId === targetBooking.bookingId &&
+            item.participantId !== participant.participantId &&
+            item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+        }).sort(function(left, right) {
+          return [left.joinedAt, left.participantId].join('|')
+            .localeCompare([right.joinedAt, right.participantId].join('|'));
+        });
+        var newCreatorName = targetBooking.creatorName;
+        var bookingStatus = targetBooking.status;
+        if (!remaining.length) {
+          bookingStatus = PRACTICE_STATUS.CANCELLED;
+          newCreatorName = '';
+          records.sheets.bookings.getRange(targetBooking.rowNumber, 7, 1, 7).setValues([[
+            bookingStatus, '', targetBooking.waitlistCalendarId,
+            '最後一位老師已退出', targetBooking.createdAt, now, teacherName
+          ]]);
+          if (targetBooking.seriesId && !leaveFuture) {
+            appendPracticeRowUnlocked_(records.sheets.exceptions, SHEET_HEADERS.PRACTICE_EXCEPTIONS, [
+              Utilities.getUuid(), targetBooking.seriesId, targetBooking.date, '取消本次',
+              '最後一位老師已退出', now, teacherName
+            ]);
+          }
+        } else {
+          everyOccurrenceEmpty = false;
+          if (participant.role === PRACTICE_ROLE.CREATOR || targetBooking.creatorName === teacherName) {
+            var nextCreator = remaining[0];
+            newCreatorName = nextCreator.teacherName;
+            if (!firstNewCreator) firstNewCreator = newCreatorName;
+            records.sheets.participants.getRange(nextCreator.rowNumber, 5).setValue(PRACTICE_ROLE.CREATOR);
+            records.sheets.bookings.getRange(targetBooking.rowNumber, 8).setValue(newCreatorName);
+            records.sheets.bookings.getRange(targetBooking.rowNumber, 12, 1, 2)
+              .setValues([[now, teacherName]]);
+          }
+        }
+        resultByBooking[targetBooking.bookingId] = {
+          bookingStatus: bookingStatus,
+          newCreatorName: newCreatorName
+        };
+      });
+
+      if (booking.seriesId) {
+        var series = records.series.filter(function(item) { return item.seriesId === booking.seriesId; })[0];
+        if (series) {
+          if (firstNewCreator) {
+            records.sheets.series.getRange(series.rowNumber, 2).setValue(firstNewCreator);
+          }
+          if (leaveFuture && everyOccurrenceEmpty) {
+            records.sheets.series.getRange(series.rowNumber, 8, 1, 2)
+              .setValues([[booking.date, '已停止']]);
+          }
+          records.sheets.series.getRange(series.rowNumber, 11, 1, 2).setValues([[now, teacherName]]);
+        }
+      }
+      var primaryResult = resultByBooking[bookingId] || {
+        bookingStatus: booking.status,
+        newCreatorName: booking.creatorName
+      };
+      appendPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: teacherName,
+        action: leaveFuture ? '退出本次及往後自主練習' : '退出自主練習',
+        targetType: '場次',
+        targetId: bookingId,
+        before: { creatorName: booking.creatorName, status: booking.status },
+        after: {
+          creatorName: primaryResult.newCreatorName,
+          status: primaryResult.bookingStatus,
+          affectedOccurrences: Object.keys(resultByBooking).length
+        },
+        reason: cleanText_(input.reason)
+      });
+      appendAudits([{
+        actor: teacherName,
+        action: leaveFuture ? '退出本次及往後自主練習' : '退出自主練習',
+        targetId: bookingId,
+        before: booking.creatorName,
+        after: primaryResult.newCreatorName || primaryResult.bookingStatus,
+        reason: cleanText_(input.reason)
+      }]);
+      return {
+        bookingId: bookingId,
+        bookingStatus: primaryResult.bookingStatus,
+        newCreatorName: primaryResult.newCreatorName,
+        affectedOccurrences: Object.keys(resultByBooking).length
+      };
+    });
+  });
+}
+
+function expandPracticeSeries_(seriesIdValue, throughDateValue) {
+  var seriesId = cleanText_(seriesIdValue);
+  if (!seriesId) throw new Error('缺少自主練習系列編號。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var series = records.series.filter(function(item) { return item.seriesId === seriesId; })[0];
+    if (!series || series.status !== '啟用中') throw new Error('找不到啟用中的自主練習系列。');
+    return runStateTransitionUnlocked_([
+      records.sheets.bookings,
+      records.sheets.participants,
+      records.sheets.exceptions,
+      records.sheets.audit
+    ], function(appendAudits) {
+      return expandPracticeSeriesUnlocked_(
+        records,
+        series,
+        throughDateValue,
+        series.creatorName,
+        appendAudits
+      );
+    });
+  });
 }
 
 function ensureCourseClosureStructureUnlocked_(spreadsheet) {

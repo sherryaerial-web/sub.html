@@ -443,7 +443,11 @@ function createSyncBackend(options = {}) {
   const auditSheet = createSheetFixture('操作紀錄', [[
     '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
   ]]);
-  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet, auditSheet]);
+  const adjustmentSheet = createSheetFixture('課程調整', [
+    EXPECTED_COURSE_ADJUSTMENT_HEADERS,
+    ...(options.adjustmentRows || []),
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet, auditSheet, adjustmentSheet]);
   const pages = (options.pages || []).slice();
   const calls = [];
   services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
@@ -471,6 +475,7 @@ function createSyncBackend(options = {}) {
     services,
     spreadsheet,
     courseSheet,
+    adjustmentSheet,
     calls,
     adminToken: backend.authenticate_('管理員甲', '9999').sessionToken,
     teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
@@ -2859,6 +2864,78 @@ test('manual sync audit write stays inside one script lock without nested acquis
   assert.equal(services.__lockState.depth, 0);
   assert.equal(auditSheet.values.length, 2);
   assert.equal(auditSheet.values[1][2], '同步 OB 課表');
+});
+
+test('sync persists one course adjustment candidate while replacing CourseList', () => {
+  const beforeRows = [
+    ['2026/09/18', '18:30', 'C－空環 Lv.1', '老師 甲', 'cal-c', 'class-ring', 'teacher-a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－舞綢 Lv.2', '老師 乙', 'cal-d', 'class-silk', 'teacher-b', '否', 'old'],
+  ];
+  const { backend, adjustmentSheet, adminToken } = createSyncBackend({
+    courseValues: [EXPECTED_COURSE_HEADERS, ...beforeRows],
+    pages: [[
+      {
+        id: 'cal-c', classTime: '2026-09-18T10:30:00Z',
+        class: { id: 'class-silk', nameZhHant: 'C－舞綢 Lv.2' },
+        instructors: [{ id: 'teacher-b', firstName: '老師', lastName: '乙' }],
+      },
+      {
+        id: 'cal-d', classTime: '2026-09-18T10:45:00Z',
+        class: { id: 'class-ring', nameZhHant: 'D－空環 Lv.1' },
+        instructors: [{ id: 'teacher-a', firstName: '老師', lastName: '甲' }],
+      },
+    ]],
+  });
+
+  const result = backend.syncCourseListFromApi(adminToken);
+
+  assert.equal(result.courseAdjustmentCandidates, 1);
+  assert.equal(adjustmentSheet.values.length, 2);
+  assert.equal(adjustmentSheet.values[1][3], 'C/D');
+  assert.equal(adjustmentSheet.values[1][7], '待確認');
+});
+
+test('course adjustment persistence ignores an already stored deterministic group', () => {
+  const backend = loadBackend();
+  const adjustmentSheet = createSheetFixture('課程調整', [EXPECTED_COURSE_ADJUSTMENT_HEADERS]);
+  const candidates = backend.detectCourseAdjustmentCandidates_([
+    ['2026/09/18', '18:30', 'C－ring', '甲', 'cal-c', 'ring', 'a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－silk', '乙', 'cal-d', 'silk', 'b', '否', 'old'],
+  ], [
+    ['2026/09/18', '18:30', 'C－silk', '乙', 'cal-c', 'silk', 'b', '否', 'v1'],
+    ['2026/09/18', '18:45', 'D－ring', '甲', 'cal-d', 'ring', 'a', '否', 'v1'],
+  ]);
+
+  assert.equal(backend.persistCourseAdjustmentCandidatesUnlocked_(adjustmentSheet, candidates).length, 1);
+  assert.equal(backend.persistCourseAdjustmentCandidatesUnlocked_(adjustmentSheet, candidates).length, 0);
+  assert.equal(adjustmentSheet.values.length, 2);
+});
+
+test('sync restores CourseList when course adjustment persistence fails', () => {
+  const beforeRows = [
+    ['2026/09/18', '18:30', 'C－空環', '老師 甲', 'cal-c', 'ring', 'a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－舞綢', '老師 乙', 'cal-d', 'silk', 'b', '否', 'old'],
+  ];
+  const fixture = createSyncBackend({
+    courseValues: [EXPECTED_COURSE_HEADERS, ...beforeRows],
+    pages: [[
+      { id: 'cal-c', classTime: '2026-09-18T10:30:00Z', class: { id: 'silk', nameZhHant: 'C－舞綢' }, instructors: [{ id: 'b', firstName: '老師', lastName: '乙' }] },
+      { id: 'cal-d', classTime: '2026-09-18T10:45:00Z', class: { id: 'ring', nameZhHant: 'D－空環' }, instructors: [{ id: 'a', firstName: '老師', lastName: '甲' }] },
+    ]],
+  });
+  const oldCourseValues = fixture.courseSheet.values.map((row) => row.slice());
+  injectSetValuesFailureOnce(
+    fixture.adjustmentSheet,
+    ({ row }) => row === 2,
+    'injected adjustment write failure',
+  );
+
+  assert.throws(
+    () => fixture.backend.syncCourseListFromApi(fixture.adminToken),
+    /injected adjustment write failure/,
+  );
+  assert.deepEqual(fixture.courseSheet.values, oldCourseValues);
+  assert.equal(fixture.adjustmentSheet.values.length, 1);
 });
 
 test('manual sync no longer exposes an hourly trigger installation command', () => {

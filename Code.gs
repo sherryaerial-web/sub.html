@@ -4381,6 +4381,13 @@ function syncCourseListFromApi(sessionToken) {
   try {
     var headers = validateAppendOnlyHeaders_(sheet, SHEET_HEADERS.COURSE_LIST);
     var snapshot = captureSheetSnapshot_(sheet);
+    var adjustmentSheet = requireSheet_(ss, SHEETS.COURSE_ADJUSTMENTS);
+    validateAppendOnlyHeaders_(adjustmentSheet, SHEET_HEADERS.COURSE_ADJUSTMENTS);
+    var adjustmentSnapshot = captureSheetSnapshot_(adjustmentSheet);
+    var beforeRows = snapshot.values.slice(1).filter(function(row) {
+      return cleanText_(row[4]);
+    });
+    var adjustmentCandidates = detectCourseAdjustmentCandidates_(beforeRows, rows);
     var existingRows = Math.max(0, sheet.getLastRow() - 1);
     var replacementRows = rows.slice();
     while (replacementRows.length < existingRows) {
@@ -4391,17 +4398,27 @@ function syncCourseListFromApi(sessionToken) {
     try {
       sheet.getRange(2, 1, replacementRows.length, writtenColumns).setValues(replacementRows);
       sheet.getRange(1, 1, 1, writtenColumns).setValues([headers]);
+      var persistedAdjustments = persistCourseAdjustmentCandidatesUnlocked_(
+        adjustmentSheet,
+        adjustmentCandidates
+      );
       appendAudit_({
         actor: admin.teacherName,
         action: '同步 OB 課表',
         targetId: range.dateFrom + '~' + range.dateTo,
         before: '',
-        after: String(normalized.length) + ' 筆',
+        after: String(normalized.length) + ' 筆；待確認調課 ' + persistedAdjustments.length + ' 組',
         reason: ''
       });
     } catch (writeError) {
       try {
         restoreSheetSnapshot_(sheet, snapshot, writtenRows, writtenColumns);
+        restoreSheetSnapshot_(
+          adjustmentSheet,
+          adjustmentSnapshot,
+          Math.max(adjustmentSnapshot.rows, adjustmentSheet.getLastRow()),
+          SHEET_HEADERS.COURSE_ADJUSTMENTS.length
+        );
       } catch (restoreError) {
         throw new Error(
           '同步寫入失敗且無法回復舊課表：' +
@@ -4418,8 +4435,47 @@ function syncCourseListFromApi(sessionToken) {
     status: 'success',
     count: normalized.length,
     dateFrom: range.dateFrom,
-    dateTo: range.dateTo
+    dateTo: range.dateTo,
+    courseAdjustmentCandidates: adjustmentCandidates.length
   };
+}
+
+function persistCourseAdjustmentCandidatesUnlocked_(sheet, candidates) {
+  assertHeaders_(sheet, SHEET_HEADERS.COURSE_ADJUSTMENTS);
+  var values = sheet.getDataRange().getValues();
+  var existingIds = {};
+  for (var index = 1; index < values.length; index++) {
+    var existingId = cleanText_(values[index][0]);
+    if (existingId) existingIds[existingId] = true;
+  }
+  var timestamp = getTimestamp_();
+  var rows = (candidates || []).filter(function(candidate) {
+    return candidate && candidate.groupId && !existingIds[candidate.groupId];
+  }).map(function(candidate) {
+    existingIds[candidate.groupId] = true;
+    return [
+      candidate.groupId,
+      candidate.detectionVersion,
+      candidate.date,
+      candidate.roomPair,
+      JSON.stringify(candidate.before || []),
+      JSON.stringify(candidate.after || []),
+      JSON.stringify(candidate.mappings || []),
+      candidate.status || '待確認',
+      candidate.reason || '',
+      timestamp,
+      '', '', '', '', ''
+    ];
+  });
+  if (rows.length) {
+    sheet.getRange(
+      sheet.getLastRow() + 1,
+      1,
+      rows.length,
+      SHEET_HEADERS.COURSE_ADJUSTMENTS.length
+    ).setValues(rows);
+  }
+  return rows;
 }
 
 function validateAppendOnlyHeaders_(sheet, expectedHeaders) {

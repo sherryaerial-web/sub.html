@@ -81,6 +81,16 @@ const EXPECTED_ORDINARY_DELAY_HEADERS = [
   '實際開始時間', '延後分鐘數', '延後占用來源代課編號',
 ];
 
+const EXPECTED_LEAVE_ADJUSTMENT_HEADERS = [
+  '調課群組 ID', '調課確認時間', '調課確認者',
+];
+
+const EXPECTED_COURSE_ADJUSTMENT_HEADERS = [
+  '調課群組 ID', '偵測版本', '日期', '教室配對', '調整前 JSON', '調整後 JSON',
+  '建議配對 JSON', '狀態', '判斷原因', '建立時間', '確認時間', '確認者',
+  '忽略原因', '通知狀態', '通知錯誤',
+];
+
 const EXPECTED_SPECIAL_REQUEST_HEADERS = [
   '申請時間', '特別課群組 ID', '老師', '日期', '教室', '來源時段 JSON',
   '代課編號 JSON', '實際開始時間', '特別課名稱', '預計難度', '分鐘數',
@@ -8019,4 +8029,92 @@ test('practice administrator dashboard is course-admin only and includes partici
   assert.equal(result.bookings[0].participants[0].teacherName, '小琪');
   assert.equal(result.notificationFailures.length, 1);
   assert.equal(result.notificationFailures[0].reason, '測試推播失敗');
+});
+
+test('course adjustment detection pairs C and D when class identities cross at different times', () => {
+  const backend = loadBackend();
+  const beforeRows = [
+    ['2026/09/18', '18:30', 'C－空環 Lv.1', '老師甲', 'cal-c', 'class-ring', 'teacher-a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－舞綢 Lv.2', '老師乙', 'cal-d', 'class-silk', 'teacher-b', '否', 'old'],
+  ];
+  const afterRows = [
+    ['2026/09/18', '18:30', 'C－舞綢 Lv.2', '老師乙', 'cal-c', 'class-silk', 'teacher-b', '否', 'new'],
+    ['2026/09/18', '18:45', 'D－空環 Lv.1', '老師甲', 'cal-d', 'class-ring', 'teacher-a', '否', 'new'],
+  ];
+
+  const candidates = backend.detectCourseAdjustmentCandidates_(beforeRows, afterRows);
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].date, '2026/09/18');
+  assert.equal(candidates[0].roomPair, 'C/D');
+  assert.equal(candidates[0].status, '待確認');
+  assert.deepEqual(Array.from(candidates[0].mappings, (mapping) => ({
+    fromCalendarId: mapping.fromCalendarId,
+    effectiveCalendarId: mapping.effectiveCalendarId,
+  })), [
+    { fromCalendarId: 'cal-c', effectiveCalendarId: 'cal-d' },
+    { fromCalendarId: 'cal-d', effectiveCalendarId: 'cal-c' },
+  ]);
+});
+
+test('course adjustment detection supports A/B and rejects unsafe or ambiguous changes', () => {
+  const backend = loadBackend();
+  const makeRow = (date, time, room, identity, calendarId) => [
+    date, time, `${room}－${identity}`, `teacher-${identity}`, calendarId,
+    `class-${identity}`, `teacher-id-${identity}`, '否', 'stamp',
+  ];
+  const before = [
+    makeRow('2026/09/18', '10:00', 'A', 'ring', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'B', 'silk', 'cal-b'),
+  ];
+  const crossed = [
+    makeRow('2026/09/18', '10:00', 'A', 'silk', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'B', 'ring', 'cal-b'),
+  ];
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, crossed)[0].roomPair, 'A/B');
+
+  const crossBuilding = [
+    makeRow('2026/09/18', '10:00', 'A', 'silk', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'C', 'ring', 'cal-b'),
+  ];
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, crossBuilding).length, 0);
+
+  const oneSided = [
+    makeRow('2026/09/18', '10:00', 'A', 'silk', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'B', 'silk', 'cal-b'),
+  ];
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, oneSided).length, 0);
+
+  const missingId = before.map((row) => row.slice());
+  missingId[0][4] = '';
+  assert.equal(backend.detectCourseAdjustmentCandidates_(missingId, crossed).length, 0);
+
+  const differentDate = crossed.map((row) => row.slice());
+  differentDate[1][0] = '2026/09/19';
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, differentDate).length, 0);
+
+  const ambiguousBefore = before.concat([
+    makeRow('2026/09/18', '11:00', 'A', 'ring', 'cal-a2'),
+  ]);
+  const ambiguousAfter = crossed.concat([
+    makeRow('2026/09/18', '11:00', 'A', 'silk', 'cal-a2'),
+  ]);
+  assert.equal(backend.detectCourseAdjustmentCandidates_(ambiguousBefore, ambiguousAfter).length, 0);
+});
+
+test('course adjustment sheet contract appends leave metadata without changing existing indexes', () => {
+  const backend = loadBackend();
+
+  assert.deepEqual(
+    Array.from(backend.SHEET_HEADERS.LEAVES.slice(25, 28)),
+    EXPECTED_ORDINARY_DELAY_HEADERS,
+  );
+  assert.deepEqual(
+    Array.from(backend.SHEET_HEADERS.LEAVES.slice(28)),
+    EXPECTED_LEAVE_ADJUSTMENT_HEADERS,
+  );
+  assert.deepEqual(
+    Array.from(backend.SHEET_HEADERS.COURSE_ADJUSTMENTS),
+    EXPECTED_COURSE_ADJUSTMENT_HEADERS,
+  );
 });

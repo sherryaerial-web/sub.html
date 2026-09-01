@@ -21,6 +21,7 @@ var SHEETS = {
   SPECIAL_COURSE_REQUESTS: '特別課安排',
   COURSE_CLOSURE_SETTINGS: '關課設定',
   COURSE_CLOSURE_LOG: '關課紀錄',
+  COURSE_ADJUSTMENTS: '課程調整',
   PRACTICE_SERIES: '自主練習系列',
   PRACTICE_BOOKINGS: '自主練習場次',
   PRACTICE_PARTICIPANTS: '自主練習參與者',
@@ -40,7 +41,8 @@ var SHEET_HEADERS = {
     '處理類型', 'OB 核對狀態', 'OB 核對時間', '差異原因', '異動狀態',
     '實際課程類別', '替代 OB Calendar ID',
     '特別課群組 ID', '特別課模式', '特別課分鐘數', '特別課結束時間',
-    '實際開始時間', '延後分鐘數', '延後占用來源代課編號'
+    '實際開始時間', '延後分鐘數', '延後占用來源代課編號',
+    '調課群組 ID', '調課確認時間', '調課確認者'
   ],
   INVITATIONS: ['邀請編號', '老師', '開放時間', '首次查看時間', '狀態', '關閉時間'],
   AUDIT: ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'],
@@ -91,6 +93,11 @@ var SHEET_HEADERS = {
   COURSE_CLOSURE_LOG: [
     '執行時間', '目標日期', '檢核時段', 'OB Calendar ID', '課程', '老師',
     '最新人數', '套用規則', 'onlyEmpty', '結果', '錯誤訊息', '操作者'
+  ],
+  COURSE_ADJUSTMENTS: [
+    '調課群組 ID', '偵測版本', '日期', '教室配對', '調整前 JSON', '調整後 JSON',
+    '建議配對 JSON', '狀態', '判斷原因', '建立時間', '確認時間', '確認者',
+    '忽略原因', '通知狀態', '通知錯誤'
   ],
   PRACTICE_SERIES: [
     '系列 ID', '建立者', '教室', '星期', '開始時間', '結束時間', '生效日期',
@@ -1410,6 +1417,11 @@ function ensureSystemStructure_() {
     ensureSupportingSheet_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT);
     ensureSupportingSheet_(ss, SHEETS.SETTINGS, SHEET_HEADERS.SETTINGS);
     ensureCourseClosureStructureUnlocked_(ss);
+    ensureSupportingSheet_(
+      ss,
+      SHEETS.COURSE_ADJUSTMENTS,
+      SHEET_HEADERS.COURSE_ADJUSTMENTS
+    );
     ensureSupportingSheet_(
       ss,
       SHEETS.SPECIAL_COURSE_REQUESTS,
@@ -7103,6 +7115,128 @@ function getClaimOptions_(session) {
 function getCourseRoom_(courseName) {
   var match = /^\s*([A-D])\s*[－—–-]\s*/i.exec(String(courseName || ''));
   return match ? match[1].toUpperCase() : '';
+}
+
+function getCourseAdjustmentRoomPair_(roomValue) {
+  var room = cleanText_(roomValue).toUpperCase();
+  if (room === 'A' || room === 'B') return 'A/B';
+  if (room === 'C' || room === 'D') return 'C/D';
+  return '';
+}
+
+function toCourseAdjustmentItem_(row) {
+  var value = row || [];
+  var classId = cleanText_(value[5]);
+  var instructorIdentity = cleanText_(value[6]) || cleanText_(value[3]);
+  var courseIdentity = classId
+    ? 'class:' + classId
+    : 'course:' + normalizeCourseCatalogKey_(value[2]);
+  return {
+    date: formatMyDate(value[0]),
+    time: formatMyTime(value[1]),
+    courseName: cleanText_(value[2]),
+    teacherName: cleanText_(value[3]),
+    calendarId: cleanText_(value[4]),
+    classId: classId,
+    instructorId: cleanText_(value[6]),
+    room: getCourseRoom_(value[2]),
+    identity: courseIdentity + '|teacher:' + instructorIdentity,
+    syncVersion: cleanText_(value[8])
+  };
+}
+
+function makeCourseAdjustmentGroupId_(dateValue, calendarIds, versionValue) {
+  return [
+    'course-adjustment',
+    String(dateValue || '').replace(/\D/g, ''),
+    (calendarIds || []).slice().sort().join('-'),
+    String(versionValue || '').replace(/[^0-9A-Za-z]/g, '')
+  ].join('_');
+}
+
+function detectCourseAdjustmentCandidates_(beforeRows, afterRows) {
+  var beforeItems = (beforeRows || []).map(toCourseAdjustmentItem_).filter(function(item) {
+    return item.date && item.room && item.calendarId && item.identity;
+  });
+  var afterItems = (afterRows || []).map(toCourseAdjustmentItem_).filter(function(item) {
+    return item.date && item.room && item.calendarId && item.identity;
+  });
+  var afterByCalendarId = {};
+  afterItems.forEach(function(item) {
+    if (!afterByCalendarId[item.calendarId]) afterByCalendarId[item.calendarId] = item;
+  });
+
+  var groups = {};
+  beforeItems.forEach(function(item) {
+    var pair = getCourseAdjustmentRoomPair_(item.room);
+    if (!pair) return;
+    var key = item.date + '|' + pair;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  });
+
+  var candidates = [];
+  Object.keys(groups).forEach(function(groupKey) {
+    var groupItems = groups[groupKey];
+    var beforeIdentityCounts = {};
+    var afterIdentityCounts = {};
+    groupItems.forEach(function(item) {
+      beforeIdentityCounts[item.identity] = (beforeIdentityCounts[item.identity] || 0) + 1;
+      var afterItem = afterByCalendarId[item.calendarId];
+      if (afterItem && afterItem.date === item.date) {
+        afterIdentityCounts[afterItem.identity] = (afterIdentityCounts[afterItem.identity] || 0) + 1;
+      }
+    });
+
+    var matchedPairs = [];
+    for (var leftIndex = 0; leftIndex < groupItems.length; leftIndex++) {
+      var leftBefore = groupItems[leftIndex];
+      var leftAfter = afterByCalendarId[leftBefore.calendarId];
+      if (!leftAfter || leftAfter.date !== leftBefore.date) continue;
+      if (getCourseAdjustmentRoomPair_(leftAfter.room) !== getCourseAdjustmentRoomPair_(leftBefore.room)) continue;
+      for (var rightIndex = leftIndex + 1; rightIndex < groupItems.length; rightIndex++) {
+        var rightBefore = groupItems[rightIndex];
+        var rightAfter = afterByCalendarId[rightBefore.calendarId];
+        if (!rightAfter || rightAfter.date !== rightBefore.date) continue;
+        if (leftBefore.room === rightBefore.room) continue;
+        if (getCourseAdjustmentRoomPair_(rightAfter.room) !== getCourseAdjustmentRoomPair_(rightBefore.room)) continue;
+        if (leftAfter.identity !== rightBefore.identity || rightAfter.identity !== leftBefore.identity) continue;
+        if (beforeIdentityCounts[leftBefore.identity] !== 1 || beforeIdentityCounts[rightBefore.identity] !== 1) continue;
+        if (afterIdentityCounts[leftAfter.identity] !== 1 || afterIdentityCounts[rightAfter.identity] !== 1) continue;
+        matchedPairs.push({
+          before: [leftBefore, rightBefore],
+          after: [leftAfter, rightAfter]
+        });
+      }
+    }
+    if (matchedPairs.length !== 1) return;
+
+    var match = matchedPairs[0];
+    var version = match.after.map(function(item) { return item.syncVersion; }).sort().pop() || '';
+    var calendarIds = match.before.map(function(item) { return item.calendarId; });
+    candidates.push({
+      groupId: makeCourseAdjustmentGroupId_(match.before[0].date, calendarIds, version),
+      detectionVersion: version,
+      date: match.before[0].date,
+      roomPair: getCourseAdjustmentRoomPair_(match.before[0].room),
+      before: match.before,
+      after: match.after,
+      mappings: match.before.map(function(beforeItem) {
+        var effectiveItem = match.after.filter(function(afterItem) {
+          return afterItem.identity === beforeItem.identity;
+        })[0];
+        return {
+          fromCalendarId: beforeItem.calendarId,
+          effectiveCalendarId: effectiveItem ? effectiveItem.calendarId : '',
+          originalTime: beforeItem.time,
+          effectiveTime: effectiveItem ? effectiveItem.time : ''
+        };
+      }),
+      status: '待確認',
+      reason: getCourseAdjustmentRoomPair_(match.before[0].room) + ' 課程身分交叉調整'
+    });
+  });
+  return candidates;
 }
 
 function getOrdinaryCourseDurationMinutes_(courseName) {

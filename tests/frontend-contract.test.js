@@ -161,6 +161,12 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
             };
           } else if (Object.prototype.hasOwnProperty.call(fixtures, action)) {
             data = fixtures[action];
+          } else if (action === 'getPracticeDay') {
+            data = {
+              date: String(fields.date || '2026/09/01').replace(/-/g, '/'),
+              teacherName: 'Ariel Lu', quickDurations: [60, 90, 120],
+              rooms: ['A', 'B', 'C', 'D'].map((room) => ({ room, blocks: [] })),
+            };
           } else {
             const authenticatedReads = new Set([
               'getAvailableSubstitutes', 'getClaimOptions', 'getClaimPageData', 'getMySubs',
@@ -212,7 +218,13 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
       'getMyCourses', 'getMyLeaves', 'getAdminDashboard', 'recordInvitationFirstView',
     ]);
     const data = isPost && !authenticatedReads.has(action)
-      ? { count: 1 }
+      ? (action === 'getPracticeDay'
+        ? {
+            date: new URLSearchParams(request.body || '').get('date') || '2026/09/01',
+            teacherName: 'Ariel Lu', quickDurations: [60, 90, 120],
+            rooms: ['A', 'B', 'C', 'D'].map((room) => ({ room, blocks: [] })),
+          }
+        : { count: 1 })
       : (fixtures[action] || []);
     const payload = { status: 'success', data };
     return Promise.resolve({ ok: true, status: 200, json: async () => payload, url });
@@ -2820,4 +2832,55 @@ test('course closure controls explain unavailable manual stages without calling 
   assert.doesNotMatch(html, /data-stage="22:30"[^>]*\? "" : "disabled"/);
   assert.doesNotMatch(html, /data-stage="23:40"[^>]*\? "" : "disabled"/);
   assert.match(html, /先前已取消 \$\{result\.alreadyProcessedCount \|\| 0\} 堂/);
+});
+
+test('teacher practice view uses one mobile day timeline with safe duration choices', () => {
+  const section = html.match(/<section id="view-practice"[\s\S]*?<\/section>/)?.[0] || '';
+  assert.ok(section, 'practice view must exist');
+  assert.match(html, /data-view="view-practice"/);
+  assert.match(section, /id="practice-date-strip"/);
+  assert.match(section, /id="practice-room-tabs"/);
+  assert.match(section, /id="practice-timeline"/);
+  assert.match(html, /function\s+renderPracticeTimeline\s*\(/);
+  assert.match(html, /function\s+openPracticeEditor\s*\(/);
+  assert.match(html, /function\s+submitPracticeEditor\s*\(/);
+  assert.match(html, /60 分鐘/);
+  assert.match(html, /90 分鐘/);
+  assert.match(html, /120 分鐘/);
+  assert.match(html, /登記候補自主練習/);
+  assert.match(html, /提醒取消後會補入/);
+  assert.match(html, /加入一起練習/);
+  assert.doesNotMatch(section, /type="month"|月曆/);
+});
+
+test('practice mutations reload the selected day and support acting-mode teachers', () => {
+  assert.match(html, /TEACHER_ACTING_ACTIONS[\s\S]*"getPracticeDay"/);
+  assert.match(html, /callPostApi\("getPracticeDay"/);
+  assert.match(html, /callPostApi\("createPracticeBooking"/);
+  assert.match(html, /callPostApi\("createPracticeWaitlist"/);
+  assert.match(html, /callPostApi\("joinPracticeBooking"/);
+  assert.match(html, /callPostApi\("leavePracticeBooking"/);
+  assert.match(html, /await\s+loadPracticeDay\(practiceState\.date\)/);
+});
+
+test('practice timeline renders formal, rental, and shared blocks in the selected room', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '小琪', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:1', type: 'course', calendarId: '1', startTime: '10:00', endTime: '11:00', label: 'A－空環', teacherName: '老師甲' },
+        { id: 'ob:2', type: 'rental', calendarId: '2', startTime: '12:00', endTime: '13:00', label: 'A－場地租借', teacherName: '租借者' },
+        { id: 'practice:1', type: 'practice', bookingId: 'practice-1', startTime: '14:00', endTime: '15:00', creatorName: '小琪', isMine: true, participants: [{ teacherName: '小琪', role: '建立者', startTime: '14:00', endTime: '15:00' }] },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture);', context);
+  const timeline = getElement('practice-timeline').innerHTML;
+  assert.match(timeline, /practice-block course/);
+  assert.match(timeline, /practice-block rental/);
+  assert.match(timeline, /practice-block practice/);
+  assert.match(timeline, /小琪的自主練習/);
 });

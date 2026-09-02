@@ -1085,6 +1085,7 @@ function createPracticeBackend(options = {}) {
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
   backend.ensurePracticeStructure_();
+  backend.getPracticeCurrentObRows_ = () => options.courseRows || [];
   return {
     backend,
     spreadsheet,
@@ -8113,6 +8114,115 @@ test('practice waitlist validates against the same live OB rows shown on the sel
   assert.equal(result.status, '候補');
   assert.equal(fixture.bookingSheet.values[1][2], '2026/09/10');
   assert.equal(fixture.courseSheet.values.length, 1);
+});
+
+test('practice waitlist rejects a time that does not conflict with its linked OB course or buffer', () => {
+  const liveCourse = [
+    '2026/09/10', '04:00', 'A－空瑜 Lv.0', 'Angela Chuang',
+    'cal-early-yoga', 'class-yoga', 'teacher-angela', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+
+  assert.throws(() => fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-early-yoga', date: '2026/09/10',
+    startTime: '07:00', endTime: '08:00', recurrence: 'once',
+  }), /候補時間.*正課.*15 分鐘/);
+
+  assert.equal(fixture.bookingSheet.values.length, 1);
+  assert.equal(fixture.participantSheet.values.length, 1);
+});
+
+test('practice update converts an ordinary booking to a waitlist when one live OB course blocks it', () => {
+  const liveCourse = [
+    '2026/09/10', '11:00', 'A－原始瑜伽', 'Jina',
+    'cal-jina-yoga', 'class-yoga', 'teacher-jina', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('冠蓉'), {
+    date: '2026/09/10', room: 'A', startTime: '07:00', endTime: '08:00', recurrence: 'once',
+  });
+
+  const result = fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A',
+    startTime: '11:00', endTime: '12:00', scope: 'once',
+  });
+
+  assert.equal(result.status, '候補');
+  assert.equal(result.waitlistCalendarId, 'cal-jina-yoga');
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(fixture.bookingSheet.values[1][8], 'cal-jina-yoga');
+  assert.match(fixture.bookingSheet.values[1][9], /等待 OB 課程取消後補入/);
+});
+
+test('practice update treats one OB turnover-buffer conflict as a waitlist candidate', () => {
+  const liveCourse = [
+    '2026/09/10', '11:15', 'A－皮拉提斯', 'Ariel Lu',
+    'cal-pilates', 'class-pilates', 'teacher-ariel', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('冠蓉'), {
+    date: '2026/09/10', room: 'A', startTime: '07:00', endTime: '08:00', recurrence: 'once',
+  });
+
+  const result = fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A',
+    startTime: '10:05', endTime: '11:05', scope: 'once',
+  });
+
+  assert.equal(result.status, '候補');
+  assert.equal(result.waitlistCalendarId, 'cal-pilates');
+});
+
+test('practice update converts a waitlist to ordinary practice after moving outside the linked course buffer', () => {
+  const liveCourse = [
+    '2026/09/10', '04:00', 'A－空瑜 Lv.0', 'Angela Chuang',
+    'cal-early-yoga', 'class-yoga', 'teacher-angela', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+  const created = fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-early-yoga', date: '2026/09/10',
+    startTime: '04:00', endTime: '05:00', recurrence: 'once',
+  });
+
+  const result = fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A',
+    startTime: '07:00', endTime: '08:00', scope: 'once',
+  });
+
+  assert.equal(result.status, '已成立');
+  assert.equal(result.waitlistCalendarId, '');
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+  assert.equal(fixture.bookingSheet.values[1][8], '');
+  assert.equal(fixture.bookingSheet.values[1][9], '');
+});
+
+test('practice update still blocks rentals other practices and ambiguous multiple-course conflicts', () => {
+  const liveRows = [
+    ['2026/09/10', '11:00', 'A－原始瑜伽', 'Jina', 'cal-yoga'],
+    ['2026/09/10', '12:00', 'A－皮拉提斯', 'Ariel Lu', 'cal-pilates'],
+    ['2026/09/10', '15:00', 'B－場地租借', 'Tako', 'cal-rental'],
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => liveRows;
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('冠蓉'), {
+    date: '2026/09/10', room: 'A', startTime: '07:00', endTime: '08:00', recurrence: 'once',
+  });
+
+  assert.throws(() => fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A',
+    startTime: '11:30', endTime: '12:30', scope: 'once',
+  }), /同時.*多堂正式課程/);
+
+  assert.throws(() => fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'B',
+    startTime: '15:00', endTime: '16:00', scope: 'once',
+  }), /場地租借/);
+  assert.equal(fixture.bookingSheet.values[1][3], 'A');
+  assert.equal(fixture.bookingSheet.values[1][4], '07:00');
 });
 
 test('practice update and cancellation enforce ownership and administrator reasons', () => {

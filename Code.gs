@@ -2107,11 +2107,19 @@ function createPracticeWaitlist_(session, inputValue) {
     var records = getPracticeRecordsUnlocked_(ss);
     var conflicts = findPracticeConflictsUnlocked_({
       room: room,
-      interval: interval,
-      excludeCalendarId: calendarId
+      interval: interval
     }, records, courseRows);
-    if (conflicts.length) {
-      throw new Error('這個候補時段另有衝突：' + conflicts[0].label + '。');
+    var selectedCourseConflict = conflicts.some(function(conflict) {
+      return conflict.type === 'course' && conflict.id === calendarId;
+    });
+    if (!selectedCourseConflict) {
+      throw new Error('候補時間必須與所選正課或前後 15 分鐘緩衝衝突。');
+    }
+    var otherConflict = conflicts.filter(function(conflict) {
+      return !(conflict.type === 'course' && conflict.id === calendarId);
+    })[0];
+    if (otherConflict) {
+      throw new Error('這個候補時段另有衝突：' + otherConflict.label + '。');
     }
 
     return runStateTransitionUnlocked_([
@@ -2458,9 +2466,14 @@ function updatePracticeBooking_(session, inputValue) {
       : [booking];
     var targetIds = targetBookings.map(function(item) { return item.bookingId; });
     var targetIntervals = {};
-    var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
-    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
-    var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var targetDispositions = {};
+    var targetDates = targetBookings.map(function(item) { return item.date; }).sort();
+    var courseRows;
+    try {
+      courseRows = getPracticeCurrentObRows_(targetDates[0], targetDates[targetDates.length - 1]);
+    } catch (error) {
+      throw new Error('目前無法即時核對 OB 課表，請稍後再調整自主練習。');
+    }
     targetBookings.forEach(function(targetBooking) {
       var targetInterval = normalizePracticeInterval_(
         updateFuture ? targetBooking.date : interval.date,
@@ -2468,12 +2481,41 @@ function updatePracticeBooking_(session, inputValue) {
         interval.endTime
       );
       targetIntervals[targetBooking.bookingId] = targetInterval;
-      assertPracticeIntervalAvailable_({
+      var conflicts = findPracticeConflictsUnlocked_({
         room: room,
         interval: targetInterval,
-        excludeBookingIds: targetIds,
-        excludeCalendarId: targetBooking.waitlistCalendarId
+        excludeBookingIds: targetIds
       }, records, courseRows);
+      var rentalConflict = conflicts.filter(function(item) { return item.type === 'rental'; })[0];
+      if (rentalConflict) {
+        throw new Error('場地租借與自主練習的前後 15 分鐘緩衝衝突。');
+      }
+      var practiceConflict = conflicts.filter(function(item) { return item.type === 'practice'; })[0];
+      if (practiceConflict) {
+        throw new Error('這個時段已有' + practiceConflict.label + '，請改用「加入一起練習」。');
+      }
+      var courseConflictsById = {};
+      conflicts.filter(function(item) { return item.type === 'course'; }).forEach(function(item) {
+        if (item.id) courseConflictsById[item.id] = item;
+      });
+      var courseConflicts = Object.keys(courseConflictsById).map(function(id) {
+        return courseConflictsById[id];
+      });
+      if (courseConflicts.length > 1) {
+        throw new Error('這個時段同時與多堂正式課程衝突，請調整時間後再候補。');
+      }
+      if (updateFuture && courseConflicts.length) {
+        throw new Error('轉為候補時只能調整這一次，請取消「套用到這次及之後」。');
+      }
+      targetDispositions[targetBooking.bookingId] = courseConflicts.length ? {
+        status: PRACTICE_STATUS.WAITLISTED,
+        waitlistCalendarId: courseConflicts[0].id,
+        reason: '等待 OB 課程取消後補入'
+      } : {
+        status: PRACTICE_STATUS.ACTIVE,
+        waitlistCalendarId: '',
+        reason: ''
+      };
     });
 
     var activeParticipants = records.participants.filter(function(item) {
@@ -2505,10 +2547,11 @@ function updatePracticeBooking_(session, inputValue) {
     return runStateTransitionUnlocked_(businessSheets, function(appendAudits) {
       targetBookings.forEach(function(targetBooking) {
         var targetInterval = targetIntervals[targetBooking.bookingId];
+        var disposition = targetDispositions[targetBooking.bookingId];
         records.sheets.bookings.getRange(targetBooking.rowNumber, 3, 1, 11).setValues([[
           targetInterval.date, room, targetInterval.startTime, targetInterval.endTime,
-          targetBooking.status, targetBooking.creatorName, targetBooking.waitlistCalendarId,
-          targetBooking.reason, targetBooking.createdAt, now, actor
+          disposition.status, targetBooking.creatorName, disposition.waitlistCalendarId,
+          disposition.reason, targetBooking.createdAt, now, actor
         ]]);
       });
       activeParticipants.forEach(function(participant) {
@@ -2536,6 +2579,8 @@ function updatePracticeBooking_(session, inputValue) {
           room: room,
           startTime: interval.startTime,
           endTime: interval.endTime,
+          status: targetDispositions[bookingId].status,
+          waitlistCalendarId: targetDispositions[bookingId].waitlistCalendarId,
           affectedOccurrences: targetBookings.length
         },
         reason: cleanText_(input.reason)
@@ -2550,7 +2595,8 @@ function updatePracticeBooking_(session, inputValue) {
       }]);
       return {
         bookingId: bookingId,
-        status: booking.status,
+        status: targetDispositions[bookingId].status,
+        waitlistCalendarId: targetDispositions[bookingId].waitlistCalendarId,
         date: interval.date,
         room: room,
         startTime: interval.startTime,

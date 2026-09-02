@@ -547,6 +547,17 @@ try {
     await page.locator('[data-practice-block="practice-1"]').click();
     await page.locator("#practice-dialog").waitFor({ state: "visible" });
     results.push(await capture(page, viewport.name, "09-practice-edit"));
+    await page.locator("#practice-editor-start").fill("10:00");
+    await page.locator("#practice-editor-end").fill("11:00");
+    await page.locator("#practice-editor-end").dispatchEvent("change");
+    await page.locator("#practice-editor-warning").filter({ hasText: "轉為候補" }).waitFor();
+    const candidateDialogBounds = await page.locator("#practice-dialog").boundingBox();
+    const candidateSubmitBounds = await page.locator("#practice-submit").boundingBox();
+    if (!candidateDialogBounds || !candidateSubmitBounds ||
+        candidateSubmitBounds.y + candidateSubmitBounds.height > candidateDialogBounds.y + candidateDialogBounds.height + 1) {
+      throw new Error(`${viewport.name}: practice save action is clipped after the waitlist conversion message`);
+    }
+    results.push(await capture(page, viewport.name, "09b-practice-edit-to-waitlist"));
     await page.locator("#practice-dialog-cancel").click();
 
     await page.locator("#logout-button").click();

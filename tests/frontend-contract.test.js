@@ -3107,6 +3107,96 @@ test('practice creator can edit time and choose whether a weekly change applies 
   assert.equal(payload.scope, 'future');
 });
 
+test('practice editor allows one course conflict and explains that the booking will become a waitlist', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:cal-jina', type: 'course', calendarId: 'cal-jina', startTime: '11:00', endTime: '12:00', label: 'A－原始瑜伽', teacherName: 'Jina' },
+        { id: 'practice:mine', type: 'practice', bookingId: 'mine', startTime: '07:00', endTime: '08:00', creatorName: '冠蓉', isMine: true, isCreator: true, participants: [{ teacherName: '冠蓉', role: '建立者', startTime: '07:00', endTime: '08:00' }] },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[1] });', context);
+  getElement('practice-editor-start').value = '11:00';
+  getElement('practice-editor-end').value = '12:00';
+
+  context.syncPracticeEditorAvailability();
+
+  assert.match(getElement('practice-editor-warning').textContent, /儲存後.*轉為候補/);
+  assert.equal(getElement('practice-submit').disabled, false);
+});
+
+test('practice editor explains that a waitlist moved to a free time will become ordinary practice', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:cal-early', type: 'course', calendarId: 'cal-early', startTime: '04:00', endTime: '05:00', label: 'A－空瑜 Lv.0', teacherName: 'Angela Chuang' },
+        { id: 'practice:mine', type: 'waitlist', bookingId: 'mine', waitlistCalendarId: 'cal-early', startTime: '04:00', endTime: '05:00', creatorName: '冠蓉', isMine: true, isCreator: true, participants: [{ teacherName: '冠蓉', role: '建立者', startTime: '04:00', endTime: '05:00' }] },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[1] });', context);
+  getElement('practice-editor-start').value = '07:00';
+  getElement('practice-editor-end').value = '08:00';
+
+  context.syncPracticeEditorAvailability();
+
+  assert.match(getElement('practice-editor-warning').textContent, /轉為一般自主練習/);
+  assert.equal(getElement('practice-submit').disabled, false);
+});
+
+test('new waitlist requires the chosen time to conflict with the selected course or its buffer', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:cal-early', type: 'course', calendarId: 'cal-early', startTime: '04:00', endTime: '05:00', label: 'A－空瑜 Lv.0', teacherName: 'Angela Chuang' },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[0] });', context);
+  getElement('practice-editor-start').value = '07:00';
+  getElement('practice-editor-end').value = '08:00';
+
+  context.syncPracticeEditorAvailability();
+
+  assert.match(getElement('practice-editor-warning').textContent, /候補時間.*正課.*15 分鐘/);
+  assert.equal(getElement('practice-submit').disabled, true);
+});
+
+test('practice editor evaluates conflicts in the room selected inside the editor', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'practice:mine', type: 'practice', bookingId: 'mine', startTime: '07:00', endTime: '08:00', creatorName: '冠蓉', isMine: true, isCreator: true, participants: [{ teacherName: '冠蓉', role: '建立者', startTime: '07:00', endTime: '08:00' }] },
+      ] },
+      { room: 'B', blocks: [
+        { id: 'ob:cal-b', type: 'course', calendarId: 'cal-b', startTime: '11:00', endTime: '12:00', label: 'B－空環 Lv.1', teacherName: 'Tako' },
+      ] },
+      { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[0] });', context);
+  getElement('practice-editor-room').value = 'B';
+  getElement('practice-editor-start').value = '11:00';
+  getElement('practice-editor-end').value = '12:00';
+
+  context.syncPracticeEditorAvailability();
+
+  assert.match(getElement('practice-editor-warning').textContent, /B－空環 Lv\.1.*轉為候補/);
+  assert.equal(getElement('practice-submit').disabled, false);
+});
+
 test('practice mutations reload the selected day and support acting-mode teachers', () => {
   assert.match(html, /TEACHER_ACTING_ACTIONS[\s\S]*"getPracticeDay"/);
   assert.match(html, /callPostApi\("getPracticeDay"/);

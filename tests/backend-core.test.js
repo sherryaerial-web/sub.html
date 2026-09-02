@@ -81,6 +81,16 @@ const EXPECTED_ORDINARY_DELAY_HEADERS = [
   '實際開始時間', '延後分鐘數', '延後占用來源代課編號',
 ];
 
+const EXPECTED_LEAVE_ADJUSTMENT_HEADERS = [
+  '調課群組 ID', '調課確認時間', '調課確認者',
+];
+
+const EXPECTED_COURSE_ADJUSTMENT_HEADERS = [
+  '調課群組 ID', '偵測版本', '日期', '教室配對', '調整前 JSON', '調整後 JSON',
+  '建議配對 JSON', '狀態', '判斷原因', '建立時間', '確認時間', '確認者',
+  '忽略原因', '通知狀態', '通知錯誤',
+];
+
 const EXPECTED_SPECIAL_REQUEST_HEADERS = [
   '申請時間', '特別課群組 ID', '老師', '日期', '教室', '來源時段 JSON',
   '代課編號 JSON', '實際開始時間', '特別課名稱', '預計難度', '分鐘數',
@@ -433,7 +443,11 @@ function createSyncBackend(options = {}) {
   const auditSheet = createSheetFixture('操作紀錄', [[
     '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
   ]]);
-  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet, auditSheet]);
+  const adjustmentSheet = createSheetFixture('課程調整', [
+    EXPECTED_COURSE_ADJUSTMENT_HEADERS,
+    ...(options.adjustmentRows || []),
+  ]);
+  const spreadsheet = createSpreadsheetFixture([accountSheet, courseSheet, auditSheet, adjustmentSheet]);
   const pages = (options.pages || []).slice();
   const calls = [];
   services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
@@ -461,6 +475,7 @@ function createSyncBackend(options = {}) {
     services,
     spreadsheet,
     courseSheet,
+    adjustmentSheet,
     calls,
     adminToken: backend.authenticate_('管理員甲', '9999').sessionToken,
     teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
@@ -498,7 +513,8 @@ function createLeaveBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(
       EXPECTED_LEAVE_EXTENSION_HEADERS,
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     ),
     ...(options.leaveRows || []),
   ]);
@@ -560,7 +576,8 @@ function createInvitationBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(
       EXPECTED_LEAVE_EXTENSION_HEADERS,
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     ),
     ...(options.leaveRows || [
       ['2026-08-03 09:00:00', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-a'],
@@ -671,7 +688,8 @@ function createVvipBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(
       EXPECTED_LEAVE_EXTENSION_HEADERS,
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     ),
     ...(options.leaveRows || []),
   ]);
@@ -1839,7 +1857,8 @@ test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact 
   const expectedWidth = EXPECTED_LEAVE_HEADERS.length
     + EXPECTED_LEAVE_EXTENSION_HEADERS.length
     + EXPECTED_SPECIAL_COURSE_HEADERS.length
-    + EXPECTED_ORDINARY_DELAY_HEADERS.length;
+    + EXPECTED_ORDINARY_DELAY_HEADERS.length
+    + EXPECTED_LEAVE_ADJUSTMENT_HEADERS.length;
   assert.ok(leaveSheet.values.slice(1).every((row) => row.length === expectedWidth));
 });
 
@@ -2051,7 +2070,8 @@ test('appends the substitute and API headers without moving fixed columns', () =
     leaveSheet.values[0].slice(10),
     EXPECTED_LEAVE_EXTENSION_HEADERS.concat(
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     )
   );
 });
@@ -2080,7 +2100,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
-      '自主練習參與者', '自主練習例外', '自主練習操作紀錄'
+      '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
+      '課程調整'
     ].sort()
   );
   assert.deepEqual(
@@ -2169,7 +2190,7 @@ test('ordinary delay fields append after every existing leave column', () => {
   assert.equal(backend.SHEET_HEADERS.LEAVES[9], '代課編號');
   assert.equal(backend.SHEET_HEADERS.LEAVES[24], '特別課結束時間');
   assert.deepEqual(
-    JSON.parse(JSON.stringify(backend.SHEET_HEADERS.LEAVES.slice(25))),
+    JSON.parse(JSON.stringify(backend.SHEET_HEADERS.LEAVES.slice(25, 28))),
     EXPECTED_ORDINARY_DELAY_HEADERS
   );
 });
@@ -2849,6 +2870,78 @@ test('manual sync audit write stays inside one script lock without nested acquis
   assert.equal(services.__lockState.depth, 0);
   assert.equal(auditSheet.values.length, 2);
   assert.equal(auditSheet.values[1][2], '同步 OB 課表');
+});
+
+test('sync persists one course adjustment candidate while replacing CourseList', () => {
+  const beforeRows = [
+    ['2026/09/18', '18:30', 'C－空環 Lv.1', '老師 甲', 'cal-c', 'class-ring', 'teacher-a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－舞綢 Lv.2', '老師 乙', 'cal-d', 'class-silk', 'teacher-b', '否', 'old'],
+  ];
+  const { backend, adjustmentSheet, adminToken } = createSyncBackend({
+    courseValues: [EXPECTED_COURSE_HEADERS, ...beforeRows],
+    pages: [[
+      {
+        id: 'cal-c', classTime: '2026-09-18T10:30:00Z',
+        class: { id: 'class-silk', nameZhHant: 'C－舞綢 Lv.2' },
+        instructors: [{ id: 'teacher-b', firstName: '老師', lastName: '乙' }],
+      },
+      {
+        id: 'cal-d', classTime: '2026-09-18T10:45:00Z',
+        class: { id: 'class-ring', nameZhHant: 'D－空環 Lv.1' },
+        instructors: [{ id: 'teacher-a', firstName: '老師', lastName: '甲' }],
+      },
+    ]],
+  });
+
+  const result = backend.syncCourseListFromApi(adminToken);
+
+  assert.equal(result.courseAdjustmentCandidates, 1);
+  assert.equal(adjustmentSheet.values.length, 2);
+  assert.equal(adjustmentSheet.values[1][3], 'C/D');
+  assert.equal(adjustmentSheet.values[1][7], '待確認');
+});
+
+test('course adjustment persistence ignores an already stored deterministic group', () => {
+  const backend = loadBackend();
+  const adjustmentSheet = createSheetFixture('課程調整', [EXPECTED_COURSE_ADJUSTMENT_HEADERS]);
+  const candidates = backend.detectCourseAdjustmentCandidates_([
+    ['2026/09/18', '18:30', 'C－ring', '甲', 'cal-c', 'ring', 'a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－silk', '乙', 'cal-d', 'silk', 'b', '否', 'old'],
+  ], [
+    ['2026/09/18', '18:30', 'C－silk', '乙', 'cal-c', 'silk', 'b', '否', 'v1'],
+    ['2026/09/18', '18:45', 'D－ring', '甲', 'cal-d', 'ring', 'a', '否', 'v1'],
+  ]);
+
+  assert.equal(backend.persistCourseAdjustmentCandidatesUnlocked_(adjustmentSheet, candidates).length, 1);
+  assert.equal(backend.persistCourseAdjustmentCandidatesUnlocked_(adjustmentSheet, candidates).length, 0);
+  assert.equal(adjustmentSheet.values.length, 2);
+});
+
+test('sync restores CourseList when course adjustment persistence fails', () => {
+  const beforeRows = [
+    ['2026/09/18', '18:30', 'C－空環', '老師 甲', 'cal-c', 'ring', 'a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－舞綢', '老師 乙', 'cal-d', 'silk', 'b', '否', 'old'],
+  ];
+  const fixture = createSyncBackend({
+    courseValues: [EXPECTED_COURSE_HEADERS, ...beforeRows],
+    pages: [[
+      { id: 'cal-c', classTime: '2026-09-18T10:30:00Z', class: { id: 'silk', nameZhHant: 'C－舞綢' }, instructors: [{ id: 'b', firstName: '老師', lastName: '乙' }] },
+      { id: 'cal-d', classTime: '2026-09-18T10:45:00Z', class: { id: 'ring', nameZhHant: 'D－空環' }, instructors: [{ id: 'a', firstName: '老師', lastName: '甲' }] },
+    ]],
+  });
+  const oldCourseValues = fixture.courseSheet.values.map((row) => row.slice());
+  injectSetValuesFailureOnce(
+    fixture.adjustmentSheet,
+    ({ row }) => row === 2,
+    'injected adjustment write failure',
+  );
+
+  assert.throws(
+    () => fixture.backend.syncCourseListFromApi(fixture.adminToken),
+    /injected adjustment write failure/,
+  );
+  assert.deepEqual(fixture.courseSheet.values, oldCourseValues);
+  assert.equal(fixture.adjustmentSheet.values.length, 1);
 });
 
 test('manual sync no longer exposes an hourly trigger installation command', () => {
@@ -7088,7 +7181,7 @@ test('next-day closure re-reads latest enrollment, logs idempotently, and preser
     return '';
   };
   const leaveSheet = createSheetFixture('請假代課紀錄', [
-    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS, EXPECTED_ORDINARY_DELAY_HEADERS),
+    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS, EXPECTED_ORDINARY_DELAY_HEADERS, EXPECTED_LEAVE_ADJUSTMENT_HEADERS),
     ['formal-human-value', '老師甲', '2026/09/01', '12:30', '空環', '確認中'],
   ]);
   const invitationSheet = createSheetFixture('代課邀請', [
@@ -8019,4 +8112,187 @@ test('practice administrator dashboard is course-admin only and includes partici
   assert.equal(result.bookings[0].participants[0].teacherName, '小琪');
   assert.equal(result.notificationFailures.length, 1);
   assert.equal(result.notificationFailures[0].reason, '測試推播失敗');
+});
+
+test('course adjustment detection pairs C and D when class identities cross at different times', () => {
+  const backend = loadBackend();
+  const beforeRows = [
+    ['2026/09/18', '18:30', 'C－空環 Lv.1', '老師甲', 'cal-c', 'class-ring', 'teacher-a', '否', 'old'],
+    ['2026/09/18', '18:45', 'D－舞綢 Lv.2', '老師乙', 'cal-d', 'class-silk', 'teacher-b', '否', 'old'],
+  ];
+  const afterRows = [
+    ['2026/09/18', '18:30', 'C－舞綢 Lv.2', '老師乙', 'cal-c', 'class-silk', 'teacher-b', '否', 'new'],
+    ['2026/09/18', '18:45', 'D－空環 Lv.1', '老師甲', 'cal-d', 'class-ring', 'teacher-a', '否', 'new'],
+  ];
+
+  const candidates = backend.detectCourseAdjustmentCandidates_(beforeRows, afterRows);
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].date, '2026/09/18');
+  assert.equal(candidates[0].roomPair, 'C/D');
+  assert.equal(candidates[0].status, '待確認');
+  assert.deepEqual(Array.from(candidates[0].mappings, (mapping) => ({
+    fromCalendarId: mapping.fromCalendarId,
+    effectiveCalendarId: mapping.effectiveCalendarId,
+  })), [
+    { fromCalendarId: 'cal-c', effectiveCalendarId: 'cal-d' },
+    { fromCalendarId: 'cal-d', effectiveCalendarId: 'cal-c' },
+  ]);
+});
+
+test('course adjustment detection supports A/B and rejects unsafe or ambiguous changes', () => {
+  const backend = loadBackend();
+  const makeRow = (date, time, room, identity, calendarId) => [
+    date, time, `${room}－${identity}`, `teacher-${identity}`, calendarId,
+    `class-${identity}`, `teacher-id-${identity}`, '否', 'stamp',
+  ];
+  const before = [
+    makeRow('2026/09/18', '10:00', 'A', 'ring', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'B', 'silk', 'cal-b'),
+  ];
+  const crossed = [
+    makeRow('2026/09/18', '10:00', 'A', 'silk', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'B', 'ring', 'cal-b'),
+  ];
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, crossed)[0].roomPair, 'A/B');
+
+  const crossBuilding = [
+    makeRow('2026/09/18', '10:00', 'A', 'silk', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'C', 'ring', 'cal-b'),
+  ];
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, crossBuilding).length, 0);
+
+  const oneSided = [
+    makeRow('2026/09/18', '10:00', 'A', 'silk', 'cal-a'),
+    makeRow('2026/09/18', '10:15', 'B', 'silk', 'cal-b'),
+  ];
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, oneSided).length, 0);
+
+  const missingId = before.map((row) => row.slice());
+  missingId[0][4] = '';
+  assert.equal(backend.detectCourseAdjustmentCandidates_(missingId, crossed).length, 0);
+
+  const differentDate = crossed.map((row) => row.slice());
+  differentDate[1][0] = '2026/09/19';
+  assert.equal(backend.detectCourseAdjustmentCandidates_(before, differentDate).length, 0);
+
+  const ambiguousBefore = before.concat([
+    makeRow('2026/09/18', '11:00', 'A', 'ring', 'cal-a2'),
+  ]);
+  const ambiguousAfter = crossed.concat([
+    makeRow('2026/09/18', '11:00', 'A', 'silk', 'cal-a2'),
+  ]);
+  assert.equal(backend.detectCourseAdjustmentCandidates_(ambiguousBefore, ambiguousAfter).length, 0);
+});
+
+test('course adjustment sheet contract appends leave metadata without changing existing indexes', () => {
+  const backend = loadBackend();
+
+  assert.deepEqual(
+    Array.from(backend.SHEET_HEADERS.LEAVES.slice(25, 28)),
+    EXPECTED_ORDINARY_DELAY_HEADERS,
+  );
+  assert.deepEqual(
+    Array.from(backend.SHEET_HEADERS.LEAVES.slice(28)),
+    EXPECTED_LEAVE_ADJUSTMENT_HEADERS,
+  );
+  assert.deepEqual(
+    Array.from(backend.SHEET_HEADERS.COURSE_ADJUSTMENTS),
+    EXPECTED_COURSE_ADJUSTMENT_HEADERS,
+  );
+});
+
+function createCourseAdjustmentBackend() {
+  const beforeItems = [
+    { date: '2026/09/18', time: '18:30', courseName: 'C－空環', teacherName: '原師甲', calendarId: 'cal-c', classId: 'ring', instructorId: 'a', room: 'C', identity: 'class:ring|teacher:a' },
+    { date: '2026/09/18', time: '18:45', courseName: 'D－舞綢', teacherName: '原師乙', calendarId: 'cal-d', classId: 'silk', instructorId: 'b', room: 'D', identity: 'class:silk|teacher:b' },
+  ];
+  const afterItems = [
+    { date: '2026/09/18', time: '18:30', courseName: 'C－舞綢', teacherName: '原師乙', calendarId: 'cal-c', classId: 'silk', instructorId: 'b', room: 'C', identity: 'class:silk|teacher:b' },
+    { date: '2026/09/18', time: '18:45', courseName: 'D－空環', teacherName: '原師甲', calendarId: 'cal-d', classId: 'ring', instructorId: 'a', room: 'D', identity: 'class:ring|teacher:a' },
+  ];
+  const mappings = [
+    { fromCalendarId: 'cal-c', effectiveCalendarId: 'cal-d', originalTime: '18:30', effectiveTime: '18:45' },
+    { fromCalendarId: 'cal-d', effectiveCalendarId: 'cal-c', originalTime: '18:45', effectiveTime: '18:30' },
+  ];
+  const adjustmentSheet = createSheetFixture('課程調整', [
+    EXPECTED_COURSE_ADJUSTMENT_HEADERS,
+    ['swap-1', 'v1', '2026/09/18', 'C/D', JSON.stringify(beforeItems), JSON.stringify(afterItems), JSON.stringify(mappings), '待確認', 'C/D 交叉調整', 'created', '', '', '', '', ''],
+  ]);
+  const leaveHeaders = EXPECTED_LEAVE_HEADERS.concat(
+    EXPECTED_LEAVE_EXTENSION_HEADERS,
+    EXPECTED_SPECIAL_COURSE_HEADERS,
+    EXPECTED_ORDINARY_DELAY_HEADERS,
+    EXPECTED_LEAVE_ADJUSTMENT_HEADERS,
+  );
+  const claimed = Array(leaveHeaders.length).fill('');
+  claimed[1] = '原師甲'; claimed[2] = '2026/09/18'; claimed[3] = '18:30'; claimed[4] = 'C－空環';
+  claimed[5] = '已領取'; claimed[6] = '代師甲'; claimed[9] = 'leave-c'; claimed[10] = 'cal-c';
+  const pending = Array(leaveHeaders.length).fill('');
+  pending[1] = '原師乙'; pending[2] = '2026/09/18'; pending[3] = '18:45'; pending[4] = 'D－舞綢';
+  pending[5] = '確認中'; pending[9] = 'leave-d'; pending[10] = 'cal-d';
+  const leaveSheet = createSheetFixture('請假代課紀錄', [leaveHeaders, claimed, pending]);
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/09/18', '18:30', 'C－舞綢', '原師乙', 'cal-c', 'silk', 'b', '否', 'new'],
+    ['2026/09/18', '18:45', 'D－空環', '原師甲', 'cal-d', 'ring', 'a', '否', 'new'],
+  ]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([adjustmentSheet, leaveSheet, courseSheet, auditSheet]);
+  const backend = loadBackend({ SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet } });
+  return { backend, spreadsheet, adjustmentSheet, leaveSheet, courseSheet, auditSheet };
+}
+
+test('course adjustment confirmation preserves leave states and remaps claimed and pending rows atomically', () => {
+  const fixture = createCourseAdjustmentBackend();
+  const pushes = [];
+  fixture.backend.sendPushAfterMutationSafely_ = (teachers, message) => {
+    pushes.push({ teachers: Array.from(teachers), content: message.content });
+    return { attempted: true, delivered: teachers.length, error: '' };
+  };
+
+  const result = fixture.backend.confirmCourseAdjustment_({
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  }, 'swap-1', []);
+
+  assert.equal(result.updatedLeaves, 2);
+  assert.equal(fixture.leaveSheet.values[1][5], '已領取');
+  assert.equal(fixture.leaveSheet.values[1][20], 'cal-d');
+  assert.equal(fixture.leaveSheet.values[1][25], '18:45');
+  assert.equal(fixture.leaveSheet.values[1][26], 15);
+  assert.deepEqual(fixture.leaveSheet.values[1].slice(28, 31), ['swap-1', fixture.leaveSheet.values[1][29], '冠蓉']);
+  assert.equal(fixture.leaveSheet.values[2][5], '確認中');
+  assert.equal(fixture.leaveSheet.values[2][20], 'cal-c');
+  assert.equal(fixture.leaveSheet.values[2][25], '18:30');
+  assert.equal(fixture.leaveSheet.values[2][26], -15);
+  assert.equal(fixture.adjustmentSheet.values[1][7], '已確認');
+  assert.deepEqual(pushes[0].teachers, ['代師甲']);
+});
+
+test('course adjustment confirmation rolls back every row when one exact update fails', () => {
+  const fixture = createCourseAdjustmentBackend();
+  const beforeLeaves = fixture.leaveSheet.values.map((row) => row.slice());
+  injectSetValuesFailureOnce(fixture.leaveSheet, ({ row }) => row === 3, 'second leave update failed');
+
+  assert.throws(() => fixture.backend.confirmCourseAdjustment_({
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  }, 'swap-1', []), /second leave update failed/);
+  assert.deepEqual(fixture.leaveSheet.values, beforeLeaves);
+  assert.equal(fixture.adjustmentSheet.values[1][7], '待確認');
+});
+
+test('course adjustment dismissal requires a reason and keeps leave rows unchanged', () => {
+  const fixture = createCourseAdjustmentBackend();
+  const admin = { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'] };
+  const beforeLeaves = fixture.leaveSheet.values.map((row) => row.slice());
+  assert.throws(() => fixture.backend.dismissCourseAdjustment_(admin, 'swap-1', ''), /請填寫忽略原因/);
+
+  const result = fixture.backend.dismissCourseAdjustment_(admin, 'swap-1', '不是調課');
+
+  assert.equal(result.status, '已忽略');
+  assert.equal(fixture.adjustmentSheet.values[1][7], '已忽略');
+  assert.equal(fixture.adjustmentSheet.values[1][12], '不是調課');
+  assert.deepEqual(fixture.leaveSheet.values, beforeLeaves);
 });

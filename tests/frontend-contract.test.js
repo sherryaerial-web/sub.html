@@ -2734,9 +2734,9 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the thirteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
+test('keeps the fourteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
   const adminTabs = html.match(/<div class=["']admin-tabs["'][^>]*>[\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
-  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 13);
+  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 14);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);
@@ -2872,6 +2872,42 @@ test('course closure controls explain unavailable manual stages without calling 
   assert.doesNotMatch(html, /data-stage="22:30"[^>]*\? "" : "disabled"/);
   assert.doesNotMatch(html, /data-stage="23:40"[^>]*\? "" : "disabled"/);
   assert.match(html, /先前已取消 \$\{result\.alreadyProcessedCount \|\| 0\} 堂/);
+});
+
+test('admin course adjustment tab shows paired before and after cards with explicit actions', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__dashboard = {
+    teachers: [], pendingInvitations: [], activeInvitees: [], missingObCancellations: [],
+    obWork: [], delayClosures: [], changeRequests: [], exceptions: [], completed: [],
+    courseAdjustments: [{
+      groupId: 'swap-1', date: '2026/09/18', roomPair: 'C/D', status: '待確認',
+      reason: 'C/D 課程身分交叉調整',
+      before: [
+        { time: '18:30', courseName: 'C－空環', teacherName: '老師甲' },
+        { time: '18:45', courseName: 'D－舞綢', teacherName: '老師乙' },
+      ],
+      after: [
+        { time: '18:30', courseName: 'C－舞綢', teacherName: '老師乙' },
+        { time: '18:45', courseName: 'D－空環', teacherName: '老師甲' },
+      ],
+    }],
+  };
+  vm.runInContext('activeAdminTab = "courseAdjustments"; adminDashboard = __dashboard; renderAdminTab();', context);
+  const markup = getElement('admin-tab-content').innerHTML;
+  assert.match(markup, /調課前/);
+  assert.match(markup, /調課後/);
+  assert.match(markup, /18:30/);
+  assert.match(markup, /C－空環/);
+  assert.match(markup, /data-admin-action="confirm-course-adjustment"/);
+  assert.match(markup, /data-admin-action="dismiss-course-adjustment"/);
+});
+
+test('admin course adjustment queue participates in counts reminders and API actions', () => {
+  assert.match(html, /data-admin-tab="courseAdjustments"/);
+  assert.match(html, /data-admin-count="courseAdjustments"/);
+  assert.match(html, /\["調課待確認", \(course\.courseAdjustments \|\| \[\]\)\.length, "courseAdjustments"\]/);
+  assert.match(html, /callApi\("confirmCourseAdjustment"/);
+  assert.match(html, /callApi\("dismissCourseAdjustment"/);
 });
 
 test('teacher practice view uses one mobile day timeline with safe duration choices', () => {

@@ -512,6 +512,46 @@ test('course administrators have one notification center for manual sends schedu
   assert.match(getElement('admin-tab-content').innerHTML, /23:40–23:44/);
 });
 
+test('teacher inbox exposes an unread badge history filters and mark-all control', async () => {
+  assert.match(html, /id=["']inbox-button["']/);
+  assert.match(html, /id=["']inbox-unread-badge["']/);
+  assert.match(html, /data-view=["']view-inbox["']/);
+  assert.match(html, /id=["']inbox-mark-all["']/);
+  assert.match(html, /data-inbox-filter=["']unread["']/);
+
+  const { context, requestActions, getElement } = createFrontendRuntime({
+    getNotificationInbox: {
+      teacherName: 'Vivi', unreadCount: 2,
+      items: [
+        { messageId: 'msg-1', type: '代課邀請', heading: '新的代課邀請', content: '請查看課程。', url: '?view=claim', createdAt: '2026-09-03 10:00:00', unread: true },
+        { messageId: 'msg-2', type: '自主練習', heading: '自主練習已取消', content: '時段已取消。', url: '?view=practice', createdAt: '2026-09-02 10:00:00', unread: false },
+      ],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = 'Vivi';", context);
+
+  await context.fetchNotificationInbox();
+
+  assert.ok(requestActions.includes('getNotificationInbox'));
+  assert.equal(getElement('inbox-unread-badge').textContent, '2');
+  assert.equal(getElement('inbox-unread-badge').hidden, false);
+  assert.match(getElement('inbox-list').innerHTML, /新的代課邀請/);
+  assert.match(getElement('inbox-list').innerHTML, /自主練習已取消/);
+});
+
+test('opening an inbox message marks it read and routes inside the app', async () => {
+  const { context, requestActions } = createFrontendRuntime({
+    markNotificationRead: { messageId: 'msg-1', status: '已讀' },
+    getNotificationInbox: { teacherName: 'Vivi', unreadCount: 0, items: [] },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = 'Vivi';", context);
+
+  await context.openInboxMessage({ messageId: 'msg-1', url: '?view=claim', unread: true });
+
+  assert.ok(requestActions.includes('markNotificationRead'));
+  assert.equal(context.getInitialAppRoute('?view=claim').viewId, 'view-claim');
+});
+
 test('management accounts land directly on the management workspace', () => {
   const { context, requestActions } = createFrontendRuntime({
     getAdminDashboard: {
@@ -530,16 +570,20 @@ test('course-admin acting mode is sent only to teacher self-service actions', as
   const { context, submittedForms } = createFrontendRuntime({
     getMyCourses: [],
     getMyPayroll: { month: '2026-09', lines: [], summary: null, disputes: [] },
+    getNotificationInbox: { teacherName: 'Tako', unreadCount: 0, items: [] },
   });
   vm.runInContext("authState.teacherName = 'Tako'; authState.managementCapabilities = ['course_admin']; authState.actingTeacherName = 'Jina';", context);
 
   await context.callApi('getMyCourses');
   await context.callApi('getMyPayroll', { month: '2026-09' });
+  await context.callApi('getNotificationInbox');
 
   const courseRequest = submittedForms.find((item) => item.fields.action === 'getMyCourses');
   const payrollRequest = submittedForms.find((item) => item.fields.action === 'getMyPayroll');
+  const inboxRequest = submittedForms.find((item) => item.fields.action === 'getNotificationInbox');
   assert.equal(courseRequest.fields.actingTeacherName, 'Jina');
   assert.equal(payrollRequest.fields.actingTeacherName, undefined);
+  assert.equal(inboxRequest.fields.actingTeacherName, undefined);
 });
 
 test('course admins can enter and leave a clearly labelled teacher acting mode', () => {

@@ -149,6 +149,12 @@ const EXPECTED_COURSE_CLOSURE_LOG_HEADERS = [
   '執行時間', '目標日期', '檢核時段', 'OB Calendar ID', '課程', '老師',
   '最新人數', '套用規則', 'onlyEmpty', '結果', '錯誤訊息', '操作者',
 ];
+const EXPECTED_NOTIFICATION_MESSAGE_HEADERS = [
+  '訊息 ID', '事件 ID', '類型', '標題', '內容', '連結', '關聯編號', '建立時間', '建立者',
+];
+const EXPECTED_NOTIFICATION_RECIPIENT_HEADERS = [
+  '收件紀錄 ID', '訊息 ID', '收件人', '狀態', '已讀時間', '建立時間',
+];
 
 function createSheetFixture(name, values) {
   const protections = [];
@@ -1149,6 +1155,7 @@ test('fixed notification schedules send once in the five-minute window even when
   assert.equal(second.sentCount, 0);
   assert.equal(deliveries.length, 1);
   assert.deepEqual(deliveries[0].names, ['冠蓉', 'Tako']);
+  assert.match(deliveries[0].message.eventKey, /^schedule_[A-Za-z0-9_-]+_20260831$/);
 });
 
 test('OneSignal failure returns a safe result without throwing or exposing the key', () => {
@@ -2102,7 +2109,7 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
       '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
-      '課程調整'
+      '課程調整', '通知訊息', '通知收件人'
     ].sort()
   );
   assert.deepEqual(
@@ -7072,6 +7079,7 @@ test('closure result push targets course admins once and includes failure detail
   assert.match(pushes[0].message.heading, /失敗/);
   assert.match(pushes[0].message.content, /A－舞綢.*cal-fail.*OB timeout/);
   assert.match(pushes[0].message.url, /view=admin&tab=closureManagement/);
+  assert.equal(pushes[0].message.eventKey, 'closure_20260901_2230_failed');
 });
 
 test('23:40 closure policy sends incomplete OB details to manual review instead of guessing', () => {
@@ -8639,4 +8647,99 @@ test('course adjustment dismissal requires a reason and keeps leave rows unchang
   assert.equal(fixture.adjustmentSheet.values[1][7], '已忽略');
   assert.equal(fixture.adjustmentSheet.values[1][12], '不是調課');
   assert.deepEqual(fixture.leaveSheet.values, beforeLeaves);
+});
+
+function createNotificationInboxBackend({ messages = [], recipients = [] } = {}) {
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const messageSheet = createSheetFixture('通知訊息', [
+    EXPECTED_NOTIFICATION_MESSAGE_HEADERS,
+    ...messages,
+  ]);
+  const recipientSheet = createSheetFixture('通知收件人', [
+    EXPECTED_NOTIFICATION_RECIPIENT_HEADERS,
+    ...recipients,
+  ]);
+  const spreadsheet = createSpreadsheetFixture([auditSheet, messageSheet, recipientSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  backend.currentTimeMs_ = () => new Date('2026-09-03T12:00:00+08:00').getTime();
+  return { backend, spreadsheet, auditSheet, messageSheet, recipientSheet };
+}
+
+test('notification inbox sheet contract is append-only and independent from existing sheets', () => {
+  const backend = loadBackend();
+  assert.deepEqual(Array.from(backend.SHEET_HEADERS.NOTIFICATION_MESSAGES), EXPECTED_NOTIFICATION_MESSAGE_HEADERS);
+  assert.deepEqual(Array.from(backend.SHEET_HEADERS.NOTIFICATION_RECIPIENTS), EXPECTED_NOTIFICATION_RECIPIENT_HEADERS);
+});
+
+test('push wrapper saves one inbox message per recipient before a push can fail', () => {
+  const fixture = createNotificationInboxBackend();
+  fixture.backend.sendPushNotificationSafely_ = () => ({
+    attempted: true, accepted: false, delivered: 0, messageId: '', error: 'injected push outage',
+  });
+
+  const result = fixture.backend.sendPushAfterMutationSafely_(['Vivi', 'Tako', 'Vivi'], {
+    eventKey: 'invite-round-7',
+    type: '代課邀請',
+    heading: '新的代課邀請',
+    content: '有新的代課可以領取。',
+    url: 'https://example.test/?view=claim',
+    relatedId: 'round-7',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.inboxSaved, true);
+  assert.equal(fixture.messageSheet.values.length, 2);
+  assert.equal(fixture.messageSheet.values[1][1], 'invite-round-7');
+  assert.equal(fixture.recipientSheet.values.length, 3);
+  assert.deepEqual(fixture.recipientSheet.values.slice(1).map((row) => row[2]), ['Vivi', 'Tako']);
+});
+
+test('notification inbox event keys prevent duplicate messages and recipient rows', () => {
+  const fixture = createNotificationInboxBackend();
+  fixture.backend.sendPushNotificationSafely_ = () => ({
+    attempted: true, accepted: true, delivered: 1, messageId: 'push-1', error: '',
+  });
+  const message = {
+    eventKey: 'closure-20260904-stage1', type: '關課結果', heading: '第一輪關課完成',
+    content: '關課完成。', url: 'https://example.test/?view=admin&tab=closureManagement',
+  };
+
+  fixture.backend.sendPushAfterMutationSafely_(['冠蓉', 'Tako'], message);
+  fixture.backend.sendPushAfterMutationSafely_(['冠蓉', 'Tako'], message);
+
+  assert.equal(fixture.messageSheet.values.length, 2);
+  assert.equal(fixture.recipientSheet.values.length, 3);
+});
+
+test('notification inbox returns only the logged-in teacher and supports read controls', () => {
+  const fixture = createNotificationInboxBackend({
+    messages: [
+      ['msg-1', 'event-1', '代課邀請', '新的代課邀請', '請查看課程。', '?view=claim', 'leave-1', '2026-09-03 10:00:00', '系統'],
+      ['msg-2', 'event-2', '自主練習', '自主練習已取消', '時段已取消。', '?view=practice', 'practice-1', '2026-09-02 10:00:00', '系統'],
+      ['msg-old', 'event-old', '管理提醒', '較早但未讀', '仍需顯示。', '?view=admin', '', '2026-01-01 10:00:00', '系統'],
+    ],
+    recipients: [
+      ['recipient-1', 'msg-1', 'Vivi', '未讀', '', '2026-09-03 10:00:00'],
+      ['recipient-2', 'msg-2', 'Tako', '未讀', '', '2026-09-02 10:00:00'],
+      ['recipient-3', 'msg-old', 'Vivi', '未讀', '', '2026-01-01 10:00:00'],
+    ],
+  });
+  const vivi = { teacherName: 'Vivi', role: '老師', managementCapabilities: [] };
+
+  const before = fixture.backend.getNotificationInbox_(vivi);
+  assert.equal(before.unreadCount, 2);
+  assert.deepEqual(Array.from(before.items, (item) => item.messageId), ['msg-1', 'msg-old']);
+
+  const marked = fixture.backend.markNotificationRead_(vivi, 'msg-1');
+  assert.equal(marked.messageId, 'msg-1');
+  assert.equal(marked.status, '已讀');
+  assert.equal(fixture.recipientSheet.values[1][3], '已讀');
+  assert.ok(fixture.recipientSheet.values[1][4]);
+
+  fixture.backend.markAllNotificationsRead_(vivi);
+  assert.equal(fixture.recipientSheet.values[3][3], '已讀');
+  assert.equal(fixture.recipientSheet.values[2][3], '未讀');
+  assert.equal(fixture.backend.getNotificationInbox_(vivi).unreadCount, 0);
 });

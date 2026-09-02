@@ -826,6 +826,66 @@
     .notification-schedule-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
     .notification-window-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .notification-window-strip span { padding: 6px 8px; border-radius: 6px; background: var(--aqua-100); color: var(--sea-800); font-size: 11px; font-weight: 750; }
+    .inbox-button { position: relative; flex: 0 0 auto; }
+    .inbox-unread-badge,
+    .nav-unread-badge {
+      display: inline-grid;
+      min-width: 19px;
+      height: 19px;
+      place-items: center;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: #f4e6e8;
+      color: #8f5f68;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .inbox-unread-badge {
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      border: 2px solid #786c64;
+    }
+    .nav-unread-badge { margin-left: auto; }
+    .inbox-filter-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+    .inbox-filter {
+      min-height: 38px;
+      padding: 7px 15px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .inbox-filter.active { border-color: #cdbbb4; background: var(--aqua-100); color: var(--sea-800); }
+    .inbox-list { display: grid; gap: 9px; }
+    .inbox-message {
+      display: grid;
+      width: 100%;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 12px;
+      padding: 14px 15px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+      box-shadow: var(--shadow-sm);
+    }
+    .inbox-message:hover { border-color: #bda79e; background: #fffaf5; }
+    .inbox-message.unread { border-left: 3px solid #ad8175; background: #fffaf5; }
+    .inbox-message-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 999px; background: transparent; }
+    .inbox-message.unread .inbox-message-dot { background: #ad8175; }
+    .inbox-message-copy { min-width: 0; }
+    .inbox-message-copy h3 { margin: 0 0 5px; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+    .inbox-message-copy p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+    .inbox-message-meta { display: grid; justify-items: end; gap: 5px; color: var(--subtle); font-size: 10px; white-space: nowrap; }
+    .inbox-message-type { padding: 3px 6px; border-radius: 5px; background: var(--soft); color: var(--sea-700); font-weight: 750; }
     .practice-admin-filters {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1254,6 +1314,10 @@
       .notification-form-grid { grid-template-columns: 1fr; }
       .notification-form-grid .full { grid-column: auto; }
       .notification-recipient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .inbox-header { align-items: stretch; }
+      .inbox-header .compact-button { width: 100%; }
+      .inbox-message { grid-template-columns: auto minmax(0, 1fr); }
+      .inbox-message-meta { grid-column: 2; grid-row: 2; justify-items: start; grid-auto-flow: column; justify-content: start; }
       .practice-admin-filters { grid-template-columns: 1fr; }
       .practice-admin-filter-actions { align-items: stretch; }
       .practice-admin-filter-actions .compact-button { flex: 1 1 auto; justify-content: center; }
@@ -1453,6 +1517,7 @@
       </div>
       <div class="topbar-actions">
         <span id="current-user" class="current-user"></span>
+        <button id="inbox-button" class="icon-button inbox-button" type="button" data-view="view-inbox" aria-label="訊息收件匣" title="訊息收件匣"><i data-lucide="bell"></i><span id="inbox-unread-badge" class="inbox-unread-badge" hidden>0</span></button>
         <button id="back-button" class="icon-button" type="button" aria-label="返回首頁" title="返回首頁"><i data-lucide="arrow-left"></i></button>
         <button id="logout-button" class="icon-button" type="button" aria-label="登出" title="登出"><i data-lucide="log-out"></i></button>
       </div>
@@ -1473,6 +1538,7 @@
           <button class="nav-item" type="button" data-view="view-mysubs"><i data-lucide="badge-check"></i><span>代課紀錄</span></button>
           <button class="nav-item" type="button" data-view="view-practice"><i data-lucide="sparkles"></i><span>自主練習</span></button>
           <button class="nav-item" type="button" data-view="view-payroll"><i data-lucide="receipt-text"></i><span>我的薪資</span></button>
+          <button class="nav-item" type="button" data-view="view-inbox"><i data-lucide="bell"></i><span>訊息</span><span id="sidebar-inbox-badge" class="nav-unread-badge" hidden>0</span></button>
           <button id="admin-entry" class="nav-item" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
         </nav>
       </aside>
@@ -1646,6 +1712,18 @@
           <div id="my-payroll-content"><div class="state">選擇月份後查詢</div></div>
         </section>
 
+        <section id="view-inbox" class="view">
+          <div class="view-header inbox-header">
+            <div><span class="eyebrow">Inbox</span><h2 class="section-heading">訊息</h2><p class="section-copy">推播沒有收到也沒關係，系統通知都會保留在這裡。</p></div>
+            <button id="inbox-mark-all" class="compact-button" type="button"><i data-lucide="check-check"></i>全部標為已讀</button>
+          </div>
+          <div class="inbox-filter-bar" role="tablist" aria-label="篩選訊息">
+            <button class="inbox-filter active" type="button" role="tab" aria-selected="true" data-inbox-filter="all">全部</button>
+            <button class="inbox-filter" type="button" role="tab" aria-selected="false" data-inbox-filter="unread">未讀</button>
+          </div>
+          <div id="inbox-list" class="inbox-list" aria-live="polite"><div class="state">載入訊息中...</div></div>
+        </section>
+
         <section id="view-admin" class="view">
           <div class="view-header">
             <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
@@ -1776,6 +1854,8 @@
     let vvipDashboard = null;
     let payrollDashboard = null;
     let notificationDashboard = null;
+    let notificationInbox = null;
+    let inboxFilter = "all";
     let practiceAdminDashboard = null;
     let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {} };
     let hasCourseSnapshot = false;
@@ -1806,6 +1886,7 @@
       "view-mysubs": "我的紀錄",
       "view-practice": "自主練習",
       "view-payroll": "我的薪資",
+      "view-inbox": "訊息",
       "view-admin": "管理工作台"
     };
 
@@ -1993,6 +2074,114 @@
 
       const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getUTCDay()];
       return `${year}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}（${weekday}）`;
+    }
+
+    function formatInboxTimestamp(value) {
+      const raw = String(value || "").trim();
+      const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2})/.exec(raw);
+      return match ? `${match[2]}/${match[3]} ${match[4]}` : raw;
+    }
+
+    function renderInboxBadge(countValue) {
+      const count = Math.max(0, Number(countValue) || 0);
+      const label = count > 99 ? "99+" : String(count);
+      ["inbox-unread-badge", "sidebar-inbox-badge"].forEach((id) => {
+        const badge = byId(id);
+        if (!badge) return;
+        badge.textContent = label;
+        badge.hidden = count === 0;
+      });
+    }
+
+    function renderNotificationInbox() {
+      const list = byId("inbox-list");
+      const data = notificationInbox || { items: [], unreadCount: 0 };
+      const items = Array.isArray(data.items) ? data.items : [];
+      const visibleItems = inboxFilter === "unread"
+        ? items.filter((item) => item.unread === true)
+        : items;
+      renderInboxBadge(data.unreadCount);
+      byId("inbox-mark-all").disabled = Number(data.unreadCount || 0) === 0;
+      if (!visibleItems.length) {
+        list.innerHTML = `<div class="state"><i data-lucide="${inboxFilter === "unread" ? "check-check" : "inbox"}"></i>${inboxFilter === "unread" ? "目前沒有未讀訊息" : "目前沒有訊息"}</div>`;
+        refreshIcons();
+        return;
+      }
+      list.innerHTML = visibleItems.map((item) => `
+        <button class="inbox-message ${item.unread ? "unread" : ""}" type="button" data-inbox-message="${escapeHtml(item.messageId)}">
+          <span class="inbox-message-dot" aria-hidden="true"></span>
+          <span class="inbox-message-copy">
+            <h3>${escapeHtml(item.heading || "系統通知")}</h3>
+            <p>${escapeHtml(item.content)}</p>
+          </span>
+          <span class="inbox-message-meta">
+            <span class="inbox-message-type">${escapeHtml(item.type || "系統通知")}</span>
+            <time>${escapeHtml(formatInboxTimestamp(item.createdAt))}</time>
+          </span>
+        </button>
+      `).join("");
+      refreshIcons();
+    }
+
+    async function fetchNotificationInbox() {
+      const list = byId("inbox-list");
+      const hadSnapshot = notificationInbox !== null;
+      beginReadRefresh(list, hadSnapshot, '<div class="state">載入訊息中...</div>');
+      try {
+        notificationInbox = await callApi("getNotificationInbox");
+        renderNotificationInbox();
+        return notificationInbox;
+      } catch (error) {
+        if (!hadSnapshot) list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        return null;
+      } finally {
+        endReadRefresh(list);
+      }
+    }
+
+    function getInboxMessageRoute(urlValue) {
+      try {
+        const url = new URL(String(urlValue || ""), "https://sherryaerial-web.github.io/sub.html/");
+        return getInitialAppRoute(url.search);
+      } catch (error) {
+        return { viewId: "", adminTab: "" };
+      }
+    }
+
+    async function openInboxMessage(itemValue) {
+      const item = itemValue || {};
+      if (item.messageId && item.unread === true) {
+        await callApi("markNotificationRead", { messageId: item.messageId });
+        item.unread = false;
+        if (notificationInbox) {
+          notificationInbox.unreadCount = Math.max(0, Number(notificationInbox.unreadCount || 0) - 1);
+          renderNotificationInbox();
+        }
+      }
+      const route = getInboxMessageRoute(item.url);
+      if (!route.viewId) return;
+      if (route.viewId === "view-admin" && !authState.managementCapabilities.length) {
+        setNotice("這則訊息需要管理權限才能查看。", "error");
+        return;
+      }
+      if (route.viewId === "view-admin" && route.adminTab) activeAdminTab = route.adminTab;
+      switchView(route.viewId);
+    }
+
+    async function markAllInboxRead() {
+      if (!notificationInbox || !Number(notificationInbox.unreadCount || 0)) return;
+      const button = byId("inbox-mark-all");
+      setButtonBusy(button, true, "處理中...");
+      try {
+        await callApi("markAllNotificationsRead");
+        notificationInbox.unreadCount = 0;
+        (notificationInbox.items || []).forEach((item) => { item.unread = false; });
+        renderNotificationInbox();
+      } catch (error) {
+        setNotice(error.message, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
     }
 
     function normalizeCourseName(value) {
@@ -2547,6 +2736,7 @@
         mysubs: "view-mysubs",
         practice: "view-practice",
         payroll: "view-payroll",
+        inbox: "view-inbox",
         admin: "view-admin"
       };
       const allowedAdminTabs = new Set([
@@ -2800,6 +2990,7 @@
       switchView(targetView);
       refreshIcons();
       initializePushForSession();
+      if (targetView !== "view-inbox") fetchNotificationInbox();
     }
 
     function clearSession() {
@@ -2828,11 +3019,14 @@
       vvipDashboard = null;
       payrollDashboard = null;
       notificationDashboard = null;
+      notificationInbox = null;
+      inboxFilter = "all";
       practiceAdminDashboard = null;
       pushIdentityExternalId = "";
       pushSessionTeacherName = "";
       pushInitializationPromise = null;
       byId("push-permission-card").hidden = true;
+      renderInboxBadge(0);
       byId("admin-entry").hidden = true;
       byId("app-shell").hidden = true;
       byId("auth-shell").hidden = false;
@@ -2934,6 +3128,7 @@
       if (viewId === "view-mysubs") fetchMySubs();
       if (viewId === "view-practice") loadPracticeDay(practiceState.date || getTaipeiToday());
       if (viewId === "view-payroll") fetchMyPayroll();
+      if (viewId === "view-inbox") fetchNotificationInbox();
       if (viewId === "view-admin") {
         fetchAdminDashboard();
         if (authState.managementCapabilities.includes("vvip_admin")) fetchVvipReminderData();
@@ -6323,6 +6518,24 @@ https://sherryaerial-web.github.io/sub.html/
     byId("practice-leave").addEventListener("click", () => leavePracticeEditor("once"));
     byId("practice-leave-future").addEventListener("click", () => leavePracticeEditor("future"));
     byId("practice-dialog-cancel").addEventListener("click", closePracticeEditor);
+    byId("inbox-mark-all").addEventListener("click", markAllInboxRead);
+    byId("inbox-list").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-inbox-message]") : null;
+      if (!button || !notificationInbox) return;
+      const item = (notificationInbox.items || []).find((entry) => entry.messageId === button.dataset.inboxMessage);
+      if (item) openInboxMessage(item);
+    });
+    document.querySelectorAll("[data-inbox-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        inboxFilter = button.dataset.inboxFilter === "unread" ? "unread" : "all";
+        document.querySelectorAll("[data-inbox-filter]").forEach((filterButton) => {
+          const active = filterButton.dataset.inboxFilter === inboxFilter;
+          filterButton.classList.toggle("active", active);
+          filterButton.setAttribute("aria-selected", String(active));
+        });
+        renderNotificationInbox();
+      });
+    });
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.view));
     });

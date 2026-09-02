@@ -26,7 +26,9 @@ var SHEETS = {
   PRACTICE_BOOKINGS: '自主練習場次',
   PRACTICE_PARTICIPANTS: '自主練習參與者',
   PRACTICE_EXCEPTIONS: '自主練習例外',
-  PRACTICE_AUDIT: '自主練習操作紀錄'
+  PRACTICE_AUDIT: '自主練習操作紀錄',
+  NOTIFICATION_MESSAGES: '通知訊息',
+  NOTIFICATION_RECIPIENTS: '通知收件人'
 };
 
 var SHEET_HEADERS = {
@@ -117,6 +119,12 @@ var SHEET_HEADERS = {
   PRACTICE_AUDIT: [
     '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON',
     '修改後 JSON', '原因'
+  ],
+  NOTIFICATION_MESSAGES: [
+    '訊息 ID', '事件 ID', '類型', '標題', '內容', '連結', '關聯編號', '建立時間', '建立者'
+  ],
+  NOTIFICATION_RECIPIENTS: [
+    '收件紀錄 ID', '訊息 ID', '收件人', '狀態', '已讀時間', '建立時間'
   ]
 };
 
@@ -1050,6 +1058,228 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
   }
 }
 
+function normalizeNotificationRecipients_(teacherNames) {
+  var seen = {};
+  return (Array.isArray(teacherNames) ? teacherNames : []).map(cleanText_).filter(function(name) {
+    if (!name || seen[name]) return false;
+    seen[name] = true;
+    return true;
+  });
+}
+
+function inferInboxNotificationType_(messageValue) {
+  var message = messageValue || {};
+  var explicitType = cleanText_(message.type);
+  if (explicitType) return explicitType;
+  var url = cleanText_(message.url);
+  if (/[?&]view=claim(?:&|$)/.test(url)) return '代課邀請';
+  if (/[?&]view=mysubs(?:&|$)/.test(url)) return '代課紀錄';
+  if (/[?&]view=practice(?:&|$)/.test(url)) return '自主練習';
+  if (/[?&]view=payroll(?:&|$)/.test(url)) return '薪資';
+  if (/[?&]view=admin(?:&|$)/.test(url)) return '管理提醒';
+  return '系統通知';
+}
+
+function ensureNotificationInboxStructureUnlocked_(spreadsheet) {
+  return {
+    messages: ensureSupportingSheet_(
+      spreadsheet,
+      SHEETS.NOTIFICATION_MESSAGES,
+      SHEET_HEADERS.NOTIFICATION_MESSAGES
+    ),
+    recipients: ensureSupportingSheet_(
+      spreadsheet,
+      SHEETS.NOTIFICATION_RECIPIENTS,
+      SHEET_HEADERS.NOTIFICATION_RECIPIENTS
+    )
+  };
+}
+
+function persistInboxNotification_(teacherNames, messageValue) {
+  var recipients = normalizeNotificationRecipients_(teacherNames);
+  if (!recipients.length) return { saved: false, messageId: '', recipientCount: 0 };
+  var message = messageValue || {};
+  var heading = cleanText_(message.heading);
+  var content = cleanText_(message.content);
+  if (!heading || !content) throw new Error('站內訊息缺少標題或內容。');
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = ensureNotificationInboxStructureUnlocked_(ss);
+    assertHeaders_(sheets.messages, SHEET_HEADERS.NOTIFICATION_MESSAGES);
+    assertHeaders_(sheets.recipients, SHEET_HEADERS.NOTIFICATION_RECIPIENTS);
+    var messageRows = sheets.messages.getDataRange().getValues();
+    var messageHeaders = getHeaderMap_(sheets.messages);
+    var recipientRows = sheets.recipients.getDataRange().getValues();
+    var recipientHeaders = getHeaderMap_(sheets.recipients);
+    var eventKey = cleanText_(message.eventKey) || ('event-' + Utilities.getUuid());
+    var messageId = '';
+    for (var index = 1; index < messageRows.length; index++) {
+      if (cleanText_(messageRows[index][messageHeaders['事件 ID'] - 1]) !== eventKey) continue;
+      messageId = cleanText_(messageRows[index][messageHeaders['訊息 ID'] - 1]);
+      break;
+    }
+    var createdAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    var newMessageRow = null;
+    if (!messageId) {
+      messageId = Utilities.getUuid();
+      newMessageRow = [
+        messageId,
+        eventKey,
+        inferInboxNotificationType_(message),
+        heading,
+        content,
+        cleanText_(message.url),
+        cleanText_(message.relatedId),
+        createdAt,
+        cleanText_(message.actor) || '系統'
+      ];
+    }
+
+    var existingRecipients = {};
+    for (var recipientIndex = 1; recipientIndex < recipientRows.length; recipientIndex++) {
+      if (cleanText_(recipientRows[recipientIndex][recipientHeaders['訊息 ID'] - 1]) !== messageId) continue;
+      existingRecipients[cleanText_(recipientRows[recipientIndex][recipientHeaders['收件人'] - 1])] = true;
+    }
+    var newRecipientRows = recipients.filter(function(name) {
+      return !existingRecipients[name];
+    }).map(function(name) {
+      return [Utilities.getUuid(), messageId, name, '未讀', '', createdAt];
+    });
+
+    return runStateTransitionUnlocked_([sheets.messages, sheets.recipients], function(appendAudits) {
+      if (newMessageRow) {
+        sheets.messages.getRange(
+          sheets.messages.getLastRow() + 1,
+          1,
+          1,
+          SHEET_HEADERS.NOTIFICATION_MESSAGES.length
+        ).setValues([newMessageRow]);
+      }
+      if (newRecipientRows.length) {
+        sheets.recipients.getRange(
+          sheets.recipients.getLastRow() + 1,
+          1,
+          newRecipientRows.length,
+          SHEET_HEADERS.NOTIFICATION_RECIPIENTS.length
+        ).setValues(newRecipientRows);
+      }
+      appendAudits([]);
+      return {
+        saved: true,
+        messageId: messageId,
+        recipientCount: recipients.length,
+        appendedRecipients: newRecipientRows.length,
+        duplicate: !newMessageRow && !newRecipientRows.length
+      };
+    });
+  });
+}
+
+function persistInboxNotificationSafely_(teacherNames, messageValue) {
+  if (typeof SpreadsheetApp === 'undefined') {
+    return { saved: false, messageId: '', recipientCount: 0, error: '' };
+  }
+  try {
+    return persistInboxNotification_(teacherNames, messageValue);
+  } catch (error) {
+    console.warn('站內訊息保存失敗，仍繼續嘗試推播。', error);
+    return { saved: false, messageId: '', recipientCount: 0, error: getErrorMessage_(error) };
+  }
+}
+
+function getNotificationInbox_(session) {
+  var teacherName = getSessionTeacherName_(session);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ensureNotificationInboxStructureUnlocked_(ss);
+  assertHeaders_(sheets.messages, SHEET_HEADERS.NOTIFICATION_MESSAGES);
+  assertHeaders_(sheets.recipients, SHEET_HEADERS.NOTIFICATION_RECIPIENTS);
+  var messageRows = sheets.messages.getDataRange().getValues();
+  var recipientRows = sheets.recipients.getDataRange().getValues();
+  var messageHeaders = getHeaderMap_(sheets.messages);
+  var recipientHeaders = getHeaderMap_(sheets.recipients);
+  var messagesById = {};
+  messageRows.slice(1).forEach(function(row) {
+    var messageId = cleanText_(row[messageHeaders['訊息 ID'] - 1]);
+    if (messageId) messagesById[messageId] = row;
+  });
+  var cutoff = Utilities.formatDate(
+    new Date(currentTimeMs_() - 90 * 24 * 60 * 60 * 1000),
+    getTimeZone_(),
+    'yyyy-MM-dd HH:mm:ss'
+  );
+  var unreadCount = 0;
+  var items = [];
+  recipientRows.slice(1).forEach(function(recipientRow) {
+    if (cleanText_(recipientRow[recipientHeaders['收件人'] - 1]) !== teacherName) return;
+    var status = cleanText_(recipientRow[recipientHeaders['狀態'] - 1]) || '未讀';
+    if (status !== '已讀') unreadCount += 1;
+    var messageId = cleanText_(recipientRow[recipientHeaders['訊息 ID'] - 1]);
+    var messageRow = messagesById[messageId];
+    if (!messageRow) return;
+    var createdAt = cleanText_(messageRow[messageHeaders['建立時間'] - 1]);
+    if (status === '已讀' && createdAt && createdAt < cutoff) return;
+    items.push({
+      messageId: messageId,
+      type: cleanText_(messageRow[messageHeaders['類型'] - 1]) || '系統通知',
+      heading: cleanText_(messageRow[messageHeaders['標題'] - 1]),
+      content: cleanText_(messageRow[messageHeaders['內容'] - 1]),
+      url: cleanText_(messageRow[messageHeaders['連結'] - 1]),
+      relatedId: cleanText_(messageRow[messageHeaders['關聯編號'] - 1]),
+      createdAt: createdAt,
+      readAt: cleanText_(recipientRow[recipientHeaders['已讀時間'] - 1]),
+      unread: status !== '已讀'
+    });
+  });
+  items.sort(function(a, b) { return b.createdAt.localeCompare(a.createdAt); });
+  return { teacherName: teacherName, unreadCount: unreadCount, items: items.slice(0, 200) };
+}
+
+function markNotificationRead_(session, messageIdValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var messageId = cleanText_(messageIdValue);
+  if (!messageId) throw new Error('缺少訊息編號。');
+  return withScriptLock_(function() {
+    var sheets = ensureNotificationInboxStructureUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+    var rows = sheets.recipients.getDataRange().getValues();
+    var headers = getHeaderMap_(sheets.recipients);
+    var rowNumber = 0;
+    for (var index = 1; index < rows.length; index++) {
+      if (cleanText_(rows[index][headers['訊息 ID'] - 1]) !== messageId) continue;
+      if (cleanText_(rows[index][headers['收件人'] - 1]) !== teacherName) continue;
+      rowNumber = index + 1;
+      break;
+    }
+    if (!rowNumber) throw new Error('找不到這則訊息。');
+    var readAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    sheets.recipients.getRange(rowNumber, headers['狀態'], 1, 2).setValues([['已讀', readAt]]);
+    return { messageId: messageId, status: '已讀', readAt: readAt };
+  });
+}
+
+function markAllNotificationsRead_(session) {
+  var teacherName = getSessionTeacherName_(session);
+  return withScriptLock_(function() {
+    var sheets = ensureNotificationInboxStructureUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+    var rows = sheets.recipients.getDataRange().getValues();
+    var headers = getHeaderMap_(sheets.recipients);
+    var readAt = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    var targets = [];
+    for (var index = 1; index < rows.length; index++) {
+      if (cleanText_(rows[index][headers['收件人'] - 1]) !== teacherName) continue;
+      if (cleanText_(rows[index][headers['狀態'] - 1]) === '已讀') continue;
+      targets.push(index + 1);
+    }
+    return runStateTransitionUnlocked_([sheets.recipients], function(appendAudits) {
+      targets.forEach(function(rowNumber) {
+        sheets.recipients.getRange(rowNumber, headers['狀態'], 1, 2).setValues([['已讀', readAt]]);
+      });
+      appendAudits([]);
+      return { updated: targets.length, status: '已讀', readAt: readAt };
+    });
+  });
+}
+
 function isNotificationScheduleDue_(scheduleValue, dateKeyValue, timeValue) {
   var schedule = scheduleValue || {};
   if (schedule.enabled === false) return false;
@@ -1189,13 +1419,17 @@ function appendNotificationAuditSafely_(event) {
   }
 }
 
-function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode, teacherNames, heading, content) {
+function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode, teacherNames, heading, content, eventKeyValue) {
   var copy = validateNotificationCopy_(heading, content);
   var recipients = resolveNotificationAudience_(audienceMode, teacherNames);
   var result = sendPushAfterMutationSafely_(recipients, {
+    eventKey: cleanText_(eventKeyValue),
+    type: cleanText_(sourceLabel) || '系統通知',
     heading: copy.heading,
     content: copy.content,
-    url: buildAppViewUrl_('', '')
+    url: buildAppViewUrl_('', ''),
+    relatedId: cleanText_(sourceId),
+    actor: cleanText_(actorName)
   });
   var accepted = Boolean(result && result.accepted === true && !result.error);
   appendNotificationAuditSafely_({
@@ -1346,7 +1580,8 @@ function runScheduledNotifications_(dateKeyValue, timeValue) {
       schedule.audienceMode,
       schedule.teacherNames,
       schedule.heading,
-      schedule.content
+      schedule.content,
+      eventKey
     );
     results.push({ scheduleId: schedule.id, result: result });
     if (result.accepted) {
@@ -1367,11 +1602,25 @@ function buildAppViewUrl_(view, adminTab) {
 }
 
 function sendPushAfterMutationSafely_(teacherNames, message) {
+  var recipients = normalizeNotificationRecipients_(teacherNames);
+  var inboxResult = persistInboxNotificationSafely_(recipients, message);
   try {
-    return sendPushNotificationSafely_(teacherNames, message);
+    var pushResult = sendPushNotificationSafely_(recipients, message) || {};
+    pushResult.inboxSaved = inboxResult.saved === true;
+    pushResult.inboxMessageId = cleanText_(inboxResult.messageId);
+    pushResult.inboxError = cleanText_(inboxResult.error);
+    return pushResult;
   } catch (error) {
     console.warn('操作已完成，但推播通知失敗。', error);
-    return { attempted: true, delivered: 0, error: getErrorMessage_(error) };
+    return {
+      attempted: true,
+      accepted: false,
+      delivered: 0,
+      error: getErrorMessage_(error),
+      inboxSaved: inboxResult.saved === true,
+      inboxMessageId: cleanText_(inboxResult.messageId),
+      inboxError: cleanText_(inboxResult.error)
+    };
   }
 }
 
@@ -1430,6 +1679,7 @@ function ensureSystemStructure_() {
     ensureVvipStructureUnlocked_(ss);
     ensurePayrollStructureUnlocked_(ss);
     ensurePracticeStructureUnlocked_(ss);
+    ensureNotificationInboxStructureUnlocked_(ss);
     var accountSheet = ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
     protectAccountsSheet_(accountSheet);
 
@@ -3360,6 +3610,15 @@ function doPost(e) {
       getPushConfiguration: function() {
         return getPushConfiguration_(session);
       },
+      getNotificationInbox: function() {
+        return getNotificationInbox_(session);
+      },
+      markNotificationRead: function() {
+        return markNotificationRead_(session, parameters.messageId);
+      },
+      markAllNotificationsRead: function() {
+        return markAllNotificationsRead_(session);
+      },
       getAvailableSubstitutes: function() {
         return getAvailableSubstitutes_(actingSession());
       },
@@ -4378,7 +4637,12 @@ function sendPushOnceSafely_(eventKeyValue, teacherNames, message) {
   if (properties && properties.getProperty(propertyKey)) {
     return { attempted: false, delivered: 0, error: '', duplicate: true };
   }
-  var result = sendPushAfterMutationSafely_(teacherNames, message);
+  var messageWithEventKey = {};
+  Object.keys(message || {}).forEach(function(key) {
+    messageWithEventKey[key] = message[key];
+  });
+  messageWithEventKey.eventKey = eventKey;
+  var result = sendPushAfterMutationSafely_(teacherNames, messageWithEventKey);
   if (properties && result && result.attempted && !result.error) {
     properties.setProperty(
       propertyKey,

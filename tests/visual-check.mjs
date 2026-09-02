@@ -111,6 +111,27 @@ const fixtures = {
     { "日期": "2026/08/10", "時間": "19:30", "課程": "空環基礎", "課程大類": "空環", "OB Calendar ID": "cal-2" },
     { "日期": "2026/08/12", "時間": "20:30", "課程": "空中瑜伽", "課程大類": "空瑜", "OB Calendar ID": "cal-3" }
   ],
+  getNotificationInbox: {
+    teacherName: "Ariel Lu",
+    unreadCount: 2,
+    items: [
+      {
+        messageId: "notice-1", type: "代課邀請", heading: "新的代課邀請",
+        content: "9/12（六）有新的代課課程開放給你，請進入領取代課查看。",
+        url: "?view=claim", createdAt: "2026-09-03 10:05:00", unread: true
+      },
+      {
+        messageId: "notice-2", type: "自主練習", heading: "自主練習時段已變更",
+        content: "因正式課程恢復，原訂 A 教室 14:00–15:00 的自主練習已取消。",
+        url: "?view=practice", createdAt: "2026-09-02 18:30:00", unread: true
+      },
+      {
+        messageId: "notice-3", type: "代課紀錄", heading: "代課領取成功",
+        content: "你已成功領取 9/18（五）18:30 的空環課程。",
+        url: "?view=mysubs", createdAt: "2026-09-01 21:10:00", unread: false
+      }
+    ]
+  },
   getMyLeaves: [
     {
       "代課編號": "mine-1", "日期": "2026/08/10", "時段": "18:30", "課程": "空環 Lv.2",
@@ -536,6 +557,10 @@ try {
     await openView(page, "view-payroll");
     await page.locator(".payroll-hero").waitFor();
     results.push(await capture(page, viewport.name, "06-payroll"));
+
+    await openView(page, "view-inbox");
+    await page.locator(".inbox-message").first().waitFor();
+    results.push(await capture(page, viewport.name, "06b-inbox"));
 
     await openView(page, "view-practice");
     await page.locator(".practice-timeline-grid").waitFor();

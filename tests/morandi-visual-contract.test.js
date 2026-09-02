@@ -38,5 +38,39 @@ test('admin teacher invitations render as five-person desktop rounds with mobile
   assert.match(html, /\.teacher-round\s*\{/);
   assert.match(html, /\.teacher-round-grid\s*\{[^}]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(html, /\.teacher-option\.is-invited\s*\{/);
+  assert.match(html, /@media\s*\(max-width:\s*920px\)[\s\S]*\.teacher-round-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.teacher-round-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
+});
+
+test('mobile app shell uses a fixed five-item safe-area tab bar', () => {
+  const html = pages[0];
+  const tabbar = html.match(/<nav id="mobile-tabbar" class="mobile-tabbar"[\s\S]*?<\/nav>/)?.[0] || '';
+
+  assert.ok(tabbar, 'mobile tab bar must exist');
+  assert.equal((tabbar.match(/class="mobile-tab-item/g) || []).length, 5);
+  assert.match(tabbar, /id="mobile-primary-entry"/);
+  assert.match(tabbar, /data-mobile-tab="records"/);
+  assert.match(html, /\.mobile-tabbar\s*\{[^}]*display:\s*none/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.sidebar\s*\{[^}]*display:\s*none/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.mobile-tabbar\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*0[^}]*display:\s*grid/s);
+  assert.match(html, /padding-bottom:\s*env\(safe-area-inset-bottom\)/);
+});
+
+test('mobile app shell groups records and keeps primary actions reachable', () => {
+  const html = pages[0];
+
+  assert.equal((html.match(/class="mobile-record-switcher"/g) || []).length, 2);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#claim-submit[\s\S]*position:\s*sticky/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#leave-submit[\s\S]*position:\s*sticky/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.admin-tabs\s*\{[^}]*position:\s*sticky/s);
+});
+
+test('mobile header uses the selected app icon and synchronizes role-aware navigation', () => {
+  const html = pages[0];
+
+  assert.match(html, /class="app-icon-mark"[^>]*src="\.\/assets\/app-icon-180\.png"/);
+  assert.match(html, /function\s+updateMobileNavigation\s*\(/);
+  assert.match(html, /function\s+syncMobileTabState\s*\(/);
+  assert.match(html, /mobile-primary-entry/);
+  assert.match(html, /managementCapabilities\.length\s*\?\s*"view-admin"\s*:\s*"view-home"/);
 });

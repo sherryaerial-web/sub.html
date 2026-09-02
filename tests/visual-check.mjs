@@ -1,18 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import pngjs from "pngjs";
-import { chromium } from "playwright";
+import playwright from "playwright";
+
+const { chromium } = playwright;
 
 const { PNG } = pngjs;
-const require = createRequire(import.meta.url);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, "..");
 const outputDir = "/private/tmp/substitute-v2-screenshots";
 const html = await fs.readFile(path.join(repoDir, "index.html"), "utf8");
-const lucidePath = path.resolve(path.dirname(require.resolve("lucide")), "../umd/lucide.js");
-const lucideScript = await fs.readFile(lucidePath);
+const lucideScript = Buffer.from("window.lucide={createIcons(){}};");
 const visualHtml = html.replace(
   '<script src="assets/xlsx.full.min.js"></script>',
   '<script>window.XLSX = { utils: {} };</script>',
@@ -45,7 +44,9 @@ const leaveOb = {
   originalTeacher: "Jina",
   substituteTeacher: "Mina",
   date: "2026/08/14",
-  time: "19:30",
+  time: "18:30",
+  actualStartTime: "19:00",
+  startDelayMinutes: 30,
   originalCourse: "舞綢 Lv.1",
   actualCourse: "空環基礎",
   difficulty: "Lv.1",
@@ -55,6 +56,24 @@ const leaveOb = {
   differenceReason: "",
   note: "改為可教授的空環課程",
   auditHistory: [{ time: "2026-08-05 10:20", action: "領取代課", reason: "改課" }]
+};
+const leaveOccupied = {
+  substituteId: "sub-ob-next",
+  originalTeacher: "Jina",
+  substituteTeacher: "",
+  date: "2026/08/14",
+  time: "20:00",
+  originalCourse: "空環 Lv.2",
+  actualCourse: "空環 Lv.2",
+  difficulty: "",
+  status: "延後占用",
+  changeStatus: "延後占用／待管理員關閉 OB",
+  verificationStatus: "待關閉 OB",
+  differenceReason: "",
+  delaySourceSubstituteId: "sub-ob",
+  delaySourceTeacher: "Mina",
+  note: "",
+  auditHistory: []
 };
 const leaveChange = {
   ...leaveOb,
@@ -102,19 +121,26 @@ const fixtures = {
     }
   ],
   getAvailableSubstitutes: [
-    { "代課編號": "sub-cross", "原老師": "Jina", "日期": "2026/08/11", "時段": "18:30", "課程": "舞綢 Lv.1", "課程大類": "舞綢", "可沿用原課程": false },
-    { "代課編號": "sub-same", "原老師": "Mina", "日期": "2026/08/13", "時段": "19:30", "課程": "空環 Lv.1", "課程大類": "空環", "可沿用原課程": true }
+    { "代課編號": "sub-delay", "原老師": "Jina", "日期": "2026/08/11", "時段": "18:30", "課程": "A－空環 Lv.1", "課程大類": "空環", "可沿用原課程": true },
+    { "代課編號": "sub-delay-next", "原老師": "Mina", "日期": "2026/08/11", "時段": "20:00", "課程": "A－空環 Lv.2", "課程大類": "空環", "可沿用原課程": true }
   ],
   getClaimOptions: {
     capabilities: ["空環", "空瑜"],
     classes: [
       { classId: "class-ring-1", courseName: "空環 Lv.1", category: "空環" },
       { classId: "class-yoga-1", courseName: "空中瑜伽", category: "空瑜" }
-    ]
+    ],
+    specialAvailability: {
+      "sub-delay": {
+        room: "A", date: "2026/08/11", startTime: "18:30", nextCourseTime: "20:00",
+        mergePartnerIds: ["sub-delay-next"], maxDurationMinutes: 75
+      }
+    }
   },
   getMySubs: [
     {
       "代課編號": "sub-history", "日期": "2026/08/08", "時段": "19:30", "課程": "舞綢 Lv.1",
+      "實際開始時間": "20:00", "延後分鐘數": 30,
       "原老師": "Jina", "處理類型": "需要新增課程", "實際課程名稱": "空環基礎", "預計難度": "Lv.1",
       "備註": "改為可教授的空環課程", "異動狀態": "無", "可申請退出": true, "異動紀錄": []
     }
@@ -153,6 +179,15 @@ const fixtures = {
       "冠蓉", "狗狗 陳", "Lydia 慕恩", "尚昀 陳", "Angela Chuang"
     ],
     pendingInvitations: [leavePending],
+    missingObCancellations: [{
+      ...leavePending,
+      substituteId: "sub-ob-cancelled",
+      date: "2026/09/18",
+      time: "19:30",
+      originalCourse: "A－空環 Lv.1~2",
+      originalTeacher: "小mo(子涵）",
+      originalCalendarId: "cal-ob-cancelled"
+    }],
     activeInvitees: ["卡拉 卡拉", "芊芊♡", "Tako", "@N.a🧘🏻♀️", "蜜莉 戴", "Liz 🌰", "Angela Chuang"]
       .map((teacherName, index) => ({
         invitationId: `invite-${index + 1}`,
@@ -160,11 +195,23 @@ const fixtures = {
         openedAt: "2026-08-05 09:00",
         viewedAt: index % 2 ? "" : "2026-08-05 09:12"
       })),
-    obWork: [leaveOb],
+    obWork: [leaveOb, leaveOccupied],
     changeRequests: [leaveChange],
     exceptions: [leaveException],
     completed: [leaveComplete],
-    replacementOptions: [{ calendarId: "cal-new", courseName: "空環基礎", teacherName: "Mina", date: "2026/08/14", time: "19:30" }]
+    replacementOptions: [{ calendarId: "cal-new", courseName: "空環基礎", teacherName: "Mina", date: "2026/08/14", time: "19:30" }],
+    courseClosure: {
+      targetDate: "2026/09/01",
+      triggerCount: 2,
+      automatic: true,
+      manualStageAvailability: { "22:30": true, "23:40": false },
+      unclaimedCandidates: [],
+      recentLogs: [],
+      socialCopy: {
+        content: "明12:00劍潭蕃茄柔軟度開發\n13:30晴光Lily舞綢\n各缺一，等到23:40",
+        updatedAt: "2026-08-31 22:30:00"
+      }
+    }
   }
 };
 
@@ -184,6 +231,15 @@ function apiPayload(request) {
     };
   }
   if (action === "logout") return { loggedOut: true };
+  if (action === "getPushConfiguration") {
+    return { configured: true, appId: "visual-test-app", externalId: "visual-test-user" };
+  }
+  if (action === "getClaimPageData") {
+    return {
+      items: fixtures.getAvailableSubstitutes,
+      options: fixtures.getClaimOptions,
+    };
+  }
   return fixtures[action] ?? { count: 1 };
 }
 
@@ -224,7 +280,17 @@ async function capture(page, viewportName, name) {
     const overflow = [...document.querySelectorAll("button, .list-item, .date-option, .summary-item")]
       .filter(visible)
       .filter((element) => element.scrollWidth > element.clientWidth + 2)
-      .map((element) => element.id || element.className || element.textContent.trim().slice(0, 30));
+      .map((element) => ({
+        name: element.id || element.className || element.textContent.trim().slice(0, 30),
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        children: [...element.children].map((child) => ({
+          className: child.className?.baseVal || child.className || child.tagName,
+          left: Math.round(child.getBoundingClientRect().left - element.getBoundingClientRect().left),
+          right: Math.round(child.getBoundingClientRect().right - element.getBoundingClientRect().left),
+          width: Math.round(child.getBoundingClientRect().width),
+        })),
+      }));
     const nav = document.querySelector(".primary-nav");
     const workspace = document.querySelector(".workspace");
     const navStyle = getComputedStyle(nav);
@@ -238,7 +304,7 @@ async function capture(page, viewportName, name) {
     };
   });
   if (layout.scrollWidth > layout.clientWidth + 1) throw new Error(`${viewportName}/${name}: horizontal overflow ${layout.scrollWidth}/${layout.clientWidth}`);
-  if (layout.overflow.length) throw new Error(`${viewportName}/${name}: clipped controls ${layout.overflow.join(" | ")}`);
+  if (layout.overflow.length) throw new Error(`${viewportName}/${name}: clipped controls ${JSON.stringify(layout.overflow)}`);
   if (!layout.mobileNavProtected) throw new Error(`${viewportName}/${name}: mobile navigation overlaps content`);
   if (layout.bodyTextLength < 35) throw new Error(`${viewportName}/${name}: required UI is missing`);
 
@@ -249,10 +315,24 @@ async function capture(page, viewportName, name) {
 }
 
 async function login(page, teacherName) {
-  await page.locator("#login-teacher").fill(teacherName);
+  await page.locator("#login-teacher").selectOption(teacherName);
   await page.locator("#login-pin").fill("1234");
   await page.locator("#login-submit").click();
   await page.locator("#app-shell").waitFor({ state: "visible" });
+}
+
+async function openView(page, viewId) {
+  const target = page.locator(`[data-view="${viewId}"]:visible`);
+  if (await target.count()) {
+    await target.first().click();
+    return;
+  }
+  if (viewId === "view-mysubs") {
+    await page.locator('.mobile-tab-item[data-view="view-myleaves"]:visible').click();
+    await page.locator('.mobile-record-button[data-view="view-mysubs"]:visible').click();
+    return;
+  }
+  throw new Error(`No visible navigation control for ${viewId}`);
 }
 
 const browser = await chromium.launch({
@@ -266,6 +346,7 @@ const adminHeaderOnly = process.env.VISUAL_SCOPE === "admin-header";
 try {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 900 },
+    { name: "tablet", width: 820, height: 980 },
     { name: "mobile", width: 390, height: 844 }
   ]) {
     const page = await browser.newPage({ viewport });
@@ -275,6 +356,29 @@ try {
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     await page.route("https://unpkg.com/**", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/javascript", body: lucideScript });
+    });
+    await page.route("https://cdn.onesignal.com/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/javascript",
+        body: `
+          window.OneSignalDeferred = window.OneSignalDeferred || [];
+          const visualPushSubscription = {
+            optedIn: false,
+            optIn: async () => { visualPushSubscription.optedIn = true; },
+            optOut: async () => { visualPushSubscription.optedIn = false; }
+          };
+          const visualOneSignal = {
+            init: async () => {},
+            login: async () => {},
+            logout: async () => {},
+            Notifications: { permission: false, isPushSupported: () => true, requestPermission: async () => {} },
+            User: { PushSubscription: visualPushSubscription }
+          };
+          window.OneSignalDeferred.splice(0).forEach((callback) => callback(visualOneSignal));
+          window.OneSignalDeferred.push = (callback) => Promise.resolve(callback(visualOneSignal));
+        `
+      });
     });
     await page.route("https://script.google.com/**", async (route) => {
       const request = route.request();
@@ -292,14 +396,39 @@ try {
       });
     });
 
-    await page.setContent(visualHtml, { waitUntil: "networkidle", timeout: 10000 });
+    await page.setContent(visualHtml, { waitUntil: "domcontentloaded", timeout: 10000 });
+    await page.waitForTimeout(120);
     if (errors.length) throw new Error(`${viewport.name}: browser startup errors: ${errors.join(" | ")}`);
     if (adminHeaderOnly) {
       await login(page, "Ivy");
-      await page.locator("#admin-entry").click();
-      await page.locator("#admin-summary .summary-item").first().waitFor();
+      await openView(page, "view-admin");
+      await page.locator("#admin-reminders .summary-item").first().waitFor();
       await page.locator("#admin-sync").click();
       await page.locator("#admin-sync-status").getByText("已同步 1 筆").waitFor();
+      const adminHeaderLayout = await page.evaluate(() => {
+        const commandBar = document.querySelector(".admin-command-bar");
+        const commandActions = document.querySelector(".admin-command-actions");
+        const tabs = document.querySelector(".admin-tabs");
+        const teacherRoundGrid = document.querySelector(".teacher-round-grid");
+        const summary = document.querySelector("#admin-summary");
+        const headerText = document.querySelector("#view-admin")?.innerText || "";
+        return {
+          hasCommandBar: Boolean(commandBar),
+          commandColumns: commandActions ? getComputedStyle(commandActions).gridTemplateColumns.split(" ").filter(Boolean).length : 0,
+          duplicateCancellationLabels: (headerText.match(/OB 已取消待關閉/g) || []).length,
+          summaryVisible: Boolean(summary && getComputedStyle(summary).display !== "none" && summary.getBoundingClientRect().height > 0),
+          tabsOverflow: tabs ? tabs.scrollWidth > tabs.clientWidth + 1 : true,
+          teacherRoundColumns: teacherRoundGrid ? getComputedStyle(teacherRoundGrid).gridTemplateColumns.split(" ").filter(Boolean).length : 0,
+        };
+      });
+      if (!adminHeaderLayout.hasCommandBar) throw new Error(`${viewport.name}: management command bar missing`);
+      if (adminHeaderLayout.duplicateCancellationLabels !== 1) throw new Error(`${viewport.name}: duplicated cancellation reminder`);
+      if (adminHeaderLayout.summaryVisible) throw new Error(`${viewport.name}: duplicate summary grid is still visible`);
+      if (viewport.width > 760 && adminHeaderLayout.tabsOverflow) throw new Error(`${viewport.name}: management tabs overflow instead of using two rows`);
+      if (viewport.width > 920 && adminHeaderLayout.teacherRoundColumns !== 5) throw new Error(`${viewport.name}: teacher rounds are not five columns`);
+      if (viewport.width > 760 && viewport.width <= 920 && adminHeaderLayout.teacherRoundColumns !== 3) throw new Error(`${viewport.name}: teacher rounds are not three columns`);
+      if (viewport.width <= 760 && adminHeaderLayout.teacherRoundColumns !== 2) throw new Error(`${viewport.name}: teacher rounds are not two columns`);
+      if (viewport.width <= 760 && adminHeaderLayout.commandColumns !== 2) throw new Error(`${viewport.name}: management tools are not a two-column grid`);
       results.push(await capture(page, viewport.name, "admin-header"));
       if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
       await page.close();
@@ -307,7 +436,7 @@ try {
     }
     if (payrollOnly) {
       await login(page, "Ivy");
-      await page.locator("#admin-entry").click();
+      await openView(page, "view-admin");
       await page.locator('[data-admin-tab="payroll"]').click();
       await page.locator(".payroll-toolbar").waitFor();
       results.push(await capture(page, viewport.name, "admin-7-payroll"));
@@ -318,7 +447,7 @@ try {
     results.push(await capture(page, viewport.name, "01-login"));
     await login(page, "Ariel Lu");
 
-    await page.locator('.nav-item[data-view="view-leave"]').click();
+    await openView(page, "view-leave");
     await page.locator(".leave-date-checkbox").first().waitFor();
     await page.locator("#select-all-visible-dates").click();
     await page.locator(".leave-course-checkbox").nth(0).check();
@@ -326,34 +455,43 @@ try {
     await page.locator("#leave-confirmation-count").getByText("已選 2 堂").waitFor();
     results.push(await capture(page, viewport.name, "02-leave-confirmation"));
 
-    await page.locator('.nav-item[data-view="view-myleaves"]').click();
+    await openView(page, "view-myleaves");
     await page.locator("#my-leaves-list .list-item").first().waitFor();
     results.push(await capture(page, viewport.name, "03-leave-history"));
 
-    await page.locator('.nav-item[data-view="view-claim"]').click();
-    const crossCard = page.locator('[data-claim-card-id="sub-cross"]');
-    await crossCard.waitFor();
-    await crossCard.locator(".claim-checkbox").check();
-    await crossCard.locator(".handling-option", { hasText: "改用既有 OB 課程" }).click();
-    await crossCard.locator(".existing-class-search").selectOption("__SPECIAL__");
-    await crossCard.locator(".new-course-name").fill("主題編舞");
-    await crossCard.locator(".claim-note").fill("調整為特別課");
-    results.push(await capture(page, viewport.name, "04-cross-apparatus-claim"));
+    await openView(page, "view-claim");
+    await page.locator('[data-claim-date-toggle="2026/08/11"]').click();
+    const delayedCard = page.locator('[data-claim-card-id="leave:sub-delay"]');
+    await delayedCard.waitFor();
+    await delayedCard.locator(".claim-checkbox").check();
+    await delayedCard.locator(".handling-option", { hasText: "調整課程或時間" }).click();
+    await delayedCard.locator(".claim-course-type").selectOption("__ORIGINAL__");
+    await delayedCard.locator(".claim-start-delay").selectOption("30");
+    await delayedCard.locator(".claim-delay-summary").filter({ hasText: "下一堂 20:00 需由管理員關閉 OB" }).waitFor();
+    results.push(await capture(page, viewport.name, "04-ordinary-delay-claim"));
+    await page.evaluate(() => {
+      claimPageState = "ended";
+      pendingLeaves = [];
+      claimOptions = { capabilities: [], classes: [], specialSlots: [] };
+      renderAvailableSubstitutes();
+    });
+    await page.locator("#pending-leaves-list").getByText("本輪代課領取已結束").waitFor();
+    results.push(await capture(page, viewport.name, "04b-invitation-round-ended"));
 
-    await page.locator('.nav-item[data-view="view-mysubs"]').click();
+    await openView(page, "view-mysubs");
     await page.locator("#my-subs-list .list-item").first().waitFor();
     results.push(await capture(page, viewport.name, "05-substitute-history"));
 
-    await page.locator('.nav-item[data-view="view-payroll"]').click();
+    await openView(page, "view-payroll");
     await page.locator(".payroll-hero").waitFor();
     results.push(await capture(page, viewport.name, "06-payroll"));
 
     await page.locator("#logout-button").click();
     await page.locator("#auth-shell").waitFor({ state: "visible" });
     await login(page, "Ivy");
-    await page.locator("#admin-entry").click();
-    await page.locator("#admin-summary .summary-item").first().waitFor();
-    const adminTabs = ["pendingInvitations", "activeInvitees", "obWork", "changeRequests", "exceptions", "completed"];
+    await openView(page, "view-admin");
+    await page.locator("#admin-reminders .summary-item").first().waitFor();
+    const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "closureManagement", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {
       const tab = adminTabs[index];
       await page.locator(`[data-admin-tab="${tab}"]`).click();

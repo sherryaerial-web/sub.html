@@ -1,33 +1,43 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import playwright from 'playwright';
 import pngjs from 'pngjs';
 
+const { chromium } = playwright;
 const { PNG } = pngjs;
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, '..');
 const outputDir = '/private/tmp/substitute-vvip-screenshots';
 const html = await fs.readFile(path.join(repoDir, 'vvip.html'), 'utf8');
 const courses = [
+  { calendarId: 'cal-special', date: '2026/09/01', time: '14:00', courseName: '後彎充電特別課 (150min)', teacherName: '卡拉' },
   { calendarId: 'cal-existing', date: '2026/09/02', time: '10:00', courseName: '空環基礎', teacherName: 'Ariel' },
-  { calendarId: 'cal-2', date: '2026/09/02', time: '19:00', courseName: '空中瑜伽', teacherName: 'Jina' },
-  { calendarId: 'cal-3', date: '2026/09/03', time: '18:30', courseName: '舞綢基礎', teacherName: 'Mina' },
-  { calendarId: 'cal-4', date: '2026/09/04', time: '20:00', courseName: '綢吊基礎', teacherName: 'Ariel' },
+  { calendarId: 'cal-2', date: '2026/09/02', time: '19:00', courseName: '空中瑜伽', teacherName: '原老師甲', leaveStatus: 'pending', originalTeacherName: '原老師甲', substituteTeacherName: '', leaveLabel: '原老師請假：原老師甲｜代課老師未定' },
+  { calendarId: 'cal-3', date: '2026/09/03', time: '18:30', courseName: '舞綢基礎', teacherName: '代課老師乙', leaveStatus: 'claimed', originalTeacherName: '原老師乙', substituteTeacherName: '代課老師乙', leaveLabel: '原老師請假：原老師乙｜代課老師：代課老師乙' },
+  { calendarId: 'cal-4', date: '2026/09/04', time: '20:00', courseName: '綢吊 Lv.0-2 (90分)', teacherName: 'Ariel' },
 ];
+let submitted = false;
 
 function payload(request) {
   const params = new URLSearchParams(request.postData() || '');
   const action = params.get('action');
-  const existing = [{ ...courses[0], status: '待人工確認' }];
+  const existing = [
+    { ...courses[1], status: '待人工確認' },
+    { calendarId: 'cal-cancelled', date: '2026/09/06', time: '15:30', courseName: '空環 Lv.1', teacherName: '原老師丙', status: '課程已取消', courseCancelled: true },
+  ];
   if (action === 'getVvipMembers') {
     return [{ id: 'vvip-1', name: '測試會員' }];
   }
   if (action === 'getVvipSelection') {
-    return { email: 'vvip@example.com', month: '2026-09', limit: 4, count: 1, selections: existing, courses };
+    const selections = submitted
+      ? [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }]
+      : existing;
+    return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: selections.filter((item) => !item.courseCancelled).length, selections, courses };
   }
   if (action === 'submitVvipSelection') {
-    return { email: 'vvip@example.com', month: '2026-09', limit: 4, count: 3, selections: [...existing, { ...courses[1], status: '待人工確認' }, { ...courses[2], status: '待人工確認' }], courses };
+    submitted = true;
+    return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: 3, selections: [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }], courses };
   }
   return {};
 }
@@ -46,6 +56,7 @@ function inspectScreenshot(buffer, label) {
 }
 
 async function runJourney(browser, viewport) {
+  submitted = false;
   const page = await browser.newPage({ viewport });
   page.setDefaultTimeout(7000);
   const errors = [];
@@ -59,13 +70,35 @@ async function runJourney(browser, viewport) {
   await page.setContent(html, { waitUntil: 'networkidle' });
   await page.locator('#vvip-member').fill('測試會員');
   await page.locator('#vvip-lookup').click();
-  await page.locator('.vvip-course-checkbox').nth(1).check();
-  await page.locator('.vvip-course-checkbox').nth(2).check();
-  await page.locator('#vvip-counter').getByText('已選 3／4 堂').waitFor();
+  await page.locator('.vvip-special-section').getByText('後彎充電特別課 (150min)').waitFor();
+  if (await page.locator('.vvip-special-section .vvip-course-checkbox').count() !== 1) {
+    throw new Error(`${viewport.name}: ordinary 90-minute course was classified as special`);
+  }
+  const sectionOrder = await page.locator('#vvip-course-area > section').evaluateAll((sections) => sections.map((section) => section.className));
+  if (sectionOrder[0] !== 'vvip-special-section') throw new Error(`${viewport.name}: special courses are not first`);
+  const septemberSecond = page.locator('[data-vvip-date-toggle="2026/09/02"]');
+  const septemberThird = page.locator('[data-vvip-date-toggle="2026/09/03"]');
+  await septemberSecond.getByText('2026/09/02（三）').waitFor();
+  if (await septemberSecond.getAttribute('aria-expanded') !== 'false') throw new Error(`${viewport.name}: ordinary date was not collapsed`);
+  await septemberSecond.click();
+  await septemberThird.click();
+  await page.getByText('原老師請假：原老師甲｜代課老師未定').waitFor();
+  await page.getByText('原老師請假：原老師乙｜代課老師：代課老師乙').waitFor();
+  if (await page.locator('.vvip-course-checkbox').count() !== courses.length - 1) {
+    throw new Error(`${viewport.name}: leave status created duplicate selectable courses`);
+  }
+  await page.locator('[data-vvip-date-toggle="2026/09/04"]').click();
+  if (await page.locator('.vvip-course-checkbox').count() !== courses.length) {
+    throw new Error(`${viewport.name}: expanded ordinary date did not render its course`);
+  }
+  await page.locator('.vvip-course-checkbox[value="cal-2"]').check();
+  await page.locator('.vvip-course-checkbox[value="cal-3"]').check();
+  await page.locator('#vvip-counter').getByText('已選 3／3 堂').waitFor();
   await page.locator('#vvip-submit').click();
-  await page.getByText('選課意願已送出').waitFor();
+  await page.getByText('已確認選課成功').waitFor();
   await page.locator('#vvip-summary-list').getByText('空中瑜伽').waitFor();
   await page.locator('#vvip-summary-list').getByText('舞綢基礎').waitFor();
+  await page.locator('#vvip-summary-list').getByText('課程已取消').waitFor();
   const layout = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,

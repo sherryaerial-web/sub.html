@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import pngjs from "pngjs";
-import playwright from "playwright";
+
+const require = createRequire(import.meta.url);
+const dependencyRoot = process.env.CODEX_NODE_MODULES || "";
+const loadDependency = (name) => require(dependencyRoot ? path.join(dependencyRoot, name) : name);
+const pngjs = loadDependency("pngjs");
+const playwright = loadDependency("playwright");
 
 const { chromium } = playwright;
 
@@ -153,6 +158,43 @@ const fixtures = {
       { month: "2026-08", lineId: "pay-2", version: "payroll-v1", calendarId: "cal-pay-2", teacherName: "Ariel Lu", date: "2026/08/08", time: "19:30", courseName: "空環 Flare 特別課", billingType: "特別課60%", attendanceCount: 8, courseIncome: 7430, ruleDetail: "課程收入 7430 × 60%", amount: 4458, manualAdjustment: 0, adjustmentReason: "", status: "待確認" }
     ],
     disputes: []
+  },
+  getPracticeDay: {
+    date: "2026/09/02",
+    teacherName: "Ariel Lu",
+    quickDurations: [60, 90, 120],
+    rooms: [
+      { room: "A", blocks: [
+        { id: "course-1", calendarId: "cal-practice-1", type: "course", startTime: "10:00", endTime: "11:00", label: "A－空環 Lv.2", teacherName: "Jina" },
+        { id: "practice-1", bookingId: "practice-1", seriesId: "series-1", type: "practice", startTime: "14:00", endTime: "16:00", creatorName: "Ariel Lu", isMine: true, participants: [
+          { teacherName: "Ariel Lu", role: "建立者", startTime: "14:00", endTime: "16:00" },
+          { teacherName: "Tako", role: "參與者", startTime: "14:30", endTime: "15:30" }
+        ] }
+      ] },
+      { room: "B", blocks: [{ id: "rental-1", type: "rental", startTime: "18:00", endTime: "20:00", label: "場地租借" }] },
+      { room: "C", blocks: [] },
+      { room: "D", blocks: [] }
+    ]
+  },
+  getPracticeAdminDashboard: {
+    filters: {},
+    summary: { total: 2, active: 1, waitlisted: 1, cancelled: 0 },
+    bookings: [
+      {
+        bookingId: "practice-1", seriesId: "series-1", date: "2026/09/02", room: "A", startTime: "14:00", endTime: "16:00", status: "已成立", creatorName: "Ariel Lu", reason: "",
+        participants: [
+          { teacherName: "Ariel Lu", role: "建立者", startTime: "14:00", endTime: "16:00", status: "有效", joinScope: "future" },
+          { teacherName: "Tako", role: "參與者", startTime: "14:30", endTime: "15:30", status: "有效", joinScope: "once" }
+        ],
+        audits: [{ time: "2026/09/01 12:00", actor: "Ariel Lu", action: "建立自主練習", reason: "" }]
+      },
+      {
+        bookingId: "practice-2", seriesId: "", date: "2026/09/03", room: "C", startTime: "19:00", endTime: "20:00", status: "候補", creatorName: "Jina", waitlistCalendarId: "cal-candidate-1", reason: "課程取消後補入",
+        participants: [{ teacherName: "Jina", role: "建立者", startTime: "19:00", endTime: "20:00", status: "有效", joinScope: "once" }],
+        audits: []
+      }
+    ],
+    notificationFailures: [{ time: "2026/09/01 12:01", targetId: "practice-1", reason: "測試推播失敗待辦" }]
   },
   getPayrollAdminDashboard: {
     month: "2026-08",
@@ -322,7 +364,7 @@ async function login(page, teacherName) {
 }
 
 async function openView(page, viewId) {
-  const target = page.locator(`[data-view="${viewId}"]:visible`);
+  let target = page.locator(`[data-view="${viewId}"]:visible`);
   if (await target.count()) {
     await target.first().click();
     return;
@@ -331,6 +373,15 @@ async function openView(page, viewId) {
     await page.locator('.mobile-tab-item[data-view="view-myleaves"]:visible').click();
     await page.locator('.mobile-record-button[data-view="view-mysubs"]:visible').click();
     return;
+  }
+  const primary = page.locator("#mobile-primary-entry:visible");
+  if (await primary.count()) {
+    await primary.click();
+    target = page.locator(`[data-view="${viewId}"]:visible`);
+    if (await target.count()) {
+      await target.first().click();
+      return;
+    }
   }
   throw new Error(`No visible navigation control for ${viewId}`);
 }
@@ -486,6 +537,14 @@ try {
     await page.locator(".payroll-hero").waitFor();
     results.push(await capture(page, viewport.name, "06-payroll"));
 
+    await openView(page, "view-practice");
+    await page.locator(".practice-timeline-grid").waitFor();
+    results.push(await capture(page, viewport.name, "07-practice-day"));
+    await page.locator('[data-practice-start="12:00"]').click();
+    await page.locator("#practice-dialog").waitFor({ state: "visible" });
+    results.push(await capture(page, viewport.name, "08-practice-create"));
+    await page.locator("#practice-dialog-cancel").click();
+
     await page.locator("#logout-button").click();
     await page.locator("#auth-shell").waitFor({ state: "visible" });
     await login(page, "Ivy");
@@ -500,6 +559,9 @@ try {
     await page.locator('[data-admin-tab="payroll"]').click();
     await page.locator(".payroll-toolbar").waitFor();
     results.push(await capture(page, viewport.name, "admin-7-payroll"));
+    await page.locator('[data-admin-tab="practice"]').click();
+    await page.locator(".practice-admin-card").first().waitFor();
+    results.push(await capture(page, viewport.name, "admin-8-practice"));
 
     if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
     await page.close();

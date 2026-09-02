@@ -2754,8 +2754,8 @@ test('practice admin workspace shows filters participants failures and protected
   assert.match(html, /data-admin-action="cancel-practice"/);
   assert.match(html, /參與者與各自時段/);
   assert.match(html, /推播失敗待處理/);
-  assert.match(html, /callPostApi\("updatePracticeBooking"/);
-  assert.match(html, /callPostApi\("cancelPracticeBooking"/);
+  assert.match(html, /callPostApi\("updatePracticeBooking",\s*\{\s*practice:\s*\{/);
+  assert.match(html, /callPostApi\("cancelPracticeBooking",\s*\{\s*practice:\s*\{/);
 });
 
 test('practice admin dashboard renders participant intervals and failure audit safely', () => {

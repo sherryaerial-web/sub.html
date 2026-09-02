@@ -4422,20 +4422,24 @@
           await correctClaimDetails(state.substituteId, difficulty, reason);
         } else if (state.action === "update-practice") {
           await callPostApi("updatePracticeBooking", {
-            bookingId: state.bookingId,
-            date: state.date,
-            room: state.room,
-            startTime: state.startTime,
-            endTime: state.endTime,
-            reason
+            practice: {
+              bookingId: state.bookingId,
+              date: state.date,
+              room: state.room,
+              startTime: state.startTime,
+              endTime: state.endTime,
+              reason
+            }
           });
           setNotice("自主練習時段已調整。");
           await fetchPracticeAdminDashboard();
         } else if (state.action === "cancel-practice") {
           await callPostApi("cancelPracticeBooking", {
-            bookingId: state.bookingId,
-            scope: state.scope || "once",
-            reason
+            practice: {
+              bookingId: state.bookingId,
+              scope: state.scope || "once",
+              reason
+            }
           });
           setNotice(state.scope === "future" ? "本次及往後的自主練習已取消。" : "這次自主練習已取消。");
           await fetchPracticeAdminDashboard();
@@ -4890,7 +4894,9 @@
           return;
         }
         if (badge.dataset.adminCount === "practice") {
-          badge.textContent = String((practiceAdminDashboard && practiceAdminDashboard.summary && practiceAdminDashboard.summary.active) || 0);
+          badge.textContent = practiceAdminDashboard
+            ? String((practiceAdminDashboard.summary && practiceAdminDashboard.summary.active) || 0)
+            : "—";
           return;
         }
         if (badge.dataset.adminCount === "courseClosureCandidates") {

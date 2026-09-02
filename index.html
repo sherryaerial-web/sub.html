@@ -1617,9 +1617,9 @@
             <div><span class="eyebrow">Practice</span><h2 class="section-heading">自主練習</h2><p class="section-copy">直接看 A、B、C、D 教室當天狀況</p></div>
           </div>
           <div class="practice-date-navigation">
-            <button id="practice-date-previous" class="practice-date-arrow" type="button" aria-label="前一天">‹</button>
+            <button id="practice-date-previous" class="practice-date-arrow" type="button" aria-label="前一週">‹</button>
             <div id="practice-date-strip" class="practice-date-strip" aria-label="選擇自主練習日期"></div>
-            <button id="practice-date-next" class="practice-date-arrow" type="button" aria-label="後一天">›</button>
+            <button id="practice-date-next" class="practice-date-arrow" type="button" aria-label="後一週">›</button>
           </div>
           <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
           <div class="practice-toolbar">
@@ -1734,7 +1734,7 @@
         <div class="practice-form-field"><label for="practice-editor-start">開始時間</label><input id="practice-editor-start" class="text-input" type="time" step="300" required></div>
         <div class="practice-form-field"><label for="practice-editor-end">結束時間</label><input id="practice-editor-end" class="text-input" type="time" step="300" required></div>
         <div class="practice-form-field full"><label>快速時長</label><div id="practice-duration-options" class="practice-duration-options"><button class="practice-duration-button active" type="button" data-practice-duration="60">60 分鐘</button><button class="practice-duration-button" type="button" data-practice-duration="90">90 分鐘</button><button class="practice-duration-button" type="button" data-practice-duration="120">120 分鐘</button></div></div>
-        <label id="practice-recurrence-field" class="practice-form-field full"><span>循環登記</span><span><input id="practice-editor-weekly" type="checkbox"> 每週同一時段，直到我停止</span></label>
+        <label id="practice-recurrence-field" class="practice-form-field full"><span>循環登記</span><span><input id="practice-editor-weekly" type="checkbox"> <span id="practice-recurrence-label">每週同一時段，直到我停止</span></span></label>
       </div>
       <div id="practice-participants" class="practice-participant-list"></div>
       <div id="practice-editor-warning" class="practice-editor-warning" aria-live="polite"></div>
@@ -1769,7 +1769,7 @@
     let payrollDashboard = null;
     let notificationDashboard = null;
     let practiceAdminDashboard = null;
-    let practiceState = { date: "", room: "A", data: null, editor: null };
+    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {} };
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
@@ -2503,7 +2503,7 @@
       mySubsRecordMonth = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
-      practiceState = { date: "", room: "A", data: null, editor: null };
+      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {} };
     }
 
     function updateActingMode() {
@@ -2977,18 +2977,25 @@
 
     async function loadPracticeDay(dateValue) {
       const date = getSafePracticeDate(dateValue);
+      const requestSerial = Number(practiceState.requestSerial || 0) + 1;
+      practiceState.requestSerial = requestSerial;
       practiceState.date = date;
       renderPracticeDateStrip();
       const timeline = byId("practice-timeline");
-      beginReadRefresh(timeline, !!practiceState.data, '<div class="state">載入教室時間中...</div>');
+      const cached = practiceState.dayCache?.[date] || null;
+      if (cached) renderPracticeView(cached);
+      beginReadRefresh(timeline, !!cached, '<div class="state">載入教室時間中...</div>');
       try {
-        practiceState.data = await callPostApi("getPracticeDay", { date });
-        renderPracticeView(practiceState.data);
+        const data = await callPostApi("getPracticeDay", { date });
+        if (requestSerial !== practiceState.requestSerial) return;
+        practiceState.dayCache[date] = data;
+        renderPracticeView(data);
       } catch (error) {
-        if (!practiceState.data) timeline.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (requestSerial !== practiceState.requestSerial) return;
+        if (!cached) timeline.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
         else setNotice(`自主練習更新失敗：${error.message}`, "error");
       } finally {
-        endReadRefresh(timeline);
+        if (requestSerial === practiceState.requestSerial) endReadRefresh(timeline);
       }
     }
 
@@ -3034,10 +3041,11 @@
       return `<button class="practice-block ${escapeHtml(block.type)}" type="button" data-practice-block="${escapeHtml(block.id)}"><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
     }
 
-    function practiceSlotAvailable(startMinutes, duration = 60) {
+    function practiceSlotAvailable(startMinutes, duration = 60, excludeBookingId = "") {
       const endMinutes = startMinutes + duration;
       if (startMinutes < 7 * 60 || endMinutes > 23 * 60 + 30) return false;
       return !getPracticeSelectedRoom().blocks.some((block) => {
+        if (excludeBookingId && block.bookingId === excludeBookingId) return false;
         const blockStart = practiceTimeToMinutes(block.startTime);
         const blockEnd = practiceTimeToMinutes(block.endTime);
         return startMinutes < blockEnd + 15 && endMinutes + 15 > blockStart;
@@ -3071,11 +3079,11 @@
       syncPracticeEditorAvailability();
     }
 
-    function findPracticeAlternatives(duration) {
+    function findPracticeAlternatives(duration, excludeBookingId = "") {
       const requestedStart = practiceTimeToMinutes(byId("practice-editor-start").value);
       const candidates = [];
       for (let minutes = 7 * 60; minutes <= 22 * 60 + 30; minutes += 5) {
-        if (practiceSlotAvailable(minutes, duration)) candidates.push(minutes);
+        if (practiceSlotAvailable(minutes, duration, excludeBookingId)) candidates.push(minutes);
       }
       candidates.sort((left, right) => {
         const leftDistance = Math.abs(left - requestedStart);
@@ -3096,17 +3104,22 @@
       const start = practiceTimeToMinutes(byId("practice-editor-start").value);
       const end = practiceTimeToMinutes(byId("practice-editor-end").value);
       const duration = end - start;
+      const excludeBookingId = ["edit", "join"].includes(practiceState.editor.mode)
+        ? (practiceState.editor.block?.bookingId || "")
+        : "";
       document.querySelectorAll("[data-practice-duration]").forEach((button) => {
         const minutes = Number(button.dataset.practiceDuration);
-        const available = practiceState.editor.mode === "waitlist" || practiceSlotAvailable(start, minutes);
+        const available = practiceState.editor.mode === "waitlist" ||
+          practiceSlotAvailable(start, minutes, excludeBookingId);
         button.disabled = !available;
         button.classList.toggle("active", duration === minutes);
       });
       let warning = "";
       if (start < 0 || end < 0 || start % 5 || end % 5) warning = "請以 5 分鐘為單位選擇時間。";
       else if (duration < 15) warning = "自主練習最短 15 分鐘。";
-      else if (practiceState.editor.mode === "create" && !practiceSlotAvailable(start, duration)) {
-        const alternatives = findPracticeAlternatives(duration);
+      else if (["create", "edit"].includes(practiceState.editor.mode) &&
+          !practiceSlotAvailable(start, duration, excludeBookingId)) {
+        const alternatives = findPracticeAlternatives(duration, excludeBookingId);
         warning = `這個時段有衝突。${alternatives.length ? `最近可選：${alternatives.join("、")}` : "當天目前沒有同時長空檔。"}`;
       }
       byId("practice-editor-warning").textContent = warning;
@@ -3115,26 +3128,32 @@
 
     function openPracticeEditor(context = {}) {
       const block = context.block || null;
-      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? "rental" : block?.isMine ? "mine" : block ? "join" : "create");
+      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? "rental" : block?.isCreator ? "edit" : block?.isMine ? "mine" : block ? "join" : "create");
       const startTime = context.startTime || block?.startTime || "14:00";
       const endTime = block?.endTime || practiceMinutesToTime(practiceTimeToMinutes(startTime) + 60);
       practiceState.editor = { mode, block };
-      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "mine" ? "自主練習詳情" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
-      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "提醒取消後會補入；OB 課程沒有取消前不會占用。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
+      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "edit" ? "調整自主練習" : mode === "mine" ? "自主練習詳情" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
+      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "提醒取消後會補入；OB 課程沒有取消前不會占用。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : mode === "edit" ? "直接修改教室或時間；仍會保留課前課後 15 分鐘。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
       byId("practice-editor-summary").textContent = `${practiceState.date} ｜ ${practiceState.room} 教室${block ? ` ｜ ${block.startTime}–${block.endTime}` : ""}`;
       byId("practice-editor-date").value = practiceState.date.replace(/\//g, "-");
       byId("practice-editor-room").value = practiceState.room;
       byId("practice-editor-start").value = startTime;
       byId("practice-editor-end").value = endTime;
-      const editable = ["create", "waitlist", "join"].includes(mode);
+      byId("practice-editor-date").disabled = mode === "edit";
+      const editable = ["create", "waitlist", "join", "edit"].includes(mode);
       byId("practice-editor-fields").hidden = !editable;
-      byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental";
+      const seriesChoice = ["join", "edit"].includes(mode) && !!block?.seriesId;
+      byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental" ||
+        mode === "mine" || (["join", "edit"].includes(mode) && !seriesChoice);
+      byId("practice-recurrence-label").textContent = mode === "edit"
+        ? "套用到這次及之後"
+        : mode === "join" ? "加入這次與之後" : "每週同一時段，直到我停止";
       byId("practice-editor-weekly").checked = false;
       byId("practice-submit").hidden = mode === "rental" || mode === "mine";
-      byId("practice-submit").textContent = mode === "waitlist" ? "確認候補" : mode === "join" ? "確認加入" : "確認登記";
-      byId("practice-leave").hidden = mode !== "mine";
+      byId("practice-submit").textContent = mode === "waitlist" ? "確認候補" : mode === "join" ? "確認加入" : mode === "edit" ? "儲存調整" : "確認登記";
+      byId("practice-leave").hidden = !["mine", "edit"].includes(mode);
       byId("practice-leave").textContent = block?.isCreator ? "只取消這次" : "只退出這次";
-      byId("practice-leave-future").hidden = mode !== "mine" || !block?.seriesId;
+      byId("practice-leave-future").hidden = !["mine", "edit"].includes(mode) || !block?.seriesId;
       byId("practice-leave-future").textContent = block?.isCreator ? "停止整個循環" : "退出這次與之後";
       const participants = block?.participants || [];
       byId("practice-participants").innerHTML = participants.map((item) => `<div class="practice-participant"><strong>${escapeHtml(item.teacherName)}${item.role === "建立者" ? "（建立者）" : ""}</strong><span>${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</span></div>`).join("");
@@ -3173,9 +3192,13 @@
       try {
         if (editor.mode === "waitlist") await callPostApi("createPracticeWaitlist", { practice });
         else if (editor.mode === "join") await callPostApi("joinPracticeBooking", { practice });
+        else if (editor.mode === "edit") await callPostApi("updatePracticeBooking", { practice });
         else await callPostApi("createPracticeBooking", { practice });
+        practiceState.date = practice.date;
+        practiceState.room = practice.room;
+        delete practiceState.dayCache[practice.date];
         closePracticeEditor();
-        setNotice(editor.mode === "join" ? "已加入自主練習。" : editor.mode === "waitlist" ? "已登記候補，課程取消後會自動補入。" : "自主練習已登記。");
+        setNotice(editor.mode === "join" ? "已加入自主練習。" : editor.mode === "waitlist" ? "已登記候補，課程取消後會自動補入。" : editor.mode === "edit" ? "自主練習時間已調整。" : "自主練習已登記。");
         await loadPracticeDay(practiceState.date);
       } catch (error) {
         setNotice(error.message, "error");
@@ -6202,10 +6225,10 @@ https://sherryaerial-web.github.io/sub.html/
     });
     byId("practice-date-previous").addEventListener("click", () => {
       if (practiceState.date <= getTaipeiToday()) return;
-      loadPracticeDay(shiftPracticeDate(practiceState.date, -1));
+      loadPracticeDay(shiftPracticeDate(practiceState.date, -7));
     });
     byId("practice-date-next").addEventListener("click", () => {
-      loadPracticeDay(shiftPracticeDate(practiceState.date || getTaipeiToday(), 1));
+      loadPracticeDay(shiftPracticeDate(practiceState.date || getTaipeiToday(), 7));
     });
     byId("practice-room-tabs").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-practice-room]") : null;

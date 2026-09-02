@@ -30,7 +30,17 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
         disabled: false,
         hidden: false,
         value: '',
-        addEventListener() {},
+        __listeners: new Map(),
+        addEventListener(type, listener) {
+          if (!this.__listeners.has(type)) this.__listeners.set(type, []);
+          this.__listeners.get(type).push(listener);
+        },
+        click() {
+          (this.__listeners.get('click') || []).forEach((listener) => listener({
+            target: this,
+            preventDefault() {},
+          }));
+        },
         focus() {},
         setAttribute() {},
         removeAttribute() {},
@@ -2947,6 +2957,64 @@ test('practice date strip starts today and navigation never selects an expired d
   );
 });
 
+test('practice date arrows move by one week instead of one day', async () => {
+  const { context, getElement, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  vm.runInContext('practiceState.date = "2026/09/09"; renderPracticeDateStrip();', context);
+
+  getElement('practice-date-next').click();
+  await Promise.resolve();
+
+  const nextRequest = submittedForms.find((form) => form.fields.action === 'getPracticeDay');
+  assert.equal(nextRequest.fields.date, '2026/09/16');
+  emitWindowEvent('message', {
+    origin: 'https://script.googleusercontent.com',
+    source: nextRequest.frameWindow,
+    data: {
+      source: 'sherry-gas-relay', requestId: nextRequest.fields.requestId,
+      payload: {
+        status: 'success',
+        data: {
+          date: '2026/09/16', teacherName: 'Tako', quickDurations: [60, 90, 120],
+          rooms: ['A', 'B', 'C', 'D'].map((room) => ({ room, blocks: [] })),
+        },
+      },
+    },
+  });
+  await Promise.resolve();
+});
+
+test('practice day ignores an older response after the teacher has selected a newer date', async () => {
+  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  const first = vm.runInContext('loadPracticeDay("2026/09/09")', context);
+  const second = vm.runInContext('loadPracticeDay("2026/09/16")', context);
+  await Promise.resolve();
+  const requests = submittedForms.filter((form) => form.fields.action === 'getPracticeDay');
+  assert.equal(requests.length, 2);
+
+  const respond = (request, date) => emitWindowEvent('message', {
+    origin: 'https://script.googleusercontent.com',
+    source: request.frameWindow,
+    data: {
+      source: 'sherry-gas-relay',
+      requestId: request.fields.requestId,
+      payload: {
+        status: 'success',
+        data: {
+          date, teacherName: 'Tako', quickDurations: [60, 90, 120],
+          rooms: ['A', 'B', 'C', 'D'].map((room) => ({ room, blocks: [] })),
+        },
+      },
+    },
+  });
+  respond(requests[1], '2026/09/16');
+  await second;
+  respond(requests[0], '2026/09/09');
+  await first;
+
+  assert.equal(vm.runInContext('practiceState.date', context), '2026/09/16');
+  assert.equal(vm.runInContext('practiceState.data.date', context), '2026/09/16');
+});
+
 test('practice timeline keeps a 19:45 course beside its real time instead of above 07:00', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceFixture = {
@@ -3005,6 +3073,38 @@ test('weekly practice details expose one-time and future cancellation choices', 
   assert.equal(getElement('practice-leave').textContent, '只取消這次');
   assert.equal(getElement('practice-leave-future').hidden, false);
   assert.equal(getElement('practice-leave-future').textContent, '停止整個循環');
+});
+
+test('practice creator can edit time and choose whether a weekly change applies forward', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime();
+  context.__weeklyPracticeBlock = {
+    id: 'practice:1', type: 'practice', bookingId: 'practice-1', seriesId: 'series-1',
+    startTime: '14:00', endTime: '15:00', creatorName: 'Tako', isMine: true,
+    isCreator: true, participants: [{ teacherName: 'Tako', role: '建立者', startTime: '14:00', endTime: '15:00' }],
+  };
+  vm.runInContext(
+    'practiceState.date = "2026/09/10"; practiceState.room = "A"; openPracticeEditor({ block: __weeklyPracticeBlock });',
+    context,
+  );
+
+  assert.equal(getElement('practice-editor-fields').hidden, false);
+  assert.equal(getElement('practice-submit').hidden, false);
+  assert.equal(getElement('practice-submit').textContent, '儲存調整');
+  assert.equal(getElement('practice-recurrence-field').hidden, false);
+  assert.equal(getElement('practice-recurrence-label').textContent, '套用到這次及之後');
+  getElement('practice-editor-start').value = '15:00';
+  getElement('practice-editor-end').value = '16:00';
+  getElement('practice-editor-weekly').checked = true;
+
+  await context.submitPracticeEditor({ preventDefault() {} });
+
+  const update = submittedForms.find((form) => form.fields.action === 'updatePracticeBooking');
+  assert.ok(update);
+  const payload = JSON.parse(update.fields.practice);
+  assert.equal(payload.bookingId, 'practice-1');
+  assert.equal(payload.startTime, '15:00');
+  assert.equal(payload.endTime, '16:00');
+  assert.equal(payload.scope, 'future');
 });
 
 test('practice mutations reload the selected day and support acting-mode teachers', () => {

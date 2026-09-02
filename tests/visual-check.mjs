@@ -166,7 +166,7 @@ const fixtures = {
     rooms: [
       { room: "A", blocks: [
         { id: "course-1", calendarId: "cal-practice-1", type: "course", startTime: "10:00", endTime: "11:00", label: "A－空環 Lv.2", teacherName: "Jina" },
-        { id: "practice-1", bookingId: "practice-1", seriesId: "series-1", type: "practice", startTime: "14:00", endTime: "16:00", creatorName: "Ariel Lu", isMine: true, participants: [
+        { id: "practice-1", bookingId: "practice-1", seriesId: "series-1", type: "practice", startTime: "14:00", endTime: "16:00", creatorName: "Ariel Lu", isMine: true, isCreator: true, participants: [
           { teacherName: "Ariel Lu", role: "建立者", startTime: "14:00", endTime: "16:00" },
           { teacherName: "Tako", role: "參與者", startTime: "14:30", endTime: "15:30" }
         ] }
@@ -543,6 +543,10 @@ try {
     await page.locator('[data-practice-start="12:00"]').click();
     await page.locator("#practice-dialog").waitFor({ state: "visible" });
     results.push(await capture(page, viewport.name, "08-practice-create"));
+    await page.locator("#practice-dialog-cancel").click();
+    await page.locator('[data-practice-block="practice-1"]').click();
+    await page.locator("#practice-dialog").waitFor({ state: "visible" });
+    results.push(await capture(page, viewport.name, "09-practice-edit"));
     await page.locator("#practice-dialog-cancel").click();
 
     await page.locator("#logout-button").click();

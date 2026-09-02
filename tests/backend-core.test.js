@@ -8096,6 +8096,25 @@ test('practice day fails closed to the CourseList snapshot when live OB is unava
   assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].calendarId, 'cal-cached');
 });
 
+test('practice waitlist validates against the same live OB rows shown on the selected day', () => {
+  const liveCourse = [
+    '2026/09/10', '09:00', 'A－原始瑜伽', 'Jina',
+    'cal-live-waitlist', 'class-yoga', 'teacher-jina', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+
+  const result = fixture.backend.createPracticeWaitlist_(fixture.teacher('Tako'), {
+    calendarId: 'cal-live-waitlist', date: '2026/09/10',
+    startTime: '09:00', endTime: '10:00', recurrence: 'once',
+  });
+
+  assert.equal(result.calendarId, 'cal-live-waitlist');
+  assert.equal(result.status, '候補');
+  assert.equal(fixture.bookingSheet.values[1][2], '2026/09/10');
+  assert.equal(fixture.courseSheet.values.length, 1);
+});
+
 test('practice update and cancellation enforce ownership and administrator reasons', () => {
   const fixture = createPracticeBackend();
   const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
@@ -8128,6 +8147,40 @@ test('practice update and cancellation enforce ownership and administrator reaso
   assert.equal(cancelled.status, '已取消');
   assert.equal(fixture.bookingSheet.values[1][6], '已取消');
   assert.equal(fixture.participantSheet.values[1][8], '已取消');
+});
+
+test('practice creator can update this and future occurrences without changing past rows', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [
+      ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-1'],
+      ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-2'],
+      ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-3'],
+    ],
+  });
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('Tako'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'weekly',
+  });
+  const secondOccurrence = fixture.bookingSheet.values.find((row) => row[2] === '2026/09/17');
+
+  const result = fixture.backend.updatePracticeBooking_(fixture.teacher('Tako'), {
+    bookingId: secondOccurrence[0], date: '2026/09/17', room: 'B',
+    startTime: '15:00', endTime: '16:00', scope: 'future',
+  });
+
+  const occurrences = fixture.bookingSheet.values.slice(1).filter((row) => row[1] === created.seriesId);
+  assert.equal(result.affectedOccurrences, 2);
+  assert.deepEqual(occurrences.map((row) => [row[2], row[3], row[4], row[5]]), [
+    ['2026/09/10', 'A', '14:00', '15:00'],
+    ['2026/09/17', 'B', '15:00', '16:00'],
+    ['2026/09/24', 'B', '15:00', '16:00'],
+  ]);
+  assert.equal(fixture.seriesSheet.values[1][2], 'B');
+  assert.equal(fixture.seriesSheet.values[1][4], '15:00');
+  assert.equal(fixture.seriesSheet.values[1][5], '16:00');
+  const futureCreators = fixture.participantSheet.values.slice(1).filter((row) => (
+    row[2] === created.seriesId && row[3] === 'Tako' && row[8] === '有效' && row[1] !== occurrences[0][0]
+  ));
+  assert.ok(futureCreators.every((row) => row[5] === '15:00' && row[6] === '16:00'));
 });
 
 test('practice administrator dashboard is course-admin only and includes participants and failures', () => {

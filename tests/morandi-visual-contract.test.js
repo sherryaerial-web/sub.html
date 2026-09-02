@@ -74,3 +74,26 @@ test('mobile header uses the selected app icon and synchronizes role-aware navig
   assert.match(html, /mobile-primary-entry/);
   assert.match(html, /managementCapabilities\.length\s*\?\s*"view-admin"\s*:\s*"view-home"/);
 });
+
+test('practice timeline is touch-friendly and the editor becomes a mobile bottom sheet', () => {
+  const html = pages[0];
+
+  assert.match(html, /\.practice-date-strip\s*\{[^}]*overflow-x:\s*auto/s);
+  assert.match(html, /\.practice-room-tabs\s*\{[^}]*display:\s*grid/s);
+  assert.match(html, /\.practice-time-button\s*\{[^}]*min-height:\s*44px/s);
+  assert.match(html, /\.practice-block\.course/);
+  assert.match(html, /\.practice-block\.rental/);
+  assert.match(html, /\.practice-block\.practice/);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#practice-dialog\s*\{[^}]*margin:\s*auto 0 0/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#practice-dialog\s*\{[^}]*width:\s*100%/s);
+});
+
+test('practice admin cards keep filters and actions usable on narrow screens', () => {
+  const html = pages[0];
+
+  assert.match(html, /\.practice-admin-filters\s*\{[^}]*display:\s*grid/s);
+  assert.match(html, /\.practice-admin-card\s*\{/);
+  assert.match(html, /\.practice-admin-fields\s*\{[^}]*display:\s*grid/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.practice-admin-filters\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.practice-admin-fields\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});

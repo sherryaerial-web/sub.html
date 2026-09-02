@@ -826,6 +826,33 @@
     .notification-schedule-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
     .notification-window-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .notification-window-strip span { padding: 6px 8px; border-radius: 6px; background: var(--aqua-100); color: var(--sea-800); font-size: 11px; font-weight: 750; }
+    .practice-admin-filters {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .practice-admin-filter-actions { display: flex; gap: 8px; align-items: end; }
+    .practice-admin-list { display: grid; gap: 10px; }
+    .practice-admin-card {
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .practice-admin-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .practice-admin-card-head strong { font-size: 15px; }
+    .practice-admin-fields {
+      display: grid;
+      grid-template-columns: minmax(110px, 1.2fr) repeat(3, minmax(90px, .8fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .practice-admin-participants { display: grid; gap: 6px; margin-top: 12px; }
+    .practice-admin-participant { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 7px; background: var(--soft); font-size: 12px; }
+    .practice-admin-audits { margin-top: 10px; }
+    .practice-admin-failures { margin-top: 18px; }
     .ob-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
     .queue-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 2px 10px; }
     .queue-section-heading strong { font-size: 14px; }
@@ -881,6 +908,143 @@
     .dialog-body h3 { margin: 0 0 7px; font-size: 17px; }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .dialog-actions .primary-button { width: auto; min-width: 110px; margin-top: 0; }
+
+    .practice-date-strip {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      margin: 0 0 12px;
+      padding: 2px 1px 8px;
+      scrollbar-width: none;
+    }
+    .practice-date-strip::-webkit-scrollbar { display: none; }
+    .practice-date-button {
+      min-width: 74px;
+      min-height: 54px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .practice-date-button strong,
+    .practice-date-button span { display: block; }
+    .practice-date-button strong { color: var(--ink); font-size: 14px; }
+    .practice-date-button span { margin-top: 2px; font-size: 11px; }
+    .practice-date-button.active { border-color: #cdaaa0; background: var(--aqua-100); }
+    .practice-room-tabs {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      margin-bottom: 12px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #ebe6e0;
+    }
+    .practice-room-tab {
+      min-height: 44px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .practice-room-tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+    .practice-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    .practice-legend { display: flex; flex-wrap: wrap; gap: 9px; color: var(--muted); font-size: 11px; }
+    .practice-legend span::before {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 5px;
+      border-radius: 50%;
+      background: var(--line-strong);
+      content: "";
+    }
+    .practice-legend .course::before { background: #9b8780; }
+    .practice-legend .rental::before { background: #b68b56; }
+    .practice-legend .shared::before { background: #6f858d; }
+    .practice-timeline {
+      position: relative;
+      min-height: 420px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .practice-timeline-grid { position: relative; padding: 8px 10px 12px 58px; }
+    .practice-time-row { position: relative; min-height: 52px; border-top: 1px solid #ece6e0; }
+    .practice-time-row:first-child { border-top: 0; }
+    .practice-time-label { position: absolute; top: -8px; left: -50px; color: var(--subtle); font-size: 11px; }
+    .practice-time-button {
+      width: 100%;
+      min-height: 44px;
+      border: 0;
+      background: transparent;
+      color: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .practice-time-button:hover { background: rgba(238, 224, 220, .35); color: var(--sea-700); }
+    .practice-block {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      width: 100%;
+      gap: 4px;
+      margin: 7px 0;
+      padding: 12px 13px;
+      border: 1px solid var(--line);
+      border-left-width: 5px;
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+    }
+    .practice-block.course { border-left-color: #9b8780; background: #faf5f2; }
+    .practice-block.rental { border-left-color: #b68b56; background: #fbf5e9; }
+    .practice-block.practice { border-left-color: #6f858d; background: #edf3f4; }
+    .practice-block.waitlist { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; }
+    .practice-block-time { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .practice-block-title { font-size: 15px; font-weight: 750; }
+    .practice-block-meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .practice-empty-state { padding: 42px 18px; color: var(--muted); text-align: center; }
+    .practice-editor-summary {
+      margin: 10px 0 14px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: var(--soft);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .practice-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .practice-form-field { display: grid; gap: 6px; }
+    .practice-form-field.full { grid-column: 1 / -1; }
+    .practice-form-field label { color: var(--ink); font-size: 12px; font-weight: 700; }
+    .practice-duration-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+    .practice-duration-button { min-height: 44px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
+    .practice-duration-button.active { border-color: #cdaaa0; background: var(--aqua-100); }
+    .practice-duration-button:disabled { opacity: .42; cursor: not-allowed; }
+    .practice-participant-list { display: grid; gap: 7px; margin-top: 10px; }
+    .practice-participant { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: var(--soft); font-size: 12px; }
+    .practice-editor-warning { margin-top: 9px; color: var(--danger); font-size: 12px; line-height: 1.45; }
+    #practice-dialog { width: min(92vw, 560px); max-height: min(88vh, 760px); padding: 0; }
     .claim-success-mark {
       display: grid;
       width: 44px;
@@ -950,6 +1114,18 @@
     }
 
     @media (max-width: 760px) {
+      #practice-dialog {
+        width: 100%;
+        max-width: none;
+        max-height: 88dvh;
+        margin: auto 0 0;
+        border-radius: 18px 18px 0 0;
+      }
+      #practice-dialog .dialog-body { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+      .practice-toolbar { align-items: stretch; flex-direction: column; }
+      .practice-toolbar .primary-button { width: 100%; }
+      .practice-form-grid { grid-template-columns: 1fr; }
+      .practice-form-field.full { grid-column: auto; }
       html { scroll-padding-top: 68px; }
       body { background: var(--page); }
       .app-shell { min-height: 100dvh; padding-bottom: calc(70px + env(safe-area-inset-bottom)); border: 0; box-shadow: none; }
@@ -1030,6 +1206,10 @@
       .notification-form-grid { grid-template-columns: 1fr; }
       .notification-form-grid .full { grid-column: auto; }
       .notification-recipient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .practice-admin-filters { grid-template-columns: 1fr; }
+      .practice-admin-filter-actions { align-items: stretch; }
+      .practice-admin-filter-actions .compact-button { flex: 1 1 auto; justify-content: center; }
+      .practice-admin-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .mobile-record-switcher {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1243,6 +1423,7 @@
           <button class="nav-item" type="button" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>請假紀錄</span></button>
           <button class="nav-item" type="button" data-view="view-claim"><i data-lucide="hand"></i><span>領取代課</span></button>
           <button class="nav-item" type="button" data-view="view-mysubs"><i data-lucide="badge-check"></i><span>代課紀錄</span></button>
+          <button class="nav-item" type="button" data-view="view-practice"><i data-lucide="sparkles"></i><span>自主練習</span></button>
           <button class="nav-item" type="button" data-view="view-payroll"><i data-lucide="receipt-text"></i><span>我的薪資</span></button>
           <button id="admin-entry" class="nav-item" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
         </nav>
@@ -1292,6 +1473,11 @@
             <button class="action-button" type="button" data-view="view-mysubs">
               <span class="action-icon"><i data-lucide="badge-check"></i></span>
               <span><span class="action-title">查看我的代課紀錄</span><span class="action-copy">確認課程與改課內容</span></span>
+              <i class="action-arrow" data-lucide="chevron-right"></i>
+            </button>
+            <button class="action-button" type="button" data-view="view-practice">
+              <span class="action-icon"><i data-lucide="sparkles"></i></span>
+              <span><span class="action-title">登記自主練習</span><span class="action-copy">看教室空檔、加入或候補</span></span>
               <i class="action-arrow" data-lucide="chevron-right"></i>
             </button>
             <button class="action-button" type="button" data-view="view-payroll">
@@ -1386,6 +1572,19 @@
           <div id="my-subs-list" class="list"><div class="state">載入中...</div></div>
         </section>
 
+        <section id="view-practice" class="view">
+          <div class="view-header">
+            <div><span class="eyebrow">Practice</span><h2 class="section-heading">自主練習</h2><p class="section-copy">直接看 A、B、C、D 教室當天狀況</p></div>
+          </div>
+          <div id="practice-date-strip" class="practice-date-strip" aria-label="選擇自主練習日期"></div>
+          <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
+          <div class="practice-toolbar">
+            <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span></div>
+            <button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="plus"></i>新增自主練習</button>
+          </div>
+          <div id="practice-timeline" class="practice-timeline" aria-live="polite"><div class="state">載入教室時間中...</div></div>
+        </section>
+
         <section id="view-payroll" class="view">
           <div class="view-header">
             <div><span class="eyebrow">Payroll</span><h2 class="section-heading">我的薪資</h2><p class="section-copy">逐堂核對已發布的薪資明細</p></div>
@@ -1424,6 +1623,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="delayClosures" data-capability="course_admin"><i data-lucide="clock-arrow-down"></i>代關課程<span class="admin-tab-count" data-admin-count="delayClosures">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知中心</button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="practice" data-capability="course_admin"><i data-lucide="sparkles"></i>自主練習<span class="admin-tab-count" data-admin-count="practice">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">—</span></button>
@@ -1440,7 +1640,7 @@
       <button class="mobile-tab-item" type="button" data-mobile-tab="leave" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="claim" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="records" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>紀錄</span></button>
-      <button class="mobile-tab-item" type="button" data-mobile-tab="payroll" data-view="view-payroll"><i data-lucide="receipt-text"></i><span>薪資</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="practice" data-view="view-practice"><i data-lucide="sparkles"></i><span>練習</span></button>
     </nav>
   </div>
 
@@ -1477,6 +1677,29 @@
     </div>
   </dialog>
 
+  <dialog id="practice-dialog" aria-labelledby="practice-dialog-title">
+    <form id="practice-form" class="dialog-body">
+      <h3 id="practice-dialog-title">登記自主練習</h3>
+      <p id="practice-dialog-copy" class="section-copy"></p>
+      <div id="practice-editor-summary" class="practice-editor-summary"></div>
+      <div id="practice-editor-fields" class="practice-form-grid">
+        <div class="practice-form-field"><label for="practice-editor-date">日期</label><input id="practice-editor-date" class="text-input" type="date" required></div>
+        <div class="practice-form-field"><label for="practice-editor-room">教室</label><select id="practice-editor-room" class="claim-control" required><option value="A">A 教室</option><option value="B">B 教室</option><option value="C">C 教室</option><option value="D">D 教室</option></select></div>
+        <div class="practice-form-field"><label for="practice-editor-start">開始時間</label><input id="practice-editor-start" class="text-input" type="time" step="300" required></div>
+        <div class="practice-form-field"><label for="practice-editor-end">結束時間</label><input id="practice-editor-end" class="text-input" type="time" step="300" required></div>
+        <div class="practice-form-field full"><label>快速時長</label><div id="practice-duration-options" class="practice-duration-options"><button class="practice-duration-button active" type="button" data-practice-duration="60">60 分鐘</button><button class="practice-duration-button" type="button" data-practice-duration="90">90 分鐘</button><button class="practice-duration-button" type="button" data-practice-duration="120">120 分鐘</button></div></div>
+        <label id="practice-recurrence-field" class="practice-form-field full"><span>循環登記</span><span><input id="practice-editor-weekly" type="checkbox"> 每週同一時段，直到我停止</span></label>
+      </div>
+      <div id="practice-participants" class="practice-participant-list"></div>
+      <div id="practice-editor-warning" class="practice-editor-warning" aria-live="polite"></div>
+      <div class="dialog-actions">
+        <button id="practice-leave" class="compact-button" type="button" hidden>退出練習</button>
+        <button id="practice-dialog-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
+        <button id="practice-submit" class="primary-button" type="submit"><i data-lucide="check"></i>確認登記</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script src="assets/xlsx.full.min.js"></script>
@@ -1498,6 +1721,8 @@
     let vvipDashboard = null;
     let payrollDashboard = null;
     let notificationDashboard = null;
+    let practiceAdminDashboard = null;
+    let practiceState = { date: "", room: "A", data: null, editor: null };
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
@@ -1524,6 +1749,7 @@
       "view-myleaves": "我的紀錄",
       "view-claim": "領取代課",
       "view-mysubs": "我的紀錄",
+      "view-practice": "自主練習",
       "view-payroll": "我的薪資",
       "view-admin": "管理工作台"
     };
@@ -1568,7 +1794,9 @@
     const TEACHER_ACTING_ACTIONS = new Set([
       "getAvailableSubstitutes", "getClaimPageData", "getClaimOptions", "getMySubs",
       "getMyCourses", "getMyLeaves", "submitLeave", "claimSubstitute",
-      "claimSpecialCourse", "cancelLeave", "requestLeaveCancellation", "requestClaimWithdrawal"
+      "claimSpecialCourse", "cancelLeave", "requestLeaveCancellation", "requestClaimWithdrawal",
+      "getPracticeDay", "createPracticeBooking", "createPracticeWaitlist",
+      "joinPracticeBooking", "leavePracticeBooking"
     ]);
 
     async function callApi(action, params = {}) {
@@ -1595,6 +1823,9 @@
 
     async function callPostApi(action, params = {}) {
       const requestParams = { ...params };
+      if (authState.actingTeacherName && TEACHER_ACTING_ACTIONS.has(action)) {
+        requestParams.actingTeacherName = authState.actingTeacherName;
+      }
       if (authState.sessionToken && !requestParams.sessionToken) {
         requestParams.sessionToken = authState.sessionToken;
       }
@@ -2225,6 +2456,7 @@
       mySubsRecordMonth = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
+      practiceState = { date: "", room: "A", data: null, editor: null };
     }
 
     function updateActingMode() {
@@ -2258,13 +2490,14 @@
         myleaves: "view-myleaves",
         claim: "view-claim",
         mysubs: "view-mysubs",
+        practice: "view-practice",
         payroll: "view-payroll",
         admin: "view-admin"
       };
       const allowedAdminTabs = new Set([
         "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
         "delayClosures", "closureManagement", "changeRequests", "exceptions", "completed",
-        "payroll", "vvip", "notifications"
+        "payroll", "vvip", "notifications", "practice"
       ]);
       const viewId = viewMap[params.get("view")] || "";
       const requestedTab = params.get("tab") || "";
@@ -2282,6 +2515,7 @@
           "view-admin": "primary",
           "view-leave": "leave",
           "view-claim": "claim",
+          "view-practice": "practice",
           "view-payroll": "payroll"
         })[viewId] || "";
 
@@ -2538,6 +2772,8 @@
       adminDashboard = null;
       vvipDashboard = null;
       payrollDashboard = null;
+      notificationDashboard = null;
+      practiceAdminDashboard = null;
       pushIdentityExternalId = "";
       pushSessionTeacherName = "";
       pushInitializationPromise = null;
@@ -2641,6 +2877,7 @@
       if (viewId === "view-myleaves") fetchMyLeaves();
       if (viewId === "view-claim") fetchAvailableSubstitutes();
       if (viewId === "view-mysubs") fetchMySubs();
+      if (viewId === "view-practice") loadPracticeDay(practiceState.date || getTaipeiToday());
       if (viewId === "view-payroll") fetchMyPayroll();
       if (viewId === "view-admin") {
         fetchAdminDashboard();
@@ -2648,6 +2885,238 @@
       }
       refreshIcons();
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function getTaipeiToday() {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit"
+      }).format(new Date()).replace(/-/g, "/");
+    }
+
+    function shiftPracticeDate(dateValue, days) {
+      const [year, month, day] = String(dateValue || getTaipeiToday()).replace(/-/g, "/").split("/").map(Number);
+      const shifted = new Date(Date.UTC(year, month - 1, day + days, 12));
+      return `${shifted.getUTCFullYear()}/${String(shifted.getUTCMonth() + 1).padStart(2, "0")}/${String(shifted.getUTCDate()).padStart(2, "0")}`;
+    }
+
+    function practiceTimeToMinutes(value) {
+      const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+      return match ? Number(match[1]) * 60 + Number(match[2]) : -1;
+    }
+
+    function practiceMinutesToTime(value) {
+      const minutes = Math.max(0, Math.min(24 * 60 - 5, Number(value) || 0));
+      return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    }
+
+    function getPracticeSelectedRoom() {
+      return (practiceState.data?.rooms || []).find((room) => room.room === practiceState.room) ||
+        { room: practiceState.room, blocks: [] };
+    }
+
+    async function loadPracticeDay(dateValue) {
+      const date = String(dateValue || getTaipeiToday()).replace(/-/g, "/");
+      practiceState.date = date;
+      renderPracticeDateStrip();
+      const timeline = byId("practice-timeline");
+      beginReadRefresh(timeline, !!practiceState.data, '<div class="state">載入教室時間中...</div>');
+      try {
+        practiceState.data = await callPostApi("getPracticeDay", { date });
+        renderPracticeView(practiceState.data);
+      } catch (error) {
+        if (!practiceState.data) timeline.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`自主練習更新失敗：${error.message}`, "error");
+      } finally {
+        endReadRefresh(timeline);
+      }
+    }
+
+    function renderPracticeDateStrip() {
+      const dates = Array.from({ length: 9 }, (_, index) => shiftPracticeDate(practiceState.date || getTaipeiToday(), index - 3));
+      byId("practice-date-strip").innerHTML = dates.map((date) => {
+        const [year, month, day] = date.split("/");
+        const weekday = formatDateWithWeekday(date).match(/（(.+)）/)?.[1] || "";
+        return `<button class="practice-date-button ${date === practiceState.date ? "active" : ""}" type="button" data-practice-date="${escapeHtml(date)}"><strong>${escapeHtml(`${month}/${day}`)}</strong><span>${escapeHtml(weekday)}</span></button>`;
+      }).join("");
+    }
+
+    function renderPracticeView(data) {
+      practiceState.data = data || { rooms: [] };
+      practiceState.date = String(data?.date || practiceState.date || getTaipeiToday()).replace(/-/g, "/");
+      if (!(data?.rooms || []).some((room) => room.room === practiceState.room)) practiceState.room = "A";
+      renderPracticeDateStrip();
+      byId("practice-room-tabs").innerHTML = ["A", "B", "C", "D"].map((room) => {
+        const count = (data?.rooms || []).find((item) => item.room === room)?.blocks?.length || 0;
+        return `<button class="practice-room-tab ${room === practiceState.room ? "active" : ""}" type="button" role="tab" aria-selected="${room === practiceState.room}" data-practice-room="${room}">${room} 教室${count ? ` <small>${count}</small>` : ""}</button>`;
+      }).join("");
+      renderPracticeTimeline(data);
+      refreshIcons();
+    }
+
+    function practiceBlockHtml(block) {
+      const participants = Array.isArray(block.participants) ? block.participants : [];
+      const names = participants.map((item) => item.teacherName).filter(Boolean).join("、");
+      const title = block.type === "practice" || block.type === "waitlist"
+        ? (block.type === "waitlist" ? `${block.creatorName}的候補練習` : `${block.creatorName}的自主練習`)
+        : (block.label || "已有行程");
+      const meta = block.type === "course"
+        ? `原課程：${block.teacherName || ""}｜點選可登記候補自主練習`
+        : block.type === "rental"
+          ? "場地租借已占用，無法登記自主練習"
+          : `${names || block.creatorName}｜${block.seriesId ? "每週循環" : "單次"}`;
+      return `<button class="practice-block ${escapeHtml(block.type)}" type="button" data-practice-block="${escapeHtml(block.id)}"><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
+    }
+
+    function practiceSlotAvailable(startMinutes, duration = 60) {
+      const endMinutes = startMinutes + duration;
+      if (startMinutes < 7 * 60 || endMinutes > 23 * 60 + 30) return false;
+      return !getPracticeSelectedRoom().blocks.some((block) => {
+        const blockStart = practiceTimeToMinutes(block.startTime);
+        const blockEnd = practiceTimeToMinutes(block.endTime);
+        return startMinutes < blockEnd + 15 && endMinutes + 15 > blockStart;
+      });
+    }
+
+    function renderPracticeTimeline() {
+      const room = getPracticeSelectedRoom();
+      const blocksByStart = new Map();
+      (room.blocks || []).forEach((block) => {
+        if (!blocksByStart.has(block.startTime)) blocksByStart.set(block.startTime, []);
+        blocksByStart.get(block.startTime).push(block);
+      });
+      const rows = [];
+      for (let minutes = 7 * 60; minutes <= 23 * 60; minutes += 30) {
+        const time = practiceMinutesToTime(minutes);
+        const blocks = blocksByStart.get(time) || [];
+        rows.push(`<div class="practice-time-row"><span class="practice-time-label">${time}</span>${blocks.map(practiceBlockHtml).join("")}${blocks.length ? "" : `<button class="practice-time-button" type="button" data-practice-start="${time}" aria-label="${time} 登記自主練習">${practiceSlotAvailable(minutes) ? "+ 登記" : ""}</button>`}</div>`);
+      }
+      const unmatched = (room.blocks || []).filter((block) => !blocksByStart.has(practiceMinutesToTime(Math.round(practiceTimeToMinutes(block.startTime) / 30) * 30)));
+      byId("practice-timeline").innerHTML = `<div class="practice-timeline-grid">${unmatched.map(practiceBlockHtml).join("")}${rows.join("")}</div>`;
+    }
+
+    function setPracticeEditorTime(startTime, duration) {
+      const start = practiceTimeToMinutes(startTime);
+      if (start < 0) return;
+      byId("practice-editor-start").value = practiceMinutesToTime(start);
+      byId("practice-editor-end").value = practiceMinutesToTime(start + duration);
+      syncPracticeEditorAvailability();
+    }
+
+    function findPracticeAlternatives(duration) {
+      const alternatives = [];
+      for (let minutes = 7 * 60; minutes <= 22 * 60 + 30 && alternatives.length < 3; minutes += 5) {
+        if (practiceSlotAvailable(minutes, duration)) alternatives.push(practiceMinutesToTime(minutes));
+      }
+      return alternatives;
+    }
+
+    function syncPracticeEditorAvailability() {
+      if (!practiceState.editor) return;
+      const start = practiceTimeToMinutes(byId("practice-editor-start").value);
+      const end = practiceTimeToMinutes(byId("practice-editor-end").value);
+      const duration = end - start;
+      document.querySelectorAll("[data-practice-duration]").forEach((button) => {
+        const minutes = Number(button.dataset.practiceDuration);
+        const available = practiceState.editor.mode === "waitlist" || practiceSlotAvailable(start, minutes);
+        button.disabled = !available;
+        button.classList.toggle("active", duration === minutes);
+      });
+      let warning = "";
+      if (start < 0 || end < 0 || start % 5 || end % 5) warning = "請以 5 分鐘為單位選擇時間。";
+      else if (duration < 15) warning = "自主練習最短 15 分鐘。";
+      else if (practiceState.editor.mode === "create" && !practiceSlotAvailable(start, duration)) {
+        const alternatives = findPracticeAlternatives(duration);
+        warning = `這個時段有衝突。${alternatives.length ? `最近可選：${alternatives.join("、")}` : "當天目前沒有同時長空檔。"}`;
+      }
+      byId("practice-editor-warning").textContent = warning;
+      byId("practice-submit").disabled = !!warning || practiceState.editor.mode === "rental" || practiceState.editor.mode === "mine";
+    }
+
+    function openPracticeEditor(context = {}) {
+      const block = context.block || null;
+      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? "rental" : block?.isMine ? "mine" : block ? "join" : "create");
+      const startTime = context.startTime || block?.startTime || "14:00";
+      const endTime = block?.endTime || practiceMinutesToTime(practiceTimeToMinutes(startTime) + 60);
+      practiceState.editor = { mode, block };
+      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "mine" ? "自主練習詳情" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
+      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "提醒取消後會補入；OB 課程沒有取消前不會占用。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
+      byId("practice-editor-summary").textContent = `${practiceState.date} ｜ ${practiceState.room} 教室${block ? ` ｜ ${block.startTime}–${block.endTime}` : ""}`;
+      byId("practice-editor-date").value = practiceState.date.replace(/\//g, "-");
+      byId("practice-editor-room").value = practiceState.room;
+      byId("practice-editor-start").value = startTime;
+      byId("practice-editor-end").value = endTime;
+      const editable = ["create", "waitlist", "join"].includes(mode);
+      byId("practice-editor-fields").hidden = !editable;
+      byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental";
+      byId("practice-editor-weekly").checked = false;
+      byId("practice-submit").hidden = mode === "rental" || mode === "mine";
+      byId("practice-submit").textContent = mode === "waitlist" ? "確認候補" : mode === "join" ? "確認加入" : "確認登記";
+      byId("practice-leave").hidden = mode !== "mine";
+      const participants = block?.participants || [];
+      byId("practice-participants").innerHTML = participants.map((item) => `<div class="practice-participant"><strong>${escapeHtml(item.teacherName)}${item.role === "建立者" ? "（建立者）" : ""}</strong><span>${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</span></div>`).join("");
+      syncPracticeEditorAvailability();
+      const dialog = byId("practice-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+      refreshIcons();
+    }
+
+    function closePracticeEditor() {
+      const dialog = byId("practice-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+      practiceState.editor = null;
+    }
+
+    async function submitPracticeEditor(event) {
+      event.preventDefault();
+      const editor = practiceState.editor;
+      if (!editor) return;
+      syncPracticeEditorAvailability();
+      if (byId("practice-editor-warning").textContent) return;
+      const practice = {
+        bookingId: editor.block?.bookingId || "",
+        calendarId: editor.block?.calendarId || "",
+        date: byId("practice-editor-date").value.replace(/-/g, "/"),
+        room: byId("practice-editor-room").value,
+        startTime: byId("practice-editor-start").value,
+        endTime: byId("practice-editor-end").value,
+        recurrence: byId("practice-editor-weekly").checked ? "weekly" : "once",
+        scope: byId("practice-editor-weekly").checked ? "future" : "once"
+      };
+      const button = byId("practice-submit");
+      setButtonBusy(button, true, "處理中...");
+      try {
+        if (editor.mode === "waitlist") await callPostApi("createPracticeWaitlist", { practice });
+        else if (editor.mode === "join") await callPostApi("joinPracticeBooking", { practice });
+        else await callPostApi("createPracticeBooking", { practice });
+        closePracticeEditor();
+        setNotice(editor.mode === "join" ? "已加入自主練習。" : editor.mode === "waitlist" ? "已登記候補，課程取消後會自動補入。" : "自主練習已登記。");
+        await loadPracticeDay(practiceState.date);
+      } catch (error) {
+        setNotice(error.message, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function leavePracticeEditor() {
+      const block = practiceState.editor?.block;
+      if (!block?.bookingId) return;
+      const button = byId("practice-leave");
+      setButtonBusy(button, true, "退出中...");
+      try {
+        await callPostApi("leavePracticeBooking", {
+          practice: { bookingId: block.bookingId, scope: block.seriesId && byId("practice-editor-weekly").checked ? "future" : "once" }
+        });
+        closePracticeEditor();
+        setNotice("已退出自主練習。");
+        await loadPracticeDay(practiceState.date);
+      } catch (error) {
+        setNotice(error.message, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
     }
 
     async function loadMyCourses() {
@@ -3951,6 +4420,29 @@
           await adjustPayrollSummary(state.teacherName, state.version, adjustment, reason);
         } else if (state.action === "correct-claim") {
           await correctClaimDetails(state.substituteId, difficulty, reason);
+        } else if (state.action === "update-practice") {
+          await callPostApi("updatePracticeBooking", {
+            practice: {
+              bookingId: state.bookingId,
+              date: state.date,
+              room: state.room,
+              startTime: state.startTime,
+              endTime: state.endTime,
+              reason
+            }
+          });
+          setNotice("自主練習時段已調整。");
+          await fetchPracticeAdminDashboard();
+        } else if (state.action === "cancel-practice") {
+          await callPostApi("cancelPracticeBooking", {
+            practice: {
+              bookingId: state.bookingId,
+              scope: state.scope || "once",
+              reason
+            }
+          });
+          setNotice(state.scope === "future" ? "本次及往後的自主練習已取消。" : "這次自主練習已取消。");
+          await fetchPracticeAdminDashboard();
         }
         closeRequestDialog();
       } catch (error) {
@@ -4233,6 +4725,7 @@
       if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       if (activeAdminTab === "notifications") return fetchNotificationAdminDashboard(rethrow);
+      if (activeAdminTab === "practice") return fetchPracticeAdminDashboard(rethrow);
       const content = byId("admin-tab-content");
       const hadSnapshot = adminDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
@@ -4269,6 +4762,31 @@
       } catch (error) {
         if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
         else setNotice(`通知中心更新失敗：${error.message}`, "error");
+        if (rethrow) throw error;
+      } finally {
+        endReadRefresh(content);
+      }
+    }
+
+    async function fetchPracticeAdminDashboard(rethrow = false) {
+      const content = byId("admin-tab-content");
+      const hadSnapshot = practiceAdminDashboard !== null;
+      const filters = {
+        dateFrom: byId("practice-admin-date-from")?.value || "",
+        dateTo: byId("practice-admin-date-to")?.value || "",
+        room: byId("practice-admin-room")?.value || "",
+        status: byId("practice-admin-status")?.value || "",
+        teacherName: byId("practice-admin-teacher")?.value.trim() || ""
+      };
+      if (hadSnapshot) renderAdminDashboard();
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入自主練習管理資料中...</div>');
+      try {
+        practiceAdminDashboard = await callApi("getPracticeAdminDashboard", filters);
+        practiceAdminDashboard.filters = filters;
+        renderAdminDashboard();
+      } catch (error) {
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`自主練習資料更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
       } finally {
         endReadRefresh(content);
@@ -4326,7 +4844,7 @@
         .slice().sort((a, b) => a.localeCompare(b, "zh-Hant"))
         .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
         .join("");
-      const isSpecialAdminTab = ["payroll", "vvip", "notifications"].includes(activeAdminTab);
+      const isSpecialAdminTab = ["payroll", "vvip", "notifications", "practice"].includes(activeAdminTab);
       byId("admin-sync").hidden = isSpecialAdminTab;
       byId("admin-reconcile").hidden = isSpecialAdminTab;
       const leavePauseButton = byId("admin-leave-pause");
@@ -4375,6 +4893,12 @@
           badge.textContent = String((payrollDashboard && payrollDashboard.metrics && payrollDashboard.metrics.pendingConfirmations) || 0);
           return;
         }
+        if (badge.dataset.adminCount === "practice") {
+          badge.textContent = practiceAdminDashboard
+            ? String((practiceAdminDashboard.summary && practiceAdminDashboard.summary.active) || 0)
+            : "—";
+          return;
+        }
         if (badge.dataset.adminCount === "courseClosureCandidates") {
           const candidates = data.courseClosure && data.courseClosure.unclaimedCandidates;
           badge.textContent = Array.isArray(candidates) ? String(candidates.length) : "0";
@@ -4394,6 +4918,8 @@
         renderPayrollAdminTab();
       } else if (activeAdminTab === "notifications") {
         renderNotificationAdminTab();
+      } else if (activeAdminTab === "practice") {
+        renderPracticeAdminDashboard();
       } else if (activeAdminTab === "pendingInvitations") {
         const pendingItems = data.pendingInvitations || [];
         const invitationRounds = buildAdminInvitationRounds(data.teachers, data.activeInvitees);
@@ -4519,6 +5045,59 @@
       } else {
         content.innerHTML = renderAdminItems(data.completed, "目前沒有已完成紀錄");
       }
+      refreshIcons();
+    }
+
+    function renderPracticeAdminDashboard() {
+      const content = byId("admin-tab-content");
+      const data = practiceAdminDashboard;
+      if (!data) {
+        content.innerHTML = '<div class="state">載入自主練習管理資料中...</div>';
+        return;
+      }
+      const filters = data.filters || {};
+      const summary = data.summary || {};
+      const bookings = Array.isArray(data.bookings) ? data.bookings : [];
+      const bookingCards = bookings.map((booking) => {
+        const participants = (booking.participants || []).map((participant) => `
+          <div class="practice-admin-participant">
+            <span><strong>${escapeHtml(participant.teacherName)}</strong>｜${escapeHtml(participant.role)}${participant.status && participant.status !== "有效" ? `｜${escapeHtml(participant.status)}` : ""}</span>
+            <span>${escapeHtml(participant.startTime)}–${escapeHtml(participant.endTime)}${participant.joinScope === "future" ? "｜本次及往後" : ""}</span>
+          </div>`).join("") || '<div class="item-meta">目前沒有有效參與者</div>';
+        const audits = (booking.audits || []).slice(0, 8).map((audit) => `
+          <div class="item-meta">${escapeHtml(audit.time)}｜${escapeHtml(audit.actor)}｜${escapeHtml(audit.action)}${audit.reason ? `｜${escapeHtml(audit.reason)}` : ""}</div>`).join("");
+        const editable = ["已成立", "候補"].includes(booking.status);
+        return `<article class="practice-admin-card" data-practice-admin-booking="${escapeHtml(booking.bookingId)}">
+          <div class="practice-admin-card-head">
+            <div><strong>${escapeHtml(booking.date)}｜${escapeHtml(booking.room)} 教室｜${escapeHtml(booking.startTime)}–${escapeHtml(booking.endTime)}</strong><div class="item-meta">建立者：${escapeHtml(booking.creatorName || "未設定")}${booking.seriesId ? "｜每週循環" : "｜單次"}${booking.waitlistCalendarId ? `｜候補 OB：${escapeHtml(booking.waitlistCalendarId)}` : ""}</div></div>
+            <span class="status-pill">${escapeHtml(booking.status)}</span>
+          </div>
+          <div class="practice-admin-fields">
+            <label class="notification-field">日期<input class="text-input" type="date" value="${escapeHtml(String(booking.date || "").replace(/\//g, "-"))}" data-practice-admin-date="${escapeHtml(booking.bookingId)}" ${editable ? "" : "disabled"}></label>
+            <label class="notification-field">教室<select class="admin-select" data-practice-admin-room="${escapeHtml(booking.bookingId)}" ${editable ? "" : "disabled"}>${["A", "B", "C", "D"].map((room) => `<option value="${room}"${room === booking.room ? " selected" : ""}>${room}</option>`).join("")}</select></label>
+            <label class="notification-field">開始<input class="text-input" type="time" step="300" value="${escapeHtml(booking.startTime)}" data-practice-admin-start="${escapeHtml(booking.bookingId)}" ${editable ? "" : "disabled"}></label>
+            <label class="notification-field">結束<input class="text-input" type="time" step="300" value="${escapeHtml(booking.endTime)}" data-practice-admin-end="${escapeHtml(booking.bookingId)}" ${editable ? "" : "disabled"}></label>
+          </div>
+          <div class="practice-admin-participants"><strong>參與者與各自時段</strong>${participants}</div>
+          ${booking.reason ? `<div class="item-meta">原因：${escapeHtml(booking.reason)}</div>` : ""}
+          ${audits ? `<details class="practice-admin-audits"><summary>查看操作紀錄（${(booking.audits || []).length}）</summary>${audits}</details>` : ""}
+          ${editable ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="update-practice" data-booking-id="${escapeHtml(booking.bookingId)}"><i data-lucide="calendar-clock"></i>調整時段</button><button class="danger-button" type="button" data-admin-action="cancel-practice" data-booking-id="${escapeHtml(booking.bookingId)}" data-series-id="${escapeHtml(booking.seriesId || "")}"><i data-lucide="calendar-x"></i>取消登記</button></div>` : ""}
+        </article>`;
+      }).join("") || '<div class="state">目前沒有符合條件的自主練習</div>';
+      const failures = (data.notificationFailures || []).map((item) => `
+        <article class="notification-history-row"><div class="notification-schedule-head"><strong>${escapeHtml(item.time || "時間未記錄")}</strong><span class="status-pill">推播失敗</span></div><div class="item-meta">${escapeHtml(item.reason || "原因未記錄")}｜場次 ${escapeHtml(item.targetId || "未記錄")}</div></article>`).join("") || '<div class="state">目前沒有推播失敗紀錄</div>';
+      content.innerHTML = `
+        <form id="practice-admin-filter-form" class="admin-control practice-admin-filters">
+          <label class="notification-field">開始日期<input id="practice-admin-date-from" class="text-input" type="date" value="${escapeHtml(filters.dateFrom || "")}"></label>
+          <label class="notification-field">結束日期<input id="practice-admin-date-to" class="text-input" type="date" value="${escapeHtml(filters.dateTo || "")}"></label>
+          <label class="notification-field">教室<select id="practice-admin-room" class="admin-select"><option value="">全部教室</option>${["A", "B", "C", "D"].map((room) => `<option value="${room}"${filters.room === room ? " selected" : ""}>${room} 教室</option>`).join("")}</select></label>
+          <label class="notification-field">狀態<select id="practice-admin-status" class="admin-select"><option value="">全部狀態</option>${["已成立", "候補", "已取消", "衝突取消"].map((status) => `<option value="${status}"${filters.status === status ? " selected" : ""}>${status}</option>`).join("")}</select></label>
+          <label class="notification-field">老師<input id="practice-admin-teacher" class="text-input" type="search" value="${escapeHtml(filters.teacherName || "")}" placeholder="輸入老師姓名"></label>
+          <div class="practice-admin-filter-actions"><button class="compact-button" type="submit"><i data-lucide="search"></i>套用篩選</button><button class="compact-button" type="button" data-admin-action="clear-practice-filters"><i data-lucide="rotate-ccw"></i>清除</button></div>
+        </form>
+        <div class="admin-summary"><div class="summary-item"><span>查詢筆數</span><strong>${Number(summary.total) || 0}</strong></div><div class="summary-item"><span>已成立</span><strong>${Number(summary.active) || 0}</strong></div><div class="summary-item"><span>候補</span><strong>${Number(summary.waitlisted) || 0}</strong></div><div class="summary-item"><span>已取消／衝突取消</span><strong>${Number(summary.cancelled) || 0}</strong></div></div>
+        <div class="practice-admin-list">${bookingCards}</div>
+        <section class="practice-admin-failures"><div class="admin-control"><strong>推播失敗待處理</strong><div class="item-meta">自主練習異動通知若未成功送出，會保留在這裡供管理員追查。</div></div>${failures}</section>`;
       refreshIcons();
     }
 
@@ -5111,6 +5690,7 @@ https://sherryaerial-web.github.io/sub.html/
       activeAdminTab = button.dataset.adminReminderTab;
       if (activeAdminTab === "vvip") fetchVvipAdminDashboard();
       else if (activeAdminTab === "notifications") fetchNotificationAdminDashboard();
+      else if (activeAdminTab === "practice") fetchPracticeAdminDashboard();
       else renderAdminDashboard();
     });
     byId("back-button").addEventListener("click", () => switchView("view-home"));
@@ -5178,6 +5758,7 @@ https://sherryaerial-web.github.io/sub.html/
         if (activeAdminTab === "vvip") fetchVvipAdminDashboard();
         else if (activeAdminTab === "payroll") fetchPayrollAdminDashboard();
         else if (activeAdminTab === "notifications") fetchNotificationAdminDashboard();
+        else if (activeAdminTab === "practice") fetchPracticeAdminDashboard();
         else renderAdminDashboard();
       });
     });
@@ -5196,6 +5777,44 @@ https://sherryaerial-web.github.io/sub.html/
         }
         if (action === "clear-notification-schedule") {
           clearNotificationScheduleForm();
+          return;
+        }
+        if (action === "clear-practice-filters") {
+          ["practice-admin-date-from", "practice-admin-date-to", "practice-admin-room", "practice-admin-status", "practice-admin-teacher"].forEach((id) => {
+            const field = byId(id);
+            if (field) field.value = "";
+          });
+          await fetchPracticeAdminDashboard();
+          return;
+        }
+        if (action === "update-practice") {
+          const bookingId = button.dataset.bookingId;
+          const readValue = (name) => document.querySelector(`[data-practice-admin-${name}="${CSS.escape(bookingId)}"]`)?.value || "";
+          openRequestDialog({
+            action: "update-practice",
+            bookingId,
+            date: readValue("date").replace(/-/g, "/"),
+            room: readValue("room"),
+            startTime: readValue("start"),
+            endTime: readValue("end"),
+            title: "調整自主練習",
+            copy: "請確認日期、教室與時間；系統會重新檢查課程、場租、緩衝時間及其他自主練習。",
+            reasonLabel: "調整原因",
+            reasonPlaceholder: "例如：管理員協助修正時段"
+          });
+          return;
+        }
+        if (action === "cancel-practice") {
+          const cancelFuture = Boolean(button.dataset.seriesId) && window.confirm("這是每週循環登記。按「確定」會取消本次及往後；按「取消」只取消這一次。");
+          openRequestDialog({
+            action: "cancel-practice",
+            bookingId: button.dataset.bookingId,
+            scope: cancelFuture ? "future" : "once",
+            title: cancelFuture ? "取消本次及往後自主練習" : "取消這次自主練習",
+            copy: "取消後會通知目前場次中的老師，並保留操作紀錄。",
+            reasonLabel: "取消原因",
+            reasonPlaceholder: "請填寫取消原因"
+          });
           return;
         }
         if (action === "toggle-notification-schedule") {
@@ -5352,6 +5971,7 @@ https://sherryaerial-web.github.io/sub.html/
         if (event.target.id === "vvip-member-form") await saveVvipMember();
         if (event.target.id === "manual-notification-form") await submitManualNotification();
         if (event.target.id === "notification-schedule-form") await submitNotificationSchedule();
+        if (event.target.id === "practice-admin-filter-form") await fetchPracticeAdminDashboard();
       } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-sync").addEventListener("click", async () => {
@@ -5422,6 +6042,39 @@ https://sherryaerial-web.github.io/sub.html/
     });
     byId("push-enable").addEventListener("click", requestPushPermission);
     byId("push-disable").addEventListener("click", disablePushNotifications);
+    byId("practice-date-strip").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-practice-date]") : null;
+      if (button) loadPracticeDay(button.dataset.practiceDate);
+    });
+    byId("practice-room-tabs").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-practice-room]") : null;
+      if (!button) return;
+      practiceState.room = button.dataset.practiceRoom;
+      renderPracticeView(practiceState.data);
+    });
+    byId("practice-timeline").addEventListener("click", (event) => {
+      const blockButton = event.target.closest ? event.target.closest("[data-practice-block]") : null;
+      if (blockButton) {
+        const block = getPracticeSelectedRoom().blocks.find((item) => item.id === blockButton.dataset.practiceBlock);
+        if (block) openPracticeEditor({ block });
+        return;
+      }
+      const timeButton = event.target.closest ? event.target.closest("[data-practice-start]") : null;
+      if (timeButton) openPracticeEditor({ mode: "create", startTime: timeButton.dataset.practiceStart });
+    });
+    byId("practice-new").addEventListener("click", () => openPracticeEditor({ mode: "create", startTime: "14:00" }));
+    byId("practice-duration-options").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-practice-duration]") : null;
+      if (!button || button.disabled) return;
+      setPracticeEditorTime(byId("practice-editor-start").value, Number(button.dataset.practiceDuration));
+    });
+    ["practice-editor-start", "practice-editor-end"].forEach((id) => {
+      byId(id).addEventListener("input", syncPracticeEditorAvailability);
+      byId(id).addEventListener("change", syncPracticeEditorAvailability);
+    });
+    byId("practice-form").addEventListener("submit", submitPracticeEditor);
+    byId("practice-leave").addEventListener("click", leavePracticeEditor);
+    byId("practice-dialog-cancel").addEventListener("click", closePracticeEditor);
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.view));
     });

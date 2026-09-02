@@ -1054,6 +1054,32 @@ function createNotificationBackend() {
   };
 }
 
+function createPracticeBackend(options = {}) {
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ...(options.courseRows || []),
+  ]);
+  const auditSheet = createSheetFixture('操作紀錄', [[
+    '操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因',
+  ]]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet, auditSheet]);
+  const backend = loadBackend({
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  backend.ensurePracticeStructure_();
+  return {
+    backend,
+    spreadsheet,
+    courseSheet,
+    bookingSheet: spreadsheet.getSheetByName('自主練習場次'),
+    seriesSheet: spreadsheet.getSheetByName('自主練習系列'),
+    participantSheet: spreadsheet.getSheetByName('自主練習參與者'),
+    exceptionSheet: spreadsheet.getSheetByName('自主練習例外'),
+    practiceAuditSheet: spreadsheet.getSheetByName('自主練習操作紀錄'),
+    teacher(name) { return { teacherName: name, role: '老師', managementCapabilities: [] }; },
+  };
+}
+
 test('course administrators can manually notify selected active teachers and the send is audited', () => {
   const { backend, auditSheet, adminSession } = createNotificationBackend();
   const deliveries = [];
@@ -2053,7 +2079,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '代課邀請', '操作紀錄', '登入帳號', '系統設定',
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
-      '關課設定', '關課紀錄'
+      '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
+      '自主練習參與者', '自主練習例外', '自主練習操作紀錄'
     ].sort()
   );
   assert.deepEqual(
@@ -7519,4 +7546,477 @@ test('next-month unclaimed closure rechecks live OB name and never cancels a ven
   assert.equal(cancellations, 0);
   assert.equal(fixture.leaveSheet.values[1][5], '確認中');
   assert.equal(result.items[0].result, '場地租借，未取消');
+});
+
+test('practice intervals enforce five-minute steps and a fifteen-minute minimum', () => {
+  const backend = loadBackend();
+
+  const interval = backend.normalizePracticeInterval_('2026/09/10', '14:05', '14:20');
+
+  assert.equal(interval.date, '2026/09/10');
+  assert.equal(interval.startTime, '14:05');
+  assert.equal(interval.endTime, '14:20');
+  assert.equal(interval.durationMinutes, 15);
+  assert.throws(
+    () => backend.normalizePracticeInterval_('2026/09/10', '14:03', '14:20'),
+    /5 分鐘/
+  );
+  assert.throws(
+    () => backend.normalizePracticeInterval_('2026/09/10', '14:05', '14:15'),
+    /至少 15 分鐘/
+  );
+});
+
+test('practice intervals use Taipei timestamps independent of the device timezone', () => {
+  const backend = loadBackend();
+
+  const interval = backend.normalizePracticeInterval_('2026/09/10', '00:05', '01:05');
+
+  assert.equal(new Date(interval.startMs).toISOString(), '2026-09-09T16:05:00.000Z');
+  assert.equal(new Date(interval.endMs).toISOString(), '2026-09-09T17:05:00.000Z');
+});
+
+test('practice conflicts include an exact fifteen-minute turnover buffer', () => {
+  const backend = loadBackend();
+  const practice = backend.normalizePracticeInterval_('2026/09/10', '14:00', '15:00');
+  const blocked = backend.normalizePracticeInterval_('2026/09/10', '15:10', '16:10');
+  const allowed = backend.normalizePracticeInterval_('2026/09/10', '15:15', '16:15');
+
+  assert.equal(backend.practiceIntervalsConflict_(practice, blocked, 15), true);
+  assert.equal(backend.practiceIntervalsConflict_(practice, allowed, 15), false);
+});
+
+test('practice quick durations expose only sixty ninety and one hundred twenty minutes', () => {
+  const backend = loadBackend();
+  const blocker = backend.normalizePracticeInterval_('2026/09/10', '15:40', '17:00');
+
+  const options = backend.getPracticeQuickDurationOptions_(
+    { date: '2026/09/10', startTime: '14:00' },
+    [{ interval: blocker, label: 'A－空環' }]
+  );
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(options)),
+    [
+      { minutes: 60, available: true, reason: '' },
+      { minutes: 90, available: false, reason: '與 A－空環 的前後 15 分鐘緩衝衝突' },
+      { minutes: 120, available: false, reason: '與 A－空環 的前後 15 分鐘緩衝衝突' },
+    ]
+  );
+});
+
+test('practice structure is isolated and preserves formal course rows across reruns', () => {
+  const courseRow = ['2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲', 'cal-1', 'class-1', 'teacher-1', '否', 'stamp'];
+  const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, courseRow]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensurePracticeStructure_();
+  backend.ensurePracticeStructure_();
+
+  assert.deepEqual(courseSheet.values, [EXPECTED_COURSE_HEADERS, courseRow]);
+  assert.deepEqual(
+    spreadsheet.sheets.map((sheet) => sheet.getName()).sort(),
+    ['CourseList', '自主練習系列', '自主練習場次', '自主練習參與者', '自主練習例外', '自主練習操作紀錄'].sort()
+  );
+});
+
+test('practice day view separates OB classes rentals and shared practice by room', () => {
+  const backend = loadBackend();
+  const day = backend.buildPracticeDayView_(
+    {
+      bookings: [{
+        bookingId: 'practice-1', seriesId: '', date: '2026/09/10', room: 'A',
+        startTime: '16:00', endTime: '17:00', status: '已成立', creatorName: '小琪',
+        waitlistCalendarId: '', reason: ''
+      }],
+      participants: [
+        { participantId: 'part-1', bookingId: 'practice-1', teacherName: '小琪', role: '建立者', startTime: '16:00', endTime: '17:00', status: '有效' },
+        { participantId: 'part-2', bookingId: 'practice-1', teacherName: 'Ariel Lu', role: '參與者', startTime: '16:30', endTime: '17:00', status: '有效' },
+      ],
+    },
+    [
+      ['2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲', 'cal-class'],
+      ['2026/09/10', '18:00', 'B－場地租借', '租借者', 'cal-rental'],
+      ['2026/09/11', '14:00', 'C－舞綢 Lv.1', '老師乙', 'cal-other-day'],
+    ],
+    '2026/09/10'
+  );
+
+  assert.equal(day.date, '2026/09/10');
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms.map((room) => room.room))), ['A', 'B', 'C', 'D']);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[0].blocks.map((block) => block.type))), ['course', 'practice']);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[0].blocks[1].participants.map((item) => item.teacherName))), ['小琪', 'Ariel Lu']);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[1].blocks.map((block) => block.type))), ['rental']);
+  assert.equal(day.rooms[2].blocks.length, 0);
+});
+
+test('practice create stores one UUID booking and its creator without touching CourseList', () => {
+  const fixture = createPracticeBackend();
+  const beforeCourses = JSON.parse(JSON.stringify(fixture.courseSheet.values));
+
+  const result = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+
+  assert.equal(result.status, '已成立');
+  assert.ok(result.bookingId);
+  assert.equal(fixture.bookingSheet.values.length, 2);
+  assert.equal(fixture.bookingSheet.values[1][0], result.bookingId);
+  assert.equal(fixture.bookingSheet.values[1][7], '小琪');
+  assert.equal(fixture.participantSheet.values.length, 2);
+  assert.equal(fixture.participantSheet.values[1][3], '小琪');
+  assert.equal(fixture.participantSheet.values[1][4], '建立者');
+  assert.deepEqual(fixture.courseSheet.values, beforeCourses);
+});
+
+test('practice join keeps participant-specific times and creator exit hands ownership over', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'once',
+  });
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'once',
+  });
+  const result = fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: created.bookingId, scope: 'once',
+  });
+
+  assert.equal(result.bookingStatus, '已成立');
+  assert.equal(result.newCreatorName, 'Ariel Lu');
+  assert.equal(fixture.bookingSheet.values[1][7], 'Ariel Lu');
+  assert.equal(fixture.participantSheet.values[1][8], '已退出');
+  assert.equal(fixture.participantSheet.values[2][3], 'Ariel Lu');
+  assert.equal(fixture.participantSheet.values[2][4], '建立者');
+  assert.equal(fixture.participantSheet.values[2][5], '15:00');
+});
+
+test('practice creation rejects formal blockers and points overlapping teachers to join', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      'cal-1', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+
+  assert.throws(
+    () => fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+      date: '2026/09/10', room: 'A', startTime: '15:10', endTime: '16:10', recurrence: 'once',
+    }),
+    /正式課程.*15 分鐘/
+  );
+
+  const first = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'B', startTime: '16:00', endTime: '17:00', recurrence: 'once',
+  });
+  assert.ok(first.bookingId);
+  assert.throws(
+    () => fixture.backend.createPracticeBooking_(fixture.teacher('Ariel Lu'), {
+      date: '2026/09/10', room: 'B', startTime: '16:30', endTime: '17:30', recurrence: 'once',
+    }),
+    /已有.*自主練習.*加入/
+  );
+});
+
+test('practice weekly recurrence keeps a cancelled occurrence as an exception', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [
+      ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-1'],
+      ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-2'],
+      ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-3'],
+    ],
+  });
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'weekly',
+  });
+  const occurrence = fixture.bookingSheet.values.find((row) => row[2] === '2026/09/17');
+
+  fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: occurrence[0], scope: 'once',
+  });
+  fixture.backend.expandPracticeSeries_(created.seriesId, '2026/09/24');
+
+  assert.equal(fixture.bookingSheet.values.filter((row) => row[1] === created.seriesId).length, 3);
+  assert.equal(occurrence[6], '已取消');
+  assert.equal(fixture.exceptionSheet.values.length, 2);
+  assert.equal(fixture.exceptionSheet.values[1][2], '2026/09/17');
+});
+
+test('practice future join and creator exit preserve participants across the weekly series', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [
+      ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-1'],
+      ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-2'],
+      ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-3'],
+    ],
+  });
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'weekly',
+  });
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'future',
+  });
+  fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: created.bookingId, scope: 'future',
+  });
+
+  const bookings = fixture.bookingSheet.values.slice(1).filter((row) => row[1] === created.seriesId);
+  const activeAriel = fixture.participantSheet.values.slice(1).filter((row) => (
+    row[2] === created.seriesId && row[3] === 'Ariel Lu' && row[8] === '有效'
+  ));
+  const leftCreator = fixture.participantSheet.values.slice(1).filter((row) => (
+    row[2] === created.seriesId && row[3] === '小琪' && row[8] === '已退出'
+  ));
+  assert.equal(activeAriel.length, 3);
+  assert.equal(leftCreator.length, 3);
+  assert.ok(bookings.every((row) => row[6] === '已成立' && row[7] === 'Ariel Lu'));
+  assert.equal(fixture.seriesSheet.values[1][1], 'Ariel Lu');
+  assert.equal(fixture.seriesSheet.values[1][8], '啟用中');
+});
+
+test('practice candidate activates only after a successful OB check confirms the linked course is gone', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  const candidate = fixture.backend.createPracticeWaitlist_(fixture.teacher('小琪'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.activated, 1);
+  assert.equal(result.cancelled, 0);
+  assert.equal(fixture.bookingSheet.values[1][0], candidate.bookingId);
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+});
+
+test('practice candidate stays pending while its linked OB course still exists', () => {
+  const courseRow = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [courseRow] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('小琪'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [courseRow];
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.activated, 0);
+  assert.equal(result.pending, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+});
+
+test('practice reconciliation fails closed when OB cannot be verified', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('小琪'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('injected OB outage'); };
+
+  assert.throws(
+    () => fixture.backend.reconcilePracticeBookings_({
+      today: '2026/09/10', throughDate: '2026/09/10',
+    }),
+    /無法確認 OB/
+  );
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+});
+
+test('practice reconciliation cancels a revived conflict and records push failure for managers', () => {
+  const fixture = createPracticeBackend();
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [[
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-revived', 'class-1', 'teacher-1', '否', 'stamp',
+  ]];
+  fixture.backend.sendPushAfterMutationSafely_ = () => ({
+    attempted: true, accepted: false, delivered: 0, error: 'injected push outage',
+  });
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.cancelled, 1);
+  assert.equal(result.notificationFailures, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '衝突取消');
+  assert.equal(fixture.participantSheet.values[1][8], '已取消');
+  assert.ok(fixture.practiceAuditSheet.values.some((row) => row[2] === '推播失敗'));
+});
+
+test('practice join and leave notify the current creator after Sheet writes finish', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'once',
+  });
+  const deliveries = [];
+  fixture.backend.sendPushAfterMutationSafely_ = (teacherNames, message) => {
+    deliveries.push({ teacherNames: Array.from(teacherNames), heading: message.heading });
+    return { attempted: true, accepted: true, delivered: teacherNames.length, error: '' };
+  };
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'once',
+  });
+  fixture.backend.leavePracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, scope: 'once',
+  });
+
+  assert.deepEqual(deliveries, [
+    { teacherNames: ['小琪'], heading: '有人加入自主練習' },
+    { teacherNames: ['小琪'], heading: '有人退出自主練習' },
+  ]);
+});
+
+test('practice API requires login, ignores forged teachers, and permits course-admin acting mode', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '冠蓉', '1234', { role: '管理員' }).concat('', 'course_admin'),
+    createAccount(bootstrap, '小琪', '2345').concat('空環', ''),
+  ], services);
+  backend.console = { error() {} };
+  const calls = [];
+  backend.getPracticeDay_ = (session, date) => {
+    calls.push(['day', session.teacherName, session.impersonatedBy || '', date]);
+    return { date, teacherName: session.teacherName };
+  };
+  backend.createPracticeBooking_ = (session, input) => {
+    calls.push(['create', session.teacherName, session.impersonatedBy || '', input.room]);
+    return { bookingId: 'practice-1' };
+  };
+  backend.getPracticeAdminDashboard_ = (session) => {
+    backend.assertCapabilitySession_(session, 'course_admin');
+    calls.push(['admin', session.teacherName]);
+    return { bookings: [] };
+  };
+
+  const missing = JSON.parse(backend.doPost({ parameter: {
+    action: 'getPracticeDay', date: '2026/09/10', teacherName: '偽造老師',
+  } }).text);
+  assert.equal(missing.status, 'error');
+  assert.match(missing.message, /請先登入/);
+
+  const teacherToken = backend.authenticate_('小琪', '2345').sessionToken;
+  const teacherResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'createPracticeBooking',
+    sessionToken: teacherToken,
+    teacherName: '偽造老師',
+    practice: JSON.stringify({ date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00' }),
+  } }).text);
+  assert.equal(teacherResult.status, 'success');
+
+  const adminToken = backend.authenticate_('冠蓉', '1234').sessionToken;
+  const actingResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getPracticeDay',
+    sessionToken: adminToken,
+    actingTeacherName: '小琪',
+    date: '2026/09/10',
+  } }).text);
+  assert.equal(actingResult.status, 'success');
+  const dashboardResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getPracticeAdminDashboard', sessionToken: adminToken,
+  } }).text);
+  assert.equal(dashboardResult.status, 'success');
+  assert.deepEqual(calls, [
+    ['create', '小琪', '', 'A'],
+    ['day', '小琪', '冠蓉', '2026/09/10'],
+    ['admin', '冠蓉'],
+  ]);
+});
+
+test('practice day service returns the signed-in teacher and canonical room timeline', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '13:00', 'A－空環 Lv.1', '老師甲', 'cal-1', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'B', startTime: '15:00', endTime: '16:00', recurrence: 'once',
+  });
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(result.teacherName, '小琪');
+  assert.equal(result.date, '2026/09/10');
+  assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].type, 'course');
+  assert.equal(result.rooms.find((room) => room.room === 'B').blocks[0].type, 'practice');
+  assert.deepEqual(Array.from(result.quickDurations), [60, 90, 120]);
+});
+
+test('practice update and cancellation enforce ownership and administrator reasons', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  const admin = {
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  };
+
+  assert.throws(() => fixture.backend.updatePracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A', startTime: '14:30', endTime: '15:30',
+  }), /只能調整自己/);
+  assert.throws(() => fixture.backend.updatePracticeBooking_(admin, {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'A', startTime: '14:30', endTime: '15:30',
+  }), /請填寫原因/);
+
+  const updated = fixture.backend.updatePracticeBooking_(admin, {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'B', startTime: '14:30', endTime: '15:30',
+    reason: '管理員依老師需求調整',
+  });
+  assert.equal(updated.room, 'B');
+  assert.equal(updated.startTime, '14:30');
+
+  assert.throws(() => fixture.backend.cancelPracticeBooking_(admin, {
+    bookingId: created.bookingId,
+  }), /請填寫原因/);
+  const cancelled = fixture.backend.cancelPracticeBooking_(admin, {
+    bookingId: created.bookingId, reason: '臨時開課', scope: 'once',
+  });
+  assert.equal(cancelled.status, '已取消');
+  assert.equal(fixture.bookingSheet.values[1][6], '已取消');
+  assert.equal(fixture.participantSheet.values[1][8], '已取消');
+});
+
+test('practice administrator dashboard is course-admin only and includes participants and failures', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.recordPracticeNotificationFailure_({
+    bookingId: created.bookingId,
+    teacherNames: ['小琪'],
+    message: { heading: '測試' },
+    error: '測試推播失敗',
+  });
+  assert.throws(() => fixture.backend.getPracticeAdminDashboard_(fixture.teacher('小琪'), {}), /課程管理權限/);
+
+  const result = fixture.backend.getPracticeAdminDashboard_({
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  }, { dateFrom: '2026/09/01', dateTo: '2026/09/30' });
+
+  assert.equal(result.bookings.length, 1);
+  assert.equal(result.bookings[0].participants[0].teacherName, '小琪');
+  assert.equal(result.notificationFailures.length, 1);
+  assert.equal(result.notificationFailures[0].reason, '測試推播失敗');
 });

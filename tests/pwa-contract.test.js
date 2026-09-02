@@ -82,5 +82,7 @@ test('deployment guide documents private OneSignal setup and device onboarding',
   assert.match(readme, /PUSH_EXTERNAL_ID_SALT.*自動/);
   assert.match(readme, /iOS\/iPadOS 16\.4/);
   assert.match(readme, /加入主畫面/);
-  assert.match(readme, /不會新增通知工作表|不新增通知工作表/);
+  assert.match(readme, /`通知訊息`、`通知收件人`/);
+  assert.match(readme, /不會改動或覆寫既有工作表欄位與人工資料/);
+  assert.match(readme, /不回填舊推播/);
 });

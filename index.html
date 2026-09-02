@@ -918,11 +918,30 @@
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .dialog-actions .primary-button { width: auto; min-width: 110px; margin-top: 0; }
 
+    .practice-date-navigation {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) 44px;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 12px;
+    }
+    .practice-date-arrow {
+      width: 44px;
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 24px;
+      line-height: 1;
+    }
+    .practice-date-arrow:disabled { opacity: .32; cursor: not-allowed; }
     .practice-date-strip {
       display: flex;
       gap: 8px;
       overflow-x: auto;
-      margin: 0 0 12px;
+      margin: 0;
       padding: 2px 1px 8px;
       scrollbar-width: none;
     }
@@ -1053,6 +1072,16 @@
     .practice-participant-list { display: grid; gap: 7px; margin-top: 10px; }
     .practice-participant { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: var(--soft); font-size: 12px; }
     .practice-editor-warning { margin-top: 9px; color: var(--danger); font-size: 12px; line-height: 1.45; }
+    .practice-course-warning {
+      margin: 0 0 12px;
+      padding: 9px 11px;
+      border-radius: 9px;
+      background: #fbf5e9;
+      color: #7a5b34;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    #practice-dialog .dialog-actions { flex-wrap: wrap; }
     #practice-dialog { width: min(92vw, 560px); max-height: min(88vh, 760px); padding: 0; }
     .claim-success-mark {
       display: grid;
@@ -1587,12 +1616,17 @@
           <div class="view-header">
             <div><span class="eyebrow">Practice</span><h2 class="section-heading">自主練習</h2><p class="section-copy">直接看 A、B、C、D 教室當天狀況</p></div>
           </div>
-          <div id="practice-date-strip" class="practice-date-strip" aria-label="選擇自主練習日期"></div>
+          <div class="practice-date-navigation">
+            <button id="practice-date-previous" class="practice-date-arrow" type="button" aria-label="前一天">‹</button>
+            <div id="practice-date-strip" class="practice-date-strip" aria-label="選擇自主練習日期"></div>
+            <button id="practice-date-next" class="practice-date-arrow" type="button" aria-label="後一天">›</button>
+          </div>
           <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
           <div class="practice-toolbar">
             <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span></div>
             <button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="plus"></i>新增自主練習</button>
           </div>
+          <div id="practice-course-warning" class="practice-course-warning" hidden></div>
           <div id="practice-timeline" class="practice-timeline" aria-live="polite"><div class="state">載入教室時間中...</div></div>
         </section>
 
@@ -1706,6 +1740,7 @@
       <div id="practice-editor-warning" class="practice-editor-warning" aria-live="polite"></div>
       <div class="dialog-actions">
         <button id="practice-leave" class="compact-button" type="button" hidden>退出練習</button>
+        <button id="practice-leave-future" class="danger-button" type="button" hidden>停止整個循環</button>
         <button id="practice-dialog-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
         <button id="practice-submit" class="primary-button" type="submit"><i data-lucide="check"></i>確認登記</button>
       </div>
@@ -2911,6 +2946,20 @@
       return `${shifted.getUTCFullYear()}/${String(shifted.getUTCMonth() + 1).padStart(2, "0")}/${String(shifted.getUTCDate()).padStart(2, "0")}`;
     }
 
+    function getSafePracticeDate(dateValue, todayValue = getTaipeiToday()) {
+      const today = String(todayValue || getTaipeiToday()).replace(/-/g, "/");
+      const date = String(dateValue || today).replace(/-/g, "/");
+      return date < today ? today : date;
+    }
+
+    function getPracticeDateStripDates(selectedDateValue, todayValue = getTaipeiToday()) {
+      const today = String(todayValue || getTaipeiToday()).replace(/-/g, "/");
+      const selected = getSafePracticeDate(selectedDateValue, today);
+      const centeredStart = shiftPracticeDate(selected, -3);
+      const start = centeredStart < today ? today : centeredStart;
+      return Array.from({ length: 9 }, (_, index) => shiftPracticeDate(start, index));
+    }
+
     function practiceTimeToMinutes(value) {
       const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
       return match ? Number(match[1]) * 60 + Number(match[2]) : -1;
@@ -2927,7 +2976,7 @@
     }
 
     async function loadPracticeDay(dateValue) {
-      const date = String(dateValue || getTaipeiToday()).replace(/-/g, "/");
+      const date = getSafePracticeDate(dateValue);
       practiceState.date = date;
       renderPracticeDateStrip();
       const timeline = byId("practice-timeline");
@@ -2944,12 +2993,15 @@
     }
 
     function renderPracticeDateStrip() {
-      const dates = Array.from({ length: 9 }, (_, index) => shiftPracticeDate(practiceState.date || getTaipeiToday(), index - 3));
+      const today = getTaipeiToday();
+      practiceState.date = getSafePracticeDate(practiceState.date, today);
+      const dates = getPracticeDateStripDates(practiceState.date, today);
       byId("practice-date-strip").innerHTML = dates.map((date) => {
         const [year, month, day] = date.split("/");
         const weekday = formatDateWithWeekday(date).match(/（(.+)）/)?.[1] || "";
         return `<button class="practice-date-button ${date === practiceState.date ? "active" : ""}" type="button" data-practice-date="${escapeHtml(date)}"><strong>${escapeHtml(`${month}/${day}`)}</strong><span>${escapeHtml(weekday)}</span></button>`;
       }).join("");
+      byId("practice-date-previous").disabled = practiceState.date <= today;
     }
 
     function renderPracticeView(data) {
@@ -2957,6 +3009,9 @@
       practiceState.date = String(data?.date || practiceState.date || getTaipeiToday()).replace(/-/g, "/");
       if (!(data?.rooms || []).some((room) => room.room === practiceState.room)) practiceState.room = "A";
       renderPracticeDateStrip();
+      const courseWarning = byId("practice-course-warning");
+      courseWarning.textContent = data?.courseWarning || "";
+      courseWarning.hidden = !courseWarning.textContent;
       byId("practice-room-tabs").innerHTML = ["A", "B", "C", "D"].map((room) => {
         const count = (data?.rooms || []).find((item) => item.room === room)?.blocks?.length || 0;
         return `<button class="practice-room-tab ${room === practiceState.room ? "active" : ""}" type="button" role="tab" aria-selected="${room === practiceState.room}" data-practice-room="${room}">${room} 教室${count ? ` <small>${count}</small>` : ""}</button>`;
@@ -2993,8 +3048,11 @@
       const room = getPracticeSelectedRoom();
       const blocksByStart = new Map();
       (room.blocks || []).forEach((block) => {
-        if (!blocksByStart.has(block.startTime)) blocksByStart.set(block.startTime, []);
-        blocksByStart.get(block.startTime).push(block);
+        const startMinutes = practiceTimeToMinutes(block.startTime);
+        const rowMinutes = Math.max(7 * 60, Math.min(23 * 60, Math.floor(startMinutes / 30) * 30));
+        const rowTime = practiceMinutesToTime(rowMinutes);
+        if (!blocksByStart.has(rowTime)) blocksByStart.set(rowTime, []);
+        blocksByStart.get(rowTime).push(block);
       });
       const rows = [];
       for (let minutes = 7 * 60; minutes <= 23 * 60; minutes += 30) {
@@ -3002,8 +3060,7 @@
         const blocks = blocksByStart.get(time) || [];
         rows.push(`<div class="practice-time-row"><span class="practice-time-label">${time}</span>${blocks.map(practiceBlockHtml).join("")}${blocks.length ? "" : `<button class="practice-time-button" type="button" data-practice-start="${time}" aria-label="${time} 登記自主練習">${practiceSlotAvailable(minutes) ? "+ 登記" : ""}</button>`}</div>`);
       }
-      const unmatched = (room.blocks || []).filter((block) => !blocksByStart.has(practiceMinutesToTime(Math.round(practiceTimeToMinutes(block.startTime) / 30) * 30)));
-      byId("practice-timeline").innerHTML = `<div class="practice-timeline-grid">${unmatched.map(practiceBlockHtml).join("")}${rows.join("")}</div>`;
+      byId("practice-timeline").innerHTML = `<div class="practice-timeline-grid">${rows.join("")}</div>`;
     }
 
     function setPracticeEditorTime(startTime, duration) {
@@ -3015,11 +3072,23 @@
     }
 
     function findPracticeAlternatives(duration) {
-      const alternatives = [];
-      for (let minutes = 7 * 60; minutes <= 22 * 60 + 30 && alternatives.length < 3; minutes += 5) {
-        if (practiceSlotAvailable(minutes, duration)) alternatives.push(practiceMinutesToTime(minutes));
+      const requestedStart = practiceTimeToMinutes(byId("practice-editor-start").value);
+      const candidates = [];
+      for (let minutes = 7 * 60; minutes <= 22 * 60 + 30; minutes += 5) {
+        if (practiceSlotAvailable(minutes, duration)) candidates.push(minutes);
       }
-      return alternatives;
+      candidates.sort((left, right) => {
+        const leftDistance = Math.abs(left - requestedStart);
+        const rightDistance = Math.abs(right - requestedStart);
+        if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+        return left >= requestedStart && right < requestedStart ? -1 : left - right;
+      });
+      const alternatives = [];
+      candidates.some((minutes) => {
+        if (alternatives.every((selected) => Math.abs(selected - minutes) >= 30)) alternatives.push(minutes);
+        return alternatives.length >= 3;
+      });
+      return alternatives.map(practiceMinutesToTime);
     }
 
     function syncPracticeEditorAvailability() {
@@ -3064,6 +3133,9 @@
       byId("practice-submit").hidden = mode === "rental" || mode === "mine";
       byId("practice-submit").textContent = mode === "waitlist" ? "確認候補" : mode === "join" ? "確認加入" : "確認登記";
       byId("practice-leave").hidden = mode !== "mine";
+      byId("practice-leave").textContent = block?.isCreator ? "只取消這次" : "只退出這次";
+      byId("practice-leave-future").hidden = mode !== "mine" || !block?.seriesId;
+      byId("practice-leave-future").textContent = block?.isCreator ? "停止整個循環" : "退出這次與之後";
       const participants = block?.participants || [];
       byId("practice-participants").innerHTML = participants.map((item) => `<div class="practice-participant"><strong>${escapeHtml(item.teacherName)}${item.role === "建立者" ? "（建立者）" : ""}</strong><span>${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</span></div>`).join("");
       syncPracticeEditorAvailability();
@@ -3112,17 +3184,19 @@
       }
     }
 
-    async function leavePracticeEditor() {
+    async function leavePracticeEditor(scope = "once") {
       const block = practiceState.editor?.block;
       if (!block?.bookingId) return;
-      const button = byId("practice-leave");
+      const isFuture = scope === "future" && !!block.seriesId;
+      if (isFuture && !window.confirm("確定停止這次與之後的循環登記嗎？若已有其他參與者，他們的登記會保留。")) return;
+      const button = isFuture ? byId("practice-leave-future") : byId("practice-leave");
       setButtonBusy(button, true, "退出中...");
       try {
         await callPostApi("leavePracticeBooking", {
-          practice: { bookingId: block.bookingId, scope: block.seriesId && byId("practice-editor-weekly").checked ? "future" : "once" }
+          practice: { bookingId: block.bookingId, scope: isFuture ? "future" : "once" }
         });
         closePracticeEditor();
-        setNotice("已退出自主練習。");
+        setNotice(isFuture ? "已停止這次與之後的循環登記。" : "已退出這次自主練習。");
         await loadPracticeDay(practiceState.date);
       } catch (error) {
         setNotice(error.message, "error");
@@ -6126,6 +6200,13 @@ https://sherryaerial-web.github.io/sub.html/
       const button = event.target.closest ? event.target.closest("[data-practice-date]") : null;
       if (button) loadPracticeDay(button.dataset.practiceDate);
     });
+    byId("practice-date-previous").addEventListener("click", () => {
+      if (practiceState.date <= getTaipeiToday()) return;
+      loadPracticeDay(shiftPracticeDate(practiceState.date, -1));
+    });
+    byId("practice-date-next").addEventListener("click", () => {
+      loadPracticeDay(shiftPracticeDate(practiceState.date || getTaipeiToday(), 1));
+    });
     byId("practice-room-tabs").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-practice-room]") : null;
       if (!button) return;
@@ -6153,7 +6234,8 @@ https://sherryaerial-web.github.io/sub.html/
       byId(id).addEventListener("change", syncPracticeEditorAvailability);
     });
     byId("practice-form").addEventListener("submit", submitPracticeEditor);
-    byId("practice-leave").addEventListener("click", leavePracticeEditor);
+    byId("practice-leave").addEventListener("click", () => leavePracticeEditor("once"));
+    byId("practice-leave-future").addEventListener("click", () => leavePracticeEditor("future"));
     byId("practice-dialog-cancel").addEventListener("click", closePracticeEditor);
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.view));

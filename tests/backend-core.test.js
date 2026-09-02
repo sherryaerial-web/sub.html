@@ -8047,6 +8047,9 @@ test('practice day service returns the signed-in teacher and canonical room time
   fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
     date: '2026/09/10', room: 'B', startTime: '15:00', endTime: '16:00', recurrence: 'once',
   });
+  fixture.backend.getPracticeCurrentObRows_ = () => [[
+    '2026/09/10', '13:00', 'A－空環 Lv.1', '老師甲', 'cal-1', 'class-1', 'teacher-1', '否', 'live-read',
+  ]];
 
   const result = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
 
@@ -8055,6 +8058,42 @@ test('practice day service returns the signed-in teacher and canonical room time
   assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].type, 'course');
   assert.equal(result.rooms.find((room) => room.room === 'B').blocks[0].type, 'practice');
   assert.deepEqual(Array.from(result.quickDurations), [60, 90, 120]);
+});
+
+test('practice day prefers the selected day live OB rows so cancelled snapshot courses disappear', () => {
+  const staleCourse = [
+    '2026/09/10', '11:00', 'A－綢吊', 'Josty Lin',
+    'cal-cancelled', 'class-silk', 'teacher-josty', '否', 'old-sync',
+  ];
+  const liveCourse = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', 'Ariel Lu',
+    'cal-live', 'class-ring', 'teacher-ariel', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [staleCourse] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+  const blocks = result.rooms.find((room) => room.room === 'A').blocks;
+
+  assert.deepEqual(Array.from(blocks, (block) => block.calendarId), ['cal-live']);
+  assert.equal(result.courseSource, 'live');
+  assert.equal(result.courseWarning, '');
+});
+
+test('practice day fails closed to the CourseList snapshot when live OB is unavailable', () => {
+  const cachedCourse = [
+    '2026/09/10', '11:00', 'A－綢吊', 'Josty Lin',
+    'cal-cached', 'class-silk', 'teacher-josty', '否', 'old-sync',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [cachedCourse] });
+  fixture.backend.console = { warn() {} };
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('OB timeout'); };
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(result.courseSource, 'snapshot');
+  assert.match(result.courseWarning, /即時課表讀取失敗/);
+  assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].calendarId, 'cal-cached');
 });
 
 test('practice update and cancellation enforce ownership and administrator reasons', () => {

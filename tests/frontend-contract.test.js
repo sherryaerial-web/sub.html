@@ -2915,6 +2915,8 @@ test('teacher practice view uses one mobile day timeline with safe duration choi
   assert.ok(section, 'practice view must exist');
   assert.match(html, /data-view="view-practice"/);
   assert.match(section, /id="practice-date-strip"/);
+  assert.match(section, /id="practice-date-previous"/);
+  assert.match(section, /id="practice-date-next"/);
   assert.match(section, /id="practice-room-tabs"/);
   assert.match(section, /id="practice-timeline"/);
   assert.match(html, /function\s+renderPracticeTimeline\s*\(/);
@@ -2927,6 +2929,82 @@ test('teacher practice view uses one mobile day timeline with safe duration choi
   assert.match(html, /提醒取消後會補入/);
   assert.match(html, /加入一起練習/);
   assert.doesNotMatch(section, /type="month"|月曆/);
+});
+
+test('practice date strip starts today and navigation never selects an expired day', () => {
+  const { context } = createFrontendRuntime();
+  const dates = vm.runInContext(
+    'getPracticeDateStripDates("2026/09/02", "2026/09/02")',
+    context,
+  );
+
+  assert.equal(dates.length, 9);
+  assert.equal(dates[0], '2026/09/02');
+  assert.equal(dates[8], '2026/09/10');
+  assert.equal(
+    vm.runInContext('getSafePracticeDate("2026/09/01", "2026/09/02")', context),
+    '2026/09/02',
+  );
+});
+
+test('practice timeline keeps a 19:45 course beside its real time instead of above 07:00', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '小琪', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:1', type: 'course', calendarId: '1', startTime: '11:00', endTime: '12:30', label: 'A－綢吊', teacherName: 'Josty Lin' },
+        { id: 'ob:2', type: 'course', calendarId: '2', startTime: '19:45', endTime: '20:45', label: 'A－原始瑜伽', teacherName: 'Jina' },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture);', context);
+  const timeline = getElement('practice-timeline').innerHTML;
+
+  assert.ok(timeline.indexOf('19:30') < timeline.indexOf('19:45–20:45'));
+  assert.ok(timeline.indexOf('19:45–20:45') < timeline.indexOf('20:00'));
+});
+
+test('practice alternatives are near the requested time and not five-minute duplicates', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '小琪', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:1', type: 'course', calendarId: '1', startTime: '10:00', endTime: '11:00', label: 'A－空環', teacherName: '老師甲' },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; practiceState.editor = { mode: "create" }; renderPracticeView(__practiceFixture);', context);
+  getElement('practice-editor-start').value = '09:30';
+
+  const alternatives = Array.from(context.findPracticeAlternatives(60));
+
+  assert.ok(alternatives.includes('08:45'));
+  assert.ok(alternatives.includes('11:15'));
+  assert.ok(alternatives.every((time, index) => index === 0 || (
+    Math.abs(context.practiceTimeToMinutes(time) - context.practiceTimeToMinutes(alternatives[index - 1])) >= 30
+  )));
+});
+
+test('weekly practice details expose one-time and future cancellation choices', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__weeklyPracticeBlock = {
+    id: 'practice:1', type: 'practice', bookingId: 'practice-1', seriesId: 'series-1',
+    startTime: '14:00', endTime: '15:00', creatorName: 'Tako', isMine: true,
+    isCreator: true, participants: [{ teacherName: 'Tako', role: '建立者', startTime: '14:00', endTime: '15:00' }],
+  };
+  vm.runInContext(
+    'practiceState.date = "2026/09/10"; practiceState.room = "A"; openPracticeEditor({ block: __weeklyPracticeBlock });',
+    context,
+  );
+
+  assert.equal(getElement('practice-leave').textContent, '只取消這次');
+  assert.equal(getElement('practice-leave-future').hidden, false);
+  assert.equal(getElement('practice-leave-future').textContent, '停止整個循環');
 });
 
 test('practice mutations reload the selected day and support acting-mode teachers', () => {

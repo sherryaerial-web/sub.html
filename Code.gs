@@ -1568,10 +1568,22 @@ function getPracticeDay_(session, dateValue) {
   var records = getPracticeRecordsUnlocked_(ss);
   var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
   assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
-  var view = buildPracticeDayView_(records, courseSheet.getDataRange().getValues().slice(1), date);
+  var courseRows = courseSheet.getDataRange().getValues().slice(1);
+  var courseSource = 'snapshot';
+  var courseWarning = '';
+  try {
+    courseRows = getPracticeCurrentObRows_(date, date);
+    courseSource = 'live';
+  } catch (error) {
+    courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示。';
+    console.warn(courseWarning, error);
+  }
+  var view = buildPracticeDayView_(records, courseRows, date);
   view.teacherName = teacherName;
   view.actingBy = cleanText_(session && session.impersonatedBy);
   view.quickDurations = [60, 90, 120];
+  view.courseSource = courseSource;
+  view.courseWarning = courseWarning;
   view.rooms.forEach(function(room) {
     room.blocks.forEach(function(block) {
       if (block.type !== 'practice' && block.type !== 'waitlist') return;

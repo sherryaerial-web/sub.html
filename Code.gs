@@ -1892,7 +1892,7 @@ function getPracticeSeriesHorizonDate_(courseRows, startDateValue) {
   }, startDate);
 }
 
-function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits) {
+function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits, courseRows) {
   var existing = records.bookings.some(function(booking) {
     return booking.seriesId === series.seriesId && booking.date === date;
   });
@@ -1906,7 +1906,7 @@ function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendA
     date: date,
     room: series.room,
     interval: interval
-  }, records, requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.COURSE_LIST).getDataRange().getValues().slice(1));
+  }, records, courseRows || []);
   if (conflicts.length) {
     var exceptionId = Utilities.getUuid();
     appendPracticeRowUnlocked_(records.sheets.exceptions, SHEET_HEADERS.PRACTICE_EXCEPTIONS, [
@@ -1951,7 +1951,7 @@ function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendA
   return { created: true, bookingId: bookingId };
 }
 
-function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor, appendAudits) {
+function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor, appendAudits, courseRows) {
   var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
   parsePracticeDateTime_(throughDate, '00:00');
   var cursor = parsePracticeDateTime_(series.startDate, '00:00');
@@ -1960,7 +1960,14 @@ function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor,
   var skipped = 0;
   while (cursor.getTime() <= end.getTime()) {
     var date = Utilities.formatDate(cursor, 'Asia/Taipei', 'yyyy/MM/dd');
-    var result = createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits);
+    var result = createPracticeOccurrenceUnlocked_(
+      records,
+      series,
+      date,
+      actor,
+      appendAudits,
+      courseRows
+    );
     if (result.created) created += 1;
     else skipped += 1;
     cursor = new Date(cursor.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -1978,7 +1985,17 @@ function createPracticeBooking_(session, inputValue) {
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var records = getPracticeRecordsUnlocked_(ss);
-    var courseRows = requireSheet_(ss, SHEETS.COURSE_LIST).getDataRange().getValues().slice(1);
+    var snapshotRows = requireSheet_(ss, SHEETS.COURSE_LIST).getDataRange().getValues().slice(1);
+    var horizon = recurrence === 'weekly'
+      ? getPracticeSeriesHorizonDate_(snapshotRows, interval.date)
+      : interval.date;
+    var courseRows;
+    try {
+      courseRows = getPracticeCurrentObRows_(interval.date, horizon);
+      if (!Array.isArray(courseRows)) throw new Error('OB 課程格式不正確。');
+    } catch (error) {
+      throw new Error('目前無法即時核對 OB 課表，請稍後再登記自主練習。');
+    }
     assertPracticeIntervalAvailable_({ room: room, interval: interval }, records, courseRows);
     var businessSheets = [
       records.sheets.series,
@@ -2007,13 +2024,13 @@ function createPracticeBooking_(session, inputValue) {
           startDate: interval.date,
           status: '啟用中'
         };
-        var horizon = getPracticeSeriesHorizonDate_(courseRows, interval.date);
         var expansion = expandPracticeSeriesUnlocked_(
           records,
           series,
           horizon,
           teacherName,
-          appendAudits
+          appendAudits,
+          courseRows
         );
         appendPracticeAuditUnlocked_(records.sheets.audit, {
           actor: teacherName,
@@ -2075,25 +2092,28 @@ function createPracticeWaitlist_(session, inputValue) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
-    var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var snapshotRows = courseSheet.getDataRange().getValues().slice(1);
     var requestedDate = cleanText_(input.date).replace(/-/g, '/');
-    var courseSource = 'snapshot';
-    if (requestedDate) {
-      parsePracticeDateTime_(requestedDate, '00:00');
-      try {
-        courseRows = getPracticeCurrentObRows_(requestedDate, requestedDate);
-        courseSource = 'live';
-      } catch (error) {
-        console.warn('候補登記無法讀取 OB 即時課表，改用最後同步課表。', error);
-      }
+    if (!requestedDate) {
+      var snapshotCourseRow = snapshotRows.filter(function(row) {
+        return cleanText_(row && row[4]) === calendarId;
+      })[0];
+      requestedDate = snapshotCourseRow ? formatMyDate(snapshotCourseRow[0]) : '';
+    }
+    if (!requestedDate) throw new Error('找不到候補課程日期，請重新整理後再選擇。');
+    parsePracticeDateTime_(requestedDate, '00:00');
+    var courseRows;
+    try {
+      courseRows = getPracticeCurrentObRows_(requestedDate, requestedDate);
+      if (!Array.isArray(courseRows)) throw new Error('OB 課程格式不正確。');
+    } catch (error) {
+      throw new Error('目前無法即時核對 OB 課表，請稍後再登記候補自主練習。');
     }
     var courseRow = courseRows.filter(function(row) {
       return cleanText_(row && row[4]) === calendarId;
     })[0];
     if (!courseRow) {
-      throw new Error(courseSource === 'live'
-        ? '這堂 OB 課程目前已不存在，請重新整理後再選擇。'
-        : '找不到候補綁定的 OB 課程，請先更新課表。');
+      throw new Error('這堂 OB 課程目前已不存在，請重新整理後再選擇。');
     }
     var date = formatMyDate(courseRow[0]);
     var room = getCourseRoom_(courseRow[2]);
@@ -2733,6 +2753,14 @@ function expandPracticeSeries_(seriesIdValue, throughDateValue) {
     var records = getPracticeRecordsUnlocked_(ss);
     var series = records.series.filter(function(item) { return item.seriesId === seriesId; })[0];
     if (!series || series.status !== '啟用中') throw new Error('找不到啟用中的自主練習系列。');
+    var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
+    var courseRows;
+    try {
+      courseRows = getPracticeCurrentObRows_(series.startDate, throughDate);
+      if (!Array.isArray(courseRows)) throw new Error('OB 課程格式不正確。');
+    } catch (error) {
+      throw new Error('目前無法即時核對 OB 課表，循環自主練習尚未展開。');
+    }
     return runStateTransitionUnlocked_([
       records.sheets.bookings,
       records.sheets.participants,
@@ -2744,7 +2772,8 @@ function expandPracticeSeries_(seriesIdValue, throughDateValue) {
         series,
         throughDateValue,
         series.creatorName,
-        appendAudits
+        appendAudits,
+        courseRows
       );
     });
   });

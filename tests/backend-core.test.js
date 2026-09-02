@@ -7813,6 +7813,84 @@ test('practice creation rejects formal blockers and points overlapping teachers 
   );
 });
 
+test('practice creation validates against live OB instead of a stale CourseList snapshot', () => {
+  const liveCourse = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-live-only', 'class-1', 'teacher-1', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+
+  assert.throws(
+    () => fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+      date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+    }),
+    /正式課程.*15 分鐘/
+  );
+
+  assert.equal(fixture.bookingSheet.values.length, 1);
+  assert.equal(fixture.participantSheet.values.length, 1);
+});
+
+test('practice creation fails closed without writing when live OB cannot be verified', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('injected OB outage'); };
+
+  assert.throws(
+    () => fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+      date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+    }),
+    /無法.*OB|OB.*稍後/
+  );
+
+  assert.equal(fixture.bookingSheet.values.length, 1);
+  assert.equal(fixture.participantSheet.values.length, 1);
+  assert.equal(fixture.seriesSheet.values.length, 1);
+});
+
+test('an early 04:00 course leaves 07:00 ordinary practice available after its buffer', () => {
+  const liveCourse = [
+    '2026/09/10', '04:00', 'A－空瑜 Lv.0', 'Angela Chuang',
+    'cal-early-yoga', 'class-yoga', 'teacher-angela', '否', 'live-read',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => [liveCourse];
+
+  const result = fixture.backend.createPracticeBooking_(fixture.teacher('冠蓉'), {
+    date: '2026/09/10', room: 'A', startTime: '07:00', endTime: '08:00', recurrence: 'once',
+  });
+
+  assert.equal(result.status, '已成立');
+  assert.equal(fixture.bookingSheet.values[1][4], '07:00');
+  assert.equal(fixture.bookingSheet.values[1][5], '08:00');
+});
+
+test('practice weekly recurrence skips future occurrences blocked by live OB', () => {
+  const snapshotRows = [
+    ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-snapshot-1'],
+    ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-snapshot-2'],
+    ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-snapshot-3'],
+  ];
+  const liveRows = snapshotRows.concat([[
+    '2026/09/17', '14:00', 'A－空環 Lv.1', '老師乙',
+    'cal-live-conflict', 'class-2', 'teacher-2', '否', 'live-read',
+  ]]);
+  const fixture = createPracticeBackend({ courseRows: snapshotRows });
+  fixture.backend.getPracticeCurrentObRows_ = () => liveRows;
+
+  const result = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'weekly',
+  });
+
+  assert.equal(result.createdOccurrences, 2);
+  assert.deepEqual(
+    fixture.bookingSheet.values.slice(1).map((row) => row[2]),
+    ['2026/09/10', '2026/09/24']
+  );
+  assert.equal(fixture.exceptionSheet.values[1][2], '2026/09/17');
+  assert.equal(fixture.exceptionSheet.values[1][3], '衝突跳過');
+});
+
 test('practice weekly recurrence keeps a cancelled occurrence as an exception', () => {
   const fixture = createPracticeBackend({
     courseRows: [
@@ -7868,6 +7946,49 @@ test('practice future join and creator exit preserve participants across the wee
   assert.ok(bookings.every((row) => row[6] === '已成立' && row[7] === 'Ariel Lu'));
   assert.equal(fixture.seriesSheet.values[1][1], 'Ariel Lu');
   assert.equal(fixture.seriesSheet.values[1][8], '啟用中');
+});
+
+test('practice release journey creates joins moves rooms and stops a weekly series without partial state', () => {
+  const calendarRows = [
+    ['2026/09/10', '08:00', 'D－空環', '老師甲', 'cal-1'],
+    ['2026/09/17', '08:00', 'D－空環', '老師甲', 'cal-2'],
+    ['2026/09/24', '08:00', 'D－空環', '老師甲', 'cal-3'],
+  ];
+  const fixture = createPracticeBackend({ courseRows: calendarRows });
+  fixture.backend.getPracticeCurrentObRows_ = () => calendarRows;
+  fixture.backend.sendPushAfterMutationSafely_ = () => ({
+    attempted: true, accepted: true, delivered: 1, error: '',
+  });
+
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('Tako'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'weekly',
+  });
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '15:00', endTime: '16:00', scope: 'future',
+  });
+  fixture.backend.updatePracticeBooking_(fixture.teacher('Tako'), {
+    bookingId: created.bookingId, date: '2026/09/10', room: 'B',
+    startTime: '15:00', endTime: '17:00', scope: 'future',
+  });
+  const second = fixture.bookingSheet.values.find((row) => row[2] === '2026/09/17');
+  const cancelled = fixture.backend.cancelPracticeBooking_(fixture.teacher('Tako'), {
+    bookingId: second[0], scope: 'future',
+  });
+
+  const occurrences = fixture.bookingSheet.values.slice(1).filter((row) => row[1] === created.seriesId);
+  assert.equal(created.createdOccurrences, 3);
+  assert.equal(cancelled.affectedOccurrences, 2);
+  assert.deepEqual(occurrences.map((row) => [row[2], row[3], row[4], row[5], row[6]]), [
+    ['2026/09/10', 'B', '15:00', '17:00', '已成立'],
+    ['2026/09/17', 'B', '15:00', '17:00', '已取消'],
+    ['2026/09/24', 'B', '15:00', '17:00', '已取消'],
+  ]);
+  assert.equal(fixture.seriesSheet.values[1][7], '2026/09/17');
+  assert.equal(fixture.seriesSheet.values[1][8], '已停止');
+  assert.equal(
+    fixture.participantSheet.values.slice(1).filter((row) => row[8] === '有效').length,
+    2
+  );
 });
 
 test('practice candidate activates only after a successful OB check confirms the linked course is gone', () => {
@@ -8114,6 +8235,27 @@ test('practice waitlist validates against the same live OB rows shown on the sel
   assert.equal(result.status, '候補');
   assert.equal(fixture.bookingSheet.values[1][2], '2026/09/10');
   assert.equal(fixture.courseSheet.values.length, 1);
+});
+
+test('practice waitlist fails closed without writing when live OB cannot be verified', () => {
+  const cachedCourse = [
+    '2026/09/10', '09:00', 'A－原始瑜伽', 'Jina',
+    'cal-cached-waitlist', 'class-yoga', 'teacher-jina', '否', 'old-sync',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [cachedCourse] });
+  fixture.backend.console = { warn() {} };
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('injected OB outage'); };
+
+  assert.throws(
+    () => fixture.backend.createPracticeWaitlist_(fixture.teacher('Tako'), {
+      calendarId: 'cal-cached-waitlist', date: '2026/09/10',
+      startTime: '09:00', endTime: '10:00', recurrence: 'once',
+    }),
+    /無法.*OB|OB.*稍後/
+  );
+
+  assert.equal(fixture.bookingSheet.values.length, 1);
+  assert.equal(fixture.participantSheet.values.length, 1);
 });
 
 test('practice waitlist rejects a time that does not conflict with its linked OB course or buffer', () => {

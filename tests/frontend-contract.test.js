@@ -2735,7 +2735,7 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
 });
 
 test('keeps the admin and practice tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 13);
+  assert.equal((html.match(/role=["']tab["']/g) || []).length, 14);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);

@@ -513,7 +513,8 @@ function createLeaveBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(
       EXPECTED_LEAVE_EXTENSION_HEADERS,
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     ),
     ...(options.leaveRows || []),
   ]);
@@ -575,7 +576,8 @@ function createInvitationBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(
       EXPECTED_LEAVE_EXTENSION_HEADERS,
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     ),
     ...(options.leaveRows || [
       ['2026-08-03 09:00:00', '老師甲', '2026/08/10', '09:00', '空環 Lv.1', '確認中', '', '', '', 'leave-a', 'calendar-a'],
@@ -686,7 +688,8 @@ function createVvipBackend(options = {}) {
     EXPECTED_LEAVE_HEADERS.concat(
       EXPECTED_LEAVE_EXTENSION_HEADERS,
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     ),
     ...(options.leaveRows || []),
   ]);
@@ -1854,7 +1857,8 @@ test('submitLeave uses the logged-in identity, stores OB IDs, and reports exact 
   const expectedWidth = EXPECTED_LEAVE_HEADERS.length
     + EXPECTED_LEAVE_EXTENSION_HEADERS.length
     + EXPECTED_SPECIAL_COURSE_HEADERS.length
-    + EXPECTED_ORDINARY_DELAY_HEADERS.length;
+    + EXPECTED_ORDINARY_DELAY_HEADERS.length
+    + EXPECTED_LEAVE_ADJUSTMENT_HEADERS.length;
   assert.ok(leaveSheet.values.slice(1).every((row) => row.length === expectedWidth));
 });
 
@@ -2066,7 +2070,8 @@ test('appends the substitute and API headers without moving fixed columns', () =
     leaveSheet.values[0].slice(10),
     EXPECTED_LEAVE_EXTENSION_HEADERS.concat(
       EXPECTED_SPECIAL_COURSE_HEADERS,
-      EXPECTED_ORDINARY_DELAY_HEADERS
+      EXPECTED_ORDINARY_DELAY_HEADERS,
+      EXPECTED_LEAVE_ADJUSTMENT_HEADERS
     )
   );
 });
@@ -2095,7 +2100,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
-      '自主練習參與者', '自主練習例外', '自主練習操作紀錄'
+      '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
+      '課程調整'
     ].sort()
   );
   assert.deepEqual(
@@ -2184,7 +2190,7 @@ test('ordinary delay fields append after every existing leave column', () => {
   assert.equal(backend.SHEET_HEADERS.LEAVES[9], '代課編號');
   assert.equal(backend.SHEET_HEADERS.LEAVES[24], '特別課結束時間');
   assert.deepEqual(
-    JSON.parse(JSON.stringify(backend.SHEET_HEADERS.LEAVES.slice(25))),
+    JSON.parse(JSON.stringify(backend.SHEET_HEADERS.LEAVES.slice(25, 28))),
     EXPECTED_ORDINARY_DELAY_HEADERS
   );
 });
@@ -7175,7 +7181,7 @@ test('next-day closure re-reads latest enrollment, logs idempotently, and preser
     return '';
   };
   const leaveSheet = createSheetFixture('請假代課紀錄', [
-    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS, EXPECTED_ORDINARY_DELAY_HEADERS),
+    EXPECTED_LEAVE_HEADERS.concat(EXPECTED_LEAVE_EXTENSION_HEADERS, EXPECTED_SPECIAL_COURSE_HEADERS, EXPECTED_ORDINARY_DELAY_HEADERS, EXPECTED_LEAVE_ADJUSTMENT_HEADERS),
     ['formal-human-value', '老師甲', '2026/09/01', '12:30', '空環', '確認中'],
   ]);
   const invitationSheet = createSheetFixture('代課邀請', [

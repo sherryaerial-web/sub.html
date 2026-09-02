@@ -87,3 +87,13 @@ test('practice timeline is touch-friendly and the editor becomes a mobile bottom
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#practice-dialog\s*\{[^}]*margin:\s*auto 0 0/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#practice-dialog\s*\{[^}]*width:\s*100%/s);
 });
+
+test('practice admin cards keep filters and actions usable on narrow screens', () => {
+  const html = pages[0];
+
+  assert.match(html, /\.practice-admin-filters\s*\{[^}]*display:\s*grid/s);
+  assert.match(html, /\.practice-admin-card\s*\{/);
+  assert.match(html, /\.practice-admin-fields\s*\{[^}]*display:\s*grid/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.practice-admin-filters\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.practice-admin-fields\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});

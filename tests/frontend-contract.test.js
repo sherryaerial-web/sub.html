@@ -2734,14 +2734,54 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the admin and practice tabs accessible and exposes their queue counts', () => {
-  assert.equal((html.match(/role=["']tab["']/g) || []).length, 14);
+test('keeps the fourteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
+  const adminTabs = html.match(/<div class=["']admin-tabs["'][^>]*>[\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
+  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 14);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);
   assert.match(html, /data-capability=["']payroll_admin["']/);
   assert.match(html, /data-capability=["']vvip_admin["']/);
   assert.match(html, /updateAdminTabCounts/);
+});
+
+test('practice admin workspace shows filters participants failures and protected actions', () => {
+  assert.match(html, /data-admin-tab="practice"[^>]*data-capability="course_admin"/);
+  assert.match(html, /function\s+fetchPracticeAdminDashboard\s*\(/);
+  assert.match(html, /function\s+renderPracticeAdminDashboard\s*\(/);
+  assert.match(html, /getPracticeAdminDashboard/);
+  assert.match(html, /data-admin-action="update-practice"/);
+  assert.match(html, /data-admin-action="cancel-practice"/);
+  assert.match(html, /參與者與各自時段/);
+  assert.match(html, /推播失敗待處理/);
+  assert.match(html, /callPostApi\("updatePracticeBooking",\s*\{\s*practice:\s*\{/);
+  assert.match(html, /callPostApi\("cancelPracticeBooking",\s*\{\s*practice:\s*\{/);
+});
+
+test('practice admin dashboard renders participant intervals and failure audit safely', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceAdminDashboard = {
+    filters: { dateFrom: '2026-09-01', room: 'A' },
+    summary: { total: 1, active: 1, waitlisted: 0, cancelled: 0 },
+    bookings: [{
+      bookingId: 'practice-1', seriesId: 'series-1', date: '2026/09/03', room: 'A',
+      startTime: '14:00', endTime: '15:00', status: '已成立', creatorName: 'Ariel Lu',
+      participants: [
+        { teacherName: 'Ariel Lu', role: '建立者', startTime: '14:00', endTime: '15:00', status: '有效' },
+        { teacherName: 'Tako', role: '參與者', startTime: '14:15', endTime: '14:45', status: '有效' },
+      ],
+      audits: [{ time: '2026/09/01 10:00', actor: '冠蓉', action: '建立自主練習', reason: '' }],
+    }],
+    notificationFailures: [{ time: '2026/09/01 10:01', targetId: 'practice-1', reason: '推播服務無回應' }],
+  };
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; renderPracticeAdminDashboard();', context);
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /Ariel Lu/);
+  assert.match(rendered, /Tako/);
+  assert.match(rendered, /14:15–14:45/);
+  assert.match(rendered, /data-admin-action="update-practice"/);
+  assert.match(rendered, /data-admin-action="cancel-practice"/);
+  assert.match(rendered, /推播服務無回應/);
 });
 
 test('admin can correct claimed difficulty and note without asking the teacher to withdraw', () => {

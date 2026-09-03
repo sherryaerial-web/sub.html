@@ -41,7 +41,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
             preventDefault() {},
           }));
         },
-        focus() {},
+        focus() { document.activeElement = this; },
         setAttribute() {},
         removeAttribute() {},
         classList: { add() {}, remove() {}, toggle() {} },
@@ -82,6 +82,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     (windowListeners.get(type) || []).slice().forEach((listener) => listener(event));
   };
   const document = {
+    activeElement: null,
     getElementById: getElement,
     querySelectorAll(selector) {
       if (selector === '.claim-checkbox:checked') return [checkedClaim];
@@ -3158,9 +3159,9 @@ test('practice creator can only cancel an existing booking and cannot edit it', 
   assert.equal(vm.runInContext('practiceState.editor.mode', context), 'mine');
 });
 
-test('clicking a course opens a fixed-time quick waitlist without editable time fields', async () => {
+test('course waitlists stay selected across dates until one batch confirmation', async () => {
   const { context, getElement, submittedForms } = createFrontendRuntime();
-  context.__practiceFixture = {
+  context.__firstPracticeDay = {
     date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
     rooms: [
       { room: 'A', blocks: [
@@ -3169,16 +3170,78 @@ test('clicking a course opens a fixed-time quick waitlist without editable time 
       { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
     ],
   };
-  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[0] });', context);
-  assert.equal(getElement('practice-editor-fields').hidden, true);
-  assert.match(getElement('practice-editor-summary').textContent, /11:00–12:00/);
+  context.__secondPracticeDay = {
+    date: '2026/09/12', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:cal-tako', type: 'course', calendarId: 'cal-tako', startTime: '18:30', endTime: '19:30', label: 'A－空環', teacherName: 'Tako' },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
 
-  await context.submitPracticeEditor({ preventDefault() {} });
-  const request = submittedForms.find((form) => form.fields.action === 'createPracticeWaitlist');
-  const payload = JSON.parse(request.fields.practice);
-  assert.equal(payload.calendarId, 'cal-jina');
-  assert.equal(payload.startTime, '11:00');
-  assert.equal(payload.endTime, '12:00');
+  assert.equal(typeof context.togglePracticeWaitlistSelection, 'function');
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__firstPracticeDay); togglePracticeWaitlistSelection(__firstPracticeDay.rooms[0].blocks[0]);', context);
+  vm.runInContext('renderPracticeView(__secondPracticeDay); togglePracticeWaitlistSelection(__secondPracticeDay.rooms[0].blocks[0]);', context);
+
+  assert.equal(vm.runInContext('Object.keys(practiceState.waitlistSelections).length', context), 2);
+  assert.equal(getElement('practice-waitlist-cart').hidden, false);
+  assert.equal(getElement('practice-waitlist-count').textContent, '已選 2 堂候補');
+  vm.runInContext('renderPracticeView(__firstPracticeDay);', context);
+  assert.match(getElement('practice-calendar').innerHTML, /is-waitlist-selected/);
+  assert.match(getElement('practice-calendar').innerHTML, /aria-pressed="true"/);
+
+  await context.submitSelectedPracticeWaitlists();
+  const requests = submittedForms.filter((form) => form.fields.action === 'createPracticeWaitlist');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map((request) => JSON.parse(request.fields.practice).calendarId), ['cal-jina', 'cal-tako']);
+  assert.deepEqual(requests.map((request) => JSON.parse(request.fields.practice).date), ['2026/09/10', '2026/09/12']);
+  assert.equal(vm.runInContext('Object.keys(practiceState.waitlistSelections).length', context), 0);
+  assert.equal(getElement('practice-waitlist-cart').hidden, true);
+});
+
+test('a mixed batch removes successful waitlists and keeps only failures with their reason', async () => {
+  const { context, getElement, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:cal-jina', type: 'course', calendarId: 'cal-jina', startTime: '11:00', endTime: '12:00', label: 'A－原始瑜伽', teacherName: 'Jina' },
+        { id: 'ob:cal-tako', type: 'course', calendarId: 'cal-tako', startTime: '18:30', endTime: '19:30', label: 'A－空環', teacherName: 'Tako' },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); togglePracticeWaitlistSelection(__practiceFixture.rooms[0].blocks[0]); togglePracticeWaitlistSelection(__practiceFixture.rooms[0].blocks[1]);', context);
+  context.loadPracticeDay = async () => {};
+
+  const pending = context.submitSelectedPracticeWaitlists();
+  await new Promise(setImmediate);
+  const first = submittedForms.filter((form) => form.fields.action === 'createPracticeWaitlist')[0];
+  emitWindowEvent('message', {
+    origin: 'https://script.googleusercontent.com', source: first.frameWindow,
+    data: { source: 'sherry-gas-relay', requestId: first.fields.requestId, payload: { status: 'success', data: { count: 1 } } },
+  });
+  await new Promise(setImmediate);
+  const second = submittedForms.filter((form) => form.fields.action === 'createPracticeWaitlist')[1];
+  emitWindowEvent('message', {
+    origin: 'https://script.googleusercontent.com', source: second.frameWindow,
+    data: { source: 'sherry-gas-relay', requestId: second.fields.requestId, payload: { status: 'error', message: '這堂已被其他老師候補' } },
+  });
+  await pending;
+
+  assert.equal(vm.runInContext('Object.keys(practiceState.waitlistSelections).length', context), 1);
+  assert.equal(vm.runInContext('Boolean(practiceState.waitlistSelections["cal-jina"])', context), false);
+  assert.equal(vm.runInContext('Boolean(practiceState.waitlistSelections["cal-tako"])', context), true);
+  assert.equal(getElement('practice-waitlist-cart').hidden, false);
+  assert.match(getElement('practice-waitlist-errors').textContent, /A－空環：這堂已被其他老師候補/);
+});
+
+test('custom practice dialog focuses its title instead of opening the native date picker', () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext('practiceState.date = "2026/09/10"; practiceState.room = "A"; openPracticeEditor({ mode: "create", startTime: "14:05" });', context);
+
+  assert.equal(context.document.activeElement?.id, 'practice-dialog-title');
 });
 
 test('practice mutations reload the selected day and support acting-mode teachers', () => {
@@ -3212,6 +3275,7 @@ test('practice card calendar renders formal rental shared and own-highlight bloc
   assert.match(calendar, /practice-block rental/);
   assert.match(calendar, /practice-block practice is-mine/);
   assert.match(calendar, /小琪的自主練習/);
+  assert.match(html.match(/<div class="practice-legend"[\s\S]*?<\/div>/)?.[0] || '', /我的登記/);
 });
 
 test('custom practice form uses explicit five-minute choices and defaults end one hour later', () => {

@@ -1068,6 +1068,27 @@
     .practice-legend .course::before { background: #9b8780; }
     .practice-legend .rental::before { background: #b68b56; }
     .practice-legend .shared::before { background: #6f858d; }
+    .practice-legend .mine::before { background: #c79689; }
+    .practice-waitlist-cart {
+      position: sticky;
+      z-index: 8;
+      bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 12px;
+      padding: 11px 12px;
+      border: 1px solid #d7b8af;
+      border-radius: 12px;
+      background: rgba(255, 253, 249, .97);
+      box-shadow: var(--shadow-md);
+      backdrop-filter: blur(14px);
+    }
+    .practice-waitlist-cart-copy { display: grid; min-width: 0; gap: 3px; }
+    .practice-waitlist-cart-copy strong { font-size: 14px; }
+    .practice-waitlist-errors { color: var(--danger); font-size: 11px; line-height: 1.45; white-space: pre-line; }
+    .practice-waitlist-cart-actions { display: flex; flex: 0 0 auto; gap: 7px; }
     .practice-calendar {
       min-height: 260px;
       border: 1px solid var(--line);
@@ -1101,6 +1122,22 @@
     .practice-block.practice { border-left-color: #6f858d; background: #edf3f4; }
     .practice-block.waitlist { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; }
     .practice-block.is-mine { border-color: #c79689; border-left-color: #a96f61; background: #f7e9e5; box-shadow: 0 5px 14px rgba(123, 84, 74, .10); }
+    .practice-block.course.is-waitlist-selected { border-color: #a96f61; background: #f4e2dd; box-shadow: 0 0 0 2px rgba(169, 111, 97, .14); }
+    .practice-block.course.is-waitlist-selected::after {
+      position: absolute;
+      top: 9px;
+      right: 10px;
+      display: grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border-radius: 50%;
+      background: #a96f61;
+      color: #fff;
+      content: "✓";
+      font-size: 13px;
+      font-weight: 800;
+    }
     .practice-block-time { color: var(--muted); font-size: 12px; font-weight: 700; }
     .practice-block-title { font-size: 15px; font-weight: 750; }
     .practice-block-meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
@@ -1249,10 +1286,12 @@
         border-bottom: 1px solid rgba(255, 255, 255, .16);
         box-shadow: 0 2px 14px rgba(64, 57, 54, .12);
       }
-      .topbar .app-icon-mark { width: 38px; height: 38px; border-radius: 11px; }
+      .topbar .brand { flex: 1 1 auto; }
+      .topbar .app-icon-mark { display: none; }
       .brand-copy { display: none; }
       .mobile-page-title { display: block; overflow: hidden; color: #fffdf9; font-size: 16px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
-      .current-user { max-width: 104px; padding: 5px 7px; }
+      .topbar-actions { flex: 0 1 auto; gap: 5px; }
+      .current-user { max-width: 78px; padding: 5px 6px; }
       .app-layout { display: block; min-height: calc(100dvh - 60px); }
       .sidebar { display: none; }
       .workspace { min-height: calc(100dvh - 60px); padding: 18px 14px calc(96px + env(safe-area-inset-bottom)); }
@@ -1287,7 +1326,9 @@
       .mobile-tab-item svg.lucide { width: 20px; height: 20px; }
       .mobile-tab-item.active { background: var(--aqua-100); color: var(--sea-800); }
       .mobile-tab-item.active::after { position: absolute; bottom: 3px; width: 18px; height: 2px; border-radius: 999px; background: #ad8175; content: ""; }
-      #back-button.visible { display: inline-flex; }
+      #back-button, #back-button.visible { display: none; }
+      .practice-waitlist-cart { bottom: calc(72px + env(safe-area-inset-bottom)); align-items: stretch; flex-direction: column; }
+      .practice-waitlist-cart-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); }
       .button-label { display: none; }
       .view-header { margin-bottom: 14px; padding-bottom: 0; border-bottom: 0; }
       .view-header .eyebrow { display: none; }
@@ -1709,7 +1750,7 @@
           </div>
           <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
           <div class="practice-toolbar">
-            <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span></div>
+            <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span><span class="mine">我的登記</span></div>
             <div class="button-row"><button id="practice-my-bookings" class="compact-button" type="button"><i data-lucide="search"></i>我的登記</button><button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="plus"></i>自訂時段</button></div>
           </div>
           <div id="practice-history-panel" class="practice-history-panel" hidden>
@@ -1718,6 +1759,10 @@
             <div id="practice-history-list" class="practice-history-list"></div>
           </div>
           <div id="practice-course-warning" class="practice-course-warning" hidden></div>
+          <div id="practice-waitlist-cart" class="practice-waitlist-cart" hidden>
+            <div class="practice-waitlist-cart-copy"><strong id="practice-waitlist-count">已選 0 堂候補</strong><span id="practice-waitlist-errors" class="practice-waitlist-errors" aria-live="polite"></span></div>
+            <div class="practice-waitlist-cart-actions"><button id="practice-waitlist-clear" class="compact-button" type="button">清除</button><button id="practice-waitlist-submit" class="primary-button inline-button" type="button"><i data-lucide="check"></i>確認候補</button></div>
+          </div>
           <div id="practice-calendar" class="practice-calendar" aria-live="polite"><div class="state">載入教室行程中...</div></div>
         </section>
 
@@ -1828,7 +1873,7 @@
 
   <dialog id="practice-dialog" aria-labelledby="practice-dialog-title">
     <form id="practice-form" class="dialog-body">
-      <h3 id="practice-dialog-title">登記自主練習</h3>
+      <h3 id="practice-dialog-title" tabindex="-1" autofocus>登記自主練習</h3>
       <p id="practice-dialog-copy" class="section-copy"></p>
       <div id="practice-editor-summary" class="practice-editor-summary"></div>
       <div id="practice-editor-fields" class="practice-form-grid">
@@ -1874,7 +1919,7 @@
     let notificationInbox = null;
     let inboxFilter = "all";
     let practiceAdminDashboard = null;
-    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, allowPastDate: false };
+    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
@@ -2717,7 +2762,7 @@
       mySubsRecordMonth = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
-      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {} };
+      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
     }
 
     function updateActingMode() {
@@ -3247,21 +3292,121 @@
         return `<button class="practice-room-tab ${room === practiceState.room ? "active" : ""}" type="button" role="tab" aria-selected="${room === practiceState.room}" data-practice-room="${room}">${room} 教室${count ? ` <small>${count}</small>` : ""}</button>`;
       }).join("");
       renderPracticeCalendar(data);
+      renderPracticeWaitlistCart();
       refreshIcons();
+    }
+
+    function getPracticeWaitlistSelectionKey(block) {
+      return String(block?.calendarId || `${block?.date || practiceState.date}|${block?.room || practiceState.room}|${block?.startTime || ""}|${block?.id || ""}`);
+    }
+
+    function getSelectedPracticeWaitlists() {
+      return Object.values(practiceState.waitlistSelections || {}).sort((left, right) =>
+        String(left.date).localeCompare(String(right.date)) ||
+        String(left.startTime).localeCompare(String(right.startTime)) ||
+        String(left.room).localeCompare(String(right.room))
+      );
+    }
+
+    function renderPracticeWaitlistCart() {
+      const selections = getSelectedPracticeWaitlists();
+      const cart = byId("practice-waitlist-cart");
+      cart.hidden = selections.length === 0;
+      byId("practice-waitlist-count").textContent = `已選 ${selections.length} 堂候補`;
+      const errors = selections.map((selection) => {
+        const reason = practiceState.waitlistErrors?.[selection.key];
+        return reason ? `${selection.label}：${reason}` : "";
+      }).filter(Boolean);
+      byId("practice-waitlist-errors").textContent = errors.join("\n");
+      byId("practice-waitlist-submit").disabled = practiceState.waitlistSubmitting || selections.length === 0;
+    }
+
+    function togglePracticeWaitlistSelection(block) {
+      if (!block || block.type !== "course") return;
+      const key = getPracticeWaitlistSelectionKey(block);
+      if (practiceState.waitlistSelections[key]) {
+        delete practiceState.waitlistSelections[key];
+        delete practiceState.waitlistErrors[key];
+      } else {
+        practiceState.waitlistSelections[key] = {
+          key,
+          calendarId: block.calendarId || "",
+          date: String(block.date || practiceState.date).replace(/-/g, "/"),
+          room: block.room || practiceState.room,
+          startTime: block.startTime,
+          endTime: block.endTime,
+          label: block.label || "未命名課程",
+          teacherName: block.teacherName || ""
+        };
+      }
+      renderPracticeCalendar();
+      renderPracticeWaitlistCart();
+      refreshIcons();
+    }
+
+    function clearSelectedPracticeWaitlists() {
+      practiceState.waitlistSelections = {};
+      practiceState.waitlistErrors = {};
+      renderPracticeCalendar();
+      renderPracticeWaitlistCart();
+    }
+
+    async function submitSelectedPracticeWaitlists() {
+      const selections = getSelectedPracticeWaitlists();
+      if (!selections.length || practiceState.waitlistSubmitting) return;
+      const button = byId("practice-waitlist-submit");
+      practiceState.waitlistSubmitting = true;
+      practiceState.waitlistErrors = {};
+      setButtonBusy(button, true, "送出中...");
+      renderPracticeWaitlistCart();
+      let successCount = 0;
+      for (const selection of selections) {
+        try {
+          await callPostApi("createPracticeWaitlist", {
+            practice: {
+              calendarId: selection.calendarId,
+              date: selection.date,
+              room: selection.room,
+              startTime: selection.startTime,
+              endTime: selection.endTime,
+              recurrence: "once",
+              scope: "once"
+            }
+          });
+          successCount += 1;
+          delete practiceState.waitlistSelections[selection.key];
+          delete practiceState.dayCache[selection.date];
+        } catch (error) {
+          practiceState.waitlistErrors[selection.key] = error.message || "候補登記失敗";
+        }
+      }
+      practiceState.waitlistSubmitting = false;
+      setButtonBusy(button, false, "");
+      renderPracticeCalendar();
+      renderPracticeWaitlistCart();
+      const failureCount = getSelectedPracticeWaitlists().length;
+      if (failureCount) {
+        setNotice(`已送出 ${successCount} 堂，${failureCount} 堂失敗並保留勾選，請查看原因。`, "error");
+      } else {
+        setNotice(`已登記 ${successCount} 堂候補；課程取消後會自動補入。`);
+      }
+      if (successCount) await loadPracticeDay(practiceState.date);
     }
 
     function practiceBlockHtml(block) {
       const participants = Array.isArray(block.participants) ? block.participants : [];
       const names = participants.map((item) => item.teacherName).filter(Boolean).join("、");
+      const selectionKey = block.type === "course" ? getPracticeWaitlistSelectionKey(block) : "";
+      const selected = !!selectionKey && !!practiceState.waitlistSelections?.[selectionKey];
       const title = block.type === "practice" || block.type === "waitlist"
         ? (block.type === "waitlist" ? `${block.creatorName}的候補練習` : `${block.creatorName}的自主練習`)
         : (block.label || "已有行程");
       const meta = block.type === "course"
-        ? `原課程：${block.teacherName || ""}｜點選可登記候補自主練習`
+        ? `原課程：${block.teacherName || ""}｜${selected ? "已選候補，可跨日期繼續選" : "點選加入候補清單"}`
         : block.type === "rental"
           ? "場地租借已占用，無法登記自主練習"
           : `${names || block.creatorName}｜${block.seriesId ? "每週循環" : "單次"}`;
-      return `<button class="practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}" type="button" data-practice-block="${escapeHtml(block.id)}"><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
+      return `<button class="practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}${selected ? " is-waitlist-selected" : ""}" type="button" data-practice-block="${escapeHtml(block.id)}"${block.type === "course" ? ` aria-pressed="${selected}"` : ""}><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
     }
 
     function getPracticeSlotConflicts(startMinutes, duration = 60, excludeBookingId = "", roomName = practiceState.room) {
@@ -3435,6 +3580,7 @@
       const dialog = byId("practice-dialog");
       if (dialog.showModal) dialog.showModal();
       else dialog.hidden = false;
+      byId("practice-dialog-title").focus({ preventScroll: true });
       refreshIcons();
     }
 
@@ -6543,10 +6689,13 @@ https://sherryaerial-web.github.io/sub.html/
       const blockButton = event.target.closest ? event.target.closest("[data-practice-block]") : null;
       if (blockButton) {
         const block = getPracticeSelectedRoom().blocks.find((item) => item.id === blockButton.dataset.practiceBlock);
-        if (block) openPracticeEditor({ block });
+        if (block?.type === "course") togglePracticeWaitlistSelection(block);
+        else if (block) openPracticeEditor({ block });
         return;
       }
     });
+    byId("practice-waitlist-clear").addEventListener("click", clearSelectedPracticeWaitlists);
+    byId("practice-waitlist-submit").addEventListener("click", submitSelectedPracticeWaitlists);
     byId("practice-new").addEventListener("click", () => openPracticeEditor({ mode: "create", startTime: "14:00" }));
     byId("practice-mobile-date-go").addEventListener("click", () => {
       const date = byId("practice-mobile-date").value;

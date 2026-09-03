@@ -187,9 +187,13 @@ const fixtures = {
     rooms: [
       { room: "A", blocks: [
         { id: "course-1", calendarId: "cal-practice-1", type: "course", startTime: "10:00", endTime: "11:00", label: "A－空環 Lv.2", teacherName: "Jina" },
+        { id: "course-2", calendarId: "cal-practice-2", type: "course", startTime: "11:30", endTime: "12:30", label: "A－舞綢 Lv.1", teacherName: "Sue" },
         { id: "practice-1", bookingId: "practice-1", seriesId: "series-1", type: "practice", startTime: "14:00", endTime: "16:00", creatorName: "Ariel Lu", isMine: true, isCreator: true, participants: [
           { teacherName: "Ariel Lu", role: "建立者", startTime: "14:00", endTime: "16:00" },
           { teacherName: "Tako", role: "參與者", startTime: "14:30", endTime: "15:30" }
+        ] },
+        { id: "practice-shared", bookingId: "practice-shared", type: "practice", startTime: "17:00", endTime: "18:00", creatorName: "Jina", isMine: false, participants: [
+          { teacherName: "Jina", role: "建立者", startTime: "17:00", endTime: "18:00" }
         ] }
       ] },
       { room: "B", blocks: [{ id: "rental-1", type: "rental", startTime: "18:00", endTime: "20:00", label: "場地租借" }] },
@@ -564,9 +568,48 @@ try {
 
     await openView(page, "view-practice");
     await page.locator(".practice-calendar-list").waitFor();
+    const practiceLayout = await page.evaluate(() => {
+      const visible = (element) => element && getComputedStyle(element).display !== "none" && element.getBoundingClientRect().width > 0;
+      const topbarItems = [
+        document.querySelector("#mobile-page-title"),
+        document.querySelector("#current-user"),
+        document.querySelector("#inbox-button"),
+        document.querySelector("#logout-button"),
+      ].filter(visible).map((element) => ({ id: element.id, rect: element.getBoundingClientRect().toJSON() }));
+      const overlaps = [];
+      for (let left = 0; left < topbarItems.length; left += 1) {
+        for (let right = left + 1; right < topbarItems.length; right += 1) {
+          const a = topbarItems[left].rect;
+          const b = topbarItems[right].rect;
+          if (a.right > b.left + 1 && b.right > a.left + 1 && a.bottom > b.top + 1 && b.bottom > a.top + 1) {
+            overlaps.push(`${topbarItems[left].id}/${topbarItems[right].id}`);
+          }
+        }
+      }
+      return {
+        iconVisible: visible(document.querySelector(".topbar .app-icon-mark")),
+        backVisible: visible(document.querySelector("#back-button")),
+        overlaps,
+        legend: document.querySelector(".practice-legend")?.innerText || "",
+        ownBackground: getComputedStyle(document.querySelector('[data-practice-block="practice-1"]')).backgroundColor,
+        sharedBackground: getComputedStyle(document.querySelector('[data-practice-block="practice-shared"]')).backgroundColor,
+      };
+    });
+    if (!practiceLayout.legend.includes("我的登記")) throw new Error(`${viewport.name}: own-practice legend is missing`);
+    if (practiceLayout.ownBackground === practiceLayout.sharedBackground) throw new Error(`${viewport.name}: own practice is not visually distinct`);
+    if (viewport.width <= 760 && (practiceLayout.iconVisible || practiceLayout.backVisible || practiceLayout.overlaps.length)) {
+      throw new Error(`${viewport.name}: mobile topbar is cluttered ${JSON.stringify(practiceLayout)}`);
+    }
     results.push(await capture(page, viewport.name, "07-practice-day"));
+    await page.locator('[data-practice-block="course-1"]').click();
+    await page.locator('[data-practice-block="course-2"]').click();
+    await page.locator("#practice-waitlist-count").getByText("已選 2 堂候補", { exact: true }).waitFor();
+    results.push(await capture(page, viewport.name, "07b-practice-waitlist-selection"));
+    await page.locator("#practice-waitlist-clear").click();
     await page.locator("#practice-new").click();
     await page.locator("#practice-dialog").waitFor({ state: "visible" });
+    const focusedPracticeControl = await page.evaluate(() => document.activeElement?.id || "");
+    if (focusedPracticeControl !== "practice-dialog-title") throw new Error(`${viewport.name}: practice dialog focused ${focusedPracticeControl || "nothing"} instead of its title`);
     results.push(await capture(page, viewport.name, "08-practice-create"));
     await page.locator("#practice-dialog-cancel").click();
     await page.locator('[data-practice-block="practice-1"]').click();

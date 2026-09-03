@@ -2176,6 +2176,34 @@ function assertPracticeIntervalAvailable_(request, records, courseRows) {
   );
 }
 
+function getPracticeParticipantBounds_(participantsValue) {
+  var participants = (participantsValue || []).filter(function(participant) {
+    return cleanText_(participant && participant.status) === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+  });
+  if (!participants.length) return null;
+  var startMinutes = Math.min.apply(null, participants.map(function(participant) {
+    return timeTextToMinutes_(participant.startTime);
+  }));
+  var endMinutes = Math.max.apply(null, participants.map(function(participant) {
+    return timeTextToMinutes_(participant.endTime);
+  }));
+  if (startMinutes < 0 || endMinutes < 0) throw new Error('自主練習參與時間格式不正確。');
+  return {
+    startTime: minutesToTimeText_(startMinutes),
+    endTime: minutesToTimeText_(endMinutes)
+  };
+}
+
+function updatePracticeBookingBoundsUnlocked_(bookingSheet, booking, participants, now, actor) {
+  var bounds = getPracticeParticipantBounds_(participants);
+  if (!bounds) return null;
+  bookingSheet.getRange(booking.rowNumber, 5, 1, 2)
+    .setValues([[bounds.startTime, bounds.endTime]]);
+  bookingSheet.getRange(booking.rowNumber, 12, 1, 2)
+    .setValues([[now, actor]]);
+  return bounds;
+}
+
 function getPracticeSeriesHorizonDate_(courseRows, startDateValue) {
   var startDate = cleanText_(startDateValue);
   return (courseRows || []).reduce(function(latest, row) {
@@ -2490,8 +2518,8 @@ function joinPracticeBooking_(session, inputValue) {
     }
     var interval = normalizePracticeInterval_(booking.date, input.startTime, input.endTime);
     var bookingInterval = normalizePracticeInterval_(booking.date, booking.startTime, booking.endTime);
-    if (interval.startMs < bookingInterval.startMs || interval.endMs > bookingInterval.endMs) {
-      throw new Error('加入時間必須在現有自主練習時段內。');
+    if (!practiceIntervalsConflict_(interval, bookingInterval, 0)) {
+      throw new Error('加入時間需要與現有自主練習時段重疊。');
     }
     if (records.participants.some(function(item) {
       return item.bookingId === bookingId && item.teacherName === teacherName &&
@@ -2504,8 +2532,41 @@ function joinPracticeBooking_(session, inputValue) {
       ? records.bookings.filter(function(item) {
           return item.seriesId === booking.seriesId && item.date >= booking.date &&
             [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(item.status) !== -1;
-        })
+        }).sort(function(left, right) { return left.date.localeCompare(right.date); })
       : [booking];
+    var courseRows;
+    try {
+      courseRows = getPracticeCurrentObRows_(
+        targetBookings[0].date,
+        targetBookings[targetBookings.length - 1].date
+      );
+      if (!Array.isArray(courseRows)) throw new Error('OB 課程格式不正確。');
+    } catch (error) {
+      throw new Error('目前無法即時核對 OB 課表，請稍後再加入自主練習。');
+    }
+    targetBookings.forEach(function(targetBooking) {
+      var targetInterval = normalizePracticeInterval_(
+        targetBooking.date,
+        interval.startTime,
+        interval.endTime
+      );
+      var targetBookingInterval = normalizePracticeInterval_(
+        targetBooking.date,
+        targetBooking.startTime,
+        targetBooking.endTime
+      );
+      if (!practiceIntervalsConflict_(targetInterval, targetBookingInterval, 0)) {
+        throw new Error('加入時間需要與現有自主練習時段重疊。');
+      }
+      assertPracticeIntervalAvailable_({
+        room: targetBooking.room,
+        interval: targetInterval,
+        excludeBookingId: targetBooking.bookingId,
+        excludeCalendarId: targetBooking.status === PRACTICE_STATUS.WAITLISTED
+          ? targetBooking.waitlistCalendarId
+          : ''
+      }, records, courseRows);
+    });
     return runStateTransitionUnlocked_([
       records.sheets.participants,
       records.sheets.bookings,
@@ -2526,8 +2587,21 @@ function joinPracticeBooking_(session, inputValue) {
           joinFuture ? '本次及往後每週' : '單次',
           PRACTICE_PARTICIPANT_STATUS.ACTIVE, now, ''
         ]);
-        records.sheets.bookings.getRange(targetBooking.rowNumber, 12, 1, 2)
-          .setValues([[now, teacherName]]);
+        var activeParticipants = records.participants.filter(function(item) {
+          return item.bookingId === targetBooking.bookingId &&
+            item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+        }).concat([{
+          startTime: interval.startTime,
+          endTime: interval.endTime,
+          status: PRACTICE_PARTICIPANT_STATUS.ACTIVE
+        }]);
+        updatePracticeBookingBoundsUnlocked_(
+          records.sheets.bookings,
+          targetBooking,
+          activeParticipants,
+          now,
+          teacherName
+        );
       });
       appendPracticeAuditUnlocked_(records.sheets.audit, {
         actor: teacherName,
@@ -2661,13 +2735,22 @@ function leavePracticeBooking_(session, inputValue) {
             if (!firstNewCreator) firstNewCreator = newCreatorName;
             records.sheets.participants.getRange(nextCreator.rowNumber, 5).setValue(PRACTICE_ROLE.CREATOR);
             records.sheets.bookings.getRange(targetBooking.rowNumber, 8).setValue(newCreatorName);
-            records.sheets.bookings.getRange(targetBooking.rowNumber, 12, 1, 2)
-              .setValues([[now, teacherName]]);
           }
+          var remainingBounds = updatePracticeBookingBoundsUnlocked_(
+            records.sheets.bookings,
+            targetBooking,
+            remaining,
+            now,
+            teacherName
+          );
+          targetBooking.startTime = remainingBounds.startTime;
+          targetBooking.endTime = remainingBounds.endTime;
         }
         resultByBooking[targetBooking.bookingId] = {
           bookingStatus: bookingStatus,
-          newCreatorName: newCreatorName
+          newCreatorName: newCreatorName,
+          startTime: targetBooking.startTime,
+          endTime: targetBooking.endTime
         };
       });
 
@@ -2717,8 +2800,8 @@ function leavePracticeBooking_(session, inputValue) {
         notifyTeacherNames: notifyTeacherNames,
         date: booking.date,
         room: booking.room,
-        startTime: booking.startTime,
-        endTime: booking.endTime
+        startTime: primaryResult.startTime || booking.startTime,
+        endTime: primaryResult.endTime || booking.endTime
       };
     });
   });

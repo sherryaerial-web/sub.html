@@ -7794,6 +7794,36 @@ test('practice join keeps participant-specific times and creator exit hands owne
   assert.equal(fixture.participantSheet.values[2][5], '15:00');
 });
 
+test('practice participant can extend a shared booking while external room conflicts stay protected', () => {
+  const fixture = createPracticeBackend();
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'once',
+  });
+
+  fixture.backend.joinPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, startTime: '13:30', endTime: '16:30', scope: 'once',
+  });
+
+  assert.deepEqual(fixture.bookingSheet.values[1].slice(4, 6), ['13:30', '16:30']);
+  assert.deepEqual(fixture.participantSheet.values[1].slice(3, 7), ['小琪', '建立者', '14:00', '16:00']);
+  assert.deepEqual(fixture.participantSheet.values[2].slice(3, 7), ['Ariel Lu', '參與者', '13:30', '16:30']);
+
+  fixture.backend.leavePracticeBooking_(fixture.teacher('Ariel Lu'), {
+    bookingId: created.bookingId, scope: 'once',
+  });
+  assert.deepEqual(fixture.bookingSheet.values[1].slice(4, 6), ['14:00', '16:00']);
+
+  fixture.backend.getPracticeCurrentObRows_ = () => [[
+    '2026/09/10', '16:40', 'A－空環 Lv.1', '老師甲', 'cal-blocked',
+  ]];
+  assert.throws(
+    () => fixture.backend.joinPracticeBooking_(fixture.teacher('Tako'), {
+      bookingId: created.bookingId, startTime: '15:00', endTime: '16:30', scope: 'once',
+    }),
+    /正式課程.*15 分鐘/,
+  );
+});
+
 test('practice creation rejects formal blockers and points overlapping teachers to join', () => {
   const fixture = createPracticeBackend({
     courseRows: [[

@@ -2986,6 +2986,12 @@ test('teacher practice view uses a card calendar with custom booking and private
   assert.match(html, /課程取消後會自動補入/);
   assert.match(html, /加入一起練習/);
   assert.match(section, /type="month"/);
+  assert.ok(
+    html.indexOf('id="practice-my-bookings"') < html.indexOf('class="practice-date-navigation"'),
+    'my-bookings query belongs in the practice header above date navigation',
+  );
+  const toolbar = html.match(/<div class="practice-toolbar">[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
+  assert.doesNotMatch(toolbar, /id="practice-my-bookings"/);
 });
 
 test('practice date strip starts today and navigation never selects an expired day', () => {
@@ -3242,6 +3248,56 @@ test('custom practice dialog focuses its title instead of opening the native dat
   vm.runInContext('practiceState.date = "2026/09/10"; practiceState.room = "A"; openPracticeEditor({ mode: "create", startTime: "14:05" });', context);
 
   assert.equal(context.document.activeElement?.id, 'practice-dialog-title');
+});
+
+test('course click opens an adjustable waitlist editor and confirmation adds its chosen interval to the batch', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'ob:cal-jina', type: 'course', calendarId: 'cal-jina', date: '2026/09/10', room: 'A', startTime: '11:00', endTime: '12:00', label: 'A－原始瑜伽', teacherName: 'Jina' },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[0] });', context);
+
+  assert.equal(vm.runInContext('practiceState.editor.mode', context), 'waitlist');
+  assert.equal(getElement('practice-editor-fields').hidden, false);
+  assert.equal(getElement('practice-editor-start').value, '11:00');
+  assert.equal(getElement('practice-editor-end').value, '12:00');
+  assert.equal(getElement('practice-editor-date').disabled, true);
+  assert.equal(getElement('practice-editor-room').disabled, true);
+
+  getElement('practice-editor-start').value = '10:45';
+  getElement('practice-editor-end').value = '12:15';
+  await context.submitPracticeEditor({ preventDefault() {} });
+
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'createPracticeWaitlist').length, 0);
+  assert.equal(vm.runInContext('practiceState.waitlistSelections["cal-jina"].startTime', context), '10:45');
+  assert.equal(vm.runInContext('practiceState.waitlistSelections["cal-jina"].endTime', context), '12:15');
+  assert.equal(getElement('practice-waitlist-count').textContent, '已選 1 堂候補');
+});
+
+test('joining another teacher keeps independent start and end times outside the creator interval', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: 'Ariel Lu', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'practice:shared', type: 'practice', bookingId: 'shared', date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', creatorName: '小琪', participants: [{ teacherName: '小琪', role: '建立者', startTime: '14:00', endTime: '16:00' }] },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[0] });', context);
+  getElement('practice-editor-start').value = '13:30';
+  getElement('practice-editor-end').value = '16:30';
+  vm.runInContext('syncPracticeEditorAvailability();', context);
+
+  assert.equal(getElement('practice-editor-warning').textContent, '');
+  assert.equal(getElement('practice-submit').disabled, false);
 });
 
 test('practice mutations reload the selected day and support acting-mode teachers', () => {

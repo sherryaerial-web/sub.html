@@ -593,16 +593,34 @@ try {
         legend: document.querySelector(".practice-legend")?.innerText || "",
         ownBackground: getComputedStyle(document.querySelector('[data-practice-block="practice-1"]')).backgroundColor,
         sharedBackground: getComputedStyle(document.querySelector('[data-practice-block="practice-shared"]')).backgroundColor,
+        queryAboveDates: document.querySelector("#practice-my-bookings").getBoundingClientRect().bottom <=
+          document.querySelector(".practice-date-navigation").getBoundingClientRect().top + 1,
+        clippedDateButtons: (() => {
+          const strip = document.querySelector("#practice-date-strip").getBoundingClientRect();
+          return Array.from(document.querySelectorAll(".practice-date-button")).filter((button) => {
+            const rect = button.getBoundingClientRect();
+            const intersects = rect.right > strip.left && rect.left < strip.right;
+            return intersects && (rect.left < strip.left - 1 || rect.right > strip.right + 1);
+          }).length;
+        })(),
       };
     });
     if (!practiceLayout.legend.includes("我的登記")) throw new Error(`${viewport.name}: own-practice legend is missing`);
     if (practiceLayout.ownBackground === practiceLayout.sharedBackground) throw new Error(`${viewport.name}: own practice is not visually distinct`);
+    if (!practiceLayout.queryAboveDates) throw new Error(`${viewport.name}: practice query is not above date navigation`);
+    if (viewport.width <= 760 && practiceLayout.clippedDateButtons) throw new Error(`${viewport.name}: practice date buttons are clipped`);
     if (viewport.width <= 760 && (practiceLayout.iconVisible || practiceLayout.backVisible || practiceLayout.overlaps.length)) {
       throw new Error(`${viewport.name}: mobile topbar is cluttered ${JSON.stringify(practiceLayout)}`);
     }
     results.push(await capture(page, viewport.name, "07-practice-day"));
     await page.locator('[data-practice-block="course-1"]').click();
+    await page.locator("#practice-dialog").waitFor({ state: "visible" });
+    await page.locator("#practice-editor-start").selectOption("09:45");
+    await page.locator("#practice-editor-end").selectOption("11:15");
+    await page.locator("#practice-submit").click();
     await page.locator('[data-practice-block="course-2"]').click();
+    await page.locator("#practice-dialog").waitFor({ state: "visible" });
+    await page.locator("#practice-submit").click();
     await page.locator("#practice-waitlist-count").getByText("已選 2 堂候補", { exact: true }).waitFor();
     results.push(await capture(page, viewport.name, "07b-practice-waitlist-selection"));
     await page.locator("#practice-waitlist-clear").click();

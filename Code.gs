@@ -1847,6 +1847,48 @@ function getPracticeDay_(session, dateValue) {
   return view;
 }
 
+function getMyPracticeBookings_(session, monthValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var month = cleanText_(monthValue) || Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('自主練習月份格式應為 YYYY-MM。');
+  var monthPrefix = month.replace('-', '/') + '/';
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensurePracticeStructureUnlocked_(ss);
+  var records = getPracticeRecordsUnlocked_(ss);
+  var bookingById = {};
+  records.bookings.forEach(function(booking) {
+    bookingById[booking.bookingId] = booking;
+  });
+  var items = records.participants.filter(function(participant) {
+    var booking = bookingById[participant.bookingId];
+    return participant.teacherName === teacherName && booking && booking.date.indexOf(monthPrefix) === 0;
+  }).map(function(participant) {
+    var booking = bookingById[participant.bookingId];
+    var participantStatus = cleanText_(participant.status) || PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    var status = cleanText_(booking.status);
+    if (participantStatus === PRACTICE_PARTICIPANT_STATUS.LEFT) status = '已退出';
+    else if (participantStatus === PRACTICE_PARTICIPANT_STATUS.CANCELLED) status = PRACTICE_STATUS.CANCELLED;
+    return {
+      bookingId: booking.bookingId,
+      seriesId: booking.seriesId,
+      date: booking.date,
+      room: booking.room,
+      startTime: participant.startTime || booking.startTime,
+      endTime: participant.endTime || booking.endTime,
+      status: status,
+      bookingStatus: booking.status,
+      participantStatus: participantStatus,
+      role: participant.role,
+      creatorName: booking.creatorName,
+      waitlistCalendarId: booking.waitlistCalendarId
+    };
+  }).sort(function(left, right) {
+    return [right.date, right.startTime, right.bookingId].join('|')
+      .localeCompare([left.date, left.startTime, left.bookingId].join('|'));
+  });
+  return { month: month, teacherName: teacherName, items: items };
+}
+
 function parsePracticeAuditJson_(value) {
   var text = cleanText_(value);
   if (!text) return null;
@@ -3640,6 +3682,9 @@ function doPost(e) {
       },
       getPracticeDay: function() {
         return getPracticeDay_(actingSession(), parameters.date);
+      },
+      getMyPracticeBookings: function() {
+        return getMyPracticeBookings_(actingSession(), parameters.month);
       },
       createPracticeBooking: function() {
         return createPracticeBooking_(

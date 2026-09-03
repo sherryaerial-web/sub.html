@@ -75,12 +75,14 @@ test('mobile header uses the selected app icon and synchronizes role-aware navig
   assert.match(html, /managementCapabilities\.length\s*\?\s*"view-admin"\s*:\s*"view-home"/);
 });
 
-test('practice timeline is touch-friendly and the editor becomes a mobile bottom sheet', () => {
+test('practice card calendar is touch-friendly and the editor becomes a mobile bottom sheet', () => {
   const html = pages[0];
 
   assert.match(html, /\.practice-date-strip\s*\{[^}]*overflow-x:\s*auto/s);
   assert.match(html, /\.practice-room-tabs\s*\{[^}]*display:\s*grid/s);
-  assert.match(html, /\.practice-time-button\s*\{[^}]*min-height:\s*44px/s);
+  assert.match(html, /\.practice-card-stack\s*\{[^}]*display:\s*grid/s);
+  assert.match(html, /\.practice-room-tabs\s*\{[^}]*position:\s*sticky/s);
+  assert.match(html, /\.practice-block\.is-mine/);
   assert.match(html, /\.practice-block\.course/);
   assert.match(html, /\.practice-block\.rental/);
   assert.match(html, /\.practice-block\.practice/);

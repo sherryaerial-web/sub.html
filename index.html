@@ -1022,6 +1022,9 @@
     .practice-date-button span { margin-top: 2px; font-size: 11px; }
     .practice-date-button.active { border-color: #cdaaa0; background: var(--aqua-100); }
     .practice-room-tabs {
+      position: sticky;
+      top: 8px;
+      z-index: 12;
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 6px;
@@ -1065,29 +1068,18 @@
     .practice-legend .course::before { background: #9b8780; }
     .practice-legend .rental::before { background: #b68b56; }
     .practice-legend .shared::before { background: #6f858d; }
-    .practice-timeline {
-      position: relative;
-      min-height: 420px;
-      overflow: hidden;
+    .practice-calendar {
+      min-height: 260px;
       border: 1px solid var(--line);
       border-radius: 14px;
       background: var(--surface);
       box-shadow: var(--shadow-sm);
     }
-    .practice-timeline-grid { position: relative; padding: 8px 10px 12px 58px; }
-    .practice-time-row { position: relative; min-height: 52px; border-top: 1px solid #ece6e0; }
-    .practice-time-row:first-child { border-top: 0; }
-    .practice-time-label { position: absolute; top: -8px; left: -50px; color: var(--subtle); font-size: 11px; }
-    .practice-time-button {
-      width: 100%;
-      min-height: 44px;
-      border: 0;
-      background: transparent;
-      color: transparent;
-      cursor: pointer;
-      text-align: left;
-    }
-    .practice-time-button:hover { background: rgba(238, 224, 220, .35); color: var(--sea-700); }
+    .practice-calendar-list { display: grid; gap: 0; padding: 4px 14px; }
+    .practice-card-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-bottom: 1px solid #ece6e0; }
+    .practice-card-row:last-child { border-bottom: 0; }
+    .practice-card-time { padding-top: 10px; color: var(--subtle); font-size: 12px; font-weight: 750; }
+    .practice-card-stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 9px; }
     .practice-block {
       position: relative;
       z-index: 2;
@@ -1108,10 +1100,20 @@
     .practice-block.rental { border-left-color: #b68b56; background: #fbf5e9; }
     .practice-block.practice { border-left-color: #6f858d; background: #edf3f4; }
     .practice-block.waitlist { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; }
+    .practice-block.is-mine { border-color: #c79689; border-left-color: #a96f61; background: #f7e9e5; box-shadow: 0 5px 14px rgba(123, 84, 74, .10); }
     .practice-block-time { color: var(--muted); font-size: 12px; font-weight: 700; }
     .practice-block-title { font-size: 15px; font-weight: 750; }
     .practice-block-meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
     .practice-empty-state { padding: 42px 18px; color: var(--muted); text-align: center; }
+    .practice-mobile-date { display: none; }
+    .practice-history-panel { margin: 0 0 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    .practice-history-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .practice-history-head strong { font-size: 15px; }
+    .practice-history-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    .practice-history-list { display: grid; gap: 8px; margin-top: 11px; }
+    .practice-history-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; padding: 11px 12px; border-radius: 9px; background: var(--soft); }
+    .practice-history-item small { color: var(--muted); }
+    .practice-history-status { align-self: center; color: var(--sea-700); font-size: 12px; font-weight: 700; }
     .practice-editor-summary {
       margin: 10px 0 14px;
       padding: 11px 12px;
@@ -1230,6 +1232,12 @@
       #practice-dialog .practice-form-field.full { grid-column: 1 / -1; }
       .practice-toolbar { align-items: stretch; flex-direction: column; }
       .practice-toolbar .primary-button { width: 100%; }
+      .practice-room-tabs { top: 68px; }
+      .practice-mobile-date { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 10px; }
+      .practice-card-row { grid-template-columns: 48px minmax(0, 1fr); gap: 7px; padding: 9px 0; }
+      .practice-card-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .practice-card-stack .practice-block:only-child { grid-column: 1 / -1; }
+      .practice-block { padding: 10px; }
       .practice-form-grid { grid-template-columns: 1fr; }
       .practice-form-field.full { grid-column: auto; }
       html { scroll-padding-top: 68px; }
@@ -1695,13 +1703,22 @@
             <div id="practice-date-strip" class="practice-date-strip" aria-label="選擇自主練習日期"></div>
             <button id="practice-date-next" class="practice-date-arrow" type="button" aria-label="後一週">›</button>
           </div>
+          <div class="practice-mobile-date">
+            <input id="practice-mobile-date" class="text-input" type="date" aria-label="查看指定日期">
+            <button id="practice-mobile-date-go" class="compact-button" type="button">前往</button>
+          </div>
           <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
           <div class="practice-toolbar">
             <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span></div>
-            <button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="plus"></i>新增自主練習</button>
+            <div class="button-row"><button id="practice-my-bookings" class="compact-button" type="button"><i data-lucide="search"></i>我的登記</button><button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="plus"></i>自訂時段</button></div>
+          </div>
+          <div id="practice-history-panel" class="practice-history-panel" hidden>
+            <div class="practice-history-head"><strong>我的自主練習登記</strong><button id="practice-history-close" class="icon-button" type="button" aria-label="關閉查詢"><i data-lucide="x"></i></button></div>
+            <div class="practice-history-controls"><input id="practice-history-month" class="text-input month-input" type="month"><button id="practice-history-search" class="compact-button" type="button"><i data-lucide="search"></i>查詢</button></div>
+            <div id="practice-history-list" class="practice-history-list"></div>
           </div>
           <div id="practice-course-warning" class="practice-course-warning" hidden></div>
-          <div id="practice-timeline" class="practice-timeline" aria-live="polite"><div class="state">載入教室時間中...</div></div>
+          <div id="practice-calendar" class="practice-calendar" aria-live="polite"><div class="state">載入教室行程中...</div></div>
         </section>
 
         <section id="view-payroll" class="view">
@@ -1817,8 +1834,8 @@
       <div id="practice-editor-fields" class="practice-form-grid">
         <div class="practice-form-field"><label for="practice-editor-date">日期</label><input id="practice-editor-date" class="text-input" type="date" required></div>
         <div class="practice-form-field"><label for="practice-editor-room">教室</label><select id="practice-editor-room" class="claim-control" required><option value="A">A 教室</option><option value="B">B 教室</option><option value="C">C 教室</option><option value="D">D 教室</option></select></div>
-        <div class="practice-form-field"><label for="practice-editor-start">開始時間</label><input id="practice-editor-start" class="text-input" type="time" step="300" required></div>
-        <div class="practice-form-field"><label for="practice-editor-end">結束時間</label><input id="practice-editor-end" class="text-input" type="time" step="300" required></div>
+        <div class="practice-form-field"><label for="practice-editor-start">開始時間</label><select id="practice-editor-start" class="claim-control" required></select></div>
+        <div class="practice-form-field"><label for="practice-editor-end">結束時間</label><select id="practice-editor-end" class="claim-control" required></select></div>
         <div class="practice-form-field full"><label>快速時長</label><div id="practice-duration-options" class="practice-duration-options"><button class="practice-duration-button active" type="button" data-practice-duration="60">60 分鐘</button><button class="practice-duration-button" type="button" data-practice-duration="90">90 分鐘</button><button class="practice-duration-button" type="button" data-practice-duration="120">120 分鐘</button></div></div>
         <label id="practice-recurrence-field" class="practice-form-field full"><span>循環登記</span><span><input id="practice-editor-weekly" type="checkbox"> <span id="practice-recurrence-label">每週同一時段，直到我停止</span></span></label>
       </div>
@@ -1857,7 +1874,7 @@
     let notificationInbox = null;
     let inboxFilter = "all";
     let practiceAdminDashboard = null;
-    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {} };
+    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, allowPastDate: false };
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
@@ -1931,7 +1948,7 @@
       "getAvailableSubstitutes", "getClaimPageData", "getClaimOptions", "getMySubs",
       "getMyCourses", "getMyLeaves", "submitLeave", "claimSubstitute",
       "claimSpecialCourse", "cancelLeave", "requestLeaveCancellation", "requestClaimWithdrawal",
-      "getPracticeDay", "createPracticeBooking", "createPracticeWaitlist",
+      "getPracticeDay", "getMyPracticeBookings", "createPracticeBooking", "createPracticeWaitlist",
       "joinPracticeBooking", "leavePracticeBooking"
     ]);
 
@@ -3149,17 +3166,17 @@
       return `${shifted.getUTCFullYear()}/${String(shifted.getUTCMonth() + 1).padStart(2, "0")}/${String(shifted.getUTCDate()).padStart(2, "0")}`;
     }
 
-    function getSafePracticeDate(dateValue, todayValue = getTaipeiToday()) {
+    function getSafePracticeDate(dateValue, todayValue = getTaipeiToday(), allowPast = false) {
       const today = String(todayValue || getTaipeiToday()).replace(/-/g, "/");
       const date = String(dateValue || today).replace(/-/g, "/");
-      return date < today ? today : date;
+      return !allowPast && date < today ? today : date;
     }
 
-    function getPracticeDateStripDates(selectedDateValue, todayValue = getTaipeiToday()) {
+    function getPracticeDateStripDates(selectedDateValue, todayValue = getTaipeiToday(), allowPast = false) {
       const today = String(todayValue || getTaipeiToday()).replace(/-/g, "/");
-      const selected = getSafePracticeDate(selectedDateValue, today);
+      const selected = getSafePracticeDate(selectedDateValue, today, allowPast);
       const centeredStart = shiftPracticeDate(selected, -3);
-      const start = centeredStart < today ? today : centeredStart;
+      const start = !allowPast && centeredStart < today ? today : centeredStart;
       return Array.from({ length: 9 }, (_, index) => shiftPracticeDate(start, index));
     }
 
@@ -3178,16 +3195,18 @@
         { room: roomName, blocks: [] };
     }
 
-    async function loadPracticeDay(dateValue) {
-      const date = getSafePracticeDate(dateValue);
+    async function loadPracticeDay(dateValue, options = {}) {
+      const allowPast = options.allowPast === true;
+      const date = getSafePracticeDate(dateValue, getTaipeiToday(), allowPast);
       const requestSerial = Number(practiceState.requestSerial || 0) + 1;
       practiceState.requestSerial = requestSerial;
       practiceState.date = date;
+      practiceState.allowPastDate = allowPast && date < getTaipeiToday();
       renderPracticeDateStrip();
-      const timeline = byId("practice-timeline");
+      const calendar = byId("practice-calendar");
       const cached = practiceState.dayCache?.[date] || null;
       if (cached) renderPracticeView(cached);
-      beginReadRefresh(timeline, !!cached, '<div class="state">載入教室時間中...</div>');
+      beginReadRefresh(calendar, !!cached, '<div class="state">載入教室行程中...</div>');
       try {
         const data = await callPostApi("getPracticeDay", { date });
         if (requestSerial !== practiceState.requestSerial) return;
@@ -3195,23 +3214,24 @@
         renderPracticeView(data);
       } catch (error) {
         if (requestSerial !== practiceState.requestSerial) return;
-        if (!cached) timeline.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        if (!cached) calendar.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
         else setNotice(`自主練習更新失敗：${error.message}`, "error");
       } finally {
-        if (requestSerial === practiceState.requestSerial) endReadRefresh(timeline);
+        if (requestSerial === practiceState.requestSerial) endReadRefresh(calendar);
       }
     }
 
     function renderPracticeDateStrip() {
       const today = getTaipeiToday();
-      practiceState.date = getSafePracticeDate(practiceState.date, today);
-      const dates = getPracticeDateStripDates(practiceState.date, today);
+      practiceState.date = getSafePracticeDate(practiceState.date, today, practiceState.allowPastDate);
+      const dates = getPracticeDateStripDates(practiceState.date, today, practiceState.allowPastDate);
       byId("practice-date-strip").innerHTML = dates.map((date) => {
         const [year, month, day] = date.split("/");
         const weekday = formatDateWithWeekday(date).match(/（(.+)）/)?.[1] || "";
         return `<button class="practice-date-button ${date === practiceState.date ? "active" : ""}" type="button" data-practice-date="${escapeHtml(date)}"><strong>${escapeHtml(`${month}/${day}`)}</strong><span>${escapeHtml(weekday)}</span></button>`;
       }).join("");
-      byId("practice-date-previous").disabled = practiceState.date <= today;
+      byId("practice-date-previous").disabled = !practiceState.allowPastDate && practiceState.date <= today;
+      byId("practice-mobile-date").value = practiceState.date.replace(/\//g, "-");
     }
 
     function renderPracticeView(data) {
@@ -3226,7 +3246,7 @@
         const count = (data?.rooms || []).find((item) => item.room === room)?.blocks?.length || 0;
         return `<button class="practice-room-tab ${room === practiceState.room ? "active" : ""}" type="button" role="tab" aria-selected="${room === practiceState.room}" data-practice-room="${room}">${room} 教室${count ? ` <small>${count}</small>` : ""}</button>`;
       }).join("");
-      renderPracticeTimeline(data);
+      renderPracticeCalendar(data);
       refreshIcons();
     }
 
@@ -3241,7 +3261,7 @@
         : block.type === "rental"
           ? "場地租借已占用，無法登記自主練習"
           : `${names || block.creatorName}｜${block.seriesId ? "每週循環" : "單次"}`;
-      return `<button class="practice-block ${escapeHtml(block.type)}" type="button" data-practice-block="${escapeHtml(block.id)}"><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
+      return `<button class="practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}" type="button" data-practice-block="${escapeHtml(block.id)}"><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
     }
 
     function getPracticeSlotConflicts(startMinutes, duration = 60, excludeBookingId = "", roomName = practiceState.room) {
@@ -3272,23 +3292,33 @@
       return { kind: "free", conflict: null, course: null };
     }
 
-    function renderPracticeTimeline() {
+    function renderPracticeCalendar() {
       const room = getPracticeSelectedRoom();
       const blocksByStart = new Map();
       (room.blocks || []).forEach((block) => {
-        const startMinutes = practiceTimeToMinutes(block.startTime);
-        const rowMinutes = Math.max(7 * 60, Math.min(23 * 60, Math.floor(startMinutes / 30) * 30));
-        const rowTime = practiceMinutesToTime(rowMinutes);
-        if (!blocksByStart.has(rowTime)) blocksByStart.set(rowTime, []);
-        blocksByStart.get(rowTime).push(block);
+        const startTime = block.startTime || "00:00";
+        if (!blocksByStart.has(startTime)) blocksByStart.set(startTime, []);
+        blocksByStart.get(startTime).push(block);
       });
-      const rows = [];
-      for (let minutes = 7 * 60; minutes <= 23 * 60; minutes += 30) {
+      const rows = Array.from(blocksByStart.keys()).sort().map((time) => {
+        const blocks = blocksByStart.get(time).slice().sort((left, right) => String(left.endTime).localeCompare(String(right.endTime)) || String(left.id).localeCompare(String(right.id)));
+        return `<div class="practice-card-row" data-practice-start="${escapeHtml(time)}"><div class="practice-card-time">${escapeHtml(time)}</div><div class="practice-card-stack">${blocks.map(practiceBlockHtml).join("")}</div></div>`;
+      });
+      byId("practice-calendar").innerHTML = rows.length
+        ? `<div class="practice-calendar-list">${rows.join("")}</div>`
+        : '<div class="practice-empty-state">這間教室今天沒有行程，可用上方「自訂時段」登記。</div>';
+    }
+
+    function populatePracticeTimeSelects() {
+      const options = [];
+      for (let minutes = 0; minutes <= 23 * 60 + 55; minutes += 5) {
         const time = practiceMinutesToTime(minutes);
-        const blocks = blocksByStart.get(time) || [];
-        rows.push(`<div class="practice-time-row"><span class="practice-time-label">${time}</span>${blocks.map(practiceBlockHtml).join("")}${blocks.length ? "" : `<button class="practice-time-button" type="button" data-practice-start="${time}" aria-label="${time} 登記自主練習">${practiceSlotAvailable(minutes) ? "+ 登記" : ""}</button>`}</div>`);
+        options.push(`<option value="${time}">${time}</option>`);
       }
-      byId("practice-timeline").innerHTML = `<div class="practice-timeline-grid">${rows.join("")}</div>`;
+      const markup = options.join("");
+      ["practice-editor-start", "practice-editor-end"].forEach((id) => {
+        if (!byId(id).innerHTML) byId(id).innerHTML = markup;
+      });
     }
 
     function setPracticeEditorTime(startTime, duration) {
@@ -3316,7 +3346,7 @@
         if (alternatives.every((selected) => Math.abs(selected - minutes) >= 30)) alternatives.push(minutes);
         return alternatives.length >= 3;
       });
-      return alternatives.map(practiceMinutesToTime);
+      return alternatives.sort((left, right) => left - right).map(practiceMinutesToTime);
     }
 
     function syncPracticeEditorAvailability() {
@@ -3326,16 +3356,14 @@
       const duration = end - start;
       const editor = practiceState.editor;
       const roomName = byId("practice-editor-room").value || practiceState.room;
-      const excludeBookingId = ["edit", "join"].includes(practiceState.editor.mode)
+      const excludeBookingId = editor.mode === "join"
         ? (practiceState.editor.block?.bookingId || "")
         : "";
       document.querySelectorAll("[data-practice-duration]").forEach((button) => {
         const minutes = Number(button.dataset.practiceDuration);
         const slotState = getPracticeEditorSlotState(start, minutes, excludeBookingId, roomName);
         const selectedCalendarId = editor.block?.calendarId || "";
-        const available = editor.mode === "edit"
-          ? ["free", "candidate"].includes(slotState.kind)
-          : editor.mode === "waitlist"
+        const available = editor.mode === "waitlist"
             ? slotState.kind === "candidate" && slotState.course?.calendarId === selectedCalendarId
             : practiceSlotAvailable(start, minutes, excludeBookingId, roomName);
         button.disabled = !available;
@@ -3349,13 +3377,7 @@
         : { kind: "blocked", conflict: null, course: null };
       if (start < 0 || end < 0 || start % 5 || end % 5) warning = "請以 5 分鐘為單位選擇時間。";
       else if (duration < 15) warning = "自主練習最短 15 分鐘。";
-      else if (editor.mode === "edit" && slotState.kind === "candidate") {
-        warning = `這個時段與「${slotState.course.label || "正式課程"}」或其前後 15 分鐘緩衝衝突，儲存後會轉為候補。`;
-        level = "info";
-      } else if (editor.mode === "edit" && editor.block?.type === "waitlist" && slotState.kind === "free") {
-        warning = "這個時段已是空堂，儲存後會轉為一般自主練習。";
-        level = "info";
-      } else if (editor.mode === "waitlist" && !(slotState.kind === "candidate" &&
+      else if (editor.mode === "waitlist" && !(slotState.kind === "candidate" &&
           slotState.course?.calendarId === (editor.block?.calendarId || ""))) {
         warning = slotState.kind === "blocked" && slotState.conflict
           ? `這個候補時段另有衝突：${slotState.conflict.label || "已有行程"}。`
@@ -3363,7 +3385,7 @@
             ? "這個時段同時與多堂正課衝突，請調整後再候補。"
             : "候補時間必須與所選正課或前後 15 分鐘緩衝衝突。";
         blocking = true;
-      } else if (["create", "edit"].includes(editor.mode) && slotState.kind !== "free") {
+      } else if (editor.mode === "create" && slotState.kind !== "free") {
         const alternatives = findPracticeAlternatives(duration, excludeBookingId, roomName);
         warning = slotState.kind === "multiple-courses"
           ? "這個時段同時與多堂正課衝突，請調整時間後再候補。"
@@ -3375,42 +3397,37 @@
       warningElement.textContent = warning;
       warningElement.dataset.level = warning ? level : "";
       warningElement.dataset.blocking = blocking ? "true" : "false";
-      if (editor.mode === "edit" && editor.block?.seriesId) {
-        const becomesCandidate = slotState.kind === "candidate";
-        byId("practice-recurrence-field").hidden = becomesCandidate;
-        if (becomesCandidate) byId("practice-editor-weekly").checked = false;
-      }
       byId("practice-submit").disabled = blocking || editor.mode === "rental" || editor.mode === "mine";
     }
 
     function openPracticeEditor(context = {}) {
       const block = context.block || null;
-      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? "rental" : block?.isCreator ? "edit" : block?.isMine ? "mine" : block ? "join" : "create");
+      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? "rental" : block?.isMine ? "mine" : block ? "join" : "create");
       const startTime = context.startTime || block?.startTime || "14:00";
       const endTime = block?.endTime || practiceMinutesToTime(practiceTimeToMinutes(startTime) + 60);
       practiceState.editor = { mode, block };
-      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "edit" ? "調整自主練習" : mode === "mine" ? "自主練習詳情" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
-      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "提醒取消後會補入；OB 課程沒有取消前不會占用。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : mode === "edit" ? "直接修改教室或時間；仍會保留課前課後 15 分鐘。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
+      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "mine" ? "自主練習詳情" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
+      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "已帶入完整課程時段；課程取消後會自動補入。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : mode === "mine" ? "要改時間請先取消，再重新登記。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
       byId("practice-editor-summary").textContent = `${practiceState.date} ｜ ${practiceState.room} 教室${block ? ` ｜ ${block.startTime}–${block.endTime}` : ""}`;
+      populatePracticeTimeSelects();
       byId("practice-editor-date").value = practiceState.date.replace(/\//g, "-");
+      byId("practice-editor-date").min = getTaipeiToday().replace(/\//g, "-");
       byId("practice-editor-room").value = practiceState.room;
       byId("practice-editor-start").value = startTime;
       byId("practice-editor-end").value = endTime;
-      byId("practice-editor-date").disabled = mode === "edit";
-      const editable = ["create", "waitlist", "join", "edit"].includes(mode);
+      byId("practice-editor-date").disabled = false;
+      const editable = ["create", "join"].includes(mode);
       byId("practice-editor-fields").hidden = !editable;
-      const seriesChoice = ["join", "edit"].includes(mode) && !!block?.seriesId;
+      const seriesChoice = mode === "join" && !!block?.seriesId;
       byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental" ||
-        mode === "mine" || (["join", "edit"].includes(mode) && !seriesChoice);
-      byId("practice-recurrence-label").textContent = mode === "edit"
-        ? "套用到這次及之後"
-        : mode === "join" ? "加入這次與之後" : "每週同一時段，直到我停止";
+        mode === "mine" || (mode === "join" && !seriesChoice);
+      byId("practice-recurrence-label").textContent = mode === "join" ? "加入這次與之後" : "每週同一時段，直到我停止";
       byId("practice-editor-weekly").checked = false;
       byId("practice-submit").hidden = mode === "rental" || mode === "mine";
-      byId("practice-submit").textContent = mode === "waitlist" ? "確認候補" : mode === "join" ? "確認加入" : mode === "edit" ? "儲存調整" : "確認登記";
-      byId("practice-leave").hidden = !["mine", "edit"].includes(mode);
+      byId("practice-submit").textContent = mode === "waitlist" ? "確認候補" : mode === "join" ? "確認加入" : "確認登記";
+      byId("practice-leave").hidden = mode !== "mine";
       byId("practice-leave").textContent = block?.isCreator ? "只取消這次" : "只退出這次";
-      byId("practice-leave-future").hidden = !["mine", "edit"].includes(mode) || !block?.seriesId;
+      byId("practice-leave-future").hidden = mode !== "mine" || !block?.seriesId;
       byId("practice-leave-future").textContent = block?.isCreator ? "停止整個循環" : "退出這次與之後";
       const participants = block?.participants || [];
       byId("practice-participants").innerHTML = participants.map((item) => `<div class="practice-participant"><strong>${escapeHtml(item.teacherName)}${item.role === "建立者" ? "（建立者）" : ""}</strong><span>${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</span></div>`).join("");
@@ -3434,13 +3451,14 @@
       if (!editor) return;
       syncPracticeEditorAvailability();
       if (byId("practice-editor-warning").dataset.blocking === "true") return;
+      const fixedWaitlist = editor.mode === "waitlist" && editor.block;
       const practice = {
         bookingId: editor.block?.bookingId || "",
         calendarId: editor.block?.calendarId || "",
-        date: byId("practice-editor-date").value.replace(/-/g, "/"),
-        room: byId("practice-editor-room").value,
-        startTime: byId("practice-editor-start").value,
-        endTime: byId("practice-editor-end").value,
+        date: fixedWaitlist ? (editor.block.date || practiceState.date) : byId("practice-editor-date").value.replace(/-/g, "/"),
+        room: fixedWaitlist ? (editor.block.room || practiceState.room) : byId("practice-editor-room").value,
+        startTime: fixedWaitlist ? editor.block.startTime : byId("practice-editor-start").value,
+        endTime: fixedWaitlist ? editor.block.endTime : byId("practice-editor-end").value,
         recurrence: byId("practice-editor-weekly").checked ? "weekly" : "once",
         scope: byId("practice-editor-weekly").checked ? "future" : "once"
       };
@@ -3450,13 +3468,12 @@
         let result;
         if (editor.mode === "waitlist") result = await callPostApi("createPracticeWaitlist", { practice });
         else if (editor.mode === "join") result = await callPostApi("joinPracticeBooking", { practice });
-        else if (editor.mode === "edit") result = await callPostApi("updatePracticeBooking", { practice });
         else result = await callPostApi("createPracticeBooking", { practice });
         practiceState.date = practice.date;
         practiceState.room = practice.room;
         delete practiceState.dayCache[practice.date];
         closePracticeEditor();
-        setNotice(editor.mode === "join" ? "已加入自主練習。" : editor.mode === "waitlist" ? "已登記候補，課程取消後會自動補入。" : editor.mode === "edit" && result?.status === "候補" ? "自主練習已調整並轉為候補。" : editor.mode === "edit" && editor.block?.type === "waitlist" ? "自主練習已調整並轉為一般登記。" : editor.mode === "edit" ? "自主練習時間已調整。" : "自主練習已登記。");
+        setNotice(editor.mode === "join" ? "已加入自主練習。" : editor.mode === "waitlist" ? "已登記候補，課程取消後會自動補入。" : "自主練習已登記。");
         await loadPracticeDay(practiceState.date);
       } catch (error) {
         setNotice(error.message, "error");
@@ -3483,6 +3500,34 @@
         setNotice(error.message, "error");
       } finally {
         setButtonBusy(button, false, "");
+      }
+    }
+
+    function getPracticeHistoryMonth() {
+      return (practiceState.date || getTaipeiToday()).slice(0, 7).replace("/", "-");
+    }
+
+    function renderMyPracticeBookings(data) {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      byId("practice-history-list").innerHTML = items.length ? items.map((item) => `
+        <div class="practice-history-item">
+          <strong>${escapeHtml(item.date)} ｜ ${escapeHtml(item.room)} 教室 ｜ ${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong>
+          <span class="practice-history-status">${escapeHtml(item.status || "")}</span>
+          <small>${escapeHtml(item.role || "")}${item.seriesId ? "｜每週循環" : "｜單次"}${item.creatorName && item.role !== "建立者" ? `｜由 ${escapeHtml(item.creatorName)} 建立` : ""}</small>
+        </div>
+      `).join("") : '<div class="state">這個月份沒有你的自主練習登記</div>';
+    }
+
+    async function fetchMyPracticeBookings() {
+      const monthInput = byId("practice-history-month");
+      const month = monthInput.value || getPracticeHistoryMonth();
+      monthInput.value = month;
+      const list = byId("practice-history-list");
+      list.innerHTML = '<div class="state">載入登記紀錄中...</div>';
+      try {
+        renderMyPracticeBookings(await callPostApi("getMyPracticeBookings", { month }));
+      } catch (error) {
+        list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
       }
     }
 
@@ -6479,14 +6524,14 @@ https://sherryaerial-web.github.io/sub.html/
     byId("push-disable").addEventListener("click", disablePushNotifications);
     byId("practice-date-strip").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-practice-date]") : null;
-      if (button) loadPracticeDay(button.dataset.practiceDate);
+      if (button) loadPracticeDay(button.dataset.practiceDate, { allowPast: practiceState.allowPastDate });
     });
     byId("practice-date-previous").addEventListener("click", () => {
-      if (practiceState.date <= getTaipeiToday()) return;
-      loadPracticeDay(shiftPracticeDate(practiceState.date, -7));
+      if (!practiceState.allowPastDate && practiceState.date <= getTaipeiToday()) return;
+      loadPracticeDay(shiftPracticeDate(practiceState.date, -7), { allowPast: practiceState.allowPastDate });
     });
     byId("practice-date-next").addEventListener("click", () => {
-      loadPracticeDay(shiftPracticeDate(practiceState.date || getTaipeiToday(), 7));
+      loadPracticeDay(shiftPracticeDate(practiceState.date || getTaipeiToday(), 7), { allowPast: practiceState.allowPastDate });
     });
     byId("practice-room-tabs").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-practice-room]") : null;
@@ -6494,25 +6539,39 @@ https://sherryaerial-web.github.io/sub.html/
       practiceState.room = button.dataset.practiceRoom;
       renderPracticeView(practiceState.data);
     });
-    byId("practice-timeline").addEventListener("click", (event) => {
+    byId("practice-calendar").addEventListener("click", (event) => {
       const blockButton = event.target.closest ? event.target.closest("[data-practice-block]") : null;
       if (blockButton) {
         const block = getPracticeSelectedRoom().blocks.find((item) => item.id === blockButton.dataset.practiceBlock);
         if (block) openPracticeEditor({ block });
         return;
       }
-      const timeButton = event.target.closest ? event.target.closest("[data-practice-start]") : null;
-      if (timeButton) openPracticeEditor({ mode: "create", startTime: timeButton.dataset.practiceStart });
     });
     byId("practice-new").addEventListener("click", () => openPracticeEditor({ mode: "create", startTime: "14:00" }));
+    byId("practice-mobile-date-go").addEventListener("click", () => {
+      const date = byId("practice-mobile-date").value;
+      if (date) loadPracticeDay(date, { allowPast: true });
+    });
+    byId("practice-my-bookings").addEventListener("click", () => {
+      byId("practice-history-panel").hidden = false;
+      byId("practice-history-month").value = getPracticeHistoryMonth();
+      fetchMyPracticeBookings();
+      refreshIcons();
+    });
+    byId("practice-history-search").addEventListener("click", fetchMyPracticeBookings);
+    byId("practice-history-close").addEventListener("click", () => { byId("practice-history-panel").hidden = true; });
     byId("practice-duration-options").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-practice-duration]") : null;
       if (!button || button.disabled) return;
       setPracticeEditorTime(byId("practice-editor-start").value, Number(button.dataset.practiceDuration));
     });
-    ["practice-editor-room", "practice-editor-start", "practice-editor-end"].forEach((id) => {
+    ["practice-editor-room", "practice-editor-end"].forEach((id) => {
       byId(id).addEventListener("input", syncPracticeEditorAvailability);
       byId(id).addEventListener("change", syncPracticeEditorAvailability);
+    });
+    byId("practice-editor-start").addEventListener("change", () => {
+      if (practiceState.editor?.mode === "create") setPracticeEditorTime(byId("practice-editor-start").value, 60);
+      else syncPracticeEditorAvailability();
     });
     byId("practice-form").addEventListener("submit", submitPracticeEditor);
     byId("practice-leave").addEventListener("click", () => leavePracticeEditor("once"));

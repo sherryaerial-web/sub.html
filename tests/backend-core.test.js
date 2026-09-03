@@ -8124,6 +8124,10 @@ test('practice API requires login, ignores forged teachers, and permits course-a
     calls.push(['day', session.teacherName, session.impersonatedBy || '', date]);
     return { date, teacherName: session.teacherName };
   };
+  backend.getMyPracticeBookings_ = (session, month) => {
+    calls.push(['history', session.teacherName, session.impersonatedBy || '', month]);
+    return { month, items: [] };
+  };
   backend.createPracticeBooking_ = (session, input) => {
     calls.push(['create', session.teacherName, session.impersonatedBy || '', input.room]);
     return { bookingId: 'practice-1' };
@@ -8157,6 +8161,13 @@ test('practice API requires login, ignores forged teachers, and permits course-a
     date: '2026/09/10',
   } }).text);
   assert.equal(actingResult.status, 'success');
+  const historyResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getMyPracticeBookings',
+    sessionToken: adminToken,
+    actingTeacherName: '小琪',
+    month: '2026-09',
+  } }).text);
+  assert.equal(historyResult.status, 'success');
   const dashboardResult = JSON.parse(backend.doPost({ parameter: {
     action: 'getPracticeAdminDashboard', sessionToken: adminToken,
   } }).text);
@@ -8164,8 +8175,39 @@ test('practice API requires login, ignores forged teachers, and permits course-a
   assert.deepEqual(calls, [
     ['create', '小琪', '', 'A'],
     ['day', '小琪', '冠蓉', '2026/09/10'],
+    ['history', '小琪', '冠蓉', '2026-09'],
     ['admin', '冠蓉'],
   ]);
+});
+
+test('my practice history returns only the signed-in teacher records for the requested month', () => {
+  const fixture = createPracticeBackend();
+  const cancelled = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  const shared = fixture.backend.createPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    date: '2026/09/11', room: 'B', startTime: '15:00', endTime: '16:00', recurrence: 'once',
+  });
+  fixture.backend.joinPracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: shared.bookingId, startTime: '15:15', endTime: '16:00', scope: 'once',
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('Jina'), {
+    date: '2026/09/12', room: 'C', startTime: '16:00', endTime: '17:00', recurrence: 'once',
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/10/01', room: 'D', startTime: '17:00', endTime: '18:00', recurrence: 'once',
+  });
+  fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: cancelled.bookingId, scope: 'once',
+  });
+
+  const result = fixture.backend.getMyPracticeBookings_(fixture.teacher('小琪'), '2026-09');
+
+  assert.equal(result.month, '2026-09');
+  assert.deepEqual(result.items.map((item) => item.date), ['2026/09/11', '2026/09/10']);
+  assert.deepEqual(result.items.map((item) => item.role), ['參與者', '建立者']);
+  assert.deepEqual(result.items.map((item) => item.status), ['已成立', '已退出']);
+  assert.equal(result.items.some((item) => item.creatorName === 'Jina'), false);
 });
 
 test('practice day service returns the signed-in teacher and canonical room timeline', () => {

@@ -563,26 +563,16 @@ try {
     results.push(await capture(page, viewport.name, "06b-inbox"));
 
     await openView(page, "view-practice");
-    await page.locator(".practice-timeline-grid").waitFor();
+    await page.locator(".practice-calendar-list").waitFor();
     results.push(await capture(page, viewport.name, "07-practice-day"));
-    await page.locator('[data-practice-start="12:00"]').click();
+    await page.locator("#practice-new").click();
     await page.locator("#practice-dialog").waitFor({ state: "visible" });
     results.push(await capture(page, viewport.name, "08-practice-create"));
     await page.locator("#practice-dialog-cancel").click();
     await page.locator('[data-practice-block="practice-1"]').click();
     await page.locator("#practice-dialog").waitFor({ state: "visible" });
-    results.push(await capture(page, viewport.name, "09-practice-edit"));
-    await page.locator("#practice-editor-start").fill("10:00");
-    await page.locator("#practice-editor-end").fill("11:00");
-    await page.locator("#practice-editor-end").dispatchEvent("change");
-    await page.locator("#practice-editor-warning").filter({ hasText: "轉為候補" }).waitFor();
-    const candidateDialogBounds = await page.locator("#practice-dialog").boundingBox();
-    const candidateSubmitBounds = await page.locator("#practice-submit").boundingBox();
-    if (!candidateDialogBounds || !candidateSubmitBounds ||
-        candidateSubmitBounds.y + candidateSubmitBounds.height > candidateDialogBounds.y + candidateDialogBounds.height + 1) {
-      throw new Error(`${viewport.name}: practice save action is clipped after the waitlist conversion message`);
-    }
-    results.push(await capture(page, viewport.name, "09b-practice-edit-to-waitlist"));
+    await page.locator("#practice-leave").waitFor({ state: "visible" });
+    results.push(await capture(page, viewport.name, "09-practice-details"));
     await page.locator("#practice-dialog-cancel").click();
 
     await page.locator("#logout-button").click();

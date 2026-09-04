@@ -155,6 +155,19 @@ const EXPECTED_NOTIFICATION_MESSAGE_HEADERS = [
 const EXPECTED_NOTIFICATION_RECIPIENT_HEADERS = [
   '收件紀錄 ID', '訊息 ID', '收件人', '狀態', '已讀時間', '建立時間',
 ];
+const EXPECTED_DISCOUNT_OBSERVATION_HEADERS = [
+  '觀測 ID', '固定時段鍵', '月份', '星期', '時間', '教室', '課程', '老師',
+  'OB Calendar ID', '觀測堂數', '未開堂數', '最近未開日期', '來源', '排除原因', '觀測時間',
+];
+const EXPECTED_DISCOUNT_HISTORY_HEADERS = [
+  '優惠月份', '固定時段鍵', '星期', '時間', '教室', '課程', '老師',
+  '來源', '推薦批次 ID', '確認時間', '確認者',
+];
+const EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS = [
+  '推薦批次 ID', '推薦月份', '項目 ID', '類型', '排序', '固定時段鍵', '星期',
+  '時間', '教室', '課程', '老師', '觀測堂數', '未開堂數', '未開率',
+  '最近未開日期', '分數', '理由', '狀態', '建立時間', '更新時間', '操作者',
+];
 
 function createSheetFixture(name, values) {
   const protections = [];
@@ -2110,6 +2123,7 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
       '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
       '課程調整', '通知訊息', '通知收件人'
+      , '課程開課觀測', '優惠課程歷史', '優惠課程推薦'
     ].sort()
   );
   assert.deepEqual(
@@ -8841,4 +8855,146 @@ test('notification inbox returns only the logged-in teacher and supports read co
   assert.equal(fixture.recipientSheet.values[3][3], '已讀');
   assert.equal(fixture.recipientSheet.values[2][3], '未讀');
   assert.equal(fixture.backend.getNotificationInbox_(vivi).unreadCount, 0);
+});
+
+test('monthly discount sheets use independent append-only contracts', () => {
+  const backend = loadBackend();
+  assert.deepEqual(Array.from(backend.SHEET_HEADERS.DISCOUNT_OBSERVATIONS), EXPECTED_DISCOUNT_OBSERVATION_HEADERS);
+  assert.deepEqual(Array.from(backend.SHEET_HEADERS.DISCOUNT_HISTORY), EXPECTED_DISCOUNT_HISTORY_HEADERS);
+  assert.deepEqual(Array.from(backend.SHEET_HEADERS.DISCOUNT_RECOMMENDATIONS), EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS);
+});
+
+test('monthly discount candidates use the two completed months and exclude ineligible courses', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/10/07', '18:30', 'A－空環 Lv.0', 'Carrie🐟', 'oct-1', 'class-1', 'teacher-1', '否', ''],
+    ['2026/10/08', '21:30', 'B－空瑜 Lv.1-2', 'Chin', 'oct-2', 'class-2', 'teacher-2', '否', ''],
+    ['2026/10/11', '13:15', 'C－綢吊 Lv.0-2', '妙妙 簡', 'oct-3', 'class-3', 'teacher-3', '否', ''],
+    ['2026/10/12', '10:30', 'A－空環 Lv.2-3', 'Tako', 'oct-4', 'class-4', 'teacher-4', '否', ''],
+    ['2026/10/13', '10:30', 'A－空環 Lv.0-1〈新老師〉', '老師新', 'excluded-new', '', '', '否', ''],
+    ['2026/10/14', '10:30', 'A－空環技巧期班', '老師期班', 'excluded-term', '', '', '否', ''],
+    ['2026/10/15', '10:30', 'A－場地租借', '老師租借', 'excluded-rental', '', '', '否', ''],
+    ['2026/10/16', '10:30', 'A－舞綢 Lv.1', '老師代課', 'excluded-sub', '', '', '是', ''],
+    ['2026/10/17', '10:30', 'A－舞綢特別課', '老師特別', 'excluded-special', '', '', '否', ''],
+    ['2026/10/18', '10:30', 'A－空瑜 Lv.0〈優惠〉', '老師優惠', 'excluded-discount', '', '', '否', ''],
+  ];
+  const observationRows = [
+    ['obs-1', '', '2026-07', 3, '18:30', '', '空環 Lv.0', 'Carrie', '', 5, 4, '2026/07/29', '歷史匯入', '', ''],
+    ['obs-2', '', '2026-08', 3, '18:30', '', '空環 Lv.0', 'Carrie', '', 4, 3, '2026/08/26', '歷史匯入', '', ''],
+    ['obs-3', '', '2026-07', 4, '21:30', '', '空瑜 Lv.1-2', 'Chin', '', 5, 3, '2026/07/30', '歷史匯入', '', ''],
+    ['obs-4', '', '2026-08', 4, '21:30', '', '空瑜 Lv.1-2', 'Chin', '', 4, 4, '2026/08/27', '歷史匯入', '', ''],
+    ['obs-5', '', '2026-07', 0, '13:15', '', '綢吊 Lv.0-2', '妙妙', '', 4, 2, '2026/07/26', '歷史匯入', '', ''],
+    ['obs-6', '', '2026-08', 0, '13:15', '', '綢吊 Lv.0-2', '妙妙', '', 5, 1, '2026/08/30', '歷史匯入', '', ''],
+    ['obs-old', '', '2026-06', 3, '18:30', '', '空環 Lv.0', 'Carrie', '', 4, 4, '2026/06/24', '歷史匯入', '', ''],
+  ];
+
+  const candidates = backend.buildMonthlyDiscountCandidates_(courseRows, observationRows, [], '2026-10');
+
+  assert.equal(candidates.length, 4);
+  assert.deepEqual(Array.from(candidates, (item) => item.teacherName), ['Chin', 'Carrie🐟', '妙妙 簡', 'Tako']);
+  assert.equal(candidates[0].observedSessions, 9);
+  assert.equal(candidates[0].missedSessions, 7);
+  assert.equal(candidates[0].evaluationMonths.join(','), '2026-07,2026-08');
+  assert.match(candidates[0].reason, /近兩個完整月份/);
+  assert.equal(candidates[3].observedSessions, 0);
+  assert.match(candidates[3].reason, /歷史資料不足/);
+});
+
+test('monthly discount cooldown matches teacher aliases and blocks two complete months', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/10/04', '19:00', 'A－現代小品', '芮錤 77', 'oct-77', '', '', '否', ''],
+    ['2026/10/05', '10:30', 'A－空環 Lv.2-3', 'Tako', 'oct-tako', '', '', '否', ''],
+  ];
+  const historyRows = [
+    ['2026-09', '', 0, '19:00', 'A', '現代小品', '77', '人工歷史', '', '', ''],
+    ['2026-07', '', 1, '10:30', '', '環 2-3', 'Tako', '人工歷史', '', '', ''],
+  ];
+
+  const candidates = backend.buildMonthlyDiscountCandidates_(courseRows, [], historyRows, '2026-10');
+
+  assert.deepEqual(Array.from(candidates, (item) => item.teacherName), ['Tako']);
+});
+
+test('monthly discount selection always keeps three primary recommendations when candidates exist', () => {
+  const backend = loadBackend();
+  const selected = backend.selectMonthlyDiscountRecommendations_([
+    { slotKey: 'a', score: 10 },
+    { slotKey: 'b', score: 9 },
+    { slotKey: 'c', score: 8 },
+    { slotKey: 'd', score: 7 },
+    { slotKey: 'e', score: 6 },
+  ], 3);
+
+  assert.deepEqual(Array.from(selected.primary, (item) => item.slotKey), ['a', 'b', 'c']);
+  assert.deepEqual(Array.from(selected.alternates, (item) => item.slotKey), ['d', 'e']);
+});
+
+test('monthly discount scheduler is due only on day five from 22:00 to 22:04', () => {
+  const backend = loadBackend();
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:00'), '2026-10');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:04'), '2026-10');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:05'), '');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-04', '22:00'), '');
+});
+
+test('monthly discount management actions are exposed through the authenticated API dispatcher', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
+
+  assert.match(source, /getMonthlyDiscountDashboard:\s*function\(\)/);
+  assert.match(source, /replaceMonthlyDiscountRecommendation:\s*function\(\)/);
+  assert.match(source, /confirmMonthlyDiscountRecommendations:\s*function\(\)/);
+  assert.match(source, /generateMonthlyDiscountRecommendations:\s*function\(\)/);
+});
+
+test('monthly discount scheduler runs before manual closure mode can return early', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
+  const start = source.indexOf('function runCourseClosureScheduler()');
+  const end = source.indexOf('\nfunction ', start + 20);
+  const body = source.slice(start, end);
+
+  assert.match(body, /runMonthlyDiscountRecommendationScheduler_/);
+  assert.ok(
+    body.indexOf('runMonthlyDiscountRecommendationScheduler_') < body.indexOf("reason: 'manual'"),
+    '優惠課推薦不能被關課的手動模式提前截斷',
+  );
+});
+
+test('historical monthly discount choices from March through September are retained as seed data', () => {
+  const backend = loadBackend();
+  const rows = backend.getLegacyMonthlyDiscountHistorySeed_();
+
+  assert.equal(rows.length, 21);
+  assert.equal(rows.filter((row) => row[0] === '2026-09').length, 3);
+  assert.ok(rows.some((row) => row[0] === '2026-09' && row[6] === 'Chin'));
+  assert.ok(rows.some((row) => row[0] === '2026-03' && row[6] === '小mo'));
+});
+
+test('daily closure results become one observation per OB calendar item without duplicates', () => {
+  const observationSheet = createSheetFixture('課程開課觀測', [
+    EXPECTED_DISCOUNT_OBSERVATION_HEADERS,
+    ['existing', 'slot', '2026-08', 1, '10:00', 'A', '測試課', '測試老師', '', 1, 0, '', '測試', '', ''],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([
+    observationSheet,
+    createSheetFixture('優惠課程歷史', [EXPECTED_DISCOUNT_HISTORY_HEADERS, ['existing']]),
+    createSheetFixture('優惠課程推薦', [EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS]),
+  ]);
+  const backend = loadBackend();
+  const details = [
+    { calendarId: 'cal-1', courseName: 'A－空環 Lv.0', teacherName: '老師甲', date: '2026/09/07', time: '10:00', isSubstitute: false },
+    { calendarId: 'cal-2', courseName: 'B－空瑜 Lv.1', teacherName: '老師乙', date: '2026/09/07', time: '11:30', isSubstitute: true },
+  ];
+  const results = [{ calendarId: 'cal-1', result: '已取消' }];
+
+  backend.recordMonthlyDiscountClosureObservationsUnlocked_(spreadsheet, '2026/09/07', '23:40', details, results);
+  backend.recordMonthlyDiscountClosureObservationsUnlocked_(spreadsheet, '2026/09/07', '23:40', details, results);
+
+  const cal1 = observationSheet.values.filter((row) => row[0] === 'cal-1');
+  const cal2 = observationSheet.values.filter((row) => row[0] === 'cal-2');
+  assert.equal(cal1.length, 1);
+  assert.equal(cal1[0][9], 1);
+  assert.equal(cal1[0][10], 1);
+  assert.equal(cal2.length, 1);
+  assert.equal(cal2[0][13], '代課');
 });

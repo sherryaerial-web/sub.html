@@ -28,7 +28,10 @@ var SHEETS = {
   PRACTICE_EXCEPTIONS: '自主練習例外',
   PRACTICE_AUDIT: '自主練習操作紀錄',
   NOTIFICATION_MESSAGES: '通知訊息',
-  NOTIFICATION_RECIPIENTS: '通知收件人'
+  NOTIFICATION_RECIPIENTS: '通知收件人',
+  DISCOUNT_OBSERVATIONS: '課程開課觀測',
+  DISCOUNT_HISTORY: '優惠課程歷史',
+  DISCOUNT_RECOMMENDATIONS: '優惠課程推薦'
 };
 
 var SHEET_HEADERS = {
@@ -125,6 +128,19 @@ var SHEET_HEADERS = {
   ],
   NOTIFICATION_RECIPIENTS: [
     '收件紀錄 ID', '訊息 ID', '收件人', '狀態', '已讀時間', '建立時間'
+  ],
+  DISCOUNT_OBSERVATIONS: [
+    '觀測 ID', '固定時段鍵', '月份', '星期', '時間', '教室', '課程', '老師',
+    'OB Calendar ID', '觀測堂數', '未開堂數', '最近未開日期', '來源', '排除原因', '觀測時間'
+  ],
+  DISCOUNT_HISTORY: [
+    '優惠月份', '固定時段鍵', '星期', '時間', '教室', '課程', '老師',
+    '來源', '推薦批次 ID', '確認時間', '確認者'
+  ],
+  DISCOUNT_RECOMMENDATIONS: [
+    '推薦批次 ID', '推薦月份', '項目 ID', '類型', '排序', '固定時段鍵', '星期',
+    '時間', '教室', '課程', '老師', '觀測堂數', '未開堂數', '未開率',
+    '最近未開日期', '分數', '理由', '狀態', '建立時間', '更新時間', '操作者'
   ]
 };
 
@@ -1685,6 +1701,7 @@ function ensureSystemStructure_() {
     ensurePayrollStructureUnlocked_(ss);
     ensurePracticeStructureUnlocked_(ss);
     ensureNotificationInboxStructureUnlocked_(ss);
+    ensureMonthlyDiscountStructureUnlocked_(ss);
     var accountSheet = ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
     protectAccountsSheet_(accountSheet);
 
@@ -3828,6 +3845,18 @@ function doPost(e) {
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
       },
+      getMonthlyDiscountDashboard: function() {
+        return getMonthlyDiscountDashboard_(session);
+      },
+      generateMonthlyDiscountRecommendations: function() {
+        return generateMonthlyDiscountRecommendations_(session);
+      },
+      replaceMonthlyDiscountRecommendation: function() {
+        return replaceMonthlyDiscountRecommendation_(session, parameters.itemId);
+      },
+      confirmMonthlyDiscountRecommendations: function() {
+        return confirmMonthlyDiscountRecommendations_(session, parameters.batchId);
+      },
       getNotificationAdminDashboard: function() {
         return getNotificationAdminDashboard_(session);
       },
@@ -4190,6 +4219,66 @@ function normalizeClosureCalendarDetail_(item) {
     points: points,
     cancelled: item.cancelled === true
   };
+}
+
+function recordMonthlyDiscountClosureObservationsUnlocked_(spreadsheet, targetDate, stage, detailsValue, resultItemsValue) {
+  var details = Array.isArray(detailsValue) ? detailsValue : [];
+  var resultItems = Array.isArray(resultItemsValue) ? resultItemsValue : [];
+  var outcomes = {};
+  var substituteByCalendarId = {};
+  var courseSheet = spreadsheet.getSheetByName(SHEETS.COURSE_LIST);
+  if (courseSheet) {
+    courseSheet.getDataRange().getValues().slice(1).forEach(function(row) {
+      var courseCalendarId = cleanText_(row && row[4]);
+      if (!courseCalendarId) return;
+      substituteByCalendarId[courseCalendarId] = ['是', 'true', '1'].indexOf(
+        cleanText_(row && row[7]).toLowerCase()
+      ) !== -1;
+    });
+  }
+  resultItems.forEach(function(item) {
+    if (item && cleanText_(item.calendarId)) outcomes[cleanText_(item.calendarId)] = item;
+  });
+  ensureMonthlyDiscountStructureUnlocked_(spreadsheet);
+  var sheet = requireSheet_(spreadsheet, SHEETS.DISCOUNT_OBSERVATIONS);
+  var existingRows = sheet.getDataRange().getValues();
+  var rowById = {};
+  existingRows.slice(1).forEach(function(row, index) {
+    var id = cleanText_(row[0]);
+    if (id) rowById[id] = index + 2;
+  });
+  var nowText = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  var month = cleanText_(targetDate).replace(/\//g, '-').slice(0, 7);
+  details.forEach(function(detail) {
+    var calendarId = cleanText_(detail && detail.calendarId);
+    var outcome = outcomes[calendarId];
+    if (!calendarId) return;
+    if (stage === '22:30' && (!outcome || cleanText_(outcome.result) !== '已取消')) return;
+    var courseName = cleanText_(detail.courseName);
+    var descriptor = {
+      weekday: getCourseWeekdayNumber_(targetDate),
+      time: formatMyTime(detail.time),
+      room: getCourseRoom_(courseName),
+      courseName: stripCoursePromotionMarker_(courseName),
+      teacherName: cleanText_(detail.teacherName)
+    };
+    var exclusion = '';
+    if (detail.isSubstitute === true || substituteByCalendarId[calendarId] === true) exclusion = '代課';
+    else if (getCoursePromotionType_(courseName)) exclusion = '優惠或新老師課';
+    else if (isVenueRentalCourseName_(courseName)) exclusion = '場地租借';
+    else if (isTermCourseName_(courseName)) exclusion = '期班';
+    else if (/特別課|自主練習|私人包班/.test(courseName)) exclusion = '非常態課';
+    else if (outcome && ['執行失敗', '待人工確認'].indexOf(cleanText_(outcome.result)) !== -1) exclusion = '關課結果未定';
+    var missed = outcome && cleanText_(outcome.result) === '已取消' ? 1 : 0;
+    var values = [[
+      calendarId, getDiscountSlotKey_(descriptor), month, descriptor.weekday, descriptor.time,
+      descriptor.room, descriptor.courseName, descriptor.teacherName, calendarId, 1, missed,
+      missed ? cleanText_(targetDate) : '', '每日關課結果', exclusion, nowText
+    ]];
+    var rowNumber = rowById[calendarId] || sheet.getLastRow() + 1;
+    sheet.getRange(rowNumber, 1, 1, SHEET_HEADERS.DISCOUNT_OBSERVATIONS.length).setValues(values);
+    rowById[calendarId] = rowNumber;
+  });
 }
 
 function getCourseClosureRule_(detail, stageValue) {
@@ -4592,6 +4681,7 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
         buildCourseClosureSocialCopy_(targetDate, targetDetails)
       );
     }
+    recordMonthlyDiscountClosureObservationsUnlocked_(ss, targetDate, stage, targetDetails, result.items);
     return result;
   });
 }
@@ -4840,18 +4930,20 @@ function runCourseClosureScheduler() {
   var dateKey = Utilities.formatDate(now, getTimeZone_(), 'yyyy-MM-dd');
   var time = Utilities.formatDate(now, getTimeZone_(), 'HH:mm');
   var notificationResult = runScheduledNotifications_(dateKey, time);
+  var monthlyDiscountResult = runMonthlyDiscountRecommendationScheduler_(dateKey, time);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureCourseClosureStructureUnlocked_(ss);
   var settings = getCourseClosureSettingsUnlocked_(
     requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS)
   );
-  if (!settings.automatic) return { skipped: true, reason: 'manual', notifications: notificationResult };
+  if (!settings.automatic) return { skipped: true, reason: 'manual', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult };
   var stage = getCourseClosureDueStage_(time);
-  if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult };
+  if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
   notifyCourseClosureResult_(result);
   result.notifications = notificationResult;
+  result.monthlyDiscount = monthlyDiscountResult;
   return result;
 }
 
@@ -5597,8 +5689,7 @@ function invalidateVvipReadCaches_(month) {
 }
 
 function getNextMonthKey_(now) {
-  var dateText = Utilities.formatDate(now || new Date(), getTimeZone_(), 'yyyy-MM-dd');
-  var parts = dateText.split('-').map(Number);
+  var parts = getCurrentMonthKey_(now).split('-').map(Number);
   var year = parts[0];
   var month = parts[1] + 1;
   if (month === 13) {
@@ -5606,6 +5697,16 @@ function getNextMonthKey_(now) {
     month = 1;
   }
   return year + '-' + ('0' + month).slice(-2);
+}
+
+function getCurrentMonthKey_(now) {
+  var date = now || new Date();
+  var patterns = ['yyyy-MM-dd', 'yyyy-MM-dd HH:mm:ss'];
+  for (var i = 0; i < patterns.length; i += 1) {
+    var formatted = cleanText_(Utilities.formatDate(date, getTimeZone_(), patterns[i]));
+    if (/^\d{4}-\d{2}/.test(formatted)) return formatted.slice(0, 7);
+  }
+  return date.getUTCFullYear() + '-' + ('0' + (date.getUTCMonth() + 1)).slice(-2);
 }
 
 function getTeacherRecordMonthKeys_(recordMonth) {
@@ -8485,6 +8586,493 @@ function isTermCourseName_(courseName) {
   return cleanText_(courseName).indexOf('期班') !== -1;
 }
 
+function shiftMonthKey_(monthValue, offsetValue) {
+  var match = /^(\d{4})-(\d{2})$/.exec(cleanText_(monthValue));
+  if (!match) throw new Error('月份格式不正確。');
+  var shifted = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1 + Number(offsetValue || 0), 1));
+  return shifted.getUTCFullYear() + '-' + String(shifted.getUTCMonth() + 1).padStart(2, '0');
+}
+
+function getMonthDistance_(fromMonthValue, toMonthValue) {
+  var fromMatch = /^(\d{4})-(\d{2})$/.exec(cleanText_(fromMonthValue));
+  var toMatch = /^(\d{4})-(\d{2})$/.exec(cleanText_(toMonthValue));
+  if (!fromMatch || !toMatch) return null;
+  return (Number(toMatch[1]) * 12 + Number(toMatch[2])) -
+    (Number(fromMatch[1]) * 12 + Number(fromMatch[2]));
+}
+
+function normalizeDiscountTeacherKey_(value) {
+  var text = cleanText_(value).toLowerCase().replace(/\s+/g, '');
+  if (!text) return '';
+  if (text === '77' || text.indexOf('芮錤') !== -1 || text.indexOf('芮錶') !== -1) return '77';
+  if (text.indexOf('小mo') !== -1) return '小mo';
+  if (text.indexOf('sherry') !== -1 || text.indexOf('雪莉') !== -1) return '雪莉';
+  if (text.indexOf('妙妙') !== -1) return '妙妙';
+  if (text.indexOf('carrie') !== -1) return 'carrie';
+  if (text.indexOf('vicky') !== -1) return 'vicky';
+  if (text.indexOf('ariel') !== -1) return 'ariel';
+  if (text.indexOf('liz') !== -1) return 'liz';
+  if (text.indexOf('蜜莉') !== -1) return '蜜莉';
+  if (text.indexOf('芊芊') !== -1) return '芊芊';
+  if (text.indexOf('nana') !== -1 || text.indexOf('@n.a') !== -1) return 'nana';
+  if (text === '巧巧' || text === '巧') return '巧';
+  if (text.indexOf('嗨底') !== -1 || text.indexOf('heidi') !== -1) return '嗨底';
+  return text.replace(/[^a-z0-9\u3400-\u9fff]/g, '');
+}
+
+function normalizeDiscountCourseKey_(value) {
+  var text = stripCourseRoom_(value).toLowerCase()
+    .replace(/空中環/g, '空環')
+    .replace(/^環(?=\s*(?:lv\.?\s*)?\d|$)/, '空環')
+    .replace(/lv\.?/g, '')
+    .replace(/[－—–-]/g, '~')
+    .replace(/\s+/g, '');
+  return text.replace(/[^a-z0-9\u3400-\u9fff~]/g, '');
+}
+
+function getMonthlyDiscountEvaluationMonths_(recommendationMonthValue) {
+  var month = cleanText_(recommendationMonthValue);
+  return [shiftMonthKey_(month, -3), shiftMonthKey_(month, -2)];
+}
+
+function getDiscountCourseDescriptor_(row) {
+  var courseName = cleanText_(row && row[2]);
+  return {
+    month: getCourseMonthKey_(row && row[0]),
+    weekday: getCourseWeekdayNumber_(row && row[0]),
+    time: formatMyTime(row && row[1]),
+    room: getCourseRoom_(courseName),
+    courseName: stripCoursePromotionMarker_(courseName),
+    courseKey: normalizeDiscountCourseKey_(courseName),
+    teacherName: cleanText_(row && row[3]),
+    teacherKey: normalizeDiscountTeacherKey_(row && row[3]),
+    calendarId: cleanText_(row && row[4]),
+    isSubstitute: ['是', 'true', '1'].indexOf(cleanText_(row && row[7]).toLowerCase()) !== -1,
+    promotionType: getCoursePromotionType_(courseName)
+  };
+}
+
+function getDiscountSlotKey_(itemValue) {
+  var item = itemValue || {};
+  return [
+    String(item.weekday), cleanText_(item.time), cleanText_(item.room),
+    normalizeDiscountTeacherKey_(item.teacherName || item.teacherKey),
+    normalizeDiscountCourseKey_(item.courseName || item.courseKey)
+  ].join('|');
+}
+
+function discountDescriptorsMatch_(candidateValue, comparisonValue) {
+  var candidate = candidateValue || {};
+  var comparison = comparisonValue || {};
+  if (String(candidate.weekday) !== String(comparison.weekday)) return false;
+  if (cleanText_(candidate.time) !== cleanText_(comparison.time)) return false;
+  if (normalizeDiscountTeacherKey_(candidate.teacherName || candidate.teacherKey) !==
+      normalizeDiscountTeacherKey_(comparison.teacherName || comparison.teacherKey)) return false;
+  var leftCourse = normalizeDiscountCourseKey_(candidate.courseName || candidate.courseKey);
+  var rightCourse = normalizeDiscountCourseKey_(comparison.courseName || comparison.courseKey);
+  if (leftCourse && rightCourse && leftCourse !== rightCourse) return false;
+  var leftRoom = cleanText_(candidate.room);
+  var rightRoom = cleanText_(comparison.room);
+  return !leftRoom || !rightRoom || leftRoom === rightRoom;
+}
+
+function isDiscountRecommendationCourseEligible_(descriptor) {
+  var item = descriptor || {};
+  var courseName = cleanText_(item.courseName);
+  if (!item.month || item.weekday === '' || !item.time || !item.teacherName || !courseName) return false;
+  if (item.isSubstitute || item.promotionType) return false;
+  if (isVenueRentalCourseName_(courseName) || isTermCourseName_(courseName)) return false;
+  if (/特別課|自主練習|私人包班/.test(courseName)) return false;
+  return true;
+}
+
+function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, historyRowsValue, recommendationMonthValue) {
+  var recommendationMonth = cleanText_(recommendationMonthValue);
+  if (!/^\d{4}-\d{2}$/.test(recommendationMonth)) throw new Error('推薦月份格式不正確。');
+  var evaluationMonths = getMonthlyDiscountEvaluationMonths_(recommendationMonth);
+  var evaluationMonthSet = {};
+  evaluationMonths.forEach(function(month) { evaluationMonthSet[month] = true; });
+  var history = (historyRowsValue || []).map(function(row) {
+    return {
+      month: cleanText_(row && row[0]), slotKey: cleanText_(row && row[1]),
+      weekday: row && row[2], time: formatMyTime(row && row[3]), room: cleanText_(row && row[4]),
+      courseName: cleanText_(row && row[5]), teacherName: cleanText_(row && row[6])
+    };
+  });
+  var seen = {};
+  var candidates = [];
+  (courseRowsValue || []).forEach(function(row) {
+    var descriptor = getDiscountCourseDescriptor_(row);
+    if (descriptor.month !== recommendationMonth || !isDiscountRecommendationCourseEligible_(descriptor)) return;
+    descriptor.slotKey = getDiscountSlotKey_(descriptor);
+    if (seen[descriptor.slotKey]) return;
+    seen[descriptor.slotKey] = true;
+    var inCooldown = history.some(function(item) {
+      var distance = getMonthDistance_(item.month, recommendationMonth);
+      if (distance !== 1 && distance !== 2) return false;
+      return (item.slotKey && item.slotKey === descriptor.slotKey) ||
+        discountDescriptorsMatch_(descriptor, item);
+    });
+    if (inCooldown) return;
+
+    var totals = { observed: 0, missed: 0, lastMissDate: '' };
+    (observationRowsValue || []).forEach(function(observationRow) {
+      var observationMonth = cleanText_(observationRow && observationRow[2]);
+      if (!evaluationMonthSet[observationMonth] || cleanText_(observationRow && observationRow[13])) return;
+      var observation = {
+        slotKey: cleanText_(observationRow && observationRow[1]),
+        weekday: observationRow && observationRow[3],
+        time: formatMyTime(observationRow && observationRow[4]),
+        room: cleanText_(observationRow && observationRow[5]),
+        courseName: cleanText_(observationRow && observationRow[6]),
+        teacherName: cleanText_(observationRow && observationRow[7])
+      };
+      if (!((observation.slotKey && observation.slotKey === descriptor.slotKey) ||
+            discountDescriptorsMatch_(descriptor, observation))) return;
+      var observed = Math.max(0, Number(observationRow[9]) || 0);
+      var missed = Math.max(0, Number(observationRow[10]) || 0);
+      totals.observed += observed;
+      totals.missed += Math.min(observed || missed, missed);
+      var missedDate = cleanText_(observationRow[11]);
+      if (missedDate && missedDate > totals.lastMissDate) totals.lastMissDate = missedDate;
+    });
+    var missRate = totals.observed ? totals.missed / totals.observed : 0;
+    var recencyScore = Number((totals.lastMissDate || '').replace(/\D/g, '').slice(-8)) || 0;
+    var score = Math.round(missRate * 1000000) + totals.missed * 10000 + recencyScore;
+    candidates.push({
+      slotKey: descriptor.slotKey,
+      weekday: descriptor.weekday,
+      time: descriptor.time,
+      room: descriptor.room,
+      courseName: descriptor.courseName,
+      teacherName: descriptor.teacherName,
+      calendarId: descriptor.calendarId,
+      observedSessions: totals.observed,
+      missedSessions: totals.missed,
+      missRate: missRate,
+      lastMissDate: totals.lastMissDate,
+      score: score,
+      evaluationMonths: evaluationMonths.slice(),
+      reason: totals.observed
+        ? '近兩個完整月份未開 ' + totals.missed + '/' + totals.observed + ' 堂（' +
+          Math.round(missRate * 100) + '%）' + (totals.lastMissDate ? '；最近未開：' + totals.lastMissDate : '')
+        : '歷史資料不足，依候選排序補足'
+    });
+  });
+  return candidates.sort(function(left, right) {
+    if (right.score !== left.score) return right.score - left.score;
+    return left.slotKey.localeCompare(right.slotKey);
+  });
+}
+
+function selectMonthlyDiscountRecommendations_(candidatesValue, countValue) {
+  var required = Math.max(1, Number(countValue) || 3);
+  var candidates = (candidatesValue || []).slice();
+  if (candidates.length < required) {
+    throw new Error('下個月符合條件的常態課不足 ' + required + ' 堂，無法建立完整推薦。');
+  }
+  return {
+    primary: candidates.slice(0, required),
+    alternates: candidates.slice(required)
+  };
+}
+
+function getMonthlyDiscountDueMonth_(dateKeyValue, timeValue) {
+  var dateKey = cleanText_(dateKeyValue);
+  var time = cleanText_(timeValue);
+  var match = /^(\d{4})-(\d{2})-05$/.exec(dateKey);
+  if (!match || !/^22:0[0-4]$/.test(time)) return '';
+  return shiftMonthKey_(match[1] + '-' + match[2], 1);
+}
+
+function getLegacyMonthlyDiscountHistorySeed_() {
+  return [
+    ['2026-03', '', 2, '10:30', 'C', '空環 Lv.0-1', '壹壹'],
+    ['2026-03', '', 6, '16:30', 'B', '空環 Lv.0', 'Liz'],
+    ['2026-03', '', 0, '13:30', 'D', '空環 Lv.0-1', '小mo'],
+    ['2026-04', '', 1, '21:30', 'A', '空瑜 Lv.0', 'Chin'],
+    ['2026-04', '', 2, '15:30', 'C', '舞綢 Lv.1-2', 'Vivi'],
+    ['2026-04', '', 2, '21:00', 'D', '空瑜 Lv.1-2', '姝姝'],
+    ['2026-05', '', 2, '21:00', 'D', '空瑜 Lv.1-2', '姝姝'],
+    ['2026-05', '', 0, '11:00', 'C', '空環 Lv.0', '蜜莉'],
+    ['2026-05', '', 0, '19:00', 'A', '現代小品', '77'],
+    ['2026-06', '', 3, '13:30', 'C', '空瑜 Lv.0-1', '壹壹'],
+    ['2026-06', '', 4, '13:45', 'B', '舞綢 Lv.1-2', 'Vivi'],
+    ['2026-06', '', 5, '14:30', 'D', '現代小品', '77'],
+    ['2026-07', '', 1, '10:30', '', '空環 Lv.2-3', 'Tako'],
+    ['2026-07', '', 6, '15:30', '', '舞綢 Lv.3-5', '雪莉'],
+    ['2026-07', '', 6, '18:30', '', '空環 Lv.0', '寧寧'],
+    ['2026-08', '', 1, '12:30', 'A', '空瑜 Lv.0', '妙妙'],
+    ['2026-08', '', 6, '17:00', 'D', '空環 Lv.1-2', '寧寧'],
+    ['2026-08', '', 0, '19:00', 'B', '舞綢 Lv.1-2', '小mo'],
+    ['2026-09', '', 3, '18:30', '', '空環 Lv.0', 'Carrie'],
+    ['2026-09', '', 4, '21:30', '', '空瑜 Lv.1-2', 'Chin'],
+    ['2026-09', '', 0, '13:15', '', '綢吊 Lv.0-2', '妙妙']
+  ].map(function(row) {
+    var descriptor = {
+      weekday: row[2], time: row[3], room: row[4], courseName: row[5], teacherName: row[6]
+    };
+    row[1] = getDiscountSlotKey_(descriptor);
+    return row.concat(['歷史人工整理', '', '', '']);
+  });
+}
+
+function getLegacyMonthlyDiscountObservationSeed_() {
+  var source = [
+    '2026-07|1|10:30|巧巧|環1-2|4|2','2026-07|1|11:00|小美|綢吊|4|3','2026-07|1|21:30|Chin|空瑜0|4|4',
+    '2026-07|2|10:00|Wen|環0|4|4','2026-07|2|10:30|壹壹|環0-1|4|4','2026-07|2|12:30|芊芊|舞綢2|4|2','2026-07|2|14:30|珍珍|空瑜0-2|4|2','2026-07|2|15:30|Vivi|舞綢1-2|4|4','2026-07|2|18:30|珍珍|空瑜0-2|4|2','2026-07|2|21:00|姝姝|空瑜1-2|4|4',
+    '2026-07|3|10:30|Tako|環1-2|5|3','2026-07|3|12:30|芊芊|舞綢1-2|5|2','2026-07|3|13:30|壹壹|空瑜0-1|5|5','2026-07|3|14:30|Jina|後彎基本|5|3','2026-07|3|18:30|Carrie|環0|5|4','2026-07|3|19:10|嗨底|環1|5|2','2026-07|3|21:30|Chin|空瑜0|5|5',
+    '2026-07|4|11:00|珍珍|空瑜0-2|5|3','2026-07|4|12:15|Vivi|空瑜0-2|5|3','2026-07|4|12:15|Ariel|皮拉提斯|5|4','2026-07|4|13:45|Vivi|舞綢1-2|5|2','2026-07|4|15:15|Vivi|空瑜0-2|5|2','2026-07|4|15:30|芊芊|環1-2|5|4','2026-07|4|17:30|芮錶|現代小品|5|3','2026-07|4|21:15|妙妙|空瑜0|5|3','2026-07|4|21:30|Chin|空瑜1-2|5|5','2026-07|4|21:30|Wen|環0|5|4',
+    '2026-07|5|11:00|芮錶|環0|5|2','2026-07|5|12:30|Ariel|皮拉提斯|5|4','2026-07|5|12:30|Tako|環1|5|2','2026-07|5|14:00|Nana|舞綢2-3|5|4','2026-07|5|14:15|小Mo|環1-2|5|2','2026-07|5|14:30|芮錶|現代小品|5|4','2026-07|5|17:15|小美|舞綢2-4|5|2','2026-07|5|20:00|Tako|環1|5|2',
+    '2026-07|6|12:00|Ariel|空瑜2-4|4|2','2026-07|6|14:30|萱|舞綢1|4|2','2026-07|6|17:00|寧寧|環1-2|4|2','2026-07|6|18:30|寧寧|環0|4|2','2026-07|6|18:30|萱|空瑜2-4|4|2','2026-07|6|19:45|Wen|環0|4|2',
+    '2026-07|0|11:00|蜜莉|環0|4|2','2026-07|0|11:30|Chloe|空瑜3-4|4|2','2026-07|0|11:30|小Mo|環0-1|4|4','2026-07|0|12:10|蜜莉|環1-2|4|2','2026-07|0|13:15|妙妙|綢吊|4|4','2026-07|0|13:30|小Mo|環0-1|4|3','2026-07|0|15:00|Vivi|舞綢2|4|3','2026-07|0|15:00|小Mo|舞綢1-2|4|4','2026-07|0|19:00|小Mo|舞綢1-2|4|2','2026-07|0|19:00|芮錶|現代小品|4|2',
+    '2026-08|1|10:30|Tako|環2-3|5|3','2026-08|1|10:45|Melody|皮拉提斯|5|5','2026-08|1|11:00|小美|綢吊|5|3','2026-08|1|12:00|巧巧|環2-3|5|3','2026-08|1|12:00|番茄|柔軟度開發|5|5','2026-08|1|12:30|妙妙|空瑜0|5|3','2026-08|1|13:15|番茄|環0|5|4','2026-08|1|14:00|壹壹|環1-2|5|4','2026-08|1|21:30|Chin|空瑜0|5|4',
+    '2026-08|2|10:00|Wen|環0|4|2','2026-08|2|10:30|壹壹|環0-1|4|4','2026-08|2|14:30|珍珍|空瑜0-2|4|3','2026-08|2|15:30|Vivi|舞綢1-2|4|2','2026-08|2|21:00|姝姝|空瑜1-2|4|3',
+    '2026-08|3|10:30|Melody|空瑜0-2|4|4','2026-08|3|11:30|雪莉|舞綢1|4|2','2026-08|3|11:45|Melody|皮拉提斯|4|4','2026-08|3|13:30|壹壹|空瑜0-1|4|3','2026-08|3|14:30|Jina|後彎基本|4|2','2026-08|3|19:10|嗨底|環1|4|3','2026-08|3|21:30|Chin|空瑜0|4|4',
+    '2026-08|4|10:00|Xuan|環3-4|4|2','2026-08|4|11:00|珍珍|空瑜0-2|4|3','2026-08|4|12:15|Vivi|空瑜0-2|4|3','2026-08|4|12:15|Ariel|皮拉提斯|4|4','2026-08|4|12:30|Tako|環2-3|4|2','2026-08|4|13:45|Vivi|舞綢1-2|4|2','2026-08|4|15:15|Vivi|空瑜0-2|4|3','2026-08|4|17:30|芮錶|現代小品|4|3','2026-08|4|18:45|Ariel|舞綢1|4|2','2026-08|4|21:15|妙妙|空瑜0|4|2','2026-08|4|21:30|Chin|空瑜1-2|4|4',
+    '2026-08|5|11:00|芮錶|環0|4|2','2026-08|5|12:30|Ariel|皮拉提斯|4|4','2026-08|5|12:30|Tako|環1|4|2','2026-08|5|14:00|Nana|舞綢2-3|4|3','2026-08|5|14:30|芮錶|現代小品|4|4','2026-08|5|17:15|小美|舞綢2-4|4|3','2026-08|5|20:00|Tako|環1|4|4',
+    '2026-08|6|12:30|雪莉|舞綢2|5|2','2026-08|6|14:30|萱|舞綢1|5|2','2026-08|6|15:30|雪莉|舞綢3-5|5|4','2026-08|6|15:45|萱|空瑜0|5|5','2026-08|6|17:00|寧寧|環1-2|5|3','2026-08|6|18:15|Lily|舞綢3-5|5|2','2026-08|6|18:30|寧寧|環0|5|4','2026-08|6|18:30|萱|空瑜2-4|5|5',
+    '2026-08|0|11:00|蜜莉|環0|5|4','2026-08|0|12:10|蜜莉|環1-2|5|3','2026-08|0|12:45|Chloe|空瑜1-2|5|2','2026-08|0|13:30|小Mo|環0-1|5|4','2026-08|0|15:00|小Mo|舞綢1-2|5|4','2026-08|0|17:00|小Mo|空瑜1-2|5|3','2026-08|0|19:00|小Mo|舞綢1-2|5|4','2026-08|0|19:00|芮錶|現代小品|5|4','2026-08|0|20:15|Wen|環0|5|3'
+  ];
+  return source.map(function(line, index) {
+    var parts = line.split('|');
+    var descriptor = {
+      weekday: Number(parts[1]), time: parts[2], room: '', courseName: parts[4], teacherName: parts[3]
+    };
+    return [
+      'legacy-2026-' + String(index + 1).padStart(3, '0'), getDiscountSlotKey_(descriptor),
+      parts[0], Number(parts[1]), parts[2], '', parts[4], parts[3], '',
+      Number(parts[5]), Number(parts[6]), '', '2026課程產出概況', '', '2026-09-05 22:00:00'
+    ];
+  });
+}
+
+function ensureMonthlyDiscountStructureUnlocked_(spreadsheet) {
+  var observationSheet = ensureSupportingSheet_(spreadsheet, SHEETS.DISCOUNT_OBSERVATIONS, SHEET_HEADERS.DISCOUNT_OBSERVATIONS);
+  var historySheet = ensureSupportingSheet_(spreadsheet, SHEETS.DISCOUNT_HISTORY, SHEET_HEADERS.DISCOUNT_HISTORY);
+  var recommendationSheet = ensureSupportingSheet_(spreadsheet, SHEETS.DISCOUNT_RECOMMENDATIONS, SHEET_HEADERS.DISCOUNT_RECOMMENDATIONS);
+  if (observationSheet.getLastRow() === 1) {
+    var observations = getLegacyMonthlyDiscountObservationSeed_();
+    if (observations.length) observationSheet.getRange(2, 1, observations.length, SHEET_HEADERS.DISCOUNT_OBSERVATIONS.length).setValues(observations);
+  }
+  if (historySheet.getLastRow() === 1) {
+    var history = getLegacyMonthlyDiscountHistorySeed_();
+    if (history.length) historySheet.getRange(2, 1, history.length, SHEET_HEADERS.DISCOUNT_HISTORY.length).setValues(history);
+  }
+  return {
+    observations: observationSheet.getName(),
+    history: historySheet.getName(),
+    recommendations: recommendationSheet.getName()
+  };
+}
+
+function toMonthlyDiscountRecommendationItem_(row, rowNumber) {
+  return {
+    rowNumber: rowNumber,
+    batchId: cleanText_(row && row[0]),
+    month: cleanText_(row && row[1]),
+    itemId: cleanText_(row && row[2]),
+    type: cleanText_(row && row[3]),
+    rank: Number(row && row[4]) || 0,
+    slotKey: cleanText_(row && row[5]),
+    weekday: Number(row && row[6]),
+    time: formatMyTime(row && row[7]),
+    room: cleanText_(row && row[8]),
+    courseName: cleanText_(row && row[9]),
+    teacherName: cleanText_(row && row[10]),
+    observedSessions: Number(row && row[11]) || 0,
+    missedSessions: Number(row && row[12]) || 0,
+    missRate: Number(row && row[13]) || 0,
+    lastMissDate: cleanText_(row && row[14]),
+    score: Number(row && row[15]) || 0,
+    reason: cleanText_(row && row[16]),
+    status: cleanText_(row && row[17]),
+    createdAt: cleanText_(row && row[18]),
+    updatedAt: cleanText_(row && row[19]),
+    actor: cleanText_(row && row[20])
+  };
+}
+
+function getMonthlyDiscountDashboardUnlocked_(spreadsheet) {
+  var recommendationSheet = spreadsheet.getSheetByName(SHEETS.DISCOUNT_RECOMMENDATIONS);
+  var historySheet = spreadsheet.getSheetByName(SHEETS.DISCOUNT_HISTORY);
+  if (!recommendationSheet || !historySheet) {
+    return {
+      available: false, month: getNextMonthKey_(new Date(currentTimeMs_())),
+      batchId: '', status: '', pendingCount: 0, recommendations: [], alternates: [], history: []
+    };
+  }
+  assertHeaders_(recommendationSheet, SHEET_HEADERS.DISCOUNT_RECOMMENDATIONS);
+  assertHeaders_(historySheet, SHEET_HEADERS.DISCOUNT_HISTORY);
+  var all = recommendationSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    return toMonthlyDiscountRecommendationItem_(row, index + 2);
+  }).filter(function(item) {
+    return item.batchId && item.status !== '已重算';
+  });
+  var latest = all.slice().sort(function(left, right) {
+    return right.createdAt.localeCompare(left.createdAt) || right.batchId.localeCompare(left.batchId);
+  })[0] || null;
+  var batchRows = latest ? all.filter(function(item) { return item.batchId === latest.batchId; }) : [];
+  var recommendations = batchRows.filter(function(item) { return item.type === '推薦'; })
+    .sort(function(left, right) { return left.rank - right.rank; });
+  var alternates = batchRows.filter(function(item) { return item.type === '候補'; })
+    .sort(function(left, right) { return left.rank - right.rank; });
+  var history = historySheet.getDataRange().getValues().slice(1).map(function(row) {
+    return {
+      month: cleanText_(row[0]), weekday: Number(row[2]), time: formatMyTime(row[3]),
+      room: cleanText_(row[4]), courseName: cleanText_(row[5]), teacherName: cleanText_(row[6]),
+      source: cleanText_(row[7]), confirmedAt: cleanText_(row[9]), confirmedBy: cleanText_(row[10])
+    };
+  }).sort(function(left, right) {
+    return right.month.localeCompare(left.month) || left.weekday - right.weekday || left.time.localeCompare(right.time);
+  }).slice(0, 36);
+  var pendingCount = recommendations.filter(function(item) { return item.status === '待確認'; }).length;
+  return {
+    available: true,
+    month: latest ? latest.month : getNextMonthKey_(new Date(currentTimeMs_())),
+    batchId: latest ? latest.batchId : '',
+    status: pendingCount ? '待確認' : (latest ? latest.status : ''),
+    pendingCount: pendingCount,
+    recommendations: recommendations,
+    alternates: alternates,
+    history: history
+  };
+}
+
+function getMonthlyDiscountDashboard_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  return getMonthlyDiscountDashboardUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+}
+
+function appendMonthlyDiscountBatchUnlocked_(sheet, month, actor, selection) {
+  var batchId = Utilities.getUuid();
+  var nowText = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  var rows = [];
+  function append(items, type) {
+    (items || []).forEach(function(item, index) {
+      rows.push([
+        batchId, month, Utilities.getUuid(), type, index + 1, item.slotKey, item.weekday,
+        item.time, item.room, item.courseName, item.teacherName, item.observedSessions,
+        item.missedSessions, item.missRate, item.lastMissDate, item.score, item.reason,
+        '待確認', nowText, nowText, actor
+      ]);
+    });
+  }
+  append(selection.primary, '推薦');
+  append(selection.alternates, '候補');
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, SHEET_HEADERS.DISCOUNT_RECOMMENDATIONS.length).setValues(rows);
+  return { batchId: batchId, createdAt: nowText };
+}
+
+function generateMonthlyDiscountRecommendationsCore_(actorValue, monthValue, forceValue) {
+  var actor = cleanText_(actorValue) || '系統每月推薦';
+  var month = cleanText_(monthValue);
+  if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('推薦月份格式不正確。');
+  var created = false;
+  var dashboard = withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureMonthlyDiscountStructureUnlocked_(ss);
+    var recommendationSheet = requireSheet_(ss, SHEETS.DISCOUNT_RECOMMENDATIONS);
+    var current = getMonthlyDiscountDashboardUnlocked_(ss);
+    if (current.batchId && current.month === month && !forceValue) return current;
+    if (current.batchId && current.month === month && current.status === '已確認') {
+      throw new Error('這個月份的優惠課已確認，不會自動覆蓋。');
+    }
+    if (current.batchId && current.month === month) {
+      current.recommendations.concat(current.alternates).forEach(function(item) {
+        recommendationSheet.getRange(item.rowNumber, 18, 1, 4).setValues([[
+          '已重算', item.createdAt,
+          Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss'), actor
+        ]]);
+      });
+    }
+    var courseRows = requireSheet_(ss, SHEETS.COURSE_LIST).getDataRange().getValues().slice(1);
+    var observationRows = requireSheet_(ss, SHEETS.DISCOUNT_OBSERVATIONS).getDataRange().getValues().slice(1);
+    var historyRows = requireSheet_(ss, SHEETS.DISCOUNT_HISTORY).getDataRange().getValues().slice(1);
+    var candidates = buildMonthlyDiscountCandidates_(courseRows, observationRows, historyRows, month);
+    var selection = selectMonthlyDiscountRecommendations_(candidates, 3);
+    appendMonthlyDiscountBatchUnlocked_(recommendationSheet, month, actor, selection);
+    created = true;
+    return getMonthlyDiscountDashboardUnlocked_(ss);
+  });
+  if (created) {
+    sendPushAfterMutationSafely_(getActiveCourseAdminNames_(), {
+      heading: dashboard.month + ' 優惠課待確認',
+      content: '系統已選出 3 堂點數優惠課，請到管理平台確認。',
+      url: buildAppViewUrl_('admin', 'closureManagement')
+    });
+  }
+  dashboard.created = created;
+  return dashboard;
+}
+
+function generateMonthlyDiscountRecommendations_(session) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  return generateMonthlyDiscountRecommendationsCore_(actor, getNextMonthKey_(new Date(currentTimeMs_())), true);
+}
+
+function replaceMonthlyDiscountRecommendation_(session, itemIdValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var itemId = cleanText_(itemIdValue);
+  if (!itemId) throw new Error('找不到要替換的推薦。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var dashboard = getMonthlyDiscountDashboardUnlocked_(ss);
+    if (dashboard.status !== '待確認') throw new Error('目前沒有待確認的優惠課推薦。');
+    var outgoing = dashboard.recommendations.filter(function(item) { return item.itemId === itemId; })[0];
+    var incoming = dashboard.alternates[0];
+    if (!outgoing || !incoming) throw new Error('目前沒有可替換的候補課程。');
+    var sheet = requireSheet_(ss, SHEETS.DISCOUNT_RECOMMENDATIONS);
+    var nowText = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    sheet.getRange(outgoing.rowNumber, 4, 1, 18).setValues([[
+      '候補', dashboard.alternates.length, outgoing.slotKey, outgoing.weekday, outgoing.time, outgoing.room,
+      outgoing.courseName, outgoing.teacherName, outgoing.observedSessions, outgoing.missedSessions,
+      outgoing.missRate, outgoing.lastMissDate, outgoing.score, outgoing.reason, '待確認',
+      outgoing.createdAt, nowText, actor
+    ]]);
+    sheet.getRange(incoming.rowNumber, 4, 1, 18).setValues([[
+      '推薦', outgoing.rank, incoming.slotKey, incoming.weekday, incoming.time, incoming.room,
+      incoming.courseName, incoming.teacherName, incoming.observedSessions, incoming.missedSessions,
+      incoming.missRate, incoming.lastMissDate, incoming.score, incoming.reason, '待確認',
+      incoming.createdAt, nowText, actor
+    ]]);
+    return getMonthlyDiscountDashboardUnlocked_(ss);
+  });
+}
+
+function confirmMonthlyDiscountRecommendations_(session, batchIdValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var batchId = cleanText_(batchIdValue);
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var dashboard = getMonthlyDiscountDashboardUnlocked_(ss);
+    if (!batchId || dashboard.batchId !== batchId || dashboard.status !== '待確認') {
+      throw new Error('這批優惠課已更新，請重新整理後再確認。');
+    }
+    if (dashboard.recommendations.length !== 3) throw new Error('優惠課必須剛好 3 堂。');
+    var recommendationSheet = requireSheet_(ss, SHEETS.DISCOUNT_RECOMMENDATIONS);
+    var historySheet = requireSheet_(ss, SHEETS.DISCOUNT_HISTORY);
+    var nowText = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    dashboard.recommendations.concat(dashboard.alternates).forEach(function(item) {
+      recommendationSheet.getRange(item.rowNumber, 18, 1, 4).setValues([[
+        '已確認', item.createdAt, nowText, actor
+      ]]);
+    });
+    var historyRows = dashboard.recommendations.map(function(item) {
+      return [dashboard.month, item.slotKey, item.weekday, item.time, item.room, item.courseName,
+        item.teacherName, '每月系統推薦', dashboard.batchId, nowText, actor];
+    });
+    historySheet.getRange(historySheet.getLastRow() + 1, 1, historyRows.length, SHEET_HEADERS.DISCOUNT_HISTORY.length).setValues(historyRows);
+    return getMonthlyDiscountDashboardUnlocked_(ss);
+  });
+}
+
+function runMonthlyDiscountRecommendationScheduler_(dateKey, time) {
+  var month = getMonthlyDiscountDueMonth_(dateKey, time);
+  if (!month) return { skipped: true, reason: 'outside-window' };
+  return generateMonthlyDiscountRecommendationsCore_('系統每月推薦', month, false);
+}
+
 function buildRecurringClaimCourseOptions_(courseRows, capabilities) {
   var allowed = {};
   (capabilities || []).forEach(function(category) {
@@ -11205,6 +11793,7 @@ function getAdminDashboard_(session) {
         return item.verificationStatus === '已核對';
       })),
       courseClosure: getCourseClosureDashboard_(session),
+      monthlyDiscount: getMonthlyDiscountDashboardUnlocked_(ss),
       courseAdjustments: getPendingCourseAdjustments_(session),
       replacementOptions: replacementOptions
     };

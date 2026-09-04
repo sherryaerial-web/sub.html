@@ -5488,6 +5488,7 @@
       const course = adminDashboard || {};
       if (authState.managementCapabilities.includes("course_admin")) {
         [
+          ["優惠課待確認", Number(course.monthlyDiscount && course.monthlyDiscount.pendingCount) || 0, "closureManagement"],
           ["調課待確認", (course.courseAdjustments || []).length, "courseAdjustments"],
           ["待處理 OB", (course.obWork || []).length, "obWork"],
           ["待處理異動", (course.changeRequests || []).length, "changeRequests"],
@@ -5585,6 +5586,7 @@
           ${items.map((item) => `<article class="list-item single-column"><label class="ob-cancellation-row"><input class="ob-cancellation-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}"><span><span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.originalCourse)}</span><span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.replacementCalendarId || item.originalCalendarId || "—")}</span></span></label></article>`).join("") || '<div class="state">目前沒有已從 OB 取消、等待關閉的代課課程</div>'}`;
       } else if (activeAdminTab === "closureManagement") {
         const closure = data.courseClosure || {};
+        const monthlyDiscount = data.monthlyDiscount || {};
         const socialCopy = closure.socialCopy && closure.socialCopy.content ? closure.socialCopy : null;
         const candidates = Array.isArray(closure.unclaimedCandidates) ? closure.unclaimedCandidates : [];
         const recentLogs = Array.isArray(closure.recentLogs) ? closure.recentLogs : [];
@@ -5608,7 +5610,30 @@
               <div class="item-meta">${escapeHtml(item.teacherName || "未取得老師")}｜${item.enrollmentCount == null ? "人數未取得" : `${escapeHtml(item.enrollmentCount)} 人`}｜${escapeHtml(item.ruleLabel || "未套用規則")}｜${escapeHtml(item.result || "未記錄結果")}｜執行：${escapeHtml(item.actor || "未記錄")}${item.error ? `｜${escapeHtml(item.error)}` : ""}</div>
             </div>
           </article>`).join("");
+        const weekdayLabels = ["日", "一", "二", "三", "四", "五", "六"];
+        const discountRows = (monthlyDiscount.recommendations || []).map((item) => `
+          <article class="list-item single-column">
+            <div>
+              <div class="item-course">週${escapeHtml(weekdayLabels[Number(item.weekday)] || "—")} ${escapeHtml(item.time)}${item.room ? `｜${escapeHtml(item.room)} 教室` : ""}｜${escapeHtml(item.teacherName)} ${escapeHtml(item.courseName)}</div>
+              <div class="item-meta">${escapeHtml(item.reason || "依近期開課紀錄排序")}</div>
+              ${monthlyDiscount.status === "待確認" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="replace-monthly-discount" data-item-id="${escapeHtml(item.itemId)}" ${(monthlyDiscount.alternates || []).length ? "" : "disabled"}><i data-lucide="refresh-cw"></i>換一堂</button></div>` : ""}
+            </div>
+          </article>`).join("");
+        const discountHistory = (monthlyDiscount.history || []).slice(0, 18).map((item) => `
+          <div class="item-meta">${escapeHtml(item.month)}｜週${escapeHtml(weekdayLabels[Number(item.weekday)] || "—")} ${escapeHtml(item.time)}${item.room ? ` ${escapeHtml(item.room)} 教室` : ""}｜${escapeHtml(item.teacherName)} ${escapeHtml(item.courseName)}</div>`).join("");
+        const monthlyDiscountPanel = `
+          <div class="admin-control">
+            <strong>${escapeHtml(monthlyDiscount.month || "下個月")} 點數優惠課推薦${monthlyDiscount.status ? `｜${escapeHtml(monthlyDiscount.status)}` : ""}</strong>
+            <div class="item-meta">每月 5 日 22:00 依前兩個完整月的未開課狀況選出 3 堂；代課、特別課、期班、場租、自主練習與近兩月已優惠課程不列入。</div>
+            <div class="admin-item-actions">
+              ${monthlyDiscount.status === "待確認" ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-monthly-discount" data-batch-id="${escapeHtml(monthlyDiscount.batchId || "")}"><i data-lucide="badge-check"></i>確認這 3 堂</button>` : ""}
+              ${!monthlyDiscount.batchId ? `<button class="compact-button" type="button" data-admin-action="generate-monthly-discount"><i data-lucide="sparkles"></i>產生下月推薦</button>` : ""}
+            </div>
+          </div>
+          ${discountRows || '<div class="state">目前尚未產生下月優惠課推薦</div>'}
+          ${discountHistory ? `<details class="admin-control"><summary><strong>過去優惠課紀錄</strong></summary><div style="margin-top:10px">${discountHistory}</div></details>` : ""}`;
         content.innerHTML = `
+          ${monthlyDiscountPanel}
           ${socialCopy ? `<div class="admin-control">
             <strong>22:30 社群提醒文字</strong>
             <div class="item-meta">已依 23:40 最低人數整理「各缺一」課程，可直接修改後複製到社群。更新：${escapeHtml(socialCopy.updatedAt || "—")}</div>
@@ -6078,6 +6103,41 @@
       setNotice("社群提醒文字已複製。");
     }
 
+    async function generateMonthlyDiscountRecommendations(button) {
+      if (!window.confirm("確定依目前課表與歷史開課資料產生下個月 3 堂優惠課建議？")) return;
+      setButtonBusy(button, true, "計算中...");
+      try {
+        await callPostApi("generateMonthlyDiscountRecommendations");
+        setNotice("已產生 3 堂優惠課建議。");
+        await fetchAdminDashboard(true);
+      } finally {
+        if (button.isConnected) setButtonBusy(button, false, "");
+      }
+    }
+
+    async function replaceMonthlyDiscountRecommendation(button) {
+      setButtonBusy(button, true, "替換中...");
+      try {
+        await callPostApi("replaceMonthlyDiscountRecommendation", { itemId: button.dataset.itemId });
+        setNotice("已換成下一堂候補課程。");
+        await fetchAdminDashboard(true);
+      } finally {
+        if (button.isConnected) setButtonBusy(button, false, "");
+      }
+    }
+
+    async function confirmMonthlyDiscountRecommendations(button) {
+      if (!window.confirm("確定將這 3 堂記錄為下個月點數優惠課？這裡不會自動修改 OB。")) return;
+      setButtonBusy(button, true, "確認中...");
+      try {
+        await callPostApi("confirmMonthlyDiscountRecommendations", { batchId: button.dataset.batchId });
+        setNotice("已確認下個月 3 堂點數優惠課；OB 仍需人工設定。");
+        await fetchAdminDashboard(true);
+      } finally {
+        if (button.isConnected) setButtonBusy(button, false, "");
+      }
+    }
+
     function selectAllUnclaimedSubstitutes() {
       const checkboxes = [...document.querySelectorAll(".unclaimed-substitute-checkbox")];
       const shouldCheck = checkboxes.some((input) => !input.checked);
@@ -6513,6 +6573,18 @@ https://sherryaerial-web.github.io/sub.html/
         }
         if (action === "copy-closure-social") {
           await copyCourseClosureSocialCopy();
+          return;
+        }
+        if (action === "generate-monthly-discount") {
+          await generateMonthlyDiscountRecommendations(button);
+          return;
+        }
+        if (action === "replace-monthly-discount") {
+          await replaceMonthlyDiscountRecommendation(button);
+          return;
+        }
+        if (action === "confirm-monthly-discount") {
+          await confirmMonthlyDiscountRecommendations(button);
           return;
         }
         if (action === "confirm-course-adjustment") {

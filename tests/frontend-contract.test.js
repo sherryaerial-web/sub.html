@@ -2906,6 +2906,46 @@ test('closure manager renders an editable one-short community message with one-t
   assert.match(getElement('admin-tab-content').innerHTML, /data-admin-action="copy-closure-social"/);
 });
 
+test('closure manager shows three monthly discount recommendations with replace and confirm actions', () => {
+  const dashboard = {
+    teachers: [], pendingInvitations: [], activeInvitees: [], missingObCancellations: [],
+    obWork: [], delayClosures: [], changeRequests: [], exceptions: [], completed: [],
+    courseClosure: { unclaimedCandidates: [], recentLogs: [], manualStageAvailability: {} },
+    monthlyDiscount: {
+      available: true, month: '2026-10', batchId: 'batch-1', status: '待確認', pendingCount: 3,
+      recommendations: [
+        { itemId: 'item-1', weekday: 1, time: '10:30', room: 'A', courseName: '空環 Lv.0', teacherName: '老師甲', reason: '近兩月未開 7/9 堂' },
+        { itemId: 'item-2', weekday: 2, time: '12:30', room: 'B', courseName: '空瑜 Lv.0', teacherName: '老師乙', reason: '近兩月未開 6/8 堂' },
+        { itemId: 'item-3', weekday: 3, time: '18:30', room: 'C', courseName: '舞綢 Lv.1', teacherName: '老師丙', reason: '近兩月未開 5/9 堂' },
+      ],
+      alternates: [{ itemId: 'alt-1' }], history: [],
+    },
+  };
+  const { context, getElement } = createFrontendRuntime();
+  context.__dashboard = dashboard;
+  vm.runInContext('activeAdminTab = "closureManagement"; adminDashboard = __dashboard; renderAdminTab();', context);
+  const output = getElement('admin-tab-content').innerHTML;
+
+  assert.match(output, /2026-10 點數優惠課推薦/);
+  assert.equal((output.match(/data-admin-action="replace-monthly-discount"/g) || []).length, 3);
+  assert.match(output, /data-admin-action="confirm-monthly-discount"/);
+  assert.match(output, /老師甲/);
+});
+
+test('admin reminders include pending monthly discount confirmation', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  assert.match(source, /優惠課待確認/);
+  assert.match(source, /monthlyDiscount\.pendingCount/);
+  assert.match(source, /\["優惠課待確認"[\s\S]*"closureManagement"\]/);
+});
+
+test('monthly discount actions call the backend and refresh the admin dashboard', () => {
+  assert.match(html, /callPostApi\("replaceMonthlyDiscountRecommendation"/);
+  assert.match(html, /callPostApi\("confirmMonthlyDiscountRecommendations"/);
+  assert.match(html, /callPostApi\("generateMonthlyDiscountRecommendations"/);
+});
+
 test('notification deep links route to the requested teacher or authorized admin page', () => {
   const { context } = createFrontendRuntime();
 

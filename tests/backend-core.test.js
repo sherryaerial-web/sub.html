@@ -2378,6 +2378,7 @@ test('classifies supported course categories', () => {
   assert.equal(backend.getCourseCategory_('現代小品'), '地板課程');
   assert.equal(backend.getCourseCategory_('柔軟度開發'), '地板課程');
   assert.equal(backend.getCourseCategory_('綢吊'), '綢吊');
+  assert.equal(backend.getCourseCategory_('C－鞦韆 Lv.1'), '鞦韆');
   assert.equal(backend.getCourseCategory_('未分類特別課'), '其他');
 });
 
@@ -4623,6 +4624,32 @@ test('teacher regular OB courses supplement missing account teaching capabilitie
   assert.equal(options.capabilities.includes('空環'), false);
   assert.equal(options.capabilities.includes('舞綢'), false);
   assert.equal(backend.teacherCanTeachCategory_('老師甲', '空瑜'), true);
+});
+
+test('regular OB trapeze teachers and approved exceptions can claim trapeze without widening access', () => {
+  const backend = loadBackend();
+  backend.getTeacherCapabilities_ = () => [];
+  const courseRows = [
+    ['2026/09/01', '09:00', 'A－鞦韆 Lv.1', '鞦韆老師', 'calendar-trapeze-1', 'class-trapeze-1', 'teacher-trapeze', '否', ''],
+    ['2026/09/08', '09:00', 'A－鞦韆 Lv.1', '鞦韆老師', 'calendar-trapeze-2', 'class-trapeze-1', 'teacher-trapeze', '否', ''],
+  ];
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getEffectiveTeacherCapabilities_('鞦韆老師', courseRows))),
+    ['鞦韆']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getEffectiveTeacherCapabilities_('Vivi', []))),
+    ['鞦韆']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getEffectiveTeacherCapabilities_('Tako', []))),
+    ['鞦韆']
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(backend.getEffectiveTeacherCapabilities_('其他老師', []))),
+    []
+  );
 });
 
 test('uninvited claim-options route returns no capabilities or OB classes', () => {

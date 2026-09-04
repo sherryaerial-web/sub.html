@@ -203,6 +203,11 @@ var CONFIG = {
 
 var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin'];
 
+var SUPPLEMENTAL_TEACHER_CAPABILITIES = {
+  'Vivi': ['鞦韆'],
+  'Tako': ['鞦韆']
+};
+
 function parsePracticeDateTime_(dateValue, timeValue) {
   var dateText = cleanText_(dateValue);
   var timeText = cleanText_(timeValue);
@@ -4077,6 +4082,7 @@ function getCourseCategory_(courseName) {
   if (/空環/.test(name)) return '空環';
   if (/舞綢/.test(name)) return '舞綢';
   if (/綢吊/.test(name)) return '綢吊';
+  if (/鞦韆/.test(name)) return '鞦韆';
   if (/瑜伽|皮拉提斯|現代小品|柔軟度|柔軟開發|後彎|開髖/.test(name)) return '地板課程';
   return '其他';
 }
@@ -9115,10 +9121,16 @@ function getRecurringTeacherCapabilities_(teacherName, courseRows) {
   return normalizeTeacherCapabilities_(categories);
 }
 
+function getSupplementalTeacherCapabilities_(teacherName) {
+  var teacher = cleanText_(teacherName);
+  return normalizeTeacherCapabilities_(SUPPLEMENTAL_TEACHER_CAPABILITIES[teacher] || []);
+}
+
 function getEffectiveTeacherCapabilities_(teacherName, courseRows) {
   return normalizeTeacherCapabilities_(
     getTeacherCapabilities_(teacherName).concat(
-      getRecurringTeacherCapabilities_(teacherName, courseRows)
+      getRecurringTeacherCapabilities_(teacherName, courseRows),
+      getSupplementalTeacherCapabilities_(teacherName)
     )
   );
 }

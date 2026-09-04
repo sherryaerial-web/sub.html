@@ -8689,6 +8689,7 @@ function isDiscountRecommendationCourseEligible_(descriptor) {
 function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, historyRowsValue, recommendationMonthValue) {
   var recommendationMonth = cleanText_(recommendationMonthValue);
   if (!/^\d{4}-\d{2}$/.test(recommendationMonth)) throw new Error('推薦月份格式不正確。');
+  var scheduleSourceMonth = shiftMonthKey_(recommendationMonth, -1);
   var evaluationMonths = getMonthlyDiscountEvaluationMonths_(recommendationMonth);
   var evaluationMonthSet = {};
   evaluationMonths.forEach(function(month) { evaluationMonthSet[month] = true; });
@@ -8703,7 +8704,7 @@ function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, 
   var candidates = [];
   (courseRowsValue || []).forEach(function(row) {
     var descriptor = getDiscountCourseDescriptor_(row);
-    if (descriptor.month !== recommendationMonth || !isDiscountRecommendationCourseEligible_(descriptor)) return;
+    if (descriptor.month !== scheduleSourceMonth || !isDiscountRecommendationCourseEligible_(descriptor)) return;
     descriptor.slotKey = getDiscountSlotKey_(descriptor);
     if (seen[descriptor.slotKey]) return;
     seen[descriptor.slotKey] = true;
@@ -8752,11 +8753,13 @@ function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, 
       missRate: missRate,
       lastMissDate: totals.lastMissDate,
       score: score,
+      scheduleSourceMonth: scheduleSourceMonth,
       evaluationMonths: evaluationMonths.slice(),
       reason: totals.observed
         ? '近兩個完整月份未開 ' + totals.missed + '/' + totals.observed + ' 堂（' +
-          Math.round(missRate * 100) + '%）' + (totals.lastMissDate ? '；最近未開：' + totals.lastMissDate : '')
-        : '歷史資料不足，依候選排序補足'
+          Math.round(missRate * 100) + '%）' + (totals.lastMissDate ? '；最近未開：' + totals.lastMissDate : '') +
+          '；依 ' + scheduleSourceMonth + ' 最近課表時段'
+        : '歷史資料不足，依候選排序補足；依 ' + scheduleSourceMonth + ' 最近課表時段'
     });
   });
   return candidates.sort(function(left, right) {

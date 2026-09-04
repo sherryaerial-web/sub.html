@@ -8867,16 +8867,16 @@ test('monthly discount sheets use independent append-only contracts', () => {
 test('monthly discount candidates use the two completed months and exclude ineligible courses', () => {
   const backend = loadBackend();
   const courseRows = [
-    ['2026/10/07', '18:30', 'A－空環 Lv.0', 'Carrie🐟', 'oct-1', 'class-1', 'teacher-1', '否', ''],
-    ['2026/10/08', '21:30', 'B－空瑜 Lv.1-2', 'Chin', 'oct-2', 'class-2', 'teacher-2', '否', ''],
-    ['2026/10/11', '13:15', 'C－綢吊 Lv.0-2', '妙妙 簡', 'oct-3', 'class-3', 'teacher-3', '否', ''],
-    ['2026/10/12', '10:30', 'A－空環 Lv.2-3', 'Tako', 'oct-4', 'class-4', 'teacher-4', '否', ''],
-    ['2026/10/13', '10:30', 'A－空環 Lv.0-1〈新老師〉', '老師新', 'excluded-new', '', '', '否', ''],
-    ['2026/10/14', '10:30', 'A－空環技巧期班', '老師期班', 'excluded-term', '', '', '否', ''],
-    ['2026/10/15', '10:30', 'A－場地租借', '老師租借', 'excluded-rental', '', '', '否', ''],
-    ['2026/10/16', '10:30', 'A－舞綢 Lv.1', '老師代課', 'excluded-sub', '', '', '是', ''],
-    ['2026/10/17', '10:30', 'A－舞綢特別課', '老師特別', 'excluded-special', '', '', '否', ''],
-    ['2026/10/18', '10:30', 'A－空瑜 Lv.0〈優惠〉', '老師優惠', 'excluded-discount', '', '', '否', ''],
+    ['2026/09/02', '18:30', 'A－空環 Lv.0', 'Carrie🐟', 'sep-1', 'class-1', 'teacher-1', '否', ''],
+    ['2026/09/03', '21:30', 'B－空瑜 Lv.1-2', 'Chin', 'sep-2', 'class-2', 'teacher-2', '否', ''],
+    ['2026/09/06', '13:15', 'C－綢吊 Lv.0-2', '妙妙 簡', 'sep-3', 'class-3', 'teacher-3', '否', ''],
+    ['2026/09/07', '10:30', 'A－空環 Lv.2-3', 'Tako', 'sep-4', 'class-4', 'teacher-4', '否', ''],
+    ['2026/09/08', '10:30', 'A－空環 Lv.0-1〈新老師〉', '老師新', 'excluded-new', '', '', '否', ''],
+    ['2026/09/09', '10:30', 'A－空環技巧期班', '老師期班', 'excluded-term', '', '', '否', ''],
+    ['2026/09/10', '10:30', 'A－場地租借', '老師租借', 'excluded-rental', '', '', '否', ''],
+    ['2026/09/11', '10:30', 'A－舞綢 Lv.1', '老師代課', 'excluded-sub', '', '', '是', ''],
+    ['2026/09/12', '10:30', 'A－舞綢特別課', '老師特別', 'excluded-special', '', '', '否', ''],
+    ['2026/09/13', '10:30', 'A－空瑜 Lv.0〈優惠〉', '老師優惠', 'excluded-discount', '', '', '否', ''],
   ];
   const observationRows = [
     ['obs-1', '', '2026-07', 3, '18:30', '', '空環 Lv.0', 'Carrie', '', 5, 4, '2026/07/29', '歷史匯入', '', ''],
@@ -8900,11 +8900,29 @@ test('monthly discount candidates use the two completed months and exclude ineli
   assert.match(candidates[3].reason, /歷史資料不足/);
 });
 
+test('monthly discount candidates use the current month schedule for next month recommendations', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/09/02', '18:30', 'A－空環 Lv.0', 'Carrie🐟', 'sep-1', 'class-1', 'teacher-1', '否', ''],
+    ['2026/09/03', '21:30', 'B－空瑜 Lv.1-2', 'Chin', 'sep-2', 'class-2', 'teacher-2', '否', ''],
+    ['2026/09/06', '13:15', 'C－綢吊 Lv.0-2', '妙妙 簡', 'sep-3', 'class-3', 'teacher-3', '否', ''],
+    ['2026/09/07', '10:30', 'A－空環 Lv.2-3', 'Tako', 'sep-4', 'class-4', 'teacher-4', '否', ''],
+    ['2026/08/05', '18:30', 'A－空環 Lv.0', '舊老師', 'aug-old', '', '', '否', ''],
+  ];
+
+  const candidates = backend.buildMonthlyDiscountCandidates_(courseRows, [], [], '2026-10');
+
+  assert.equal(candidates.length, 4);
+  assert.deepEqual(Array.from(candidates, (item) => item.teacherName).sort(), ['Carrie🐟', 'Chin', 'Tako', '妙妙 簡'].sort());
+  assert.ok(candidates.every((item) => item.scheduleSourceMonth === '2026-09'));
+  assert.ok(candidates.every((item) => /依 2026-09 最近課表時段/.test(item.reason)));
+});
+
 test('monthly discount cooldown matches teacher aliases and blocks two complete months', () => {
   const backend = loadBackend();
   const courseRows = [
-    ['2026/10/04', '19:00', 'A－現代小品', '芮錤 77', 'oct-77', '', '', '否', ''],
-    ['2026/10/05', '10:30', 'A－空環 Lv.2-3', 'Tako', 'oct-tako', '', '', '否', ''],
+    ['2026/09/06', '19:00', 'A－現代小品', '芮錤 77', 'sep-77', '', '', '否', ''],
+    ['2026/09/07', '10:30', 'A－空環 Lv.2-3', 'Tako', 'sep-tako', '', '', '否', ''],
   ];
   const historyRows = [
     ['2026-09', '', 0, '19:00', 'A', '現代小品', '77', '人工歷史', '', '', ''],

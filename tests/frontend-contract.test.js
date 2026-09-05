@@ -2789,9 +2789,10 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the fourteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
+test('keeps the fifteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
   const adminTabs = html.match(/<div class=["']admin-tabs["'][^>]*>[\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
-  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 14);
+  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 15);
+  assert.match(adminTabs, /data-admin-tab=["']monthlyDiscount["']/);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);
@@ -2906,13 +2907,13 @@ test('closure manager renders an editable one-short community message with one-t
   assert.match(getElement('admin-tab-content').innerHTML, /data-admin-action="copy-closure-social"/);
 });
 
-test('closure manager shows three monthly discount recommendations with replace and confirm actions', () => {
+test('monthly discount workspace shows three recommendations with replace and confirm actions', () => {
   const dashboard = {
     teachers: [], pendingInvitations: [], activeInvitees: [], missingObCancellations: [],
     obWork: [], delayClosures: [], changeRequests: [], exceptions: [], completed: [],
     courseClosure: { unclaimedCandidates: [], recentLogs: [], manualStageAvailability: {} },
     monthlyDiscount: {
-      available: true, month: '2026-10', batchId: 'batch-1', status: '待確認', pendingCount: 3,
+      available: true, month: 'Thu Oct 01 2026 00:00:00 GMT+0800 (Taipei Standard Time)', batchId: 'batch-1', status: '待確認', pendingCount: 3,
       recommendations: [
         { itemId: 'item-1', weekday: 1, time: '10:30', room: 'A', courseName: '空環 Lv.0', teacherName: '老師甲', reason: '近兩月未開 7/9 堂' },
         { itemId: 'item-2', weekday: 2, time: '12:30', room: 'B', courseName: '空瑜 Lv.0', teacherName: '老師乙', reason: '近兩月未開 6/8 堂' },
@@ -2923,13 +2924,17 @@ test('closure manager shows three monthly discount recommendations with replace 
   };
   const { context, getElement } = createFrontendRuntime();
   context.__dashboard = dashboard;
-  vm.runInContext('activeAdminTab = "closureManagement"; adminDashboard = __dashboard; renderAdminTab();', context);
+  vm.runInContext('activeAdminTab = "monthlyDiscount"; adminDashboard = __dashboard; renderAdminTab();', context);
   const output = getElement('admin-tab-content').innerHTML;
 
-  assert.match(output, /2026-10 點數優惠課推薦/);
+  assert.match(output, /2026 年 10 月 點數優惠課推薦/);
+  assert.doesNotMatch(output, /Thu Oct 01 2026/);
   assert.equal((output.match(/data-admin-action="replace-monthly-discount"/g) || []).length, 3);
   assert.match(output, /data-admin-action="confirm-monthly-discount"/);
   assert.match(output, /老師甲/);
+
+  vm.runInContext('activeAdminTab = "closureManagement"; renderAdminTab();', context);
+  assert.doesNotMatch(getElement('admin-tab-content').innerHTML, /點數優惠課推薦/);
 });
 
 test('admin reminders include pending monthly discount confirmation', () => {
@@ -2937,7 +2942,7 @@ test('admin reminders include pending monthly discount confirmation', () => {
 
   assert.match(source, /優惠課待確認/);
   assert.match(source, /monthlyDiscount\.pendingCount/);
-  assert.match(source, /\["優惠課待確認"[\s\S]*"closureManagement"\]/);
+  assert.match(source, /\["優惠課待確認"[\s\S]*"monthlyDiscount"\]/);
 });
 
 test('monthly discount actions call the backend and refresh the admin dashboard', () => {
@@ -2956,6 +2961,10 @@ test('notification deep links route to the requested teacher or authorized admin
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.getInitialAppRoute('?view=admin&tab=closureManagement'))),
     { viewId: 'view-admin', adminTab: 'closureManagement' },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getInitialAppRoute('?view=admin&tab=monthlyDiscount'))),
+    { viewId: 'view-admin', adminTab: 'monthlyDiscount' },
   );
 });
 

@@ -9002,7 +9002,7 @@ function generateMonthlyDiscountRecommendationsCore_(actorValue, monthValue, for
     sendPushAfterMutationSafely_(getActiveCourseAdminNames_(), {
       heading: dashboard.month + ' 優惠課待確認',
       content: '系統已選出 3 堂點數優惠課，請到管理平台確認。',
-      url: buildAppViewUrl_('admin', 'closureManagement')
+      url: buildAppViewUrl_('admin', 'monthlyDiscount')
     });
   }
   dashboard.created = created;

@@ -1833,6 +1833,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="missingObCancellations" data-capability="course_admin"><i data-lucide="calendar-x-2"></i>OB 已取消<span class="admin-tab-count" data-admin-count="missingObCancellations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="closureManagement" data-capability="course_admin"><i data-lucide="calendar-cog"></i>關課管理<span class="admin-tab-count" data-admin-count="courseClosureCandidates">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="monthlyDiscount" data-capability="course_admin"><i data-lucide="badge-percent"></i>優惠課推薦<span class="admin-tab-count" data-admin-count="monthlyDiscount">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="courseAdjustments" data-capability="course_admin"><i data-lucide="arrow-left-right"></i>調課確認<span class="admin-tab-count" data-admin-count="courseAdjustments">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="delayClosures" data-capability="course_admin"><i data-lucide="clock-arrow-down"></i>代關課程<span class="admin-tab-count" data-admin-count="delayClosures">—</span></button>
@@ -2823,7 +2824,7 @@
       };
       const allowedAdminTabs = new Set([
         "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
-        "delayClosures", "closureManagement", "changeRequests", "exceptions", "completed",
+        "delayClosures", "closureManagement", "monthlyDiscount", "changeRequests", "exceptions", "completed",
         "payroll", "vvip", "notifications", "practice"
       ]);
       const viewId = viewMap[params.get("view")] || "";
@@ -5463,7 +5464,7 @@
         .slice().sort((a, b) => a.localeCompare(b, "zh-Hant"))
         .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
         .join("");
-      const isSpecialAdminTab = ["payroll", "vvip", "notifications", "practice"].includes(activeAdminTab);
+      const isSpecialAdminTab = ["payroll", "vvip", "notifications", "practice", "monthlyDiscount"].includes(activeAdminTab);
       byId("admin-sync").hidden = isSpecialAdminTab;
       byId("admin-reconcile").hidden = isSpecialAdminTab;
       const leavePauseButton = byId("admin-leave-pause");
@@ -5488,7 +5489,7 @@
       const course = adminDashboard || {};
       if (authState.managementCapabilities.includes("course_admin")) {
         [
-          ["優惠課待確認", Number(course.monthlyDiscount && course.monthlyDiscount.pendingCount) || 0, "closureManagement"],
+          ["優惠課待確認", Number(course.monthlyDiscount && course.monthlyDiscount.pendingCount) || 0, "monthlyDiscount"],
           ["調課待確認", (course.courseAdjustments || []).length, "courseAdjustments"],
           ["待處理 OB", (course.obWork || []).length, "obWork"],
           ["待處理異動", (course.changeRequests || []).length, "changeRequests"],
@@ -5525,9 +5526,56 @@
           badge.textContent = Array.isArray(candidates) ? String(candidates.length) : "0";
           return;
         }
+        if (badge.dataset.adminCount === "monthlyDiscount") {
+          badge.textContent = String(Number(data.monthlyDiscount && data.monthlyDiscount.pendingCount) || 0);
+          return;
+        }
         const items = data[badge.dataset.adminCount];
         badge.textContent = Array.isArray(items) ? String(items.length) : "0";
       });
+    }
+
+    function formatAdminMonthLabel(value) {
+      const text = String(value || "").trim();
+      const direct = /^(\d{4})-(\d{2})$/.exec(text);
+      if (direct) return `${direct[1]} 年 ${Number(direct[2])} 月`;
+      const date = new Date(text);
+      if (!Number.isNaN(date.getTime())) {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          year: "numeric", month: "2-digit", timeZone: "Asia/Taipei"
+        }).formatToParts(date);
+        const year = parts.find((part) => part.type === "year")?.value;
+        const month = parts.find((part) => part.type === "month")?.value;
+        if (year && month) return `${year} 年 ${Number(month)} 月`;
+      }
+      return text || "下個月";
+    }
+
+    function renderMonthlyDiscountAdminTab() {
+      const content = byId("admin-tab-content");
+      const monthlyDiscount = (adminDashboard && adminDashboard.monthlyDiscount) || {};
+      const weekdayLabels = ["日", "一", "二", "三", "四", "五", "六"];
+      const discountRows = (monthlyDiscount.recommendations || []).map((item) => `
+        <article class="list-item single-column">
+          <div>
+            <div class="item-course">週${escapeHtml(weekdayLabels[Number(item.weekday)] || "—")} ${escapeHtml(item.time)}${item.room ? `｜${escapeHtml(item.room)} 教室` : ""}｜${escapeHtml(item.teacherName)} ${escapeHtml(item.courseName)}</div>
+            <div class="item-meta">${escapeHtml(item.reason || "依近期開課紀錄排序")}</div>
+            ${monthlyDiscount.status === "待確認" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="replace-monthly-discount" data-item-id="${escapeHtml(item.itemId)}" ${(monthlyDiscount.alternates || []).length ? "" : "disabled"}><i data-lucide="refresh-cw"></i>換一堂</button></div>` : ""}
+          </div>
+        </article>`).join("");
+      const discountHistory = (monthlyDiscount.history || []).slice(0, 18).map((item) => `
+        <div class="item-meta">${escapeHtml(formatAdminMonthLabel(item.month))}｜週${escapeHtml(weekdayLabels[Number(item.weekday)] || "—")} ${escapeHtml(item.time)}${item.room ? ` ${escapeHtml(item.room)} 教室` : ""}｜${escapeHtml(item.teacherName)} ${escapeHtml(item.courseName)}</div>`).join("");
+      content.innerHTML = `
+        <div class="admin-control">
+          <strong>${escapeHtml(formatAdminMonthLabel(monthlyDiscount.month))} 點數優惠課推薦${monthlyDiscount.status ? `｜${escapeHtml(monthlyDiscount.status)}` : ""}</strong>
+          <div class="item-meta">每月 5 日 22:00 依前兩個完整月的未開課狀況選出 3 堂；代課、特別課、期班、場租、自主練習與近兩月已優惠課程不列入。</div>
+          <div class="admin-item-actions">
+            ${monthlyDiscount.status === "待確認" ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-monthly-discount" data-batch-id="${escapeHtml(monthlyDiscount.batchId || "")}"><i data-lucide="badge-check"></i>確認這 3 堂</button>` : ""}
+            ${!monthlyDiscount.batchId ? `<button class="compact-button" type="button" data-admin-action="generate-monthly-discount"><i data-lucide="sparkles"></i>產生下月推薦</button>` : ""}
+          </div>
+        </div>
+        ${discountRows || '<div class="state">目前尚未產生下月優惠課推薦</div>'}
+        ${discountHistory ? `<details class="admin-control"><summary><strong>過去優惠課紀錄</strong></summary><div style="margin-top:10px">${discountHistory}</div></details>` : ""}`;
     }
 
     function renderAdminTab() {
@@ -5541,6 +5589,8 @@
         renderNotificationAdminTab();
       } else if (activeAdminTab === "practice") {
         renderPracticeAdminDashboard();
+      } else if (activeAdminTab === "monthlyDiscount") {
+        renderMonthlyDiscountAdminTab();
       } else if (activeAdminTab === "pendingInvitations") {
         const pendingItems = data.pendingInvitations || [];
         const invitationRounds = buildAdminInvitationRounds(data.teachers, data.activeInvitees);
@@ -5586,7 +5636,6 @@
           ${items.map((item) => `<article class="list-item single-column"><label class="ob-cancellation-row"><input class="ob-cancellation-checkbox" type="checkbox" value="${escapeHtml(item.substituteId)}"><span><span class="item-course">${escapeHtml(item.date)} ${escapeHtml(item.time)}｜${escapeHtml(item.originalCourse)}</span><span class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜OB Calendar ID：${escapeHtml(item.replacementCalendarId || item.originalCalendarId || "—")}</span></span></label></article>`).join("") || '<div class="state">目前沒有已從 OB 取消、等待關閉的代課課程</div>'}`;
       } else if (activeAdminTab === "closureManagement") {
         const closure = data.courseClosure || {};
-        const monthlyDiscount = data.monthlyDiscount || {};
         const socialCopy = closure.socialCopy && closure.socialCopy.content ? closure.socialCopy : null;
         const candidates = Array.isArray(closure.unclaimedCandidates) ? closure.unclaimedCandidates : [];
         const recentLogs = Array.isArray(closure.recentLogs) ? closure.recentLogs : [];
@@ -5610,30 +5659,7 @@
               <div class="item-meta">${escapeHtml(item.teacherName || "未取得老師")}｜${item.enrollmentCount == null ? "人數未取得" : `${escapeHtml(item.enrollmentCount)} 人`}｜${escapeHtml(item.ruleLabel || "未套用規則")}｜${escapeHtml(item.result || "未記錄結果")}｜執行：${escapeHtml(item.actor || "未記錄")}${item.error ? `｜${escapeHtml(item.error)}` : ""}</div>
             </div>
           </article>`).join("");
-        const weekdayLabels = ["日", "一", "二", "三", "四", "五", "六"];
-        const discountRows = (monthlyDiscount.recommendations || []).map((item) => `
-          <article class="list-item single-column">
-            <div>
-              <div class="item-course">週${escapeHtml(weekdayLabels[Number(item.weekday)] || "—")} ${escapeHtml(item.time)}${item.room ? `｜${escapeHtml(item.room)} 教室` : ""}｜${escapeHtml(item.teacherName)} ${escapeHtml(item.courseName)}</div>
-              <div class="item-meta">${escapeHtml(item.reason || "依近期開課紀錄排序")}</div>
-              ${monthlyDiscount.status === "待確認" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="replace-monthly-discount" data-item-id="${escapeHtml(item.itemId)}" ${(monthlyDiscount.alternates || []).length ? "" : "disabled"}><i data-lucide="refresh-cw"></i>換一堂</button></div>` : ""}
-            </div>
-          </article>`).join("");
-        const discountHistory = (monthlyDiscount.history || []).slice(0, 18).map((item) => `
-          <div class="item-meta">${escapeHtml(item.month)}｜週${escapeHtml(weekdayLabels[Number(item.weekday)] || "—")} ${escapeHtml(item.time)}${item.room ? ` ${escapeHtml(item.room)} 教室` : ""}｜${escapeHtml(item.teacherName)} ${escapeHtml(item.courseName)}</div>`).join("");
-        const monthlyDiscountPanel = `
-          <div class="admin-control">
-            <strong>${escapeHtml(monthlyDiscount.month || "下個月")} 點數優惠課推薦${monthlyDiscount.status ? `｜${escapeHtml(monthlyDiscount.status)}` : ""}</strong>
-            <div class="item-meta">每月 5 日 22:00 依前兩個完整月的未開課狀況選出 3 堂；代課、特別課、期班、場租、自主練習與近兩月已優惠課程不列入。</div>
-            <div class="admin-item-actions">
-              ${monthlyDiscount.status === "待確認" ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-monthly-discount" data-batch-id="${escapeHtml(monthlyDiscount.batchId || "")}"><i data-lucide="badge-check"></i>確認這 3 堂</button>` : ""}
-              ${!monthlyDiscount.batchId ? `<button class="compact-button" type="button" data-admin-action="generate-monthly-discount"><i data-lucide="sparkles"></i>產生下月推薦</button>` : ""}
-            </div>
-          </div>
-          ${discountRows || '<div class="state">目前尚未產生下月優惠課推薦</div>'}
-          ${discountHistory ? `<details class="admin-control"><summary><strong>過去優惠課紀錄</strong></summary><div style="margin-top:10px">${discountHistory}</div></details>` : ""}`;
         content.innerHTML = `
-          ${monthlyDiscountPanel}
           ${socialCopy ? `<div class="admin-control">
             <strong>22:30 社群提醒文字</strong>
             <div class="item-meta">已依 23:40 最低人數整理「各缺一」課程，可直接修改後複製到社群。更新：${escapeHtml(socialCopy.updatedAt || "—")}</div>

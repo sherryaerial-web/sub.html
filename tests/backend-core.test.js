@@ -8963,6 +8963,7 @@ test('monthly discount management actions are exposed through the authenticated 
   assert.match(source, /replaceMonthlyDiscountRecommendation:\s*function\(\)/);
   assert.match(source, /confirmMonthlyDiscountRecommendations:\s*function\(\)/);
   assert.match(source, /generateMonthlyDiscountRecommendations:\s*function\(\)/);
+  assert.match(source, /優惠課待確認[\s\S]*buildAppViewUrl_\('admin', 'monthlyDiscount'\)/);
 });
 
 test('monthly discount scheduler runs before manual closure mode can return early', () => {

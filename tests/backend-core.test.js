@@ -8917,6 +8917,37 @@ test('notification inbox returns only the logged-in teacher and supports read co
   assert.equal(fixture.backend.getNotificationInbox_(vivi).unreadCount, 0);
 });
 
+test('notification inbox normalizes Sheet date values and sorts every message newest first', () => {
+  const fixture = createNotificationInboxBackend({
+    messages: [
+      ['msg-sep-3', 'event-sep-3', '管理提醒', '9 月 3 日', '', '?view=admin', '', new Date('2026-09-03T23:44:00+08:00'), '系統'],
+      ['msg-sep-5-early', 'event-sep-5-early', '管理提醒', '9 月 5 日凌晨', '', '?view=admin', '', new Date('2026-09-05T03:01:00+08:00'), '系統'],
+      ['msg-sep-4', 'event-sep-4', '管理提醒', '9 月 4 日', '', '?view=admin', '', '2026-09-04 23:44:00', '系統'],
+      ['msg-sep-5-late', 'event-sep-5-late', '管理提醒', '9 月 5 日下午', '', '?view=admin', '', new Date('2026-09-05T15:21:00+08:00'), '系統'],
+    ],
+    recipients: [
+      ['recipient-sep-3', 'msg-sep-3', '冠蓉', '未讀', '', new Date('2026-09-03T23:44:00+08:00')],
+      ['recipient-sep-5-early', 'msg-sep-5-early', '冠蓉', '未讀', '', new Date('2026-09-05T03:01:00+08:00')],
+      ['recipient-sep-4', 'msg-sep-4', '冠蓉', '未讀', '', '2026-09-04 23:44:00'],
+      ['recipient-sep-5-late', 'msg-sep-5-late', '冠蓉', '未讀', '', new Date('2026-09-05T15:21:00+08:00')],
+    ],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-06T12:00:00+08:00').getTime();
+
+  const inbox = fixture.backend.getNotificationInbox_({
+    teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'],
+  });
+
+  assert.deepEqual(
+    Array.from(inbox.items, (item) => item.messageId),
+    ['msg-sep-5-late', 'msg-sep-5-early', 'msg-sep-4', 'msg-sep-3'],
+  );
+  assert.deepEqual(
+    Array.from(inbox.items, (item) => item.createdAt),
+    ['2026-09-05 15:21:00', '2026-09-05 03:01:00', '2026-09-04 23:44:00', '2026-09-03 23:44:00'],
+  );
+});
+
 test('monthly discount sheets use independent append-only contracts', () => {
   const backend = loadBackend();
   assert.deepEqual(Array.from(backend.SHEET_HEADERS.DISCOUNT_OBSERVATIONS), EXPECTED_DISCOUNT_OBSERVATION_HEADERS);

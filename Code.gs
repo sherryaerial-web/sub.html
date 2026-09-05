@@ -1210,6 +1210,24 @@ function persistInboxNotificationSafely_(teacherNames, messageValue) {
   }
 }
 
+function normalizeNotificationTimestamp_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  }
+  var text = cleanText_(value);
+  var match = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+  if (!match) return text;
+  return [
+    match[1],
+    String(Number(match[2])).padStart(2, '0'),
+    String(Number(match[3])).padStart(2, '0')
+  ].join('-') + ' ' + [
+    String(Number(match[4])).padStart(2, '0'),
+    match[5],
+    match[6] || '00'
+  ].join(':');
+}
+
 function getNotificationInbox_(session) {
   var teacherName = getSessionTeacherName_(session);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1238,7 +1256,7 @@ function getNotificationInbox_(session) {
     var messageId = cleanText_(recipientRow[recipientHeaders['訊息 ID'] - 1]);
     var messageRow = messagesById[messageId];
     if (!messageRow) return;
-    var createdAt = cleanText_(messageRow[messageHeaders['建立時間'] - 1]);
+    var createdAt = normalizeNotificationTimestamp_(messageRow[messageHeaders['建立時間'] - 1]);
     if (createdAt && createdAt < cutoff) return;
     if (status !== '已讀') unreadCount += 1;
     items.push({

@@ -3238,6 +3238,17 @@ test('practice calendar keeps one long booking beside every overlapping course',
   assert.match(calendar, /data-practice-start="13:30"/);
 });
 
+test('a lone long practice card stretches to the full height of its overlapping lane group', () => {
+  assert.match(html, /\.practice-card-stack\s*\{[^}]*align-items:\s*stretch/s);
+  assert.match(html, /\.practice-card-lane:\s*has\(> \.practice-block:only-child\)[^{]*\{[^}]*height:\s*100%/s);
+});
+
+test('course administrators get a manual practice OB refresh button', () => {
+  assert.match(html, /id="practice-refresh"[^>]*hidden[^>]*>[^<]*(?:<[^>]+>)*更新課表/);
+  assert.match(html, /practice-refresh[^\n]*managementCapabilities\.includes\("course_admin"\)/);
+  assert.match(html, /callPostApi\("refreshPracticeDay",\s*\{\s*date/s);
+});
+
 test('practice alternatives are near the requested time and not five-minute duplicates', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceFixture = {

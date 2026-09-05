@@ -8258,6 +8258,74 @@ test('scheduled practice reconciliation conservatively uses the synchronized sna
   assert.equal(deliveries[0].message.heading, '原課程恢復，已改回候補');
 });
 
+test('practice OB day cache can be force refreshed by a course administrator', () => {
+  const services = createAuthServices();
+  const fixture = createPracticeBackend({ services: { CacheService: services.CacheService } });
+  let liveReads = 0;
+  fixture.backend.getPracticeCurrentObRows_ = () => {
+    liveReads += 1;
+    return [[
+      '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+      `cal-${liveReads}`, 'class-1', 'teacher-1', '否', 'stamp',
+    ]];
+  };
+
+  const first = fixture.backend.getPracticeCurrentObRowsForDayView_('2026/09/10');
+  const cached = fixture.backend.getPracticeCurrentObRowsForDayView_('2026/09/10');
+  const refreshed = fixture.backend.getPracticeCurrentObRowsForDayView_('2026/09/10', true);
+
+  assert.equal(liveReads, 2);
+  assert.equal(first[0][4], 'cal-1');
+  assert.equal(cached[0][4], 'cal-1');
+  assert.equal(refreshed[0][4], 'cal-2');
+});
+
+test('five-minute scheduler only runs background practice reconciliation once per hour', () => {
+  const services = createAuthServices();
+  const backend = loadBackend({ PropertiesService: services.PropertiesService });
+  let now = new Date('2026-09-06T12:00:00+08:00').getTime();
+  let reconciliationRuns = 0;
+  backend.currentTimeMs_ = () => now;
+  backend.runScheduledPracticeReconciliation = () => {
+    reconciliationRuns += 1;
+    return { checked: 1, activated: 0, reverted: 0, cancelled: 0, courseSource: 'live' };
+  };
+
+  const first = backend.runHourlyPracticeReconciliationIfDue_();
+  now = new Date('2026-09-06T12:05:00+08:00').getTime();
+  const second = backend.runHourlyPracticeReconciliationIfDue_();
+  now = new Date('2026-09-06T13:00:00+08:00').getTime();
+  const third = backend.runHourlyPracticeReconciliationIfDue_();
+
+  assert.equal(reconciliationRuns, 2);
+  assert.equal(first.skipped, false);
+  assert.equal(second.skipped, true);
+  assert.equal(third.skipped, false);
+});
+
+test('course administrator can force refresh one practice date through the authenticated API', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
+
+  assert.match(source, /refreshPracticeDay:\s*function\(\)/);
+  assert.match(source, /function refreshPracticeDay_\(session, dateValue\)/);
+  assert.match(source, /assertCapabilitySession_\(session, 'course_admin'\)/);
+  assert.match(source, /getPracticeCurrentObRowsForDayView_\(date, true\)/);
+});
+
+test('nightly closure refreshes the affected practice date before notifying administrators', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
+  ['executeNextDayClosures_', 'runCourseClosureScheduler'].forEach((functionName) => {
+    const start = source.indexOf(`function ${functionName}`);
+    const end = source.indexOf('\nfunction ', start + 20);
+    const body = source.slice(start, end);
+    assert.match(body, /refreshPracticeAfterCourseClosure_\(result\)/, functionName);
+    assert.ok(
+      body.indexOf('refreshPracticeAfterCourseClosure_(result)') < body.indexOf('notifyCourseClosureResult_(result)'),
+      `${functionName} must refresh practice before the closure notification`,
+    );
+  });
+});
+
 test('practice candidate stays pending while its linked OB course still exists', () => {
   const courseRow = [
     '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
@@ -9630,15 +9698,15 @@ test('monthly discount scheduler runs before manual closure mode can return earl
   );
 });
 
-test('the existing five-minute scheduler also reconciles practice before manual closure mode returns', () => {
+test('the existing five-minute scheduler gates practice reconciliation to hourly before manual closure mode returns', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
   const start = source.indexOf('function runCourseClosureScheduler()');
   const end = source.indexOf('\nfunction ', start + 20);
   const body = source.slice(start, end);
 
-  assert.match(body, /runScheduledPracticeReconciliation/);
+  assert.match(body, /runHourlyPracticeReconciliationIfDue_/);
   assert.ok(
-    body.indexOf('runScheduledPracticeReconciliation') < body.indexOf("reason: 'manual'"),
+    body.indexOf('runHourlyPracticeReconciliationIfDue_') < body.indexOf("reason: 'manual'"),
     '自主練習核對不能被關課的手動模式提前截斷',
   );
 });

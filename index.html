@@ -1107,10 +1107,15 @@
     .practice-card-stack {
       display: grid;
       grid-template-columns: repeat(var(--practice-lane-count, 1), minmax(0, 1fr));
-      align-items: start;
+      align-items: stretch;
       gap: 9px;
     }
     .practice-card-lane { display: grid; min-width: 0; align-content: start; gap: 9px; }
+    .practice-card-lane:has(> .practice-block:only-child) { height: 100%; }
+    .practice-card-lane:has(> .practice-block:only-child) > .practice-block {
+      height: calc(100% - 14px);
+      align-content: center;
+    }
     .practice-block {
       position: relative;
       z-index: 2;
@@ -1785,7 +1790,7 @@
         <section id="view-practice" class="view">
           <div class="view-header practice-view-header">
             <div><span class="eyebrow">Practice</span><h2 class="section-heading">自主練習</h2><p class="section-copy">直接看 A、B、C、D 教室當天狀況</p></div>
-            <div class="practice-header-actions"><button id="practice-my-bookings" class="compact-button" type="button"><i data-lucide="search"></i>我的登記</button></div>
+            <div class="practice-header-actions"><button id="practice-refresh" class="compact-button" type="button" hidden><i data-lucide="refresh-cw"></i>更新課表</button><button id="practice-my-bookings" class="compact-button" type="button"><i data-lucide="search"></i>我的登記</button></div>
           </div>
           <div class="practice-date-navigation">
             <button id="practice-date-previous" class="practice-date-arrow" type="button" aria-label="前一週">‹</button>
@@ -3085,6 +3090,7 @@
       updateActingMode();
       byId("admin-entry").hidden = !authState.managementCapabilities.length;
       byId("admin-act-as-control").hidden = !authState.managementCapabilities.includes("course_admin");
+      byId("practice-refresh").hidden = !authState.managementCapabilities.includes("course_admin");
       document.querySelectorAll(".admin-tab[data-capability]").forEach((button) => {
         button.hidden = !authState.managementCapabilities.includes(button.dataset.capability);
       });
@@ -6944,6 +6950,22 @@ https://sherryaerial-web.github.io/sub.html/
       byId("practice-history-month").value = getPracticeHistoryMonth();
       fetchMyPracticeBookings();
       refreshIcons();
+    });
+    byId("practice-refresh").addEventListener("click", async () => {
+      const button = byId("practice-refresh");
+      const date = practiceState.date || getTaipeiToday();
+      setButtonBusy(button, true, "更新中...");
+      try {
+        const data = await callPostApi("refreshPracticeDay", { date });
+        practiceState.dayCache[date] = data;
+        practiceState.dayCacheFetchedAt[date] = Date.now();
+        renderPracticeView(data);
+        setNotice("已即時更新 OB 課表與自主練習狀態。");
+      } catch (error) {
+        setNotice(`更新課表失敗：${error.message}`, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
     });
     byId("practice-history-search").addEventListener("click", fetchMyPracticeBookings);
     byId("practice-history-close").addEventListener("click", () => { byId("practice-history-panel").hidden = true; });

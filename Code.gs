@@ -211,6 +211,8 @@ var CONFIG = {
   PUSH_SENT_KEY_PREFIX: 'PUSH_SENT_',
   NOTIFICATION_SCHEDULES_PROPERTY: 'NOTIFICATION_SCHEDULES_V1',
   COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
+  PRACTICE_OB_DAY_CACHE_SECONDS: 60 * 60,
+  PRACTICE_RECONCILE_HOUR_PROPERTY: 'PRACTICE_RECONCILE_HOUR_V1',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
@@ -1973,15 +1975,31 @@ function getPracticeDay_(session, dateValue) {
   return view;
 }
 
-function getPracticeCurrentObRowsForDayView_(dateValue) {
+function getPracticeCurrentObRowsForDayView_(dateValue, forceRefreshValue) {
   var date = cleanText_(dateValue).replace(/-/g, '/');
   parsePracticeDateTime_(date, '00:00');
   var cacheKey = 'practice_ob_day_v1_' + date.replace(/\D/g, '');
+  if (forceRefreshValue === true) removeCachedValue_(cacheKey);
   var cachedRows = getCachedJsonValue_(cacheKey);
   if (Array.isArray(cachedRows)) return cachedRows;
   var rows = getPracticeCurrentObRows_(date, date);
-  putCachedJsonValue_(cacheKey, rows, 30);
+  putCachedJsonValue_(cacheKey, rows, CONFIG.PRACTICE_OB_DAY_CACHE_SECONDS);
   return rows;
+}
+
+function refreshPracticeDay_(session, dateValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  var date = cleanText_(dateValue).replace(/-/g, '/');
+  parsePracticeDateTime_(date, '00:00');
+  var currentObRows = getPracticeCurrentObRowsForDayView_(date, true);
+  var result = reconcilePracticeBookings_({
+    today: date,
+    throughDate: date,
+    currentObRows: currentObRows
+  });
+  result.courseSource = 'live';
+  result.courseWarning = '';
+  return result;
 }
 
 function getMyPracticeBookings_(session, monthValue) {
@@ -4210,7 +4228,7 @@ function runScheduledPracticeReconciliation() {
   var currentObRows = [];
   try {
     dates.forEach(function(date) {
-      currentObRows = currentObRows.concat(getPracticeCurrentObRows_(date, date));
+      currentObRows = currentObRows.concat(getPracticeCurrentObRowsForDayView_(date));
     });
   } catch (error) {
     var fallbackResult = reconcilePracticeBookings_({
@@ -4231,6 +4249,20 @@ function runScheduledPracticeReconciliation() {
   liveResult.courseSource = 'live';
   liveResult.courseWarning = '';
   return liveResult;
+}
+
+function runHourlyPracticeReconciliationIfDue_() {
+  var now = new Date(currentTimeMs_());
+  var hourKey = Utilities.formatDate(now, getTimeZone_(), 'yyyy-MM-dd') + '-' +
+    Utilities.formatDate(now, getTimeZone_(), 'HH:mm').slice(0, 2);
+  var properties = getScriptProperties_();
+  if (properties && cleanText_(properties.getProperty(CONFIG.PRACTICE_RECONCILE_HOUR_PROPERTY)) === hourKey) {
+    return { skipped: true, reason: 'same-hour' };
+  }
+  if (properties) properties.setProperty(CONFIG.PRACTICE_RECONCILE_HOUR_PROPERTY, hourKey);
+  var result = runScheduledPracticeReconciliation() || {};
+  result.skipped = false;
+  return result;
 }
 
 function ensureCourseClosureStructureUnlocked_(spreadsheet) {
@@ -4610,6 +4642,10 @@ function doPost(e) {
         return getMyCourses_(actingSession());
       },
       getPracticeDay: function() {
+        return getPracticeDay_(actingSession(), parameters.date);
+      },
+      refreshPracticeDay: function() {
+        refreshPracticeDay_(session, parameters.date);
         return getPracticeDay_(actingSession(), parameters.date);
       },
       getMyPracticeBookings: function() {
@@ -5736,6 +5772,15 @@ function notifyCourseClosureResult_(resultValue) {
   if (result.stage === '22:30' && result.socialCopy && cleanText_(result.socialCopy.content)) {
     content += ' 社群提醒文字已整理完成。';
   }
+  if (result.practiceRefresh) {
+    if (result.practiceRefresh.failed) {
+      content += ' 自主練習同步失敗，請到自主練習頁按「更新課表」。';
+    } else {
+      content += ' 自主練習已同步：候補成立 ' + (Number(result.practiceRefresh.activated) || 0) +
+        '、恢復候補 ' + ((Number(result.practiceRefresh.reverted) || 0) + (Number(result.practiceRefresh.restored) || 0)) +
+        '、取消 ' + (Number(result.practiceRefresh.cancelled) || 0) + '。';
+    }
+  }
   return sendPushOnceSafely_(
     ['closure', String(result.targetDate).replace(/\D/g, ''), String(result.stage).replace(/\D/g, ''), hasFailures ? 'failed' : 'success'].join('_'),
     getActiveCourseAdminNames_(),
@@ -5747,11 +5792,34 @@ function notifyCourseClosureResult_(resultValue) {
   );
 }
 
+function refreshPracticeAfterCourseClosure_(resultValue) {
+  var result = resultValue || {};
+  var date = cleanText_(result.targetDate).replace(/-/g, '/');
+  if (!date) return null;
+  try {
+    var currentObRows = getPracticeCurrentObRowsForDayView_(date, true);
+    result.practiceRefresh = reconcilePracticeBookings_({
+      today: date,
+      throughDate: date,
+      currentObRows: currentObRows
+    });
+    result.practiceRefresh.courseSource = 'live';
+  } catch (error) {
+    result.practiceRefresh = {
+      failed: true,
+      error: getErrorMessage_(error),
+      courseSource: 'unavailable'
+    };
+  }
+  return result.practiceRefresh;
+}
+
 function executeNextDayClosures_(session, stageValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   assertManualCourseClosureStageAvailable_(stageValue);
   var result = executeNextDayClosuresCore_(actor, stageValue, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
+  refreshPracticeAfterCourseClosure_(result);
   notifyCourseClosureResult_(result);
   return result;
 }
@@ -5764,7 +5832,7 @@ function runCourseClosureScheduler() {
   var monthlyDiscountResult = runMonthlyDiscountRecommendationScheduler_(dateKey, time);
   var practiceReconciliationResult;
   try {
-    practiceReconciliationResult = runScheduledPracticeReconciliation();
+    practiceReconciliationResult = runHourlyPracticeReconciliationIfDue_();
   } catch (practiceError) {
     practiceReconciliationResult = { failed: true, error: getErrorMessage_(practiceError) };
   }
@@ -5778,6 +5846,7 @@ function runCourseClosureScheduler() {
   if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult, practice: practiceReconciliationResult };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
+  refreshPracticeAfterCourseClosure_(result);
   notifyCourseClosureResult_(result);
   result.notifications = notificationResult;
   result.monthlyDiscount = monthlyDiscountResult;

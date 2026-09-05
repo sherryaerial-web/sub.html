@@ -8195,6 +8195,66 @@ test('practice candidate stays pending while its linked OB course still exists',
   assert.equal(fixture.bookingSheet.values[1][6], '候補');
 });
 
+test('one continuous practice waitlist can span multiple formal courses and activates only after all are gone', () => {
+  const firstCourse = [
+    '2026/09/10', '10:30', 'C－空環 Lv.0', '老師甲',
+    'cal-first', 'class-1', 'teacher-1', '否', 'stamp',
+  ];
+  const secondCourse = [
+    '2026/09/10', '12:30', 'C－空環 Lv.1', '老師乙',
+    'cal-second', 'class-2', 'teacher-2', '否', 'stamp',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [firstCourse, secondCourse] });
+  const deliveries = [];
+  fixture.backend.sendPushAfterMutationSafely_ = (teacherNames, message) => {
+    deliveries.push({ teacherNames: Array.from(teacherNames), heading: message.heading });
+    return { attempted: true, accepted: true, delivered: teacherNames.length, error: '' };
+  };
+
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-first', date: '2026/09/10', room: 'C',
+    startTime: '10:30', endTime: '13:30', recurrence: 'once',
+  });
+
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(fixture.bookingSheet.values[1][8], 'cal-first|cal-second');
+
+  fixture.backend.getPracticeCurrentObRows_ = () => [secondCourse];
+  const partial = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+  assert.equal(partial.pending, 1);
+  assert.equal(partial.activated, 0);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(deliveries.length, 0);
+
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  const complete = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+  assert.equal(complete.activated, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+  assert.deepEqual(deliveries, [{ teacherNames: ['冠蓉'], heading: '候補自主練習已成立' }]);
+});
+
+test('expired waitlists disappear from private practice history while future waitlists remain', () => {
+  const pastCourse = ['2026/09/04', '11:00', 'A－空環', '老師甲', 'cal-past'];
+  const futureCourse = ['2026/09/07', '10:30', 'C－空環', '老師乙', 'cal-future'];
+  const fixture = createPracticeBackend({ courseRows: [pastCourse, futureCourse] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-past', date: '2026/09/04', startTime: '11:00', endTime: '12:00',
+  });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-future', date: '2026/09/07', startTime: '10:30', endTime: '11:30',
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-05T08:00:00+08:00').getTime();
+
+  const result = fixture.backend.getMyPracticeBookings_(fixture.teacher('冠蓉'), '2026-09');
+
+  assert.deepEqual(Array.from(result.items, (item) => item.bookingId), [fixture.bookingSheet.values[2][0]]);
+  assert.equal(result.items[0].status, '候補');
+});
+
 test('practice reconciliation fails closed when OB cannot be verified', () => {
   const fixture = createPracticeBackend({
     courseRows: [[
@@ -9129,6 +9189,19 @@ test('monthly discount scheduler runs before manual closure mode can return earl
   assert.ok(
     body.indexOf('runMonthlyDiscountRecommendationScheduler_') < body.indexOf("reason: 'manual'"),
     '優惠課推薦不能被關課的手動模式提前截斷',
+  );
+});
+
+test('the existing five-minute scheduler also reconciles practice before manual closure mode returns', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
+  const start = source.indexOf('function runCourseClosureScheduler()');
+  const end = source.indexOf('\nfunction ', start + 20);
+  const body = source.slice(start, end);
+
+  assert.match(body, /runScheduledPracticeReconciliation/);
+  assert.ok(
+    body.indexOf('runScheduledPracticeReconciliation') < body.indexOf("reason: 'manual'"),
+    '自主練習核對不能被關課的手動模式提前截斷',
   );
 });
 

@@ -276,6 +276,34 @@ function normalizePracticeInterval_(dateValue, startTimeValue, endTimeValue) {
   };
 }
 
+function parsePracticeWaitlistCalendarIds_(value) {
+  var seen = {};
+  return cleanText_(value).split('|').map(function(id) {
+    return cleanText_(id);
+  }).filter(function(id) {
+    if (!id || seen[id]) return false;
+    seen[id] = true;
+    return true;
+  });
+}
+
+function serializePracticeWaitlistCalendarIds_(values) {
+  var seen = {};
+  return (values || []).map(function(id) {
+    return cleanText_(id);
+  }).filter(function(id) {
+    if (!id || seen[id]) return false;
+    seen[id] = true;
+    return true;
+  }).join('|');
+}
+
+function isPracticeIntervalPast_(dateValue, endTimeValue, nowMsValue) {
+  var nowMs = Number(nowMsValue);
+  if (!isFinite(nowMs)) nowMs = currentTimeMs_();
+  return parsePracticeDateTime_(dateValue, endTimeValue).getTime() <= nowMs;
+}
+
 function practiceIntervalsConflict_(leftValue, rightValue, bufferMinutesValue) {
   var left = leftValue || {};
   var right = rightValue || {};
@@ -1907,8 +1935,10 @@ function getPracticeDay_(session, dateValue) {
   view.quickDurations = [60, 90, 120];
   view.courseSource = courseSource;
   view.courseWarning = courseWarning;
+  var nowMs = currentTimeMs_();
   view.rooms.forEach(function(room) {
     room.blocks.forEach(function(block) {
+      block.isPast = isPracticeIntervalPast_(block.date, block.endTime, nowMs);
       if (block.type !== 'practice' && block.type !== 'waitlist') return;
       block.isMine = block.participants.some(function(participant) {
         return participant.teacherName === teacherName &&
@@ -1929,6 +1959,7 @@ function getMyPracticeBookings_(session, monthValue) {
   ensurePracticeStructureUnlocked_(ss);
   var records = getPracticeRecordsUnlocked_(ss);
   var bookingById = {};
+  var nowMs = currentTimeMs_();
   records.bookings.forEach(function(booking) {
     bookingById[booking.bookingId] = booking;
   });
@@ -1940,7 +1971,9 @@ function getMyPracticeBookings_(session, monthValue) {
       booking &&
       booking.date.indexOf(monthPrefix) === 0 &&
       participantStatus === PRACTICE_PARTICIPANT_STATUS.ACTIVE &&
-      [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(bookingStatus) !== -1;
+      [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(bookingStatus) !== -1 &&
+      !(bookingStatus === PRACTICE_STATUS.WAITLISTED &&
+        isPracticeIntervalPast_(booking.date, participant.endTime || booking.endTime, nowMs));
   }).map(function(participant) {
     var booking = bookingById[participant.bookingId];
     var participantStatus = cleanText_(participant.status) || PRACTICE_PARTICIPANT_STATUS.ACTIVE;
@@ -2534,12 +2567,16 @@ function createPracticeWaitlist_(session, inputValue) {
     if (!selectedCourseConflict) {
       throw new Error('候補時間必須與所選正課或前後 15 分鐘緩衝衝突。');
     }
-    var otherConflict = conflicts.filter(function(conflict) {
-      return !(conflict.type === 'course' && conflict.id === calendarId);
+    var hardConflict = conflicts.filter(function(conflict) {
+      return conflict.type === 'rental' || conflict.type === 'practice';
     })[0];
-    if (otherConflict) {
-      throw new Error('這個候補時段另有衝突：' + otherConflict.label + '。');
+    if (hardConflict) {
+      throw new Error('這個候補時段另有衝突：' + hardConflict.label + '。');
     }
+    var linkedCalendarIds = conflicts.filter(function(conflict) {
+      return conflict.type === 'course';
+    }).map(function(conflict) { return conflict.id; });
+    var waitlistCalendarIds = serializePracticeWaitlistCalendarIds_(linkedCalendarIds);
 
     return runStateTransitionUnlocked_([
       records.sheets.bookings,
@@ -2551,8 +2588,9 @@ function createPracticeWaitlist_(session, inputValue) {
       var now = getTimestamp_();
       appendPracticeRowUnlocked_(records.sheets.bookings, SHEET_HEADERS.PRACTICE_BOOKINGS, [
         bookingId, '', date, room, interval.startTime, interval.endTime,
-        PRACTICE_STATUS.WAITLISTED, teacherName, calendarId,
-        '等待 OB 課程取消後補入', now, now, teacherName
+        PRACTICE_STATUS.WAITLISTED, teacherName, waitlistCalendarIds,
+        linkedCalendarIds.length > 1 ? '等待所有相關 OB 課程取消後補入' : '等待 OB 課程取消後補入',
+        now, now, teacherName
       ]);
       appendPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.PRACTICE_PARTICIPANTS, [
         participantId, bookingId, '', teacherName, PRACTICE_ROLE.CREATOR,
@@ -2563,7 +2601,7 @@ function createPracticeWaitlist_(session, inputValue) {
         action: '登記候補自主練習',
         targetType: '場次',
         targetId: bookingId,
-        after: { calendarId: calendarId, date: date, room: room, startTime: startTime, endTime: endTime }
+        after: { calendarIds: linkedCalendarIds, date: date, room: room, startTime: startTime, endTime: endTime }
       });
       appendAudits([{
         actor: teacherName,
@@ -2577,7 +2615,8 @@ function createPracticeWaitlist_(session, inputValue) {
         bookingId: bookingId,
         seriesId: '',
         status: PRACTICE_STATUS.WAITLISTED,
-        calendarId: calendarId
+        calendarId: calendarId,
+        calendarIds: linkedCalendarIds
       };
     });
   });
@@ -3344,8 +3383,9 @@ function reconcilePracticeBookings_(optionsValue) {
         result.checked += 1;
         var interval = normalizePracticeInterval_(booking.date, booking.startTime, booking.endTime);
         var activeTeacherNames = getPracticeActiveTeacherNames_(records, booking.bookingId);
+        var waitlistCalendarIds = parsePracticeWaitlistCalendarIds_(booking.waitlistCalendarId);
         if (booking.status === PRACTICE_STATUS.WAITLISTED &&
-            currentCalendarIds[booking.waitlistCalendarId]) {
+            waitlistCalendarIds.some(function(id) { return currentCalendarIds[id]; })) {
           result.pending += 1;
           return;
         }
@@ -4995,19 +5035,26 @@ function runCourseClosureScheduler() {
   var time = Utilities.formatDate(now, getTimeZone_(), 'HH:mm');
   var notificationResult = runScheduledNotifications_(dateKey, time);
   var monthlyDiscountResult = runMonthlyDiscountRecommendationScheduler_(dateKey, time);
+  var practiceReconciliationResult;
+  try {
+    practiceReconciliationResult = runScheduledPracticeReconciliation();
+  } catch (practiceError) {
+    practiceReconciliationResult = { failed: true, error: getErrorMessage_(practiceError) };
+  }
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureCourseClosureStructureUnlocked_(ss);
   var settings = getCourseClosureSettingsUnlocked_(
     requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS)
   );
-  if (!settings.automatic) return { skipped: true, reason: 'manual', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult };
+  if (!settings.automatic) return { skipped: true, reason: 'manual', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult, practice: practiceReconciliationResult };
   var stage = getCourseClosureDueStage_(time);
-  if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult };
+  if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult, practice: practiceReconciliationResult };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
   notifyCourseClosureFailures_(result);
   notifyCourseClosureResult_(result);
   result.notifications = notificationResult;
   result.monthlyDiscount = monthlyDiscountResult;
+  result.practice = practiceReconciliationResult;
   return result;
 }
 

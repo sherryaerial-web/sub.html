@@ -3329,6 +3329,45 @@ test('course click opens an adjustable waitlist editor and confirmation adds its
   assert.equal(getElement('practice-waitlist-count').textContent, '已選 1 堂候補');
 });
 
+test('one waitlist editor interval may span two formal courses without blocking submission', async () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'C', blocks: [
+        { id: 'ob:cal-first', type: 'course', calendarId: 'cal-first', date: '2026/09/10', room: 'C', startTime: '10:30', endTime: '11:30', label: 'C－空環 Lv.0', teacherName: '老師甲' },
+        { id: 'ob:cal-second', type: 'course', calendarId: 'cal-second', date: '2026/09/10', room: 'C', startTime: '12:30', endTime: '13:30', label: 'C－空環 Lv.1', teacherName: '老師乙' },
+      ] },
+      { room: 'A', blocks: [] }, { room: 'B', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "C"; renderPracticeView(__practiceFixture); openPracticeEditor({ block: __practiceFixture.rooms[0].blocks[0] });', context);
+  getElement('practice-editor-end').value = '13:30';
+  vm.runInContext('syncPracticeEditorAvailability();', context);
+
+  assert.equal(getElement('practice-editor-warning').textContent, '');
+  assert.equal(getElement('practice-submit').disabled, false);
+  await context.submitPracticeEditor({ preventDefault() {} });
+  assert.equal(vm.runInContext('practiceState.waitlistSelections["cal-first"].endTime', context), '13:30');
+});
+
+test('practice calendar marks completed blocks and past date choices as historical', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/04', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'A', blocks: [
+        { id: 'practice:past', type: 'practice', bookingId: 'past', date: '2026/09/04', room: 'A', startTime: '11:00', endTime: '12:00', creatorName: '冠蓉', isMine: true, isPast: true, participants: [{ teacherName: '冠蓉', role: '建立者', startTime: '11:00', endTime: '12:00' }] },
+      ] },
+      { room: 'B', blocks: [] }, { room: 'C', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+  vm.runInContext('practiceState.room = "A"; practiceState.allowPastDate = true; renderPracticeView(__practiceFixture);', context);
+
+  assert.match(getElement('practice-calendar').innerHTML, /practice-block practice is-mine is-past/);
+  assert.match(getElement('practice-date-strip').innerHTML, /practice-date-button[^>]*is-past/);
+});
+
 test('joining another teacher keeps independent start and end times outside the creator interval', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceFixture = {

@@ -1021,6 +1021,8 @@
     .practice-date-button strong { color: var(--ink); font-size: 14px; }
     .practice-date-button span { margin-top: 2px; font-size: 11px; }
     .practice-date-button.active { border-color: #cdaaa0; background: var(--aqua-100); }
+    .practice-date-button.is-past { opacity: .5; background: #f4f1ed; }
+    .practice-date-button.is-past.active { opacity: .72; }
     .practice-view-header { align-items: center; }
     .practice-header-actions { flex: 0 0 auto; }
     .practice-room-tabs {
@@ -1124,6 +1126,7 @@
     .practice-block.practice { border-left-color: #6f858d; background: #edf3f4; }
     .practice-block.waitlist { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; }
     .practice-block.is-mine { border-color: #c79689; border-left-color: #a96f61; background: #f7e9e5; box-shadow: 0 5px 14px rgba(123, 84, 74, .10); }
+    .practice-block.is-past { opacity: .5; filter: saturate(.45); box-shadow: none; }
     .practice-block.course.is-waitlist-selected { border-color: #a96f61; background: #f4e2dd; box-shadow: 0 0 0 2px rgba(169, 111, 97, .14); }
     .practice-block.course.is-waitlist-selected::after {
       position: absolute;
@@ -1163,9 +1166,11 @@
       line-height: 1.55;
     }
     .practice-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-    .practice-form-field { display: grid; gap: 6px; }
+    .practice-form-field { display: grid; min-width: 0; gap: 6px; }
     .practice-form-field.full { grid-column: 1 / -1; }
     .practice-form-field label { color: var(--ink); font-size: 12px; font-weight: 700; }
+    #practice-dialog .text-input,
+    #practice-dialog .claim-control { width: 100%; min-width: 0; max-width: 100%; }
     .practice-duration-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
     .practice-duration-button { min-height: 44px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
     .practice-duration-button.active { border-color: #cdaaa0; background: var(--aqua-100); }
@@ -1406,6 +1411,11 @@
       .record-period-actions .compact-button { flex: 1 1 120px; justify-content: center; }
       #claim-submit,
       #leave-submit { position: sticky; bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 16; box-shadow: 0 8px 28px rgba(64, 57, 54, .20); }
+    }
+
+    @media (max-width: 420px) {
+      #practice-dialog .practice-form-grid { grid-template-columns: 1fr; }
+      #practice-dialog .practice-form-field.full { grid-column: auto; }
     }
 
     @media (max-width: 380px) {
@@ -3294,7 +3304,7 @@
       byId("practice-date-strip").innerHTML = dates.map((date) => {
         const [year, month, day] = date.split("/");
         const weekday = formatDateWithWeekday(date).match(/（(.+)）/)?.[1] || "";
-        return `<button class="practice-date-button ${date === practiceState.date ? "active" : ""}" type="button" data-practice-date="${escapeHtml(date)}"><strong>${escapeHtml(`${month}/${day}`)}</strong><span>${escapeHtml(weekday)}</span></button>`;
+        return `<button class="practice-date-button${date === practiceState.date ? " active" : ""}${date < today ? " is-past" : ""}" type="button" data-practice-date="${escapeHtml(date)}"><strong>${escapeHtml(`${month}/${day}`)}</strong><span>${escapeHtml(weekday)}</span></button>`;
       }).join("");
       byId("practice-date-previous").disabled = !practiceState.allowPastDate && practiceState.date <= today;
       byId("practice-mobile-date").value = practiceState.date.replace(/\//g, "-");
@@ -3446,7 +3456,7 @@
         : block.type === "rental"
           ? "場地租借已占用，無法登記自主練習"
           : `${names || block.creatorName}｜${block.seriesId ? "每週循環" : "單次"}`;
-      return `<button class="practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}${selected ? " is-waitlist-selected" : ""}" type="button" data-practice-block="${escapeHtml(block.id)}"${block.type === "course" ? ` aria-pressed="${selected}"` : ""}><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
+      return `<button class="practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}${block.isPast ? " is-past" : ""}${selected ? " is-waitlist-selected" : ""}" type="button" data-practice-block="${escapeHtml(block.id)}"${block.type === "course" ? ` aria-pressed="${selected}"` : ""}><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
     }
 
     function getPracticeSlotConflicts(startMinutes, duration = 60, excludeBookingId = "", roomName = practiceState.room) {
@@ -3469,12 +3479,16 @@
     function getPracticeEditorSlotState(startMinutes, duration, excludeBookingId = "", roomName = practiceState.room) {
       const conflicts = getPracticeSlotConflicts(startMinutes, duration, excludeBookingId, roomName);
       const hardConflict = conflicts.find((block) => block.type === "rental" || block.type === "practice");
-      if (hardConflict) return { kind: "blocked", conflict: hardConflict, course: null };
+      if (hardConflict) return { kind: "blocked", conflict: hardConflict, course: null, courses: [] };
       const courses = conflicts.filter((block, index, all) => block.type === "course" &&
         all.findIndex((candidate) => candidate.type === "course" && candidate.calendarId === block.calendarId) === index);
-      if (courses.length > 1) return { kind: "multiple-courses", conflict: courses[0], course: null };
-      if (courses.length === 1) return { kind: "candidate", conflict: courses[0], course: courses[0] };
-      return { kind: "free", conflict: null, course: null };
+      if (courses.length > 1) return { kind: "multiple-courses", conflict: courses[0], course: null, courses };
+      if (courses.length === 1) return { kind: "candidate", conflict: courses[0], course: courses[0], courses };
+      return { kind: "free", conflict: null, course: null, courses: [] };
+    }
+
+    function practiceWaitlistCoversSelectedCourse(slotState, selectedCalendarId) {
+      return (slotState.courses || []).some((course) => course.calendarId === selectedCalendarId);
     }
 
     function renderPracticeCalendar() {
@@ -3549,7 +3563,7 @@
         const slotState = getPracticeEditorSlotState(start, minutes, excludeBookingId, roomName);
         const selectedCalendarId = editor.block?.calendarId || "";
         const available = editor.mode === "waitlist"
-            ? slotState.kind === "candidate" && slotState.course?.calendarId === selectedCalendarId
+            ? practiceWaitlistCoversSelectedCourse(slotState, selectedCalendarId)
             : practiceSlotAvailable(start, minutes, excludeBookingId, roomName);
         button.disabled = !available;
         button.classList.toggle("active", duration === minutes);
@@ -3559,7 +3573,7 @@
       let level = "error";
       const slotState = start >= 0 && duration >= 15
         ? getPracticeEditorSlotState(start, duration, excludeBookingId, roomName)
-        : { kind: "blocked", conflict: null, course: null };
+        : { kind: "blocked", conflict: null, course: null, courses: [] };
       const joinBlockStart = practiceTimeToMinutes(editor.block?.startTime);
       const joinBlockEnd = practiceTimeToMinutes(editor.block?.endTime);
       const overlapsJoinedPractice = editor.mode !== "join" || (
@@ -3571,8 +3585,10 @@
         warning = "加入時間需要與現有自主練習時段重疊。";
         blocking = true;
       }
-      else if (editor.mode === "waitlist" && !(slotState.kind === "candidate" &&
-          slotState.course?.calendarId === (editor.block?.calendarId || ""))) {
+      else if (editor.mode === "waitlist" && !practiceWaitlistCoversSelectedCourse(
+          slotState,
+          editor.block?.calendarId || ""
+        )) {
         warning = slotState.kind === "blocked" && slotState.conflict
           ? `這個候補時段另有衝突：${slotState.conflict.label || "已有行程"}。`
           : slotState.kind === "multiple-courses"

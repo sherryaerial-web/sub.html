@@ -90,6 +90,14 @@ test('practice card calendar is touch-friendly and the editor becomes a mobile b
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#practice-dialog\s*\{[^}]*width:\s*100%/s);
 });
 
+test('very narrow practice editor stacks native date and select fields without overlap', () => {
+  const html = pages[0];
+
+  assert.match(html, /\.practice-form-field\s*\{[^}]*min-width:\s*0/s);
+  assert.match(html, /#practice-dialog\s+\.text-input[\s\S]*min-width:\s*0/s);
+  assert.match(html, /@media\s*\(max-width:\s*420px\)[\s\S]*#practice-dialog\s+\.practice-form-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
+});
+
 test('practice admin cards keep filters and actions usable on narrow screens', () => {
   const html = pages[0];
 

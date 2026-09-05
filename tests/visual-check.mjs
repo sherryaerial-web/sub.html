@@ -633,10 +633,30 @@ try {
       const editorColumns = await page.evaluate(() => {
         const date = document.querySelector("#practice-editor-date").getBoundingClientRect();
         const room = document.querySelector("#practice-editor-room").getBoundingClientRect();
-        return { dateBottom: date.bottom, roomTop: room.top };
+        const body = document.querySelector("#practice-dialog .dialog-body").getBoundingClientRect();
+        return {
+          dateBottom: date.bottom,
+          roomTop: room.top,
+          dateLeft: date.left,
+          dateRight: date.right,
+          roomLeft: room.left,
+          roomRight: room.right,
+          bodyLeft: body.left,
+          bodyRight: body.right,
+          dateAppearance: getComputedStyle(document.querySelector("#practice-editor-date")).appearance,
+        };
       });
       if (editorColumns.roomTop <= editorColumns.dateBottom) {
         throw new Error(`${viewport.name}: practice date and room controls still overlap ${JSON.stringify(editorColumns)}`);
+      }
+      if (editorColumns.dateLeft < editorColumns.bodyLeft - 1 || editorColumns.dateRight > editorColumns.bodyRight + 1) {
+        throw new Error(`${viewport.name}: practice date control escapes the dialog ${JSON.stringify(editorColumns)}`);
+      }
+      if (Math.abs(editorColumns.dateLeft - editorColumns.roomLeft) > 1 || Math.abs(editorColumns.dateRight - editorColumns.roomRight) > 1) {
+        throw new Error(`${viewport.name}: practice date does not align with the other editor controls ${JSON.stringify(editorColumns)}`);
+      }
+      if (editorColumns.dateAppearance !== "none") {
+        throw new Error(`${viewport.name}: practice date keeps the native intrinsic Safari appearance ${JSON.stringify(editorColumns)}`);
       }
     }
     results.push(await capture(page, viewport.name, "08-practice-create"));

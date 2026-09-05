@@ -1171,6 +1171,19 @@
     .practice-form-field label { color: var(--ink); font-size: 12px; font-weight: 700; }
     #practice-dialog .text-input,
     #practice-dialog .claim-control { width: 100%; min-width: 0; max-width: 100%; }
+    #practice-dialog input[type="date"] {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      inline-size: 100%;
+      min-inline-size: 0;
+      max-inline-size: 100%;
+      -webkit-appearance: none;
+      appearance: none;
+      text-align: left;
+    }
+    #practice-dialog input[type="date"]::-webkit-date-and-time-value { min-height: 1.2em; text-align: left; }
     .practice-duration-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
     .practice-duration-button { min-height: 44px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
     .practice-duration-button.active { border-color: #cdaaa0; background: var(--aqua-100); }

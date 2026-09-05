@@ -5735,13 +5735,17 @@ function getVvipMonthFromDate_(value) {
   return match ? match[1] + '-' + match[2] : '';
 }
 
-function normalizeVvipMonthKey_(value) {
+function normalizeMonthKey_(value) {
   if (value && typeof value.getTime === 'function' && !isNaN(value.getTime())) {
     return Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM-dd').slice(0, 7);
   }
   var text = cleanText_(value);
   var match = /^(\d{4})[-/](\d{1,2})(?:[-/]\d{1,2})?$/.exec(text);
   return match ? match[1] + '-' + ('0' + match[2]).slice(-2) : text;
+}
+
+function normalizeVvipMonthKey_(value) {
+  return normalizeMonthKey_(value);
 }
 
 function getVvipSettings_(sheet) {
@@ -8587,15 +8591,15 @@ function isTermCourseName_(courseName) {
 }
 
 function shiftMonthKey_(monthValue, offsetValue) {
-  var match = /^(\d{4})-(\d{2})$/.exec(cleanText_(monthValue));
+  var match = /^(\d{4})-(\d{2})$/.exec(normalizeMonthKey_(monthValue));
   if (!match) throw new Error('月份格式不正確。');
   var shifted = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1 + Number(offsetValue || 0), 1));
   return shifted.getUTCFullYear() + '-' + String(shifted.getUTCMonth() + 1).padStart(2, '0');
 }
 
 function getMonthDistance_(fromMonthValue, toMonthValue) {
-  var fromMatch = /^(\d{4})-(\d{2})$/.exec(cleanText_(fromMonthValue));
-  var toMatch = /^(\d{4})-(\d{2})$/.exec(cleanText_(toMonthValue));
+  var fromMatch = /^(\d{4})-(\d{2})$/.exec(normalizeMonthKey_(fromMonthValue));
+  var toMatch = /^(\d{4})-(\d{2})$/.exec(normalizeMonthKey_(toMonthValue));
   if (!fromMatch || !toMatch) return null;
   return (Number(toMatch[1]) * 12 + Number(toMatch[2])) -
     (Number(fromMatch[1]) * 12 + Number(fromMatch[2]));
@@ -8631,7 +8635,7 @@ function normalizeDiscountCourseKey_(value) {
 }
 
 function getMonthlyDiscountEvaluationMonths_(recommendationMonthValue) {
-  var month = cleanText_(recommendationMonthValue);
+  var month = normalizeMonthKey_(recommendationMonthValue);
   return [shiftMonthKey_(month, -3), shiftMonthKey_(month, -2)];
 }
 
@@ -8687,7 +8691,7 @@ function isDiscountRecommendationCourseEligible_(descriptor) {
 }
 
 function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, historyRowsValue, recommendationMonthValue) {
-  var recommendationMonth = cleanText_(recommendationMonthValue);
+  var recommendationMonth = normalizeMonthKey_(recommendationMonthValue);
   if (!/^\d{4}-\d{2}$/.test(recommendationMonth)) throw new Error('推薦月份格式不正確。');
   var scheduleSourceMonth = shiftMonthKey_(recommendationMonth, -1);
   var evaluationMonths = getMonthlyDiscountEvaluationMonths_(recommendationMonth);
@@ -8695,7 +8699,7 @@ function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, 
   evaluationMonths.forEach(function(month) { evaluationMonthSet[month] = true; });
   var history = (historyRowsValue || []).map(function(row) {
     return {
-      month: cleanText_(row && row[0]), slotKey: cleanText_(row && row[1]),
+      month: normalizeMonthKey_(row && row[0]), slotKey: cleanText_(row && row[1]),
       weekday: row && row[2], time: formatMyTime(row && row[3]), room: cleanText_(row && row[4]),
       courseName: cleanText_(row && row[5]), teacherName: cleanText_(row && row[6])
     };
@@ -8718,7 +8722,7 @@ function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, 
 
     var totals = { observed: 0, missed: 0, lastMissDate: '' };
     (observationRowsValue || []).forEach(function(observationRow) {
-      var observationMonth = cleanText_(observationRow && observationRow[2]);
+      var observationMonth = normalizeMonthKey_(observationRow && observationRow[2]);
       if (!evaluationMonthSet[observationMonth] || cleanText_(observationRow && observationRow[13])) return;
       var observation = {
         slotKey: cleanText_(observationRow && observationRow[1]),
@@ -8873,7 +8877,7 @@ function toMonthlyDiscountRecommendationItem_(row, rowNumber) {
   return {
     rowNumber: rowNumber,
     batchId: cleanText_(row && row[0]),
-    month: cleanText_(row && row[1]),
+    month: normalizeMonthKey_(row && row[1]),
     itemId: cleanText_(row && row[2]),
     type: cleanText_(row && row[3]),
     rank: Number(row && row[4]) || 0,
@@ -8922,7 +8926,7 @@ function getMonthlyDiscountDashboardUnlocked_(spreadsheet) {
     .sort(function(left, right) { return left.rank - right.rank; });
   var history = historySheet.getDataRange().getValues().slice(1).map(function(row) {
     return {
-      month: cleanText_(row[0]), weekday: Number(row[2]), time: formatMyTime(row[3]),
+      month: normalizeMonthKey_(row[0]), weekday: Number(row[2]), time: formatMyTime(row[3]),
       room: cleanText_(row[4]), courseName: cleanText_(row[5]), teacherName: cleanText_(row[6]),
       source: cleanText_(row[7]), confirmedAt: cleanText_(row[9]), confirmedBy: cleanText_(row[10])
     };
@@ -8969,7 +8973,7 @@ function appendMonthlyDiscountBatchUnlocked_(sheet, month, actor, selection) {
 
 function generateMonthlyDiscountRecommendationsCore_(actorValue, monthValue, forceValue) {
   var actor = cleanText_(actorValue) || '系統每月推薦';
-  var month = cleanText_(monthValue);
+  var month = normalizeMonthKey_(monthValue);
   if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('推薦月份格式不正確。');
   var created = false;
   var dashboard = withScriptLock_(function() {

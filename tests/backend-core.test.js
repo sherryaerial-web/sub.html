@@ -8900,6 +8900,36 @@ test('monthly discount candidates use the two completed months and exclude ineli
   assert.match(candidates[3].reason, /歷史資料不足/);
 });
 
+test('monthly discount candidates count observation months returned by Sheets as dates', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/09/06', '11:00', 'C－空環 Lv.0', '蜜莉 戴', 'sep-1', 'class-1', 'teacher-1', '否', ''],
+  ];
+  const observationRows = [
+    ['obs-1', '', new Date('2026-07-01T00:00:00+08:00'), 0, '11:00', '', '空環 Lv.0', '蜜莉', '', 4, 2, '2026/07/26', '歷史匯入', '', ''],
+    ['obs-2', '', new Date('2026-08-01T00:00:00+08:00'), 0, '11:00', '', '空環 Lv.0', '蜜莉', '', 5, 4, '2026/08/30', '歷史匯入', '', ''],
+  ];
+
+  const candidates = backend.buildMonthlyDiscountCandidates_(courseRows, observationRows, [], '2026-10');
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].observedSessions, 9);
+  assert.equal(candidates[0].missedSessions, 6);
+  assert.match(candidates[0].reason, /近兩個完整月份/);
+});
+
+test('monthly discount dashboard rows show a month key when Sheets returns a date', () => {
+  const backend = loadBackend();
+  const row = Array(21).fill('');
+  row[0] = 'batch-1';
+  row[1] = new Date('2026-10-01T00:00:00+08:00');
+  row[2] = 'item-1';
+
+  const item = backend.toMonthlyDiscountRecommendationItem_(row, 2);
+
+  assert.equal(item.month, '2026-10');
+});
+
 test('monthly discount candidates use the current month schedule for next month recommendations', () => {
   const backend = loadBackend();
   const courseRows = [

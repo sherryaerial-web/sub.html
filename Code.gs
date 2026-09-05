@@ -1324,6 +1324,14 @@ function isNotificationScheduleDue_(scheduleValue, dateKeyValue, timeValue) {
   return currentMinutes >= scheduledMinutes && currentMinutes <= scheduledMinutes + 4;
 }
 
+function isCourseAdjustmentReminderDue_(dateKeyValue, timeValue) {
+  return isNotificationScheduleDue_({
+    day: '4',
+    time: '22:00',
+    enabled: true
+  }, dateKeyValue, timeValue);
+}
+
 function getActiveAccountTeacherNames_() {
   var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.ACCOUNTS);
   assertHeaders_(sheet, SHEET_HEADERS.ACCOUNTS);
@@ -1590,6 +1598,30 @@ function runScheduledNotifications_(dateKeyValue, timeValue) {
   var sentCount = 0;
   var failedCount = 0;
   var results = [];
+  if (isCourseAdjustmentReminderDue_(dateKey, time)) {
+    var reminderId = 'monthly-course-adjustment-reminder';
+    var reminderEventKey = 'monthly_course_adjustment_' + dateKey.replace(/\D/g, '');
+    var reminderPropertyKey = CONFIG.PUSH_SENT_KEY_PREFIX + reminderEventKey;
+    if (!properties || !properties.getProperty(reminderPropertyKey)) {
+      var reminderResult = sendManagedNotification_(
+        '系統通知排程',
+        '每月課程調整提醒',
+        reminderId,
+        'all',
+        [],
+        '課程調整提醒',
+        '如有需要調整課程，請於本月 5 日 23:59 前告知管理員。',
+        reminderEventKey
+      );
+      results.push({ scheduleId: reminderId, result: reminderResult });
+      if (reminderResult.accepted) {
+        sentCount += 1;
+        if (properties) properties.setProperty(reminderPropertyKey, dateKey + ' ' + time);
+      } else {
+        failedCount += 1;
+      }
+    }
+  }
   getNotificationSchedules_().forEach(function(schedule) {
     if (!isNotificationScheduleDue_(schedule, dateKey, time)) return;
     var eventKey = 'schedule_' + cleanText_(schedule.id).replace(/[^A-Za-z0-9_-]/g, '_') + '_' + dateKey.replace(/\D/g, '');

@@ -4390,6 +4390,13 @@ function getCourseClosureRule_(detail, stageValue) {
       base.manualReview = true;
       base.reason = 'OB 課程資料不完整，請人工確認。';
       return base;
+    } else if (getCoursePromotionType_(courseName) === 'monthly-discount' &&
+               getCourseCategory_(courseName) === '綢吊' &&
+               teacherName.indexOf('妙妙') !== -1) {
+      base.ruleKey = 'miaomiao-discounted-silk-hammock';
+      base.ruleLabel = '妙妙綢吊優惠課至少 3 人';
+      base.minimumEnrollment = 3;
+      base.cancelAtOrBelow = 2;
     } else if (['Jina', '小美', '卡拉', '卡拉 卡拉'].indexOf(teacherName) !== -1 ||
                Number(detail.points) === 2) {
       base.ruleKey = 'teacher-or-two-points';

@@ -7098,6 +7098,38 @@ test('next-day closure policy applies the approved thresholds with highest rule 
   assert.equal(policy(detail({ courseName: '雙人舞綢', enrollmentCount: 4 }), '23:40').eligible, false);
 });
 
+test('Miaomiao discounted silk hammock requires three students while ordinary silk hammock stays at two', () => {
+  const backend = loadBackend();
+  const detail = (overrides = {}) => ({
+    calendarId: 'silk-hammock-1',
+    date: '2026/09/06',
+    time: '13:15',
+    courseName: 'B－綢吊 Lv.0-2 (90分)〈優惠〉',
+    teacherName: '妙妙 簡',
+    enrollmentCount: 2,
+    points: 4,
+    cancelled: false,
+    ...overrides,
+  });
+
+  const discounted = backend.getCourseClosureRule_(detail(), '23:40');
+  assert.equal(discounted.minimumEnrollment, 3);
+  assert.equal(discounted.cancelAtOrBelow, 2);
+  assert.equal(discounted.eligible, true);
+
+  const ordinary = backend.getCourseClosureRule_(detail({
+    courseName: 'B－綢吊 Lv.0-2 (90分)',
+  }), '23:40');
+  assert.equal(ordinary.minimumEnrollment, 2);
+  assert.equal(ordinary.eligible, false);
+
+  const anotherTeacher = backend.getCourseClosureRule_(detail({
+    teacherName: '其他老師',
+  }), '23:40');
+  assert.equal(anotherTeacher.minimumEnrollment, 2);
+  assert.equal(anotherTeacher.eligible, false);
+});
+
 test('next-day closure policy always excludes venue rentals at both stages', () => {
   const backend = loadBackend();
   const detail = (courseName) => ({

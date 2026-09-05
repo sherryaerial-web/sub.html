@@ -2732,6 +2732,49 @@ test('cold app start keeps the saved login when session validation only has a co
   assert.equal(getElement('auth-shell').hidden, true);
 });
 
+test('background saved-session validation does not return an administrator from practice to management', async () => {
+  let resolveSession;
+  const sessionValidation = new Promise((resolve) => { resolveSession = resolve; });
+  const storage = new Map([
+    ['sherry-substitute-auth-session', JSON.stringify({
+      sessionToken: 'saved-session-token',
+      teacherName: '冠蓉',
+      role: '管理員',
+      managementCapabilities: ['course_admin'],
+    })],
+  ]);
+  const localStorage = {
+    getItem(key) { return storage.get(key) || ''; },
+    setItem(key, value) { storage.set(key, value); },
+    removeItem(key) { storage.delete(key); },
+  };
+  const { context, requestActions } = createFrontendRuntime(
+    {
+      getTeachers: [{ '指導者': '冠蓉' }],
+      getSession: sessionValidation,
+    },
+    { localStorage },
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(requestActions.includes('getSession'));
+  assert.equal(requestActions.filter((action) => action === 'getAdminDashboard').length, 1);
+
+  context.switchView('view-practice');
+  assert.equal(requestActions.filter((action) => action === 'getPracticeDay').length, 1);
+
+  resolveSession({
+    teacherName: '冠蓉',
+    role: '管理員',
+    managementCapabilities: ['course_admin'],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(requestActions.filter((action) => action === 'getAdminDashboard').length, 1);
+});
+
 test('cold app start still clears a session that the backend explicitly reports as expired', async () => {
   const storage = new Map([
     ['sherry-substitute-auth-session', JSON.stringify({
@@ -3130,6 +3173,21 @@ test('practice day ignores an older response after the teacher has selected a ne
 
   assert.equal(vm.runInContext('practiceState.date', context), '2026/09/16');
   assert.equal(vm.runInContext('practiceState.data.date', context), '2026/09/16');
+});
+
+test('practice day reuses a fresh same-date response instead of repeatedly calling OB', async () => {
+  const { context, requestActions } = createFrontendRuntime({
+    getPracticeDay: {
+      date: '2026/09/10', teacherName: '小琪', quickDurations: [60, 90, 120],
+      rooms: ['A', 'B', 'C', 'D'].map((room) => ({ room, blocks: [] })),
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '小琪';", context);
+
+  await context.loadPracticeDay('2026/09/10');
+  await context.loadPracticeDay('2026/09/10');
+
+  assert.equal(requestActions.filter((action) => action === 'getPracticeDay').length, 1);
 });
 
 test('practice calendar orders cards by actual start time and puts simultaneous cards in one row', () => {

@@ -1945,6 +1945,7 @@
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
+    const PRACTICE_DAY_CACHE_MS = 30000;
     const LAST_TEACHER_KEY = "sherry-substitute-last-teacher";
     const AUTH_SESSION_KEY = "sherry-substitute-auth-session";
 
@@ -1963,7 +1964,8 @@
     let notificationInbox = null;
     let inboxFilter = "all";
     let practiceAdminDashboard = null;
-    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+    let activeViewId = "";
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
     let myLeavesSnapshotHtml = null;
@@ -2806,7 +2808,7 @@
       mySubsRecordMonth = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
-      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
     }
 
     function updateActingMode() {
@@ -3071,7 +3073,8 @@
       }
     }
 
-    function showLoggedInApp() {
+    function showLoggedInApp(options = {}) {
+      const preserveView = options.preserveView === true && !!activeViewId;
       byId("auth-shell").hidden = true;
       byId("app-shell").hidden = false;
       updateActingMode();
@@ -3081,19 +3084,25 @@
         button.hidden = !authState.managementCapabilities.includes(button.dataset.capability);
       });
       const firstAdminTab = document.querySelector(".admin-tab[data-capability]:not([hidden])");
-      if (firstAdminTab) activeAdminTab = firstAdminTab.dataset.adminTab;
+      const currentAdminTab = document.querySelector(`.admin-tab[data-admin-tab="${CSS.escape(activeAdminTab)}"]:not([hidden])`);
+      if (firstAdminTab && (!preserveView || !currentAdminTab)) activeAdminTab = firstAdminTab.dataset.adminTab;
       const month = new Date().toISOString().slice(0, 7);
       byId("payroll-month").value = month;
       const route = getInitialAppRoute(window.location && window.location.search);
       const defaultView = authState.managementCapabilities.length ? "view-admin" : "view-home";
-      let targetView = route.viewId || defaultView;
+      let targetView = preserveView ? activeViewId : (route.viewId || defaultView);
       if (targetView === "view-admin" && !authState.managementCapabilities.length) targetView = "view-home";
       if (targetView === "view-admin" && route.adminTab) {
         const tabCapability = route.adminTab === "payroll" ? "payroll_admin"
           : route.adminTab === "vvip" ? "vvip_admin" : "course_admin";
         if (authState.managementCapabilities.includes(tabCapability)) activeAdminTab = route.adminTab;
       }
-      switchView(targetView);
+      if (preserveView && targetView === activeViewId) {
+        syncMobileTabState(targetView);
+        byId("back-button").classList.toggle("visible", targetView !== "view-home" && targetView !== "view-admin");
+      } else {
+        switchView(targetView);
+      }
       refreshIcons();
       initializePushForSession();
       if (targetView !== "view-inbox") fetchNotificationInbox();
@@ -3128,6 +3137,7 @@
       notificationInbox = null;
       inboxFilter = "all";
       practiceAdminDashboard = null;
+      activeViewId = "";
       pushIdentityExternalId = "";
       pushSessionTeacherName = "";
       pushInitializationPromise = null;
@@ -3165,7 +3175,7 @@
         const currentSession = await callPostApi("getSession");
         applySession(currentSession, savedSession.sessionToken);
         saveSession();
-        showLoggedInApp();
+        showLoggedInApp({ preserveView: true });
       } catch (error) {
         if (isInvalidSessionError(error)) {
           clearSession();
@@ -3215,6 +3225,7 @@
       if (viewId === "view-admin" && !authState.managementCapabilities.length) {
         return setNotice("需要管理權限。", "error");
       }
+      activeViewId = viewId;
       clearNotice();
       document.querySelectorAll(".view").forEach((view) => {
         view.classList.toggle("active", view.id === viewId);
@@ -3287,19 +3298,26 @@
     async function loadPracticeDay(dateValue, options = {}) {
       const allowPast = options.allowPast === true;
       const date = getSafePracticeDate(dateValue, getTaipeiToday(), allowPast);
-      const requestSerial = Number(practiceState.requestSerial || 0) + 1;
-      practiceState.requestSerial = requestSerial;
+      const cached = practiceState.dayCache?.[date] || null;
+      const cachedAt = Number(practiceState.dayCacheFetchedAt?.[date] || 0);
+      const cacheIsFresh = !!cached && Date.now() - cachedAt < PRACTICE_DAY_CACHE_MS;
       practiceState.date = date;
       practiceState.allowPastDate = allowPast && date < getTaipeiToday();
       renderPracticeDateStrip();
+      if (cacheIsFresh && options.forceRefresh !== true) {
+        renderPracticeView(cached);
+        return;
+      }
+      const requestSerial = Number(practiceState.requestSerial || 0) + 1;
+      practiceState.requestSerial = requestSerial;
       const calendar = byId("practice-calendar");
-      const cached = practiceState.dayCache?.[date] || null;
       if (cached) renderPracticeView(cached);
       beginReadRefresh(calendar, !!cached, '<div class="state">載入教室行程中...</div>');
       try {
         const data = await callPostApi("getPracticeDay", { date });
         if (requestSerial !== practiceState.requestSerial) return;
         practiceState.dayCache[date] = data;
+        practiceState.dayCacheFetchedAt[date] = Date.now();
         renderPracticeView(data);
       } catch (error) {
         if (requestSerial !== practiceState.requestSerial) return;
@@ -3439,6 +3457,7 @@
           successCount += 1;
           delete practiceState.waitlistSelections[selection.key];
           delete practiceState.dayCache[selection.date];
+          delete practiceState.dayCacheFetchedAt[selection.date];
         } catch (error) {
           practiceState.waitlistErrors[selection.key] = error.message || "候補登記失敗";
         }
@@ -3709,6 +3728,7 @@
         practiceState.date = practice.date;
         practiceState.room = practice.room;
         delete practiceState.dayCache[practice.date];
+        delete practiceState.dayCacheFetchedAt[practice.date];
         closePracticeEditor();
         setNotice(editor.mode === "join" ? "已加入自主練習。" : "自主練習已登記。");
         await loadPracticeDay(practiceState.date);
@@ -3730,6 +3750,8 @@
         await callPostApi("leavePracticeBooking", {
           practice: { bookingId: block.bookingId, scope: isFuture ? "future" : "once" }
         });
+        delete practiceState.dayCache[practiceState.date];
+        delete practiceState.dayCacheFetchedAt[practiceState.date];
         closePracticeEditor();
         setNotice(isFuture ? "已停止這次與之後的循環登記。" : "已退出這次自主練習。");
         await loadPracticeDay(practiceState.date);

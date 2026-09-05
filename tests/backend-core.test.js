@@ -1101,6 +1101,7 @@ function createPracticeBackend(options = {}) {
   ]]);
   const spreadsheet = createSpreadsheetFixture([courseSheet, auditSheet]);
   const backend = loadBackend({
+    ...(options.services || {}),
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
   backend.ensurePracticeStructure_();
@@ -8181,6 +8182,45 @@ test('practice candidate activates only after a successful OB check confirms the
   assert.equal(fixture.bookingSheet.values[1][6], '已成立');
 });
 
+test('scheduled practice reconciliation reads only dates with actionable practice bookings', () => {
+  const fixture = createPracticeBackend();
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('Ariel Lu'), {
+    date: '2026/09/17', room: 'B', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-06T12:00:00+08:00').getTime();
+  const reads = [];
+  fixture.backend.getPracticeCurrentObRows_ = (dateFrom, dateTo) => {
+    reads.push([dateFrom, dateTo]);
+    return [];
+  };
+
+  const result = fixture.backend.runScheduledPracticeReconciliation();
+
+  assert.deepEqual(reads, [
+    ['2026/09/10', '2026/09/10'],
+    ['2026/09/17', '2026/09/17'],
+  ]);
+  assert.equal(result.checked, 2);
+});
+
+test('scheduled practice reconciliation does not call OB when no future booking needs checking', () => {
+  const fixture = createPracticeBackend();
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-06T12:00:00+08:00').getTime();
+  let liveReads = 0;
+  fixture.backend.getPracticeCurrentObRows_ = () => {
+    liveReads += 1;
+    return [];
+  };
+
+  const result = fixture.backend.runScheduledPracticeReconciliation();
+
+  assert.equal(liveReads, 0);
+  assert.equal(result.checked, 0);
+});
+
 test('practice candidate stays pending while its linked OB course still exists', () => {
   const courseRow = [
     '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
@@ -8538,6 +8578,38 @@ test('practice day service returns the signed-in teacher and canonical room time
   assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].type, 'course');
   assert.equal(result.rooms.find((room) => room.room === 'B').blocks[0].type, 'practice');
   assert.deepEqual(Array.from(result.quickDurations), [60, 90, 120]);
+});
+
+test('practice day briefly reuses one live OB read while booking mutations still verify OB directly', () => {
+  const cache = new Map();
+  const fixture = createPracticeBackend({
+    courseRows: [],
+    services: {
+      CacheService: {
+        getScriptCache() {
+          return {
+            get(key) { return cache.get(key) || null; },
+            put(key, value) { cache.set(key, value); },
+            remove(key) { cache.delete(key); },
+          };
+        },
+      },
+    },
+  });
+  let liveReads = 0;
+  fixture.backend.getPracticeCurrentObRows_ = () => {
+    liveReads += 1;
+    return [];
+  };
+
+  fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+  fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+  assert.equal(liveReads, 1);
+
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  assert.equal(liveReads, 2);
 });
 
 test('practice day prefers the selected day live OB rows so cancelled snapshot courses disappear', () => {

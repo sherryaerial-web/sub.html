@@ -1923,7 +1923,7 @@ function getPracticeDay_(session, dateValue) {
   var courseSource = 'snapshot';
   var courseWarning = '';
   try {
-    courseRows = getPracticeCurrentObRows_(date, date);
+    courseRows = getPracticeCurrentObRowsForDayView_(date);
     courseSource = 'live';
     try {
       reconcilePracticeBookings_({
@@ -1959,6 +1959,17 @@ function getPracticeDay_(session, dateValue) {
     });
   });
   return view;
+}
+
+function getPracticeCurrentObRowsForDayView_(dateValue) {
+  var date = cleanText_(dateValue).replace(/-/g, '/');
+  parsePracticeDateTime_(date, '00:00');
+  var cacheKey = 'practice_ob_day_v1_' + date.replace(/\D/g, '');
+  var cachedRows = getCachedJsonValue_(cacheKey);
+  if (Array.isArray(cachedRows)) return cachedRows;
+  var rows = getPracticeCurrentObRows_(date, date);
+  putCachedJsonValue_(cacheKey, rows, 30);
+  return rows;
 }
 
 function getMyPracticeBookings_(session, monthValue) {
@@ -3674,8 +3685,48 @@ function reconcilePracticeBookings_(optionsValue) {
   return mutationResult;
 }
 
+function getScheduledPracticeReconciliationDates_(todayValue, throughDateValue) {
+  var today = cleanText_(todayValue).replace(/-/g, '/');
+  var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
+  return withScriptLock_(function() {
+    var records = getPracticeRecordsUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+    var seen = {};
+    return records.bookings.filter(function(booking) {
+      return booking.date >= today && booking.date <= throughDate &&
+        ([PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) !== -1 ||
+          (booking.status === PRACTICE_STATUS.CONFLICT_CANCELLED && booking.waitlistCalendarId));
+    }).map(function(booking) {
+      return booking.date;
+    }).filter(function(date) {
+      if (seen[date]) return false;
+      seen[date] = true;
+      return true;
+    }).sort();
+  });
+}
+
 function runScheduledPracticeReconciliation() {
-  return reconcilePracticeBookings_({});
+  var now = new Date(currentTimeMs_());
+  var today = Utilities.formatDate(now, 'Asia/Taipei', 'yyyy/MM/dd');
+  var throughDate = Utilities.formatDate(
+    new Date(parsePracticeDateTime_(today, '00:00').getTime() + 45 * 24 * 60 * 60 * 1000),
+    'Asia/Taipei',
+    'yyyy/MM/dd'
+  );
+  var dates = getScheduledPracticeReconciliationDates_(today, throughDate);
+  var currentObRows = [];
+  try {
+    dates.forEach(function(date) {
+      currentObRows = currentObRows.concat(getPracticeCurrentObRows_(date, date));
+    });
+  } catch (error) {
+    throw new Error('無法確認 OB，自主練習資料未變更：' + getErrorMessage_(error));
+  }
+  return reconcilePracticeBookings_({
+    today: today,
+    throughDate: throughDate,
+    currentObRows: currentObRows
+  });
 }
 
 function ensureCourseClosureStructureUnlocked_(spreadsheet) {

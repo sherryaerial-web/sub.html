@@ -8262,6 +8262,15 @@ test('my practice history returns only the signed-in teacher records for the req
   fixture.backend.joinPracticeBooking_(fixture.teacher('小琪'), {
     bookingId: shared.bookingId, startTime: '15:15', endTime: '16:00', scope: 'once',
   });
+  const exitedShared = fixture.backend.createPracticeBooking_(fixture.teacher('Tako'), {
+    date: '2026/09/13', room: 'D', startTime: '16:00', endTime: '17:00', recurrence: 'once',
+  });
+  fixture.backend.joinPracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: exitedShared.bookingId, startTime: '16:00', endTime: '17:00', scope: 'once',
+  });
+  fixture.backend.leavePracticeBooking_(fixture.teacher('小琪'), {
+    bookingId: exitedShared.bookingId, scope: 'once',
+  });
   fixture.backend.createPracticeBooking_(fixture.teacher('Jina'), {
     date: '2026/09/12', room: 'C', startTime: '16:00', endTime: '17:00', recurrence: 'once',
   });
@@ -8275,9 +8284,9 @@ test('my practice history returns only the signed-in teacher records for the req
   const result = fixture.backend.getMyPracticeBookings_(fixture.teacher('小琪'), '2026-09');
 
   assert.equal(result.month, '2026-09');
-  assert.deepEqual(result.items.map((item) => item.date), ['2026/09/11', '2026/09/10']);
-  assert.deepEqual(result.items.map((item) => item.role), ['參與者', '建立者']);
-  assert.deepEqual(result.items.map((item) => item.status), ['已成立', '已退出']);
+  assert.deepEqual(result.items.map((item) => item.date), ['2026/09/11']);
+  assert.deepEqual(result.items.map((item) => item.role), ['參與者']);
+  assert.deepEqual(result.items.map((item) => item.status), ['已成立']);
   assert.equal(result.items.some((item) => item.creatorName === 'Jina'), false);
 });
 
@@ -8829,31 +8838,32 @@ test('notification inbox event keys prevent duplicate messages and recipient row
 test('notification inbox returns only the logged-in teacher and supports read controls', () => {
   const fixture = createNotificationInboxBackend({
     messages: [
-      ['msg-1', 'event-1', '代課邀請', '新的代課邀請', '請查看課程。', '?view=claim', 'leave-1', '2026-09-03 10:00:00', '系統'],
-      ['msg-2', 'event-2', '自主練習', '自主練習已取消', '時段已取消。', '?view=practice', 'practice-1', '2026-09-02 10:00:00', '系統'],
-      ['msg-old', 'event-old', '管理提醒', '較早但未讀', '仍需顯示。', '?view=admin', '', '2026-01-01 10:00:00', '系統'],
+      ['msg-cutoff', 'event-cutoff', '自主練習', '期限內訊息', '仍需顯示。', '?view=practice', 'practice-1', '2026-07-20 12:00:00', '系統'],
+      ['msg-newest', 'event-newest', '代課邀請', '新的代課邀請', '請查看課程。', '?view=claim', 'leave-1', '2026-09-03 10:00:00', '系統'],
+      ['msg-expired', 'event-expired', '管理提醒', '超過期限的未讀訊息', '不應顯示。', '?view=admin', '', '2026-07-20 11:59:59', '系統'],
     ],
     recipients: [
-      ['recipient-1', 'msg-1', 'Vivi', '未讀', '', '2026-09-03 10:00:00'],
-      ['recipient-2', 'msg-2', 'Tako', '未讀', '', '2026-09-02 10:00:00'],
-      ['recipient-3', 'msg-old', 'Vivi', '未讀', '', '2026-01-01 10:00:00'],
+      ['recipient-cutoff', 'msg-cutoff', 'Vivi', '未讀', '', '2026-07-20 12:00:00'],
+      ['recipient-newest', 'msg-newest', 'Vivi', '未讀', '', '2026-09-03 10:00:00'],
+      ['recipient-expired', 'msg-expired', 'Vivi', '未讀', '', '2026-07-20 11:59:59'],
+      ['recipient-other', 'msg-cutoff', 'Tako', '未讀', '', '2026-07-20 12:00:00'],
     ],
   });
   const vivi = { teacherName: 'Vivi', role: '老師', managementCapabilities: [] };
 
   const before = fixture.backend.getNotificationInbox_(vivi);
   assert.equal(before.unreadCount, 2);
-  assert.deepEqual(Array.from(before.items, (item) => item.messageId), ['msg-1', 'msg-old']);
+  assert.deepEqual(Array.from(before.items, (item) => item.messageId), ['msg-newest', 'msg-cutoff']);
 
-  const marked = fixture.backend.markNotificationRead_(vivi, 'msg-1');
-  assert.equal(marked.messageId, 'msg-1');
+  const marked = fixture.backend.markNotificationRead_(vivi, 'msg-newest');
+  assert.equal(marked.messageId, 'msg-newest');
   assert.equal(marked.status, '已讀');
-  assert.equal(fixture.recipientSheet.values[1][3], '已讀');
-  assert.ok(fixture.recipientSheet.values[1][4]);
+  assert.equal(fixture.recipientSheet.values[2][3], '已讀');
+  assert.ok(fixture.recipientSheet.values[2][4]);
 
   fixture.backend.markAllNotificationsRead_(vivi);
-  assert.equal(fixture.recipientSheet.values[3][3], '已讀');
-  assert.equal(fixture.recipientSheet.values[2][3], '未讀');
+  assert.equal(fixture.recipientSheet.values[1][3], '已讀');
+  assert.equal(fixture.recipientSheet.values[4][3], '未讀');
   assert.equal(fixture.backend.getNotificationInbox_(vivi).unreadCount, 0);
 });
 

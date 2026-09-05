@@ -180,6 +180,7 @@ var CONFIG = {
   AUTH_MAX_FAILED_ATTEMPTS: 5,
   AUTH_LOCK_DURATION_MS: 15 * 60 * 1000,
   AUTH_SESSION_KEY_PREFIX: 'SUBSTITUTE_SESSION_',
+  NOTIFICATION_INBOX_RETENTION_DAYS: 45,
   PASSWORD_IMPORT_COMPLETED_PROPERTY: 'TEACHER_PASSWORD_IMPORT_COMPLETED_AT',
   PASSWORD_IMPORT_EXPECTED_ROWS: 37,
   LEAVE_BATCH_MAX: 50,
@@ -1225,7 +1226,7 @@ function getNotificationInbox_(session) {
     if (messageId) messagesById[messageId] = row;
   });
   var cutoff = Utilities.formatDate(
-    new Date(currentTimeMs_() - 90 * 24 * 60 * 60 * 1000),
+    new Date(currentTimeMs_() - CONFIG.NOTIFICATION_INBOX_RETENTION_DAYS * 24 * 60 * 60 * 1000),
     getTimeZone_(),
     'yyyy-MM-dd HH:mm:ss'
   );
@@ -1234,12 +1235,12 @@ function getNotificationInbox_(session) {
   recipientRows.slice(1).forEach(function(recipientRow) {
     if (cleanText_(recipientRow[recipientHeaders['收件人'] - 1]) !== teacherName) return;
     var status = cleanText_(recipientRow[recipientHeaders['狀態'] - 1]) || '未讀';
-    if (status !== '已讀') unreadCount += 1;
     var messageId = cleanText_(recipientRow[recipientHeaders['訊息 ID'] - 1]);
     var messageRow = messagesById[messageId];
     if (!messageRow) return;
     var createdAt = cleanText_(messageRow[messageHeaders['建立時間'] - 1]);
-    if (status === '已讀' && createdAt && createdAt < cutoff) return;
+    if (createdAt && createdAt < cutoff) return;
+    if (status !== '已讀') unreadCount += 1;
     items.push({
       messageId: messageId,
       type: cleanText_(messageRow[messageHeaders['類型'] - 1]) || '系統通知',
@@ -1883,7 +1884,13 @@ function getMyPracticeBookings_(session, monthValue) {
   });
   var items = records.participants.filter(function(participant) {
     var booking = bookingById[participant.bookingId];
-    return participant.teacherName === teacherName && booking && booking.date.indexOf(monthPrefix) === 0;
+    var participantStatus = cleanText_(participant && participant.status) || PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    var bookingStatus = cleanText_(booking && booking.status);
+    return participant.teacherName === teacherName &&
+      booking &&
+      booking.date.indexOf(monthPrefix) === 0 &&
+      participantStatus === PRACTICE_PARTICIPANT_STATUS.ACTIVE &&
+      [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(bookingStatus) !== -1;
   }).map(function(participant) {
     var booking = bookingById[participant.bookingId];
     var participantStatus = cleanText_(participant.status) || PRACTICE_PARTICIPANT_STATUS.ACTIVE;

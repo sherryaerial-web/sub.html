@@ -423,6 +423,7 @@ try {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 900 },
     { name: "tablet", width: 820, height: 980 },
+    { name: "mobile-wide", width: 430, height: 932 },
     { name: "mobile", width: 390, height: 844 }
   ]) {
     const page = await browser.newPage({ viewport });
@@ -628,6 +629,16 @@ try {
     await page.locator("#practice-dialog").waitFor({ state: "visible" });
     const focusedPracticeControl = await page.evaluate(() => document.activeElement?.id || "");
     if (focusedPracticeControl !== "practice-dialog-title") throw new Error(`${viewport.name}: practice dialog focused ${focusedPracticeControl || "nothing"} instead of its title`);
+    if (viewport.width <= 480) {
+      const editorColumns = await page.evaluate(() => {
+        const date = document.querySelector("#practice-editor-date").getBoundingClientRect();
+        const room = document.querySelector("#practice-editor-room").getBoundingClientRect();
+        return { dateBottom: date.bottom, roomTop: room.top };
+      });
+      if (editorColumns.roomTop <= editorColumns.dateBottom) {
+        throw new Error(`${viewport.name}: practice date and room controls still overlap ${JSON.stringify(editorColumns)}`);
+      }
+    }
     results.push(await capture(page, viewport.name, "08-practice-create"));
     await page.locator("#practice-dialog-cancel").click();
     await page.locator('[data-practice-block="practice-1"]').click();

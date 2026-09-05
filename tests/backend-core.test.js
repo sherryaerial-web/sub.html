@@ -8902,11 +8902,10 @@ test('practice update converts a waitlist to ordinary practice after moving outs
   assert.equal(fixture.bookingSheet.values[1][9], '');
 });
 
-test('practice update still blocks rentals other practices and ambiguous multiple-course conflicts', () => {
+test('practice update links every overlapping OB course when one waitlist spans multiple courses', () => {
   const liveRows = [
     ['2026/09/10', '11:00', 'A－原始瑜伽', 'Jina', 'cal-yoga'],
     ['2026/09/10', '12:00', 'A－皮拉提斯', 'Ariel Lu', 'cal-pilates'],
-    ['2026/09/10', '15:00', 'B－場地租借', 'Tako', 'cal-rental'],
   ];
   const fixture = createPracticeBackend({ courseRows: [] });
   fixture.backend.getPracticeCurrentObRows_ = () => liveRows;
@@ -8914,10 +8913,27 @@ test('practice update still blocks rentals other practices and ambiguous multipl
     date: '2026/09/10', room: 'A', startTime: '07:00', endTime: '08:00', recurrence: 'once',
   });
 
-  assert.throws(() => fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
+  const result = fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
     bookingId: created.bookingId, date: '2026/09/10', room: 'A',
     startTime: '11:30', endTime: '12:30', scope: 'once',
-  }), /同時.*多堂正式課程/);
+  });
+
+  assert.equal(result.status, '候補');
+  assert.equal(result.waitlistCalendarId, 'cal-yoga|cal-pilates');
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(fixture.bookingSheet.values[1][8], 'cal-yoga|cal-pilates');
+  assert.match(fixture.bookingSheet.values[1][9], /等待所有相關 OB 課程取消後補入/);
+});
+
+test('practice update still blocks rentals', () => {
+  const liveRows = [
+    ['2026/09/10', '15:00', 'B－場地租借', 'Tako', 'cal-rental'],
+  ];
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.getPracticeCurrentObRows_ = () => liveRows;
+  const created = fixture.backend.createPracticeBooking_(fixture.teacher('冠蓉'), {
+    date: '2026/09/10', room: 'A', startTime: '07:00', endTime: '08:00', recurrence: 'once',
+  });
 
   assert.throws(() => fixture.backend.updatePracticeBooking_(fixture.teacher('冠蓉'), {
     bookingId: created.bookingId, date: '2026/09/10', room: 'B',
@@ -8959,6 +8975,140 @@ test('practice update and cancellation enforce ownership and administrator reaso
   assert.equal(cancelled.status, '已取消');
   assert.equal(fixture.bookingSheet.values[1][6], '已取消');
   assert.equal(fixture.participantSheet.values[1][8], '已取消');
+});
+
+test('TimeTree migration manifest assigns every entry to the matching teacher account', () => {
+  const backend = loadBackend();
+  const entries = backend.getTimeTreePracticeMigration202609Manifest_();
+
+  assert.equal(entries.length, 20);
+  assert.deepEqual(
+    entries.find((entry) => entry.sourceId === 'nana-mon-b-1600').teacherName,
+    '@N.a🧘🏻♀️'
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(entries.find((entry) => entry.sourceId === 'milly-sun-c-1000'))),
+    {
+      sourceId: 'milly-sun-c-1000', teacherName: '蜜莉 戴', date: '2026/09/06',
+      room: 'C', startTime: '10:00', endTime: '13:15', recurrence: 'weekly',
+    }
+  );
+  assert.deepEqual(
+    Array.from(entries.find((entry) => entry.sourceId === 'liz-sun-a-1600').excludedDates),
+    ['2026/09/13']
+  );
+});
+
+test('TimeTree migration keeps teachers independent and links all overlapping OB courses', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.createPracticeBooking_(fixture.teacher('Tako'), {
+    date: '2026/09/10', room: 'C', startTime: '11:00', endTime: '12:00', recurrence: 'once',
+  });
+  const courseRows = [
+    ['2026/09/10', '10:00', 'C－空環 Lv.0', '蜜莉 戴', 'cal-first'],
+    ['2026/09/10', '12:15', 'C－空環 Lv.1~2', '蜜莉 戴', 'cal-second'],
+  ];
+  const records = fixture.backend.getPracticeRecordsUnlocked_(fixture.spreadsheet);
+  const entry = {
+    sourceId: 'milly-test', teacherName: '蜜莉 戴', date: '2026/09/10',
+    room: 'C', startTime: '10:00', endTime: '13:15', recurrence: 'weekly',
+  };
+
+  const imported = fixture.backend.appendTimeTreePracticeOccurrenceUnlocked_(
+    records, entry, '2026/09/10', 'series-milly', courseRows, '冠蓉（TimeTree 移轉）', () => {}
+  );
+  const duplicate = fixture.backend.appendTimeTreePracticeOccurrenceUnlocked_(
+    records, entry, '2026/09/10', 'series-milly', courseRows, '冠蓉（TimeTree 移轉）', () => {}
+  );
+
+  assert.equal(imported.created, true);
+  assert.equal(imported.status, '候補');
+  assert.equal(imported.waitlistCalendarId, 'cal-first|cal-second');
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(fixture.bookingSheet.values.length, 3);
+  assert.deepEqual(fixture.bookingSheet.values[2].slice(2, 10), [
+    '2026/09/10', 'C', '10:00', '13:15', '候補', '蜜莉 戴',
+    'cal-first|cal-second', '等待所有相關 OB 課程取消後補入',
+  ]);
+});
+
+test('TimeTree migration core skips an existing weekly series and imports only missing entries', () => {
+  const horizonRows = [
+    ['2026/09/07', '08:00', 'D－空環', '老師甲', 'cal-1'],
+    ['2026/09/14', '08:00', 'D－空環', '老師甲', 'cal-2'],
+    ['2026/09/21', '08:00', 'D－空環', '老師甲', 'cal-3'],
+  ];
+  const fixture = createPracticeBackend({ courseRows: horizonRows });
+  fixture.backend.createPracticeBooking_(fixture.teacher('蜜莉 戴'), {
+    date: '2026/09/07', room: 'A', startTime: '17:00', endTime: '18:00', recurrence: 'weekly',
+  });
+  const records = fixture.backend.getPracticeRecordsUnlocked_(fixture.spreadsheet);
+  const entries = fixture.backend.getTimeTreePracticeMigration202609Manifest_().filter((entry) => (
+    entry.sourceId === 'milly-mon-a-1700' || entry.sourceId === 'sherry-wed-c-1500'
+  ));
+
+  const result = fixture.backend.migrateTimeTreePracticeEntriesUnlocked_(
+    records, entries, horizonRows, '2026/09/21', '冠蓉（TimeTree 移轉）', () => {}
+  );
+
+  assert.equal(result.skippedSeries, 1);
+  assert.equal(result.createdSeries, 0);
+  assert.equal(result.createdBookings, 1);
+  assert.equal(fixture.seriesSheet.values.length, 2);
+  assert.equal(fixture.bookingSheet.values.at(-1)[7], 'Sherry❤雪莉');
+  assert.equal(fixture.bookingSheet.values.at(-1)[2], '2026/09/09');
+});
+
+test('TimeTree migration cancels only Milly split Sunday records before merging them', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.createPracticeBooking_(fixture.teacher('蜜莉 戴'), {
+    date: '2026/09/13', room: 'C', startTime: '10:00', endTime: '11:55', recurrence: 'once',
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('蜜莉 戴'), {
+    date: '2026/09/13', room: 'C', startTime: '12:15', endTime: '13:15', recurrence: 'once',
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('Carrie🐟'), {
+    date: '2026/09/13', room: 'C', startTime: '16:30', endTime: '18:00', recurrence: 'once',
+  });
+  const records = fixture.backend.getPracticeRecordsUnlocked_(fixture.spreadsheet);
+
+  const result = fixture.backend.cancelSplitMillyPracticeBookingsForMigrationUnlocked_(
+    records, '冠蓉（TimeTree 移轉）', () => {}
+  );
+
+  assert.equal(result.cancelledBookings, 2);
+  assert.deepEqual(fixture.bookingSheet.values.slice(1).map((row) => row[6]), [
+    '已取消', '已取消', '已成立',
+  ]);
+  assert.deepEqual(fixture.participantSheet.values.slice(1).map((row) => row[8]), [
+    '已退出', '已退出', '有效',
+  ]);
+});
+
+test('TimeTree weekly series keeps creating waitlists when later OB courses overlap', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  const records = fixture.backend.getPracticeRecordsUnlocked_(fixture.spreadsheet);
+  const entry = {
+    sourceId: 'future-waitlist', teacherName: 'Tako', date: '2026/09/10',
+    room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'weekly',
+  };
+  fixture.backend.migrateTimeTreePracticeEntriesUnlocked_(
+    records, [entry], [], '2026/09/10', '冠蓉（TimeTree 移轉）', () => {}
+  );
+  const series = records.series[0];
+  const laterCourse = [[
+    '2026/09/17', '14:00', 'A－空環 Lv.1', 'Ariel Lu',
+    'cal-later', 'class-later', 'teacher-ariel', '否', 'live-read',
+  ]];
+
+  fixture.backend.expandPracticeSeriesUnlocked_(
+    records, series, '2026/09/17', 'Tako', () => {}, laterCourse
+  );
+
+  const occurrence = fixture.bookingSheet.values.find((row) => row[2] === '2026/09/17');
+  assert.equal(occurrence[6], '候補');
+  assert.equal(occurrence[8], 'cal-later');
+  assert.equal(fixture.exceptionSheet.values.length, 1);
 });
 
 test('practice creator can update this and future occurrences without changing past rows', () => {

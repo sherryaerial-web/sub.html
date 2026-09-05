@@ -1925,6 +1925,17 @@ function getPracticeDay_(session, dateValue) {
   try {
     courseRows = getPracticeCurrentObRows_(date, date);
     courseSource = 'live';
+    try {
+      reconcilePracticeBookings_({
+        today: date,
+        throughDate: date,
+        currentObRows: courseRows
+      });
+      records = getPracticeRecordsUnlocked_(ss);
+    } catch (reconciliationError) {
+      courseWarning = '候補狀態核對失敗，請稍後重新整理。';
+      console.warn(courseWarning, reconciliationError);
+    }
   } catch (error) {
     courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示。';
     console.warn(courseWarning, error);
@@ -3345,12 +3356,14 @@ function reconcilePracticeBookings_(optionsValue) {
   parsePracticeDateTime_(today, '00:00');
   parsePracticeDateTime_(throughDate, '00:00');
 
-  var currentObRows;
-  try {
-    currentObRows = getPracticeCurrentObRows_(today, throughDate);
-    if (!Array.isArray(currentObRows)) throw new Error('OB 課程格式不正確。');
-  } catch (error) {
-    throw new Error('無法確認 OB，自主練習資料未變更：' + getErrorMessage_(error));
+  var currentObRows = Array.isArray(options.currentObRows) ? options.currentObRows : null;
+  if (!currentObRows) {
+    try {
+      currentObRows = getPracticeCurrentObRows_(today, throughDate);
+      if (!Array.isArray(currentObRows)) throw new Error('OB 課程格式不正確。');
+    } catch (error) {
+      throw new Error('無法確認 OB，自主練習資料未變更：' + getErrorMessage_(error));
+    }
   }
 
   var mutationResult = withScriptLock_(function() {

@@ -8474,6 +8474,30 @@ test('practice day prefers the selected day live OB rows so cancelled snapshot c
   assert.equal(result.courseWarning, '');
 });
 
+test('practice day live refresh immediately promotes a waitlist when the linked OB course is gone', () => {
+  const cancelledCourse = [
+    '2026/09/07', '10:30', 'C\uff0d\u7a7a\u74b0 Lv.0', 'Tako',
+    'cal-tako-cancelled', 'class-ring', 'teacher-tako', '\u5426', 'old-sync',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [cancelledCourse] });
+  const waitlist = fixture.backend.createPracticeWaitlist_(fixture.teacher('\u51a0\u84c9'), {
+    calendarId: 'cal-tako-cancelled', date: '2026/09/07', room: 'C',
+    startTime: '10:30', endTime: '11:30', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  fixture.backend.sendPushAfterMutationSafely_ = () => ({
+    attempted: true, accepted: true, delivered: 1, error: '',
+  });
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('\u51a0\u84c9'), '2026/09/07');
+  const practiceBlock = result.rooms.find((room) => room.room === 'C').blocks
+    .find((block) => block.bookingId === waitlist.bookingId);
+
+  assert.equal(practiceBlock.type, 'practice');
+  assert.equal(practiceBlock.status, '\u5df2\u6210\u7acb');
+  assert.equal(fixture.bookingSheet.values[1][6], '\u5df2\u6210\u7acb');
+});
+
 test('practice day fails closed to the CourseList snapshot when live OB is unavailable', () => {
   const cachedCourse = [
     '2026/09/10', '11:00', 'A－綢吊', 'Josty Lin',

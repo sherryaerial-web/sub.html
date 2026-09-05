@@ -3318,6 +3318,26 @@ function getPracticeCurrentObRows_(dateFromValue, dateToValue) {
   return rows;
 }
 
+function getPracticeCancelledWaitlistCalendarIds_(calendarIdsValue) {
+  var calendarIds = (Array.isArray(calendarIdsValue) ? calendarIdsValue : [])
+    .map(cleanText_)
+    .filter(function(id, index, all) { return id && all.indexOf(id) === index; });
+  var confirmedCancelled = {};
+  if (!calendarIds.length) return confirmedCancelled;
+
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!cleanText_(token)) return confirmedCancelled;
+  calendarIds.forEach(function(calendarId) {
+    try {
+      var detail = fetchCalendarDetail_(token, calendarId);
+      if (detail && detail.cancelled === true) confirmedCancelled[calendarId] = true;
+    } catch (error) {
+      console.warn('無法確認候補所連結的 OB 課程，保留候補：' + calendarId, error);
+    }
+  });
+  return confirmedCancelled;
+}
+
 function getPracticeActiveTeacherNames_(records, bookingId) {
   return records.participants.filter(function(item) {
     return item.bookingId === bookingId && item.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
@@ -3366,7 +3386,30 @@ function reconcilePracticeBookings_(optionsValue) {
     }
   }
 
+  var currentCalendarIdsBeforeMutation = {};
+  currentObRows.forEach(function(row) {
+    var id = cleanText_(row && row[4]);
+    if (id) currentCalendarIdsBeforeMutation[id] = true;
+  });
+  var missingWaitlistCalendarIds = withScriptLock_(function() {
+    var records = getPracticeRecordsUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+    var missing = {};
+    records.bookings.filter(function(booking) {
+      return booking.date >= today && booking.date <= throughDate &&
+        booking.status === PRACTICE_STATUS.WAITLISTED;
+    }).forEach(function(booking) {
+      parsePracticeWaitlistCalendarIds_(booking.waitlistCalendarId).forEach(function(calendarId) {
+        if (!currentCalendarIdsBeforeMutation[calendarId]) missing[calendarId] = true;
+      });
+    });
+    return Object.keys(missing);
+  });
+  var confirmedCancelledCalendarIds = getPracticeCancelledWaitlistCalendarIds_(
+    missingWaitlistCalendarIds
+  );
+
   var mutationResult = withScriptLock_(function() {
+    if (typeof SpreadsheetApp.flush === 'function') SpreadsheetApp.flush();
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var records = getPracticeRecordsUnlocked_(ss);
     var currentCalendarIds = {};
@@ -3377,8 +3420,11 @@ function reconcilePracticeBookings_(optionsValue) {
     var result = {
       checked: 0,
       activated: 0,
+      reverted: 0,
+      restored: 0,
       cancelled: 0,
       pending: 0,
+      skippedStale: 0,
       notifications: []
     };
 
@@ -3391,14 +3437,80 @@ function reconcilePracticeBookings_(optionsValue) {
       var now = getTimestamp_();
       records.bookings.filter(function(booking) {
         return booking.date >= today && booking.date <= throughDate &&
-          [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) !== -1;
+          ([PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) !== -1 ||
+            (booking.status === PRACTICE_STATUS.CONFLICT_CANCELLED && booking.waitlistCalendarId));
       }).forEach(function(booking) {
         result.checked += 1;
+        var latestStatus = cleanText_(
+          records.sheets.bookings.getRange(booking.rowNumber, 7).getValue()
+        );
+        if (latestStatus !== booking.status) {
+          result.skippedStale += 1;
+          return;
+        }
         var interval = normalizePracticeInterval_(booking.date, booking.startTime, booking.endTime);
         var activeTeacherNames = getPracticeActiveTeacherNames_(records, booking.bookingId);
         var waitlistCalendarIds = parsePracticeWaitlistCalendarIds_(booking.waitlistCalendarId);
+        var linkedCalendarStillExists = waitlistCalendarIds.some(function(id) {
+          return currentCalendarIds[id];
+        });
+
+        if (booking.status === PRACTICE_STATUS.CONFLICT_CANCELLED && linkedCalendarStillExists) {
+          var restoredTeacherNames = [];
+          records.participants.filter(function(participant) {
+            return participant.bookingId === booking.bookingId &&
+              participant.status === PRACTICE_PARTICIPANT_STATUS.CANCELLED &&
+              (participant.role === PRACTICE_ROLE.CREATOR ||
+                cleanText_(participant.leftAt) === cleanText_(booking.updatedAt));
+          }).forEach(function(participant) {
+            records.sheets.participants.getRange(participant.rowNumber, 9, 1, 3).setValues([[
+              PRACTICE_PARTICIPANT_STATUS.ACTIVE,
+              participant.joinedAt,
+              ''
+            ]]);
+            if (restoredTeacherNames.indexOf(participant.teacherName) === -1) {
+              restoredTeacherNames.push(participant.teacherName);
+            }
+          });
+          records.sheets.bookings.getRange(booking.rowNumber, 7, 1, 7).setValues([[
+            PRACTICE_STATUS.WAITLISTED,
+            booking.creatorName,
+            booking.waitlistCalendarId,
+            'OB 課程仍在，已恢復原候補',
+            booking.createdAt,
+            now,
+            '系統'
+          ]]);
+          result.restored += 1;
+          result.notifications.push({
+            bookingId: booking.bookingId,
+            eventKey: 'practice_reconcile_' + booking.bookingId + '_restore_' + booking.updatedAt,
+            teacherNames: restoredTeacherNames,
+            message: {
+              heading: '自主練習已恢復為候補',
+              content: booking.date + ' ' + booking.room + ' 教室 ' +
+                booking.startTime + '–' + booking.endTime + ' 已恢復原候補，不需重新登記。',
+              url: buildAppViewUrl_('practice')
+            }
+          });
+          appendPracticeAuditUnlocked_(records.sheets.audit, {
+            actor: '系統', action: '恢復誤取消候補', targetType: '場次',
+            targetId: booking.bookingId, before: booking.status,
+            after: PRACTICE_STATUS.WAITLISTED, reason: booking.waitlistCalendarId
+          });
+          formalAudits.push({
+            actor: '系統', action: '恢復誤取消自主練習候補', targetId: booking.bookingId,
+            before: booking.status, after: PRACTICE_STATUS.WAITLISTED,
+            reason: booking.waitlistCalendarId
+          });
+          return;
+        }
+
         if (booking.status === PRACTICE_STATUS.WAITLISTED &&
-            waitlistCalendarIds.some(function(id) { return currentCalendarIds[id]; })) {
+            (linkedCalendarStillExists || !waitlistCalendarIds.length ||
+              !waitlistCalendarIds.every(function(id) {
+                return confirmedCancelledCalendarIds[id] === true;
+              }))) {
           result.pending += 1;
           return;
         }
@@ -3414,6 +3526,46 @@ function reconcilePracticeBookings_(optionsValue) {
           return item.type === 'course' || item.type === 'rental';
         });
 
+        var restoredLinkedCourse = booking.status === PRACTICE_STATUS.ACTIVE &&
+          waitlistCalendarIds.length && conflicts.some(function(conflict) {
+            return conflict.type === 'course' && waitlistCalendarIds.indexOf(conflict.id) !== -1;
+          });
+        if (restoredLinkedCourse) {
+          records.sheets.bookings.getRange(booking.rowNumber, 7, 1, 7).setValues([[
+            PRACTICE_STATUS.WAITLISTED,
+            booking.creatorName,
+            booking.waitlistCalendarId,
+            '原 OB 課程恢復，已改回候補',
+            booking.createdAt,
+            now,
+            '系統'
+          ]]);
+          result.reverted += 1;
+          result.notifications.push({
+            bookingId: booking.bookingId,
+            eventKey: 'practice_reconcile_' + booking.bookingId + '_revert_' + booking.updatedAt,
+            teacherNames: activeTeacherNames,
+            message: {
+              heading: '原課程恢復，已改回候補',
+              content: booking.date + ' ' + booking.room + ' 教室 ' +
+                booking.startTime + '–' + booking.endTime + ' 的 OB 課程已恢復，' +
+                '自主練習已保留為候補。',
+              url: buildAppViewUrl_('practice')
+            }
+          });
+          appendPracticeAuditUnlocked_(records.sheets.audit, {
+            actor: '系統', action: '原課程恢復改回候補', targetType: '場次',
+            targetId: booking.bookingId, before: booking.status,
+            after: PRACTICE_STATUS.WAITLISTED, reason: booking.waitlistCalendarId
+          });
+          formalAudits.push({
+            actor: '系統', action: '自主練習改回候補', targetId: booking.bookingId,
+            before: booking.status, after: PRACTICE_STATUS.WAITLISTED,
+            reason: booking.waitlistCalendarId
+          });
+          return;
+        }
+
         if (booking.status === PRACTICE_STATUS.WAITLISTED && !conflicts.length) {
           records.sheets.bookings.getRange(booking.rowNumber, 7, 1, 7).setValues([[
             PRACTICE_STATUS.ACTIVE,
@@ -3427,6 +3579,7 @@ function reconcilePracticeBookings_(optionsValue) {
           result.activated += 1;
           result.notifications.push({
             bookingId: booking.bookingId,
+            eventKey: 'practice_reconcile_' + booking.bookingId + '_activate_' + booking.updatedAt,
             teacherNames: activeTeacherNames,
             message: {
               heading: '候補自主練習已成立',
@@ -3473,6 +3626,7 @@ function reconcilePracticeBookings_(optionsValue) {
         result.cancelled += 1;
         result.notifications.push({
           bookingId: booking.bookingId,
+          eventKey: 'practice_reconcile_' + booking.bookingId + '_cancel_' + booking.updatedAt,
           teacherNames: activeTeacherNames,
           message: {
             heading: '自主練習時段已取消',
@@ -3493,6 +3647,7 @@ function reconcilePracticeBookings_(optionsValue) {
         });
       });
       appendAudits(formalAudits);
+      if (typeof SpreadsheetApp.flush === 'function') SpreadsheetApp.flush();
       return result;
     });
   });
@@ -3500,7 +3655,11 @@ function reconcilePracticeBookings_(optionsValue) {
   var notificationFailures = 0;
   mutationResult.notifications.forEach(function(notification) {
     if (!notification.teacherNames.length) return;
-    var pushResult = sendPushAfterMutationSafely_(notification.teacherNames, notification.message);
+    var pushResult = sendPushOnceSafely_(
+      notification.eventKey,
+      notification.teacherNames,
+      notification.message
+    );
     if (pushResult && pushResult.accepted !== false && !cleanText_(pushResult.error)) return;
     notificationFailures += 1;
     recordPracticeNotificationFailure_({

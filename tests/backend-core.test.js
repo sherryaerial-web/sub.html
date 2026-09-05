@@ -1105,6 +1105,12 @@ function createPracticeBackend(options = {}) {
   });
   backend.ensurePracticeStructure_();
   backend.getPracticeCurrentObRows_ = () => options.courseRows || [];
+  backend.getPracticeCancelledWaitlistCalendarIds_ = (calendarIds) => (
+    (calendarIds || []).reduce((result, calendarId) => {
+      result[calendarId] = true;
+      return result;
+    }, {})
+  );
   return {
     backend,
     spreadsheet,
@@ -8193,6 +8199,86 @@ test('practice candidate stays pending while its linked OB course still exists',
   assert.equal(result.activated, 0);
   assert.equal(result.pending, 1);
   assert.equal(fixture.bookingSheet.values[1][6], '候補');
+});
+
+test('practice candidate stays pending when the OB list omits its course but calendar detail is still active', () => {
+  const courseRow = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [courseRow] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  fixture.backend.getPracticeCancelledWaitlistCalendarIds_ = () => ({});
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.activated, 0);
+  assert.equal(result.pending, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+});
+
+test('an activated waitlist returns to waitlisted when its linked OB course reappears', () => {
+  const courseRow = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [courseRow] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+
+  const deliveries = [];
+  fixture.backend.getPracticeCurrentObRows_ = () => [courseRow];
+  fixture.backend.sendPushAfterMutationSafely_ = (teacherNames, message) => {
+    deliveries.push({ teacherNames: Array.from(teacherNames), message: { ...message } });
+    return { attempted: true, accepted: true, delivered: 1, error: '' };
+  };
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.reverted, 1);
+  assert.equal(result.cancelled, 0);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(fixture.participantSheet.values[1][8], '有效');
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].message.heading, '原課程恢復，已改回候補');
+  assert.match(deliveries[0].message.eventKey, /^practice_reconcile_/);
+});
+
+test('a conflict-cancelled waitlist is repaired back to waitlisted when its linked OB course exists', () => {
+  const courseRow = [
+    '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
+    'cal-wait', 'class-1', 'teacher-1', '否', 'stamp',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [courseRow] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-wait', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  fixture.bookingSheet.values[1][6] = '衝突取消';
+  fixture.bookingSheet.values[1][9] = 'OB 課程「A－空環 Lv.1」占用此時段';
+  fixture.participantSheet.values[1][8] = '已取消';
+  fixture.participantSheet.values[1][10] = '2026-09-10 12:00:00';
+  fixture.backend.getPracticeCurrentObRows_ = () => [courseRow];
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+
+  assert.equal(result.restored, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(fixture.participantSheet.values[1][8], '有效');
+  assert.equal(fixture.participantSheet.values[1][10], '');
 });
 
 test('one continuous practice waitlist can span multiple formal courses and activates only after all are gone', () => {

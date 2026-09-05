@@ -1104,7 +1104,13 @@
     .practice-card-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-bottom: 1px solid #ece6e0; }
     .practice-card-row:last-child { border-bottom: 0; }
     .practice-card-time { padding-top: 10px; color: var(--subtle); font-size: 12px; font-weight: 750; }
-    .practice-card-stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 9px; }
+    .practice-card-stack {
+      display: grid;
+      grid-template-columns: repeat(var(--practice-lane-count, 1), minmax(0, 1fr));
+      align-items: start;
+      gap: 9px;
+    }
+    .practice-card-lane { display: grid; min-width: 0; align-content: start; gap: 9px; }
     .practice-block {
       position: relative;
       z-index: 2;
@@ -1309,8 +1315,7 @@
       .practice-room-tabs { top: 68px; }
       .practice-mobile-date { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 10px; }
       .practice-card-row { grid-template-columns: 48px minmax(0, 1fr); gap: 7px; padding: 9px 0; }
-      .practice-card-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .practice-card-stack .practice-block:only-child { grid-column: 1 / -1; }
+      .practice-card-stack { grid-template-columns: repeat(var(--practice-lane-count, 1), minmax(0, 1fr)); }
       .practice-block { padding: 10px; }
       .practice-form-grid { grid-template-columns: 1fr; }
       .practice-form-field.full { grid-column: auto; }
@@ -3523,17 +3528,41 @@
       return (slotState.courses || []).some((course) => course.calendarId === selectedCalendarId);
     }
 
+    function groupPracticeBlocksIntoLanes(blocks) {
+      const sorted = (blocks || []).slice().sort((left, right) => {
+        const startDifference = practiceTimeToMinutes(left.startTime) - practiceTimeToMinutes(right.startTime);
+        if (startDifference) return startDifference;
+        const endDifference = practiceTimeToMinutes(right.endTime) - practiceTimeToMinutes(left.endTime);
+        return endDifference || String(left.id).localeCompare(String(right.id));
+      });
+      const groups = [];
+      sorted.forEach((block) => {
+        const start = practiceTimeToMinutes(block.startTime);
+        const end = practiceTimeToMinutes(block.endTime);
+        const safeEnd = end > start ? end : start + 1;
+        let group = groups[groups.length - 1];
+        if (!group || start >= group.end) {
+          group = { start, end: safeEnd, startTime: block.startTime || "00:00", lanes: [] };
+          groups.push(group);
+        } else {
+          group.end = Math.max(group.end, safeEnd);
+        }
+        let lane = group.lanes.find((candidate) => candidate.end <= start);
+        if (!lane) {
+          lane = { end: safeEnd, blocks: [] };
+          group.lanes.push(lane);
+        }
+        lane.blocks.push(block);
+        lane.end = Math.max(lane.end, safeEnd);
+      });
+      return groups;
+    }
+
     function renderPracticeCalendar() {
       const room = getPracticeSelectedRoom();
-      const blocksByStart = new Map();
-      (room.blocks || []).forEach((block) => {
-        const startTime = block.startTime || "00:00";
-        if (!blocksByStart.has(startTime)) blocksByStart.set(startTime, []);
-        blocksByStart.get(startTime).push(block);
-      });
-      const rows = Array.from(blocksByStart.keys()).sort().map((time) => {
-        const blocks = blocksByStart.get(time).slice().sort((left, right) => String(left.endTime).localeCompare(String(right.endTime)) || String(left.id).localeCompare(String(right.id)));
-        return `<div class="practice-card-row" data-practice-start="${escapeHtml(time)}"><div class="practice-card-time">${escapeHtml(time)}</div><div class="practice-card-stack">${blocks.map(practiceBlockHtml).join("")}</div></div>`;
+      const rows = groupPracticeBlocksIntoLanes(room.blocks || []).map((group) => {
+        const lanes = group.lanes.map((lane) => `<div class="practice-card-lane">${lane.blocks.map(practiceBlockHtml).join("")}</div>`).join("");
+        return `<div class="practice-card-row" data-practice-start="${escapeHtml(group.startTime)}"><div class="practice-card-time">${escapeHtml(group.startTime)}</div><div class="practice-card-stack" style="--practice-lane-count:${group.lanes.length}">${lanes}</div></div>`;
       });
       byId("practice-calendar").innerHTML = rows.length
         ? `<div class="practice-calendar-list">${rows.join("")}</div>`

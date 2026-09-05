@@ -3212,6 +3212,32 @@ test('practice calendar orders cards by actual start time and puts simultaneous 
   assert.doesNotMatch(calendar, /practice-time-row|07:00 登記自主練習/);
 });
 
+test('practice calendar keeps one long booking beside every overlapping course', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/06', teacherName: '冠蓉', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'C', blocks: [
+        { id: 'practice:milly', type: 'waitlist', bookingId: 'milly', startTime: '10:00', endTime: '13:15', creatorName: '蜜莉 戴', participants: [{ teacherName: '蜜莉 戴', role: '建立者', startTime: '10:00', endTime: '13:15' }] },
+        { id: 'ob:1', type: 'course', calendarId: '1', startTime: '11:00', endTime: '12:00', label: 'C－空環 Lv.0', teacherName: '蜜莉 戴' },
+        { id: 'ob:2', type: 'course', calendarId: '2', startTime: '12:10', endTime: '13:10', label: 'C－空環 Lv.1~2', teacherName: '蜜莉 戴' },
+        { id: 'ob:3', type: 'course', calendarId: '3', startTime: '13:30', endTime: '14:30', label: 'C－空環 Lv.2~3', teacherName: '蜜莉 戴' },
+      ] },
+      { room: 'A', blocks: [] }, { room: 'B', blocks: [] }, { room: 'D', blocks: [] },
+    ],
+  };
+
+  vm.runInContext('practiceState.room = "C"; renderPracticeView(__practiceFixture);', context);
+  const calendar = getElement('practice-calendar').innerHTML;
+  const overlapRow = calendar.match(/<div class="practice-card-row" data-practice-start="10:00">([\s\S]*?)<\/div><\/div><\/div>/)?.[1] || '';
+
+  assert.match(overlapRow, /practice-card-lane/);
+  assert.match(overlapRow, /蜜莉 戴的候補練習/);
+  assert.match(overlapRow, /C－空環 Lv\.0/);
+  assert.match(overlapRow, /C－空環 Lv\.1~2/);
+  assert.match(calendar, /data-practice-start="13:30"/);
+});
+
 test('practice alternatives are near the requested time and not five-minute duplicates', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceFixture = {

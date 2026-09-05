@@ -186,6 +186,9 @@ const fixtures = {
     quickDurations: [60, 90, 120],
     rooms: [
       { room: "A", blocks: [
+        { id: "practice-long", bookingId: "practice-long", seriesId: "series-long", type: "waitlist", startTime: "09:30", endTime: "12:45", creatorName: "蜜莉 戴", isMine: false, participants: [
+          { teacherName: "蜜莉 戴", role: "建立者", startTime: "09:30", endTime: "12:45" }
+        ] },
         { id: "course-1", calendarId: "cal-practice-1", type: "course", startTime: "10:00", endTime: "11:00", label: "A－空環 Lv.2", teacherName: "Jina" },
         { id: "course-2", calendarId: "cal-practice-2", type: "course", startTime: "11:30", endTime: "12:30", label: "A－舞綢 Lv.1", teacherName: "Sue" },
         { id: "practice-1", bookingId: "practice-1", seriesId: "series-1", type: "practice", startTime: "14:00", endTime: "16:00", creatorName: "Ariel Lu", isMine: true, isCreator: true, participants: [
@@ -604,11 +607,23 @@ try {
             return intersects && (rect.left < strip.left - 1 || rect.right > strip.right + 1);
           }).length;
         })(),
+        overlappingPracticeLanes: (() => {
+          const stack = document.querySelector('[data-practice-block="practice-long"]')?.closest('.practice-card-stack');
+          const lanes = Array.from(stack?.querySelectorAll(':scope > .practice-card-lane') || []);
+          const rects = lanes.map((lane) => lane.getBoundingClientRect());
+          return {
+            count: lanes.length,
+            separated: rects.length === 2 && rects[0].right <= rects[1].left + 1,
+          };
+        })(),
       };
     });
     if (!practiceLayout.legend.includes("我的登記")) throw new Error(`${viewport.name}: own-practice legend is missing`);
     if (practiceLayout.ownBackground === practiceLayout.sharedBackground) throw new Error(`${viewport.name}: own practice is not visually distinct`);
     if (!practiceLayout.queryAboveDates) throw new Error(`${viewport.name}: practice query is not above date navigation`);
+    if (practiceLayout.overlappingPracticeLanes.count !== 2 || !practiceLayout.overlappingPracticeLanes.separated) {
+      throw new Error(`${viewport.name}: long practice is not laid out beside overlapping courses ${JSON.stringify(practiceLayout.overlappingPracticeLanes)}`);
+    }
     if (viewport.width <= 760 && practiceLayout.clippedDateButtons) throw new Error(`${viewport.name}: practice date buttons are clipped`);
     if (viewport.width <= 760 && (practiceLayout.iconVisible || practiceLayout.backVisible || practiceLayout.overlaps.length)) {
       throw new Error(`${viewport.name}: mobile topbar is cluttered ${JSON.stringify(practiceLayout)}`);

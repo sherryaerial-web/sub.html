@@ -1937,8 +1937,20 @@ function getPracticeDay_(session, dateValue) {
       console.warn(courseWarning, reconciliationError);
     }
   } catch (error) {
-    courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示。';
+    courseWarning = 'OB 即時課表讀取失敗，已以最後同步課表保守核對；新候補仍會等即時 OB 確認後才補入。';
     console.warn(courseWarning, error);
+    try {
+      reconcilePracticeBookings_({
+        today: date,
+        throughDate: date,
+        currentObRows: courseRows,
+        conservativeFallback: true
+      });
+      records = getPracticeRecordsUnlocked_(ss);
+    } catch (fallbackError) {
+      courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示。';
+      console.warn('自主練習保守核對失敗。', fallbackError);
+    }
   }
   var view = buildPracticeDayView_(records, courseRows, date);
   view.teacherName = teacherName;
@@ -3377,6 +3389,7 @@ function recordPracticeNotificationFailure_(eventValue) {
 
 function reconcilePracticeBookings_(optionsValue) {
   var options = optionsValue || {};
+  var conservativeFallback = options.conservativeFallback === true;
   var today = cleanText_(options.today || Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd'))
     .replace(/-/g, '/');
   var throughDate = cleanText_(options.throughDate || Utilities.formatDate(
@@ -3415,9 +3428,8 @@ function reconcilePracticeBookings_(optionsValue) {
     });
     return Object.keys(missing);
   });
-  var confirmedCancelledCalendarIds = getPracticeCancelledWaitlistCalendarIds_(
-    missingWaitlistCalendarIds
-  );
+  var confirmedCancelledCalendarIds = conservativeFallback ? {} :
+    getPracticeCancelledWaitlistCalendarIds_(missingWaitlistCalendarIds);
 
   var mutationResult = withScriptLock_(function() {
     if (typeof SpreadsheetApp.flush === 'function') SpreadsheetApp.flush();
@@ -3436,6 +3448,7 @@ function reconcilePracticeBookings_(optionsValue) {
       cancelled: 0,
       pending: 0,
       skippedStale: 0,
+      conservativeFallback: conservativeFallback,
       notifications: []
     };
 
@@ -3577,6 +3590,10 @@ function reconcilePracticeBookings_(optionsValue) {
           return;
         }
 
+        // 最後同步課表可能落後，備援模式只處理「相同 OB 課程編號重新出現」。
+        // 不用舊資料補入候補，也不取消其他已成立的自主練習。
+        if (conservativeFallback) return;
+
         if (booking.status === PRACTICE_STATUS.WAITLISTED && !conflicts.length) {
           records.sheets.bookings.getRange(booking.rowNumber, 7, 1, 7).setValues([[
             PRACTICE_STATUS.ACTIVE,
@@ -3705,6 +3722,23 @@ function getScheduledPracticeReconciliationDates_(todayValue, throughDateValue) 
   });
 }
 
+function getPracticeSnapshotRowsForDates_(datesValue) {
+  var dates = (Array.isArray(datesValue) ? datesValue : []).map(function(date) {
+    return cleanText_(date).replace(/-/g, '/');
+  });
+  var wanted = {};
+  dates.forEach(function(date) {
+    parsePracticeDateTime_(date, '00:00');
+    wanted[date] = true;
+  });
+  if (!dates.length) return [];
+  var courseSheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.COURSE_LIST);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  return courseSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return wanted[formatMyDate(row && row[0])] === true;
+  });
+}
+
 function runScheduledPracticeReconciliation() {
   var now = new Date(currentTimeMs_());
   var today = Utilities.formatDate(now, 'Asia/Taipei', 'yyyy/MM/dd');
@@ -3720,13 +3754,24 @@ function runScheduledPracticeReconciliation() {
       currentObRows = currentObRows.concat(getPracticeCurrentObRows_(date, date));
     });
   } catch (error) {
-    throw new Error('無法確認 OB，自主練習資料未變更：' + getErrorMessage_(error));
+    var fallbackResult = reconcilePracticeBookings_({
+      today: today,
+      throughDate: throughDate,
+      currentObRows: getPracticeSnapshotRowsForDates_(dates),
+      conservativeFallback: true
+    });
+    fallbackResult.courseSource = 'snapshot';
+    fallbackResult.courseWarning = 'OB 即時課表讀取失敗，已以最後同步課表保守核對。';
+    return fallbackResult;
   }
-  return reconcilePracticeBookings_({
+  var liveResult = reconcilePracticeBookings_({
     today: today,
     throughDate: throughDate,
     currentObRows: currentObRows
   });
+  liveResult.courseSource = 'live';
+  liveResult.courseWarning = '';
+  return liveResult;
 }
 
 function ensureCourseClosureStructureUnlocked_(spreadsheet) {

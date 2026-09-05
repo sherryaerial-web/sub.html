@@ -8221,6 +8221,43 @@ test('scheduled practice reconciliation does not call OB when no future booking 
   assert.equal(result.checked, 0);
 });
 
+test('scheduled practice reconciliation conservatively uses the synchronized snapshot when live OB fails', () => {
+  const restoredCourse = [
+    '2026/09/10', '11:00', 'C－空環 Lv.0', '蜜莉 戴',
+    'cal-scheduled-restored', 'class-ring', 'teacher-milly', '否', 'last-sync',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [restoredCourse] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-scheduled-restored', date: '2026/09/10', room: 'C',
+    startTime: '11:00', endTime: '13:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  fixture.backend.sendPushAfterMutationSafely_ = () => ({
+    attempted: true, accepted: true, delivered: 1, error: '',
+  });
+  fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+
+  const deliveries = [];
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-06T12:00:00+08:00').getTime();
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('OB quota exceeded'); };
+  fixture.backend.sendPushAfterMutationSafely_ = (teacherNames, message) => {
+    deliveries.push({ teacherNames: Array.from(teacherNames), message: { ...message } });
+    return { attempted: true, accepted: true, delivered: 1, error: '' };
+  };
+
+  const result = fixture.backend.runScheduledPracticeReconciliation();
+
+  assert.equal(result.courseSource, 'snapshot');
+  assert.equal(result.conservativeFallback, true);
+  assert.equal(result.reverted, 1);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].message.heading, '原課程恢復，已改回候補');
+});
+
 test('practice candidate stays pending while its linked OB course still exists', () => {
   const courseRow = [
     '2026/09/10', '14:00', 'A－空環 Lv.1', '老師甲',
@@ -8670,6 +8707,75 @@ test('practice day fails closed to the CourseList snapshot when live OB is unava
   assert.equal(result.courseSource, 'snapshot');
   assert.match(result.courseWarning, /即時課表讀取失敗/);
   assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].calendarId, 'cal-cached');
+});
+
+test('practice day live outage conservatively returns an activated linked waitlist to waitlisted', () => {
+  const restoredCourse = [
+    '2026/09/10', '11:00', 'C－空環 Lv.0', '蜜莉 戴',
+    'cal-restored', 'class-ring', 'teacher-milly', '否', 'last-sync',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [restoredCourse] });
+  const waitlist = fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-restored', date: '2026/09/10', room: 'C',
+    startTime: '11:00', endTime: '13:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  fixture.backend.sendPushAfterMutationSafely_ = () => ({
+    attempted: true, accepted: true, delivered: 1, error: '',
+  });
+  fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+  });
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+
+  const deliveries = [];
+  fixture.backend.console = { warn() {} };
+  fixture.backend.getPracticeCurrentObRows_ = () => { throw new Error('OB quota exceeded'); };
+  fixture.backend.sendPushAfterMutationSafely_ = (teacherNames, message) => {
+    deliveries.push({ teacherNames: Array.from(teacherNames), message: { ...message } });
+    return { attempted: true, accepted: true, delivered: 1, error: '' };
+  };
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('冠蓉'), '2026/09/10');
+  const block = result.rooms.find((room) => room.room === 'C').blocks
+    .find((item) => item.bookingId === waitlist.bookingId);
+
+  assert.equal(result.courseSource, 'snapshot');
+  assert.match(result.courseWarning, /保守核對/);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(block.type, 'waitlist');
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].message.heading, '原課程恢復，已改回候補');
+});
+
+test('conservative practice snapshot never activates missing waitlists or cancels unrelated practice', () => {
+  const linkedCourse = [
+    '2026/09/10', '11:00', 'C－空環 Lv.0', '蜜莉 戴',
+    'cal-linked', 'class-ring', 'teacher-milly', '否', 'last-sync',
+  ];
+  const unrelatedCourse = [
+    '2026/09/10', '15:00', 'A－空環 Lv.1', '老師甲',
+    'cal-unrelated', 'class-2', 'teacher-2', '否', 'last-sync',
+  ];
+  const fixture = createPracticeBackend({ courseRows: [linkedCourse, unrelatedCourse] });
+  fixture.backend.createPracticeWaitlist_(fixture.teacher('冠蓉'), {
+    calendarId: 'cal-linked', date: '2026/09/10', room: 'C',
+    startTime: '11:00', endTime: '12:00', recurrence: 'once',
+  });
+  fixture.backend.getPracticeCurrentObRows_ = () => [];
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '15:00', endTime: '16:00', recurrence: 'once',
+  });
+
+  const result = fixture.backend.reconcilePracticeBookings_({
+    today: '2026/09/10', throughDate: '2026/09/10',
+    currentObRows: [unrelatedCourse], conservativeFallback: true,
+  });
+
+  assert.equal(result.activated, 0);
+  assert.equal(result.cancelled, 0);
+  assert.equal(fixture.bookingSheet.values[1][6], '候補');
+  assert.equal(fixture.bookingSheet.values[2][6], '已成立');
 });
 
 test('practice waitlist validates against the same live OB rows shown on the selected day', () => {

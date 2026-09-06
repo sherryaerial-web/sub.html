@@ -7143,11 +7143,10 @@ test('payroll dashboard recognizes month cells stored as Google Sheets dates', (
   const payment = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
   const sherryFormat = createSheetFixture('給雪莉的格式', [
     ['中國信託銀行', '金額', '備註'],
-    ['Wen', 99999, ''],
-    ['蕃茄', 99999, ''],
+    ['Tako', 99999, '轉永豐'],
     ['', '', ''],
     ['台新銀行', '金額', '備註'],
-    ['Tako', 99999, '轉永豐'],
+    ['Liz 🌰', 99999, ''],
   ]);
   summaries.values.push(
     [augustSheetDate, 'wen', 4800, 0, 0, 0, 4800, 3566, 'version-1', '待確認', '', 'now', 0, '', '', ''],
@@ -7169,11 +7168,12 @@ test('payroll dashboard recognizes month cells stored as Google Sheets dates', (
   assert.equal(result.lines.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(result.sherryFormatRows)), [
     ['中國信託銀行', '金額', '備註'],
+    ['Tako', 58837, '轉永豐'],
     ['Wen', 4800, ''],
     ['蕃茄', 800, ''],
     ['', '', ''],
     ['台新銀行', '金額', '備註'],
-    ['Tako', 58837, '轉永豐'],
+    ['Liz 🌰', '', ''],
   ]);
 });
 

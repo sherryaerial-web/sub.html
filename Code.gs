@@ -8847,6 +8847,25 @@ function getSherryPayrollExportRows_(spreadsheet, summaries) {
     var amount = Object.prototype.hasOwnProperty.call(salaryByTeacher, key) ? salaryByTeacher[key] : '';
     return [name, amount, cleanText_(row[2])];
   });
+  var existingTeacherKeys = {};
+  rows.forEach(function(row) {
+    var key = normalizePayrollExportTeacherKey_(row[0]);
+    if (key) existingTeacherKeys[key] = true;
+  });
+  var firstBankRequiredTeachers = ['Wen', '蕃茄'];
+  var secondSectionIndex = rows.findIndex(function(row) { return cleanText_(row[0]) === '台新銀行'; });
+  var insertionIndex = secondSectionIndex < 0 ? rows.length : secondSectionIndex;
+  if (insertionIndex > 0 && rows[insertionIndex - 1].every(function(value) { return value === ''; })) {
+    insertionIndex -= 1;
+  }
+  firstBankRequiredTeachers.forEach(function(name) {
+    var key = normalizePayrollExportTeacherKey_(name);
+    if (existingTeacherKeys[key]) return;
+    var amount = Object.prototype.hasOwnProperty.call(salaryByTeacher, key) ? salaryByTeacher[key] : '';
+    rows.splice(insertionIndex, 0, [name, amount, '']);
+    insertionIndex += 1;
+    existingTeacherKeys[key] = true;
+  });
   while (rows.length && rows[rows.length - 1].every(function(value) { return value === ''; })) rows.pop();
   return rows;
 }

@@ -210,6 +210,8 @@ var CONFIG = {
   PUSH_EXTERNAL_ID_SALT_PROPERTY: 'PUSH_EXTERNAL_ID_SALT',
   PUSH_SENT_KEY_PREFIX: 'PUSH_SENT_',
   NOTIFICATION_SCHEDULES_PROPERTY: 'NOTIFICATION_SCHEDULES_V1',
+  MONTHLY_OPERATIONS_PROPERTY_PREFIX: 'MONTHLY_OPERATIONS_V1_',
+  MONTHLY_OPERATIONS_TEMPLATES_PROPERTY: 'MONTHLY_OPERATIONS_TEMPLATES_V1',
   COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
   PRACTICE_OB_DAY_CACHE_SECONDS: 60 * 60,
   PRACTICE_RECONCILE_HOUR_PROPERTY: 'PRACTICE_RECONCILE_HOUR_V1',
@@ -1505,14 +1507,6 @@ function getMonthlyOperationDueEventIds_(dateKeyValue, timeValue, contextValue) 
   }).map(function(item) { return item[0]; });
 }
 
-function isCourseAdjustmentReminderDue_(dateKeyValue, timeValue) {
-  return isNotificationScheduleDue_({
-    day: '4',
-    time: '22:00',
-    enabled: true
-  }, dateKeyValue, timeValue);
-}
-
 function getActiveAccountTeacherNames_() {
   var sheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.ACCOUNTS);
   assertHeaders_(sheet, SHEET_HEADERS.ACCOUNTS);
@@ -1547,6 +1541,223 @@ function saveNotificationSchedules_(schedules) {
   var properties = getScriptProperties_();
   if (!properties) throw new Error('目前無法儲存通知排程。');
   properties.setProperty(CONFIG.NOTIFICATION_SCHEDULES_PROPERTY, JSON.stringify(schedules || []));
+}
+
+function getDefaultMonthlyOperationsTemplates_() {
+  return {
+    course_adjustment_start: {
+      heading: '本月課程調整開始',
+      content: '本月課程調整期間已開始，如需調整下月課程，請於期限內完成或告知管理員。',
+      audienceMode: 'all'
+    },
+    course_adjustment_end: {
+      heading: '本月課程調整即將截止',
+      content: '本月課程調整即將截止，尚有調整需求請盡快完成或告知管理員。',
+      audienceMode: 'all'
+    },
+    leave_open_admin: {
+      heading: '請準備開放請假',
+      content: '本月課程調整期已結束，可進入管理後台開放請假登記。',
+      audienceMode: 'admins'
+    },
+    leave_deadline_admin: {
+      heading: '請假截止提醒待處理',
+      content: '明天是本月建議請假截止日，可視情況發送老師截止提醒。',
+      audienceMode: 'admins'
+    },
+    leave_close_admin: {
+      heading: '請確認結束請假',
+      content: '已到本月建議請假截止時間，請確認資料並視情況結束請假登記。',
+      audienceMode: 'admins'
+    },
+    vvip_prepare_admin: {
+      heading: '請準備 VVIP 選課',
+      content: '請準備本月 VVIP 選課與一般預約開放作業。',
+      audienceMode: 'admins'
+    },
+    vvip_open_admin: {
+      heading: '請開放 VVIP 選課',
+      content: '今天是建議開放 VVIP 選課的日期，請至管理後台確認並開放。',
+      audienceMode: 'admins'
+    },
+    vvip_close_admin: {
+      heading: '請結束 VVIP 選課',
+      content: '今天是建議結束 VVIP 選課的日期，請至管理後台確認並關閉。',
+      audienceMode: 'admins'
+    },
+    general_booking_admin: {
+      heading: '請開放一般預約',
+      content: '今天是本月一般預約開放日，請確認 OB 系統並正式開放預約。',
+      audienceMode: 'admins'
+    },
+    open_leave: {
+      heading: '本月請假登記已開放',
+      content: '本月請假登記已開放，請於期限內完成下月請假。',
+      audienceMode: 'all'
+    },
+    send_leave_deadline: {
+      heading: '本月請假登記即將截止',
+      content: '本月請假登記即將截止，尚未完成的老師請盡快填寫。',
+      audienceMode: 'all'
+    },
+    open_substitute: {
+      heading: '代課／特別課已開放',
+      content: '本輪代課／特別課已開放，請進入系統查看並領取。',
+      audienceMode: 'all'
+    },
+    close_substitute: {
+      heading: '代課／特別課已結束',
+      content: '本輪代課／特別課領取已結束。',
+      audienceMode: 'all'
+    },
+    close_substitute_admin: {
+      heading: '請接續確認 VVIP',
+      content: '本輪代課／特別課已結束，請接著確認 VVIP 選課階段。',
+      audienceMode: 'admins'
+    }
+  };
+}
+
+function getMonthlyOperationsTemplates_() {
+  var defaults = getDefaultMonthlyOperationsTemplates_();
+  var properties = getScriptProperties_();
+  var raw = properties ? properties.getProperty(CONFIG.MONTHLY_OPERATIONS_TEMPLATES_PROPERTY) : '';
+  if (!raw) return defaults;
+  try {
+    var saved = JSON.parse(raw) || {};
+    Object.keys(defaults).forEach(function(id) {
+      if (!saved[id]) return;
+      var copy = validateNotificationCopy_(saved[id].heading, saved[id].content);
+      defaults[id] = {
+        heading: copy.heading,
+        content: copy.content,
+        audienceMode: defaults[id].audienceMode
+      };
+    });
+  } catch (error) {
+    console.warn('月度營運通知範本無法解析，已改用預設文字。', error);
+  }
+  return defaults;
+}
+
+function saveMonthlyOperationsTemplates_(session, templatesValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  var current = getMonthlyOperationsTemplates_();
+  var input = templatesValue && typeof templatesValue === 'object' ? templatesValue : {};
+  Object.keys(input).forEach(function(id) {
+    if (!Object.prototype.hasOwnProperty.call(current, id)) return;
+    var copy = validateNotificationCopy_(input[id] && input[id].heading, input[id] && input[id].content);
+    current[id] = {
+      heading: copy.heading,
+      content: copy.content,
+      audienceMode: current[id].audienceMode
+    };
+  });
+  var properties = getScriptProperties_();
+  if (!properties) throw new Error('目前無法儲存月度通知文字。');
+  properties.setProperty(CONFIG.MONTHLY_OPERATIONS_TEMPLATES_PROPERTY, JSON.stringify(current));
+  return current;
+}
+
+function getMonthlyOperationsState_(monthKeyValue) {
+  var month = normalizeMonthlyOperationsMonthKey_(monthKeyValue);
+  var defaults = {
+    version: 1,
+    month: month,
+    events: {},
+    operations: {},
+    substituteOpenedAt: ''
+  };
+  var properties = getScriptProperties_();
+  var raw = properties
+    ? properties.getProperty(CONFIG.MONTHLY_OPERATIONS_PROPERTY_PREFIX + month.replace('-', '_'))
+    : '';
+  if (!raw) return defaults;
+  try {
+    var saved = JSON.parse(raw) || {};
+    defaults.events = saved.events && typeof saved.events === 'object' ? saved.events : {};
+    defaults.operations = saved.operations && typeof saved.operations === 'object' ? saved.operations : {};
+    defaults.substituteOpenedAt = cleanText_(saved.substituteOpenedAt);
+  } catch (error) {
+    console.warn('月度營運狀態無法解析，已改用空白狀態。', error);
+  }
+  return defaults;
+}
+
+function saveMonthlyOperationsState_(monthKeyValue, stateValue) {
+  var month = normalizeMonthlyOperationsMonthKey_(monthKeyValue);
+  var state = stateValue || {};
+  var normalized = {
+    version: 1,
+    month: month,
+    events: state.events && typeof state.events === 'object' ? state.events : {},
+    operations: state.operations && typeof state.operations === 'object' ? state.operations : {},
+    substituteOpenedAt: cleanText_(state.substituteOpenedAt)
+  };
+  var properties = getScriptProperties_();
+  if (!properties) throw new Error('目前無法儲存月度營運狀態。');
+  properties.setProperty(
+    CONFIG.MONTHLY_OPERATIONS_PROPERTY_PREFIX + month.replace('-', '_'),
+    JSON.stringify(normalized)
+  );
+  return normalized;
+}
+
+function shouldSkipMonthlyOperationsEvent_(eventId, state) {
+  var operations = state && state.operations ? state.operations : {};
+  if (eventId === 'leave_open_admin' && operations.open_leave && operations.open_leave.completedAt) return true;
+  if ((eventId === 'leave_deadline_admin' || eventId === 'leave_close_admin') &&
+      operations.close_leave && operations.close_leave.completedAt) return true;
+  return false;
+}
+
+function runMonthlyOperationsNotifications_(dateKeyValue, timeValue) {
+  var dateKey = cleanText_(dateKeyValue);
+  var time = cleanText_(timeValue);
+  var month = normalizeMonthlyOperationsMonthKey_(dateKey.slice(0, 7));
+  var state = getMonthlyOperationsState_(month);
+  var dueIds = getMonthlyOperationDueEventIds_(dateKey, time, {
+    substituteOpenedAt: state.substituteOpenedAt
+  });
+  var templates = getMonthlyOperationsTemplates_();
+  var result = { sentCount: 0, skippedCount: 0, failedCount: 0, items: [] };
+  dueIds.forEach(function(eventId) {
+    var eventState = state.events[eventId] || {};
+    if (cleanText_(eventState.sentAt) || shouldSkipMonthlyOperationsEvent_(eventId, state)) {
+      result.skippedCount += 1;
+      return;
+    }
+    var template = templates[eventId];
+    if (!template) {
+      result.failedCount += 1;
+      result.items.push({ scheduleId: eventId, error: '找不到月度通知範本。' });
+      return;
+    }
+    var eventKey = 'monthly_operations_' + month.replace(/\D/g, '') + '_' + eventId;
+    var delivery = sendManagedNotification_(
+      '系統通知排程',
+      '月度營運流程',
+      eventId,
+      template.audienceMode,
+      [],
+      template.heading,
+      template.content,
+      eventKey
+    );
+    var attemptedAt = dateKey + ' ' + time + ':00';
+    state.events[eventId] = {
+      eventKey: eventKey,
+      lastAttemptAt: attemptedAt,
+      sentAt: delivery.accepted ? attemptedAt : '',
+      lastError: delivery.accepted ? '' : (delivery.error || '通知服務未接受本次發送。'),
+      recipientCount: delivery.recipientCount || 0
+    };
+    saveMonthlyOperationsState_(month, state);
+    result.items.push({ scheduleId: eventId, result: delivery });
+    if (delivery.accepted) result.sentCount += 1;
+    else result.failedCount += 1;
+  });
+  return result;
 }
 
 function normalizeNotificationAudienceMode_(modeValue) {
@@ -1779,30 +1990,10 @@ function runScheduledNotifications_(dateKeyValue, timeValue) {
   var sentCount = 0;
   var failedCount = 0;
   var results = [];
-  if (isCourseAdjustmentReminderDue_(dateKey, time)) {
-    var reminderId = 'monthly-course-adjustment-reminder';
-    var reminderEventKey = 'monthly_course_adjustment_' + dateKey.replace(/\D/g, '');
-    var reminderPropertyKey = CONFIG.PUSH_SENT_KEY_PREFIX + reminderEventKey;
-    if (!properties || !properties.getProperty(reminderPropertyKey)) {
-      var reminderResult = sendManagedNotification_(
-        '系統通知排程',
-        '每月課程調整提醒',
-        reminderId,
-        'all',
-        [],
-        '課程調整提醒',
-        '如有需要調整課程，請於本月 5 日 23:59 前告知管理員。',
-        reminderEventKey
-      );
-      results.push({ scheduleId: reminderId, result: reminderResult });
-      if (reminderResult.accepted) {
-        sentCount += 1;
-        if (properties) properties.setProperty(reminderPropertyKey, dateKey + ' ' + time);
-      } else {
-        failedCount += 1;
-      }
-    }
-  }
+  var monthlyResult = runMonthlyOperationsNotifications_(dateKey, time);
+  sentCount += Number(monthlyResult.sentCount || 0);
+  failedCount += Number(monthlyResult.failedCount || 0);
+  results = results.concat(monthlyResult.items || []);
   getNotificationSchedules_().forEach(function(schedule) {
     if (!isNotificationScheduleDue_(schedule, dateKey, time)) return;
     var eventKey = 'schedule_' + cleanText_(schedule.id).replace(/[^A-Za-z0-9_-]/g, '_') + '_' + dateKey.replace(/\D/g, '');

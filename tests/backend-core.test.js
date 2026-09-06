@@ -1128,6 +1128,7 @@ function createNotificationBackend() {
   return {
     backend,
     services,
+    spreadsheet,
     auditSheet,
     adminSession: backend.requireSession_(backend.authenticate_('冠蓉', '1234').sessionToken),
   };
@@ -1220,54 +1221,43 @@ test('fixed notification schedules send once in the five-minute window even when
   assert.match(deliveries[0].message.eventKey, /^schedule_[A-Za-z0-9_-]+_20260831$/);
 });
 
-test('monthly course adjustment reminder is due only on day 4 from 22:00 through 22:04', () => {
-  const backend = loadBackend();
-
-  assert.equal(backend.isCourseAdjustmentReminderDue_('2026-10-04', '21:59'), false);
-  assert.equal(backend.isCourseAdjustmentReminderDue_('2026-10-04', '22:00'), true);
-  assert.equal(backend.isCourseAdjustmentReminderDue_('2026-10-04', '22:04'), true);
-  assert.equal(backend.isCourseAdjustmentReminderDue_('2026-10-04', '22:05'), false);
-  assert.equal(backend.isCourseAdjustmentReminderDue_('2026-10-05', '22:00'), false);
-});
-
-test('monthly course adjustment reminder notifies every active teacher once and is retained by managed delivery', () => {
-  const { backend } = createNotificationBackend();
+test('monthly automatic reminders use fixed audiences and persist one completion per event', () => {
+  const { backend, services } = createNotificationBackend();
   const deliveries = [];
   backend.sendPushNotificationSafely_ = (names, message) => {
-    deliveries.push({ names: Array.from(names), message: { ...message } });
-    return { attempted: true, accepted: true, delivered: 3, messageId: 'monthly-reminder-1', error: '' };
+    deliveries.push({ names: Array.from(names), eventKey: message.eventKey });
+    return { attempted: true, accepted: true, delivered: names.length, messageId: `push-${deliveries.length}`, error: '' };
   };
-
-  const first = backend.runScheduledNotifications_('2026-10-04', '22:03');
-  const second = backend.runScheduledNotifications_('2026-10-04', '22:04');
-
-  assert.equal(first.sentCount, 1);
-  assert.equal(second.sentCount, 0);
-  assert.equal(deliveries.length, 1);
+  assert.equal(backend.runMonthlyOperationsNotifications_('2026-10-01', '21:03').sentCount, 1);
+  assert.equal(backend.runMonthlyOperationsNotifications_('2026-10-01', '21:04').sentCount, 0);
   assert.deepEqual(deliveries[0].names, ['冠蓉', 'Tako', 'Jina']);
-  assert.equal(deliveries[0].message.heading, '課程調整提醒');
-  assert.equal(deliveries[0].message.content, '如有需要調整課程，請於本月 5 日 23:59 前告知管理員。');
-  assert.equal(deliveries[0].message.type, '每月課程調整提醒');
-  assert.equal(deliveries[0].message.eventKey, 'monthly_course_adjustment_20261004');
+  assert.equal(backend.runMonthlyOperationsNotifications_('2026-10-07', '21:00').sentCount, 1);
+  assert.deepEqual(deliveries[1].names, ['冠蓉', 'Tako']);
+  assert.match(services.PropertiesService.getScriptProperties().getProperty('MONTHLY_OPERATIONS_V1_2026_10'), /course_adjustment_start/);
 });
 
-test('failed monthly course adjustment reminder remains retryable inside its five-minute window', () => {
+test('a failed monthly automatic reminder remains retryable without duplicating its inbox event', () => {
   const { backend } = createNotificationBackend();
   let attempts = 0;
-  backend.sendPushNotificationSafely_ = () => {
-    attempts += 1;
-    if (attempts === 1) {
-      return { attempted: true, accepted: false, delivered: 0, messageId: '', error: 'temporary failure' };
-    }
-    return { attempted: true, accepted: true, delivered: 3, messageId: 'monthly-reminder-2', error: '' };
-  };
-
-  const first = backend.runScheduledNotifications_('2026-10-04', '22:00');
-  const second = backend.runScheduledNotifications_('2026-10-04', '22:01');
-
+  backend.sendPushNotificationSafely_ = () => (++attempts === 1)
+    ? { attempted: true, accepted: false, delivered: 0, messageId: '', error: 'temporary' }
+    : { attempted: true, accepted: true, delivered: 3, messageId: 'retry-ok', error: '' };
+  const first = backend.runMonthlyOperationsNotifications_('2026-11-05', '21:00');
+  const second = backend.runMonthlyOperationsNotifications_('2026-11-05', '21:01');
   assert.equal(first.failedCount, 1);
   assert.equal(second.sentCount, 1);
   assert.equal(attempts, 2);
+});
+
+test('scheduled notifications include monthly operations without creating another scheduler trigger', () => {
+  const { backend } = createNotificationBackend();
+  backend.sendPushNotificationSafely_ = (names) => ({
+    attempted: true, accepted: true, delivered: names.length, messageId: 'combined', error: '',
+  });
+  const result = backend.runScheduledNotifications_('2026-12-01', '21:02');
+  assert.equal(result.sentCount, 1);
+  assert.equal(result.failedCount, 0);
+  assert.equal(result.items[0].scheduleId, 'course_adjustment_start');
 });
 
 test('OneSignal failure returns a safe result without throwing or exposing the key', () => {

@@ -141,6 +141,24 @@ const EXPECTED_PAYROLL_DISPUTE_HEADERS = [
   '異議 ID', '月份', '老師', '明細 ID', '問題說明', '狀態', '管理員回覆',
   '提出時間', '處理者', '處理時間',
 ];
+
+const EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS = [
+  '學生 ID', 'OB 登記姓名', '身分辨識尾碼', '裝置 Token 雜湊', '資格狀態',
+  '確認時間', '確認者', '備註', '建立時間', '更新時間',
+  '晴光資格狀態', '晴光確認時間', '晴光確認者',
+  '劍潭資格狀態', '劍潭確認時間', '劍潭確認者',
+];
+const EXPECTED_STUDENT_PRACTICE_GROUP_HEADERS = [
+  '場次 ID', '日期', '教室', '開始時間', '結束時間', '狀態', '異動狀態',
+  '建立時間', '更新時間', '更新者',
+];
+const EXPECTED_STUDENT_PRACTICE_PARTICIPANT_HEADERS = [
+  '參與 ID', '場次 ID', '學生 ID', '資格狀態', '登記狀態', '加入時間',
+  '取消時間', '取消原因', '備註',
+];
+const EXPECTED_STUDENT_PRACTICE_AUDIT_HEADERS = [
+  '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON', '修改後 JSON', '原因',
+];
 const EXPECTED_PAYROLL_PAYMENT_HEADERS = ['老師', '轉帳群組/銀行', '備註', '是否啟用'];
 const EXPECTED_COURSE_CLOSURE_SETTING_HEADERS = [
   '設定鍵', '設定值', '更新時間', '操作者', '備註',
@@ -2281,6 +2299,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
       '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
+      '學生自主練習資格', '學生自主練習場次',
+      '學生自主練習參與者', '學生自主練習操作紀錄',
       '課程調整', '通知訊息', '通知收件人'
       , '課程開課觀測', '優惠課程歷史', '優惠課程推薦'
     ].sort()
@@ -10023,4 +10043,375 @@ test('daily closure results become one observation per OB calendar item without 
   assert.equal(cal1[0][10], 1);
   assert.equal(cal2.length, 1);
   assert.equal(cal2[0][13], '代課');
+});
+
+test('student practice availability hides private blocker data and exposes only durations that fit', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-09T00:00:00+08:00').getTime(),
+    dayStartTime: '07:00',
+    dayEndTime: '14:00',
+    rooms: [{
+      room: 'A',
+      blockers: [
+        { type: 'course', startTime: '09:00', endTime: '10:00', label: 'A－空環', teacherName: '老師甲', calendarId: 'ob-1' },
+        { type: 'teacher-practice', startTime: '12:00', endTime: '13:00', teacherName: '老師乙', bookingId: 'teacher-1' },
+      ],
+      studentGroups: [],
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    date: '2026/09/10',
+    rooms: [{
+      room: 'A',
+      slots: [
+        { type: 'empty', startTime: '07:00', endTime: '08:45', durations: [60, 90] },
+        { type: 'empty', startTime: '10:15', endTime: '11:45', durations: [60, 90] },
+      ],
+    }],
+  });
+  assert.equal(JSON.stringify(result).includes('老師甲'), false);
+  assert.equal(JSON.stringify(result).includes('ob-1'), false);
+  assert.equal(JSON.stringify(result).includes('A－空環'), false);
+});
+
+test('student practice availability exposes an existing student group without participant names', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-09T00:00:00+08:00').getTime(),
+    dayStartTime: '09:00',
+    dayEndTime: '14:00',
+    rooms: [{
+      room: 'B',
+      blockers: [],
+      studentGroups: [{
+        groupId: 'group-public-id',
+        startTime: '11:00',
+        endTime: '12:00',
+        status: '已成立',
+        participantNames: ['學生甲', '學生乙'],
+      }],
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms[0].slots)), [
+    { type: 'empty', startTime: '09:00', endTime: '10:45', durations: [60, 90] },
+    { type: 'shared', groupId: 'group-public-id', startTime: '11:00', endTime: '12:00', durations: [60] },
+    { type: 'empty', startTime: '12:15', endTime: '14:00', durations: [60, 90] },
+  ]);
+  assert.equal(JSON.stringify(result).includes('學生甲'), false);
+});
+
+test('student practice availability removes starts inside the two hour deadline', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-10T08:10:00+08:00').getTime(),
+    dayStartTime: '07:00',
+    dayEndTime: '14:00',
+    rooms: [{ room: 'C', blockers: [], studentGroups: [] }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms[0].slots)), [
+    { type: 'empty', startTime: '10:10', endTime: '14:00', durations: [60, 90, 120] },
+  ]);
+});
+
+test('student practice availability reserves a pending qualification request without showing it as shared', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-09T00:00:00+08:00').getTime(),
+    dayStartTime: '09:00',
+    dayEndTime: '14:00',
+    rooms: [{
+      room: 'D', blockers: [], studentGroups: [{
+        groupId: 'pending-private', startTime: '11:00', endTime: '12:00', status: '待確認資格',
+      }],
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms[0].slots)), [
+    { type: 'empty', startTime: '09:00', endTime: '10:45', durations: [60, 90] },
+    { type: 'empty', startTime: '12:15', endTime: '14:00', durations: [60, 90] },
+  ]);
+  assert.equal(JSON.stringify(result).includes('pending-private'), false);
+});
+
+test('student practice structure is isolated from teacher practice and formal course rows', () => {
+  const courseSheet = createSheetFixture('CourseList', [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/09/10', '10:00', 'A－空環', '老師甲', 'ob-1'],
+  ]);
+  const teacherPracticeSheet = createSheetFixture('自主練習場次', [
+    ['場次 ID', '系列 ID', '日期', '教室', '開始時間', '結束時間', '狀態', '建立者', '候補 OB Calendar ID', '狀態原因', '建立時間', '更新時間', '更新者'],
+    ['teacher-booking-1', '', '2026/09/10', 'B', '12:00', '13:00', '已成立', '老師乙'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([courseSheet, teacherPracticeSheet]);
+  const backend = loadBackend();
+
+  const result = backend.ensureStudentPracticeStructureUnlocked_(spreadsheet);
+
+  assert.deepEqual(courseSheet.values[1].slice(0, 5), ['2026/09/10', '10:00', 'A－空環', '老師甲', 'ob-1']);
+  assert.equal(teacherPracticeSheet.values[1][0], 'teacher-booking-1');
+  assert.deepEqual(spreadsheet.getSheetByName('學生自主練習資格').values[0], EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('學生自主練習場次').values[0], EXPECTED_STUDENT_PRACTICE_GROUP_HEADERS);
+  assert.equal(result.qualifications, '學生自主練習資格');
+});
+
+test('student practice qualification schema appends venue columns without changing existing rows', () => {
+  const legacyHeaders = EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS.slice(0, 10);
+  const existingRow = [
+    'student-legacy', '舊學生', '1234', 'hash-legacy', '已確認',
+    '2026-09-01 10:00:00', 'Tako', '舊備註', '2026-09-01 09:00:00', '2026-09-01 10:00:00',
+  ];
+  const qualificationSheet = createSheetFixture('學生自主練習資格', [legacyHeaders, existingRow]);
+  const spreadsheet = createSpreadsheetFixture([qualificationSheet]);
+  const backend = loadBackend();
+
+  backend.ensureStudentPracticeStructureUnlocked_(spreadsheet);
+
+  assert.deepEqual(qualificationSheet.values[0], EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS);
+  assert.deepEqual(qualificationSheet.values[1].slice(0, 10), existingRow);
+});
+
+test('student practice submission preserves pending request and confirmed student establishes immediately', () => {
+  const spreadsheet = createSpreadsheetFixture([]);
+  const crypto = require('node:crypto');
+  let uuid = 0;
+  const backend = loadBackend({
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'SHA_256' },
+      Charset: { UTF_8: 'UTF_8' },
+      computeDigest(_algorithm, value) {
+        return Array.from(crypto.createHash('sha256').update(value, 'utf8').digest())
+          .map((byte) => byte > 127 ? byte - 256 : byte);
+      },
+      getUuid() { uuid += 1; return `student-uuid-${uuid}`; },
+      formatDate(value, _timezone, pattern) {
+        const date = new Date(value);
+        const parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+        }).formatToParts(date).reduce((acc, part) => ((acc[part.type] = part.value), acc), {});
+        if (pattern === 'yyyy-MM-dd') return `${parts.year}-${parts.month}-${parts.day}`;
+        if (pattern === 'yyyy/MM/dd') return `${parts.year}/${parts.month}/${parts.day}`;
+        if (pattern === 'HH:mm') return `${parts.hour}:${parts.minute}`;
+        if (pattern === 'yyyy-MM-dd HH:mm:ss') return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+        return '';
+      },
+    },
+  });
+  backend.currentTimeMs_ = () => new Date('2026-09-09T08:00:00+08:00').getTime();
+  backend.getPracticeCurrentObRowsForDayView_ = () => [];
+  backend.getPracticeRecordsUnlocked_ = () => ({ bookings: [], participants: [] });
+
+  const pending = backend.submitStudentPractice_({
+    obName: '學生甲', identitySuffix: '1234', date: '2026/09/10', room: 'A',
+    startTime: '10:00', durationMinutes: 60,
+  });
+  assert.equal(pending.status, '待確認資格');
+  assert.match(pending.studentToken, /^[A-Za-z0-9-]{10,}$/);
+  assert.equal(spreadsheet.getSheetByName('學生自主練習場次').values.length, 2);
+  assert.equal(spreadsheet.getSheetByName('學生自主練習參與者').values[1][4], '待確認資格');
+
+  spreadsheet.getSheetByName('學生自主練習資格').values[1][10] = '已確認';
+  const active = backend.submitStudentPractice_({
+    studentToken: pending.studentToken, date: '2026/09/11', room: 'B',
+    startTime: '13:00', durationMinutes: 90,
+  });
+  assert.equal(active.status, '已成立');
+  assert.equal(active.endTime, '14:30');
+  assert.equal(spreadsheet.getSheetByName('學生自主練習資格').values.length, 2);
+
+  const otherVenue = backend.submitStudentPractice_({
+    studentToken: pending.studentToken, date: '2026/09/12', room: 'C',
+    startTime: '15:00', durationMinutes: 60,
+  });
+  assert.equal(otherVenue.qualificationVenue, '劍潭');
+  assert.equal(otherVenue.status, '待確認資格');
+  assert.equal(spreadsheet.getSheetByName('學生自主練習資格').values[1][13], '待確認資格');
+});
+
+test('student practice public routes expose availability and submission without teacher session data', () => {
+  const backend = loadBackend(createAuthServices());
+  backend.getPublicStudentPracticeAvailability_ = (date) => ({ date, rooms: [] });
+  backend.submitStudentPractice_ = (practice) => ({ status: '待確認資格', room: practice.room });
+
+  const availability = JSON.parse(backend.doGet({ parameter: {
+    action: 'getStudentPracticeAvailability', date: '2026/09/10', sessionToken: 'ignored',
+  } }).text);
+  const submission = JSON.parse(backend.doPost({ parameter: {
+    action: 'submitStudentPractice',
+    practice: JSON.stringify({ obName: '學生甲', identitySuffix: '1234', room: 'C' }),
+  } }).text);
+
+  assert.deepEqual(availability, { status: 'success', data: { date: '2026/09/10', rooms: [] } });
+  assert.deepEqual(submission, { status: 'success', data: { status: '待確認資格', room: 'C' } });
+});
+
+function createStudentPracticeAdminFixture(rows = {}) {
+  const qualificationSheet = createSheetFixture('學生自主練習資格', [
+    EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS,
+    ...(rows.qualifications || []),
+  ]);
+  const groupSheet = createSheetFixture('學生自主練習場次', [
+    EXPECTED_STUDENT_PRACTICE_GROUP_HEADERS,
+    ...(rows.groups || []),
+  ]);
+  const participantSheet = createSheetFixture('學生自主練習參與者', [
+    EXPECTED_STUDENT_PRACTICE_PARTICIPANT_HEADERS,
+    ...(rows.participants || []),
+  ]);
+  const auditSheet = createSheetFixture('學生自主練習操作紀錄', [
+    EXPECTED_STUDENT_PRACTICE_AUDIT_HEADERS,
+  ]);
+  const spreadsheet = createSpreadsheetFixture([
+    qualificationSheet, groupSheet, participantSheet, auditSheet,
+  ]);
+  const backend = loadBackend({ SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet } });
+  backend.currentTimeMs_ = () => new Date('2026-09-09T00:00:00+08:00').getTime();
+  backend.getPracticeCurrentObRowsForDayView_ = () => [];
+  backend.getPracticeRecordsUnlocked_ = () => ({ bookings: [], participants: [] });
+  return { backend, spreadsheet, qualificationSheet, groupSheet, participantSheet, auditSheet };
+}
+
+test('student practice admin dashboard is course-admin only and joins student identity with requests', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', '1234', 'hash-1', '待確認資格', '', '', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00',
+      '待確認資格', '', '', '', '', '',
+    ]],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '待確認資格', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00', '學生甲',
+    ]],
+    participants: [[
+      'participant-1', 'group-1', 'student-1', '待確認資格', '待確認資格',
+      '2026-09-08 10:00:00', '', '', '需要空環',
+    ]],
+  });
+
+  assert.throws(() => fixture.backend.getStudentPracticeAdminDashboard_({
+    teacherName: '小琪', role: '老師', managementCapabilities: [],
+  }, {}), /課程管理權限/);
+  const result = fixture.backend.getStudentPracticeAdminDashboard_({
+    teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'],
+  }, {});
+
+  assert.equal(result.summary.pendingQualification, 1);
+  assert.equal(result.requests[0].obName, '學生甲');
+  assert.equal(result.requests[0].identitySuffix, '1234');
+  assert.equal(result.requests[0].note, '需要空環');
+  assert.equal(result.requests[0].qualificationVenue, '晴光');
+  assert.equal(result.requests[0].qualificationStatus, '待確認資格');
+});
+
+test('student practice admin qualification confirmation applies only to the selected venue', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', '1234', 'hash-1', '待確認資格', '', '', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00',
+      '待確認資格', '', '', '待確認資格', '', '',
+    ]],
+    groups: [
+      ['group-1', '2026/09/10', 'A', '10:00', '11:00', '待確認資格', '',
+        '2026-09-08 10:00:00', '2026-09-08 10:00:00', '學生甲'],
+      ['group-2', '2026/09/11', 'C', '10:00', '11:00', '待確認資格', '',
+        '2026-09-08 10:00:00', '2026-09-08 10:00:00', '學生甲'],
+    ],
+    participants: [
+      ['participant-1', 'group-1', 'student-1', '待確認資格', '待確認資格',
+        '2026-09-08 10:00:00', '', '', '保留原備註'],
+      ['participant-2', 'group-2', 'student-1', '待確認資格', '待確認資格',
+        '2026-09-08 10:00:00', '', '', '劍潭申請'],
+    ],
+  });
+
+  const result = fixture.backend.confirmStudentPracticeQualification_({
+    teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'],
+  }, 'participant-1');
+
+  assert.equal(result.status, '已成立');
+  assert.equal(result.qualificationVenue, '晴光');
+  assert.equal(fixture.qualificationSheet.values[1][10], '已確認');
+  assert.equal(fixture.qualificationSheet.values[1][13], '待確認資格');
+  assert.equal(fixture.participantSheet.values[1][3], '已確認');
+  assert.equal(fixture.participantSheet.values[1][4], '已成立');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+  assert.equal(fixture.participantSheet.values[1][8], '保留原備註');
+  assert.equal(fixture.participantSheet.values[2][3], '待確認資格');
+  assert.equal(fixture.participantSheet.values[2][4], '待確認資格');
+  assert.equal(fixture.groupSheet.values[2][5], '待確認資格');
+});
+
+test('student practice admin cancellation removes one student and releases only the final participant', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [
+      ['student-1', '學生甲', '1234', 'hash-1', '已確認', '', '', '', '', ''],
+      ['student-2', '學生乙', '5678', 'hash-2', '已確認', '', '', '', '', ''],
+    ],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [
+      ['participant-1', 'group-1', 'student-1', '已確認', '已成立', '', '', '', ''],
+      ['participant-2', 'group-1', 'student-2', '已確認', '已成立', '', '', '', ''],
+    ],
+  });
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const first = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-1', '學生來訊取消');
+  assert.equal(first.groupStatus, '已成立');
+  assert.equal(fixture.participantSheet.values[1][4], '已取消');
+  assert.equal(fixture.participantSheet.values[2][4], '已成立');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+
+  const final = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-2', '學生來訊取消');
+  assert.equal(final.groupStatus, '已取消');
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+});
+
+test('student practice admin can move one student atomically and preserves the original on conflict', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', '1234', 'hash-1', '', '', '', '', '', '',
+      '已確認', '', 'Tako', '待確認資格', '', '',
+    ]],
+    groups: [
+      ['group-old', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako'],
+      ['group-blocker', '2026/09/10', 'B', '14:30', '15:30', '已成立', '', '', '', 'Tako'],
+    ],
+    participants: [
+      ['participant-1', 'group-old', 'student-1', '已確認', '已成立', '', '', '', '原備註'],
+      ['participant-2', 'group-blocker', 'student-2', '已確認', '已成立', '', '', '', ''],
+    ],
+  });
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(() => fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'B',
+    startTime: '14:00', durationMinutes: 60, reason: '學生申請換時間',
+  }), /已有學生/);
+  assert.equal(fixture.participantSheet.values[1][1], 'group-old');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+
+  const result = fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'C',
+    startTime: '16:00', durationMinutes: 90, reason: '學生申請換時間',
+  });
+  assert.notEqual(result.groupId, 'group-old');
+  assert.equal(result.status, '待確認資格');
+  assert.equal(fixture.participantSheet.values[1][1], result.groupId);
+  assert.equal(fixture.participantSheet.values[1][3], '待確認資格');
+  assert.equal(fixture.participantSheet.values[1][8], '原備註');
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+  assert.deepEqual(fixture.groupSheet.values.at(-1).slice(1, 6), [
+    '2026/09/10', 'C', '16:00', '17:30', '待確認資格',
+  ]);
 });

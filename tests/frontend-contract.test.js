@@ -3019,7 +3019,11 @@ test('practice admin dashboard renders participant intervals and failure audit s
     }],
     notificationFailures: [{ time: '2026/09/01 10:01', targetId: 'practice-1', reason: '推播服務無回應' }],
   };
-  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; renderPracticeAdminDashboard();', context);
+  context.__studentPracticeAdminDashboard = {
+    summary: { total: 0, pendingQualification: 0, active: 0, changePending: 0 },
+    requests: [],
+  };
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; renderPracticeAdminDashboard();', context);
   const rendered = getElement('admin-tab-content').innerHTML;
   assert.match(rendered, /Ariel Lu/);
   assert.match(rendered, /Tako/);
@@ -3685,4 +3689,21 @@ test('practice history is queried by month and rendered only from the private AP
   assert.ok(requestActions.includes('getMyPracticeBookings'));
   assert.match(getElement('practice-history-list').innerHTML, /2026\/09\/10/);
   assert.match(getElement('practice-history-list').innerHTML, /A 教室/);
+});
+
+test('practice admin includes student qualification and independent cancellation controls', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  assert.match(html, /studentPracticeAdminDashboard/);
+  assert.match(html, /getStudentPracticeAdminDashboard/);
+  assert.match(html, /待確認學生資格/);
+  assert.match(html, /qualificationVenue/);
+  assert.match(html, /資格並成立/);
+  assert.match(html, /已完成.*開關門與設備安裝教學/);
+  assert.match(html, /data-admin-action="confirm-student-practice-qualification"/);
+  assert.match(html, /data-admin-action="cancel-student-practice-participant"/);
+  assert.match(html, /data-admin-action="move-student-practice-participant"/);
+  assert.match(html, /confirmStudentPracticeQualification/);
+  assert.match(html, /cancelStudentPracticeParticipant/);
+  assert.match(html, /moveStudentPracticeParticipant/);
 });

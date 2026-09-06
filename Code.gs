@@ -8183,6 +8183,33 @@ function refreshSherryPayrollFormatUnlocked_(spreadsheet, month, version) {
   return { updated: Object.keys(finalizedByTeacher).length };
 }
 
+function normalizePayrollExportTeacherKey_(value) {
+  return normalizeDiscountTeacherKey_(value).replace(/蕃/g, '番');
+}
+
+function getSherryPayrollExportRows_(spreadsheet, summaries) {
+  var formatSheet = spreadsheet.getSheetByName(SHEETS.SHERRY_PAYROLL_FORMAT);
+  if (!formatSheet || formatSheet.getLastRow() < 1) return [];
+  var salaryByTeacher = {};
+  (Array.isArray(summaries) ? summaries : []).forEach(function(item) {
+    var key = normalizePayrollExportTeacherKey_(item.teacherName);
+    if (key) salaryByTeacher[key] = Number(item.totalSalary) || 0;
+  });
+  var sectionNames = ['中國信託銀行', '台新銀行', 'Linepay', '國泰銀行'];
+  var rows = formatSheet.getRange(1, 1, formatSheet.getLastRow(), 3).getValues().map(function(row) {
+    var name = cleanText_(row[0]);
+    if (!name) return ['', '', ''];
+    if (sectionNames.indexOf(name) !== -1) {
+      return [name, cleanText_(row[1]), cleanText_(row[2])];
+    }
+    var key = normalizePayrollExportTeacherKey_(name);
+    var amount = Object.prototype.hasOwnProperty.call(salaryByTeacher, key) ? salaryByTeacher[key] : '';
+    return [name, amount, cleanText_(row[2])];
+  });
+  while (rows.length && rows[rows.length - 1].every(function(value) { return value === ''; })) rows.pop();
+  return rows;
+}
+
 function getPayrollAdminDashboard_(session, monthValue) {
   assertCapabilitySession_(session, 'payroll_admin');
   var month = monthValue ? getPayrollMonthRange_(monthValue).month : '';
@@ -8217,6 +8244,7 @@ function getPayrollAdminDashboard_(session, monthValue) {
     month: month,
     version: version,
     summaries: summaries,
+    sherryFormatRows: getSherryPayrollExportRows_(ss, summaries),
     lines: lines,
     disputes: disputes,
     metrics: {

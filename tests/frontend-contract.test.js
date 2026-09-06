@@ -2186,7 +2186,7 @@ test('admin Excel export exposes clearly separated all-data and monthly payroll 
 
 test('monthly payroll export fetches only the selected payroll month', async () => {
   const payroll = {
-    month: '2026-08', summaries: [], lines: [], disputes: [],
+    month: '2026-08', summaries: [], lines: [], disputes: [], sherryFormatRows: [],
     metrics: { teachers: 0, totalSalary: 0, pendingConfirmations: 0, teacherConfirmed: 0, finalized: 0, openDisputes: 0, errors: 0 },
   };
   const { context, getElement, requestActions } = createFrontendRuntime({
@@ -2214,8 +2214,82 @@ test('monthly payroll export fetches only the selected payroll month', async () 
   await context.exportAdminExcel('payroll', getElement('payroll-export'));
 
   assert.deepEqual(requestActions.slice(exportRequestStart), ['getPayrollAdminDashboard']);
-  assert.deepEqual(written[0].workbook.sheetNames, ['薪資總表', '薪資明細', '薪資異議']);
+  assert.deepEqual(written[0].workbook.sheetNames, ['給雪莉的格式', '計算結果']);
   assert.equal(written[0].filename, 'Sherry薪資_2026-08.xlsx');
+});
+
+test('monthly payroll export matches the two-tab boss layout and uses calculated salary totals', () => {
+  const { context } = createFrontendRuntime();
+  const payroll = {
+    month: '2026-08',
+    sherryFormatRows: [
+      ['中國信託銀行', '金額', '備註'],
+      ['冠蓉', 30000, ''],
+      ['Tako', 58837, '轉永豐'],
+      ['', '', ''],
+      ['台新銀行', '金額', '備註'],
+      ['蜜莉 戴', 9895, '轉玉山'],
+    ],
+    summaries: [{
+      teacherName: 'Tako', subtotal: 26900, bonusRate: 0.04, bonusAmount: 1076,
+      fixedAdjustment: 30000, adminAdjustment: 861, totalSalary: 58837, profit: 50990,
+      status: '待確認', confirmedAt: '',
+    }],
+  };
+
+  const sheets = context.buildPayrollExecutiveExportSheets(payroll);
+
+  assert.deepEqual(Array.from(sheets, (sheet) => sheet.name), ['給雪莉的格式', '計算結果']);
+  assert.deepEqual(Array.from(sheets[0].rows[2]), ['Tako', 58837, '轉永豐']);
+  assert.deepEqual(Array.from(sheets[1].rows[0]), [
+    '老師姓名', '鐘點費小計', '獎金比例', '獎金金額', '固定津貼/扣項',
+    '應領總薪資', '盈利', '確認狀態', '確認時間',
+  ]);
+  assert.deepEqual(Array.from(sheets[1].rows[1]), [
+    'Tako', 26900, 0.04, 1076, 30861, 58837, 50990, '待確認', '',
+  ]);
+});
+
+test('monthly payroll workbook keeps the bank colors number formats and frozen result header', async () => {
+  const XLSX = require('../assets/xlsx.full.min.js');
+  const JSZip = require('../assets/jszip.min.js');
+  const { context } = createFrontendRuntime();
+  context.window.XLSX = XLSX;
+  context.window.JSZip = JSZip;
+  const sheets = context.buildPayrollExecutiveExportSheets({
+    sherryFormatRows: [
+      ['中國信託銀行', '金額', '備註'],
+      ['Tako', 58837, '轉永豐'],
+      ['', '', ''],
+      ['台新銀行', '金額', '備註'],
+      ['蜜莉 戴', 9895, '轉玉山'],
+      ['', '', ''],
+      ['Linepay', '', ''],
+      ['Vicky Lee', 15553, ''],
+      ['', '', ''],
+      ['國泰銀行', '', ''],
+      ['妙妙 簡', 11200, ''],
+    ],
+    summaries: [{
+      teacherName: 'Tako', subtotal: 26900, bonusRate: 0.04, bonusAmount: 1076,
+      fixedAdjustment: 30000, adminAdjustment: 861, totalSalary: 58837,
+      profit: 50990, status: '待確認', confirmedAt: '',
+    }],
+  });
+
+  const bytes = await context.buildPayrollWorkbookBytes(sheets);
+  const zip = await JSZip.loadAsync(bytes);
+  const styles = await zip.file('xl/styles.xml').async('string');
+  const firstSheet = await zip.file('xl/worksheets/sheet1.xml').async('string');
+  const secondSheet = await zip.file('xl/worksheets/sheet2.xml').async('string');
+
+  ['FFFF9900', 'FFFCE5CD', 'FFB6D7A8', 'FFD9EAD3', 'FF9FC5E8', 'FFCFE2F3', 'FFEA9999', 'FFF4CCCC']
+    .forEach((color) => assert.match(styles, new RegExp(color)));
+  assert.match(firstSheet, /<c r="A1" s="1"/);
+  assert.match(firstSheet, /<c r="A2" s="4"/);
+  assert.match(firstSheet, /<c r="A4" s="10"/);
+  assert.match(secondSheet, /<pane ySplit="1" topLeftCell="A2"/);
+  assert.match(secondSheet, /<autoFilter ref="A1:I2"/);
 });
 
 test('admin Excel export builds capability-scoped worksheets with complete results', () => {

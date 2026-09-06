@@ -6923,7 +6923,20 @@ test('payroll dashboard recognizes month cells stored as Google Sheets dates', (
   ]);
   const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
   const payment = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
-  const spreadsheet = createSpreadsheetFixture([rules, source, snapshot, lines, summaries, disputes, payment]);
+  const sherryFormat = createSheetFixture('給雪莉的格式', [
+    ['中國信託銀行', '金額', '備註'],
+    ['Wen', 99999, ''],
+    ['蕃茄', 99999, ''],
+    ['', '', ''],
+    ['台新銀行', '金額', '備註'],
+    ['Tako', 99999, '轉永豐'],
+  ]);
+  summaries.values.push(
+    [augustSheetDate, 'wen', 4800, 0, 0, 0, 4800, 3566, 'version-1', '待確認', '', 'now', 0, '', '', ''],
+    [augustSheetDate, '番茄🍅', 800, 0, 0, 0, 800, 1079, 'version-1', '待確認', '', 'now', 0, '', '', ''],
+    [augustSheetDate, 'Tako', 26900, 0.04, 1076, 30000, 58837, 50990, 'version-1', '待確認', '', 'now', 861, '', '', ''],
+  );
+  const spreadsheet = createSpreadsheetFixture([rules, source, snapshot, lines, summaries, disputes, payment, sherryFormat]);
   const backend = loadBackendWithSpreadsheet(spreadsheet);
 
   const result = backend.getPayrollAdminDashboard_({
@@ -6932,10 +6945,18 @@ test('payroll dashboard recognizes month cells stored as Google Sheets dates', (
 
   assert.equal(result.month, '2026-08');
   assert.equal(result.version, 'version-1');
-  assert.equal(result.metrics.teachers, 1);
-  assert.equal(result.metrics.totalSalary, 900);
-  assert.equal(result.metrics.pendingConfirmations, 1);
+  assert.equal(result.metrics.teachers, 4);
+  assert.equal(result.metrics.totalSalary, 65337);
+  assert.equal(result.metrics.pendingConfirmations, 4);
   assert.equal(result.lines.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.sherryFormatRows)), [
+    ['中國信託銀行', '金額', '備註'],
+    ['Wen', 4800, ''],
+    ['蕃茄', 800, ''],
+    ['', '', ''],
+    ['台新銀行', '金額', '備註'],
+    ['Tako', 58837, '轉永豐'],
+  ]);
 });
 
 test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {

@@ -1952,6 +1952,7 @@
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script src="assets/xlsx.full.min.js"></script>
+  <script src="assets/jszip.min.js"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -5337,6 +5338,147 @@
       return sheets;
     }
 
+    function buildPayrollExecutiveExportSheets(payroll = {}) {
+      const sherryRows = (Array.isArray(payroll.sherryFormatRows) ? payroll.sherryFormatRows : [])
+        .map((row) => [row?.[0], row?.[1], row?.[2]].map(protectExcelCell));
+      const resultRows = makeExportTable([
+        "老師姓名", "鐘點費小計", "獎金比例", "獎金金額", "固定津貼/扣項",
+        "應領總薪資", "盈利", "確認狀態", "確認時間"
+      ], payroll.summaries, (item) => [
+        item.teacherName, item.subtotal, item.bonusRate, item.bonusAmount,
+        (Number(item.fixedAdjustment) || 0) + (Number(item.adminAdjustment) || 0),
+        item.totalSalary, item.profit, item.status, item.confirmedAt
+      ]);
+      return [
+        { name: "給雪莉的格式", rows: sherryRows },
+        { name: "計算結果", rows: resultRows }
+      ];
+    }
+
+    function getPayrollWorkbookStylesXml() {
+      const xfs = [
+        [0, 0, false],
+        [2, 0, false], [2, 3, true], [2, 0, true],
+        [3, 0, false], [3, 3, true], [3, 0, true],
+        [0, 0, false], [0, 3, false], [0, 9, false],
+        [4, 0, false], [4, 3, true], [4, 0, true],
+        [5, 0, false], [5, 3, true], [5, 0, true],
+        [6, 0, false], [6, 3, true], [6, 0, true],
+        [7, 0, false], [7, 3, true], [7, 0, true],
+        [8, 0, false], [8, 3, true], [8, 0, true],
+        [9, 0, false], [9, 3, true], [9, 0, true]
+      ].map(([fillId, numFmtId, centered]) =>
+        `<xf numFmtId="${numFmtId}" fontId="0" fillId="${fillId}" borderId="0" xfId="0"` +
+        `${fillId ? ' applyFill="1"' : ''}${numFmtId ? ' applyNumberFormat="1"' : ''}` +
+        `${centered ? ' applyAlignment="1"><alignment horizontal="center"/></xf>' : '/>'}`
+      ).join("");
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="10"/><color theme="1"/><name val="Arial"/><family val="2"/></font></fonts>
+  <fills count="10">
+    <fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFF9900"/><bgColor rgb="FFFF9900"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFCE5CD"/><bgColor rgb="FFFCE5CD"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFB6D7A8"/><bgColor rgb="FFB6D7A8"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFD9EAD3"/><bgColor rgb="FFD9EAD3"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF9FC5E8"/><bgColor rgb="FF9FC5E8"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFCFE2F3"/><bgColor rgb="FFCFE2F3"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFEA9999"/><bgColor rgb="FFEA9999"/></patternFill></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFF4CCCC"/><bgColor rgb="FFF4CCCC"/></patternFill></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="${xfs.length}">${xfs}</cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+  <dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleMedium4"/>
+</styleSheet>`;
+    }
+
+    function setPayrollXmlCellStyle(xml, cellReference, styleId) {
+      const pattern = new RegExp(`<c r="${cellReference}"(?![^>]*\\bs=)`);
+      return xml.replace(pattern, `<c r="${cellReference}" s="${styleId}"`);
+    }
+
+    function stylePayrollPaymentSheetXml(xml, rows) {
+      const groupStyles = {
+        "中國信託銀行": { header: [1, 2, 3], body: [4, 5, 6] },
+        "台新銀行": { header: [10, 11, 12], body: [13, 14, 15] },
+        "Linepay": { header: [16, 17, 18], body: [19, 20, 21] },
+        "國泰銀行": { header: [22, 23, 24], body: [25, 26, 27] }
+      };
+      let activeStyles = null;
+      (Array.isArray(rows) ? rows : []).forEach((row, rowIndex) => {
+        const name = String(row?.[0] || "").trim();
+        const headerStyles = groupStyles[name];
+        if (headerStyles) activeStyles = headerStyles;
+        if (!name && row.every((value) => value === "" || value == null)) {
+          activeStyles = null;
+          return;
+        }
+        const styles = headerStyles?.header || activeStyles?.body;
+        if (!styles) return;
+        ["A", "B", "C"].forEach((column, columnIndex) => {
+          xml = setPayrollXmlCellStyle(xml, `${column}${rowIndex + 1}`, styles[columnIndex]);
+        });
+      });
+      return xml;
+    }
+
+    function stylePayrollResultSheetXml(xml, rows) {
+      (Array.isArray(rows) ? rows : []).forEach((row, rowIndex) => {
+        if (rowIndex === 0) return;
+        ["B", "D", "E", "F", "G"].forEach((column) => {
+          xml = setPayrollXmlCellStyle(xml, `${column}${rowIndex + 1}`, 8);
+        });
+        xml = setPayrollXmlCellStyle(xml, `C${rowIndex + 1}`, 9);
+      });
+      return xml.replace(
+        '<sheetView workbookViewId="0"/>',
+        '<sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView>'
+      );
+    }
+
+    async function buildPayrollWorkbookBytes(sheets) {
+      if (!window.XLSX?.utils || typeof window.XLSX.write !== "function" || !window.JSZip) {
+        throw new Error("薪資 Excel 元件載入失敗，請重新整理後再試。");
+      }
+      const workbook = window.XLSX.utils.book_new();
+      sheets.forEach((sheet, index) => {
+        const worksheet = window.XLSX.utils.aoa_to_sheet(sheet.rows);
+        worksheet["!cols"] = index === 0
+          ? [{ wch: 18 }, { wch: 14 }, { wch: 16 }]
+          : [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 22 }];
+        if (index === 1 && sheet.rows[0]?.length) {
+          worksheet["!autofilter"] = { ref: window.XLSX.utils.encode_range({
+            s: { r: 0, c: 0 }, e: { r: Math.max(sheet.rows.length - 1, 0), c: sheet.rows[0].length - 1 }
+          }) };
+        }
+        window.XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
+      });
+      const rawWorkbook = window.XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
+      const archive = await window.JSZip.loadAsync(rawWorkbook);
+      archive.file("xl/styles.xml", getPayrollWorkbookStylesXml());
+      const firstSheetPath = "xl/worksheets/sheet1.xml";
+      const secondSheetPath = "xl/worksheets/sheet2.xml";
+      const firstSheetXml = await archive.file(firstSheetPath).async("string");
+      const secondSheetXml = await archive.file(secondSheetPath).async("string");
+      archive.file(firstSheetPath, stylePayrollPaymentSheetXml(firstSheetXml, sheets[0]?.rows || []));
+      archive.file(secondSheetPath, stylePayrollResultSheetXml(secondSheetXml, sheets[1]?.rows || []));
+      return archive.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+    }
+
+    function downloadExcelBytes(bytes, filename) {
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     function getExportColumnWidths(rows) {
       const widths = (rows[0] || []).map((header, columnIndex) => {
         const maxLength = rows.reduce((max, row) => {
@@ -5386,23 +5528,30 @@
         }
         await Promise.all(requests);
 
-        const sheets = buildAdminExportSheets(payload);
+        const sheets = exportScope === "payroll"
+          ? buildPayrollExecutiveExportSheets(payload.payroll || {})
+          : buildAdminExportSheets(payload);
         if (!sheets.length) throw new Error("目前沒有可匯出的管理資料。");
-        const workbook = window.XLSX.utils.book_new();
-        sheets.forEach((sheet) => {
-          const worksheet = window.XLSX.utils.aoa_to_sheet(sheet.rows);
-          worksheet["!cols"] = getExportColumnWidths(sheet.rows);
-          if (sheet.rows[0] && sheet.rows[0].length) {
-            worksheet["!autofilter"] = { ref: window.XLSX.utils.encode_range({
-              s: { r: 0, c: 0 }, e: { r: Math.max(sheet.rows.length - 1, 0), c: sheet.rows[0].length - 1 }
-            }) };
-          }
-          window.XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
-        });
         const filename = exportScope === "payroll"
           ? `Sherry薪資_${payrollMonth}.xlsx`
           : `Sherry教室管理_${getTaipeiDateStamp()}.xlsx`;
-        window.XLSX.writeFile(workbook, filename, { compression: true });
+        if (exportScope === "payroll" && window.JSZip && typeof window.XLSX.write === "function") {
+          const bytes = await buildPayrollWorkbookBytes(sheets);
+          downloadExcelBytes(bytes, filename);
+        } else {
+          const workbook = window.XLSX.utils.book_new();
+          sheets.forEach((sheet) => {
+            const worksheet = window.XLSX.utils.aoa_to_sheet(sheet.rows);
+            worksheet["!cols"] = getExportColumnWidths(sheet.rows);
+            if (sheet.rows[0] && sheet.rows[0].length) {
+              worksheet["!autofilter"] = { ref: window.XLSX.utils.encode_range({
+                s: { r: 0, c: 0 }, e: { r: Math.max(sheet.rows.length - 1, 0), c: sheet.rows[0].length - 1 }
+              }) };
+            }
+            window.XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
+          });
+          window.XLSX.writeFile(workbook, filename, { compression: true });
+        }
         setNotice(`已匯出 ${sheets.length} 個工作表。`);
       } finally {
         setButtonBusy(button, false, "");

@@ -9988,3 +9988,78 @@ test('daily closure results become one observation per OB calendar item without 
   assert.equal(cal2.length, 1);
   assert.equal(cal2[0][13], '代課');
 });
+
+test('student practice availability hides private blocker data and exposes only durations that fit', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-09T00:00:00+08:00').getTime(),
+    dayStartTime: '07:00',
+    dayEndTime: '14:00',
+    rooms: [{
+      room: 'A',
+      blockers: [
+        { type: 'course', startTime: '09:00', endTime: '10:00', label: 'A－空環', teacherName: '老師甲', calendarId: 'ob-1' },
+        { type: 'teacher-practice', startTime: '12:00', endTime: '13:00', teacherName: '老師乙', bookingId: 'teacher-1' },
+      ],
+      studentGroups: [],
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    date: '2026/09/10',
+    rooms: [{
+      room: 'A',
+      slots: [
+        { type: 'empty', startTime: '07:00', endTime: '08:45', durations: [60, 90] },
+        { type: 'empty', startTime: '10:15', endTime: '11:45', durations: [60, 90] },
+      ],
+    }],
+  });
+  assert.equal(JSON.stringify(result).includes('老師甲'), false);
+  assert.equal(JSON.stringify(result).includes('ob-1'), false);
+  assert.equal(JSON.stringify(result).includes('A－空環'), false);
+});
+
+test('student practice availability exposes an existing student group without participant names', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-09T00:00:00+08:00').getTime(),
+    dayStartTime: '09:00',
+    dayEndTime: '14:00',
+    rooms: [{
+      room: 'B',
+      blockers: [],
+      studentGroups: [{
+        groupId: 'group-public-id',
+        startTime: '11:00',
+        endTime: '12:00',
+        status: '已成立',
+        participantNames: ['學生甲', '學生乙'],
+      }],
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms[0].slots)), [
+    { type: 'empty', startTime: '09:00', endTime: '10:45', durations: [60, 90] },
+    { type: 'shared', groupId: 'group-public-id', startTime: '11:00', endTime: '12:00', durations: [60] },
+    { type: 'empty', startTime: '12:15', endTime: '14:00', durations: [60, 90] },
+  ]);
+  assert.equal(JSON.stringify(result).includes('學生甲'), false);
+});
+
+test('student practice availability removes starts inside the two hour deadline', () => {
+  const context = loadBackend();
+  const result = context.buildStudentPracticeAvailability_({
+    date: '2026/09/10',
+    nowMs: new Date('2026-09-10T08:10:00+08:00').getTime(),
+    dayStartTime: '07:00',
+    dayEndTime: '14:00',
+    rooms: [{ room: 'C', blockers: [], studentGroups: [] }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms[0].slots)), [
+    { type: 'empty', startTime: '10:10', endTime: '14:00', durations: [60, 90, 120] },
+  ]);
+});

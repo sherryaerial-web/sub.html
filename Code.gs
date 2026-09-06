@@ -2449,6 +2449,99 @@ function ensurePracticeStructureUnlocked_(spreadsheet) {
   return result;
 }
 
+function buildStudentPracticeAvailability_(inputValue) {
+  var input = inputValue || {};
+  var date = cleanText_(input.date).replace(/-/g, '/');
+  parsePracticeDateTime_(date, '00:00');
+  var dayStart = timeTextToMinutes_(cleanText_(input.dayStartTime) || '07:00');
+  var dayEnd = timeTextToMinutes_(cleanText_(input.dayEndTime) || '23:00');
+  if (dayStart < 0 || dayEnd <= dayStart) throw new Error('學生自主練習開放時間不正確。');
+  var nowMs = Number(input.nowMs);
+  if (!isFinite(nowMs)) nowMs = currentTimeMs_();
+  var earliestStart = dayStart;
+  var dateStartMs = parsePracticeDateTime_(date, '00:00').getTime();
+  var deadlineStart = Math.ceil(((nowMs + 2 * 60 * 60 * 1000) - dateStartMs) / (5 * 60 * 1000)) * 5;
+  if (deadlineStart > earliestStart) earliestStart = deadlineStart;
+  var quickDurations = [60, 90, 120];
+
+  return {
+    date: date,
+    rooms: (input.rooms || []).map(function(roomValue) {
+      var room = requirePracticeRoom_(roomValue && roomValue.room);
+      var occupied = [];
+      (roomValue.blockers || []).forEach(function(blocker) {
+        var start = timeTextToMinutes_(blocker && blocker.startTime);
+        var end = timeTextToMinutes_(blocker && blocker.endTime);
+        if (start < 0 || end <= start) return;
+        occupied.push({ start: Math.max(dayStart, start - 15), end: Math.min(dayEnd, end + 15) });
+      });
+      (roomValue.studentGroups || []).forEach(function(group) {
+        var status = cleanText_(group && group.status);
+        if (status !== '已成立') return;
+        var start = timeTextToMinutes_(group.startTime);
+        var end = timeTextToMinutes_(group.endTime);
+        if (start < 0 || end <= start) return;
+        occupied.push({ start: Math.max(dayStart, start - 15), end: Math.min(dayEnd, end + 15) });
+      });
+      occupied.sort(function(left, right) { return left.start - right.start || left.end - right.end; });
+      var merged = [];
+      occupied.forEach(function(interval) {
+        var previous = merged[merged.length - 1];
+        if (!previous || interval.start > previous.end) merged.push({ start: interval.start, end: interval.end });
+        else if (interval.end > previous.end) previous.end = interval.end;
+      });
+
+      var slots = [];
+      var cursor = Math.max(dayStart, earliestStart);
+      merged.forEach(function(interval) {
+        if (interval.end <= cursor) return;
+        if (interval.start > cursor) {
+          var availableMinutes = interval.start - cursor;
+          var durations = quickDurations.filter(function(duration) { return duration <= availableMinutes; });
+          if (durations.length) slots.push({
+            type: 'empty',
+            startTime: minutesToTimeText_(cursor),
+            endTime: minutesToTimeText_(interval.start),
+            durations: durations
+          });
+        }
+        cursor = Math.max(cursor, interval.end);
+      });
+      if (cursor < dayEnd) {
+        var remainingMinutes = dayEnd - cursor;
+        var remainingDurations = quickDurations.filter(function(duration) {
+          return duration <= remainingMinutes;
+        });
+        if (remainingDurations.length) slots.push({
+          type: 'empty',
+          startTime: minutesToTimeText_(cursor),
+          endTime: minutesToTimeText_(dayEnd),
+          durations: remainingDurations
+        });
+      }
+
+      (roomValue.studentGroups || []).forEach(function(group) {
+        if (cleanText_(group && group.status) !== '已成立') return;
+        var start = timeTextToMinutes_(group.startTime);
+        var end = timeTextToMinutes_(group.endTime);
+        if (start < earliestStart || end <= start || start < dayStart || end > dayEnd) return;
+        slots.push({
+          type: 'shared',
+          groupId: cleanText_(group.groupId),
+          startTime: minutesToTimeText_(start),
+          endTime: minutesToTimeText_(end),
+          durations: [end - start]
+        });
+      });
+      slots.sort(function(left, right) {
+        return [left.startTime, left.type, left.endTime].join('|')
+          .localeCompare([right.startTime, right.type, right.endTime].join('|'));
+      });
+      return { room: room, slots: slots };
+    })
+  };
+}
+
 function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
   var records = recordsValue || {};
   var date = cleanText_(dateValue).replace(/-/g, '/');

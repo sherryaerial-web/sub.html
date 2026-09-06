@@ -2186,6 +2186,96 @@ function getNotificationHistory_() {
   });
 }
 
+function getMonthlyOperationsDashboard_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  var month = getCurrentMonthlyOperationsMonthKey_();
+  var state = getMonthlyOperationsState_(month);
+  var schedule = getMonthlyOperationsSchedule_(month, state.substituteOpenedAt);
+  var templates = getMonthlyOperationsTemplates_();
+  var now = Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'yyyy-MM-dd HH:mm');
+  var automaticDefinitions = [
+    ['course_adjustment_start', '課程調整開始', schedule.courseAdjustmentStartAt],
+    ['course_adjustment_end', '課程調整即將截止', schedule.courseAdjustmentEndAt],
+    ['leave_open_admin', '提醒管理者準備開放請假', schedule.leaveOpenReminderAt],
+    ['leave_deadline_admin', '提醒管理者發送請假截止通知', schedule.leaveDeadlineAdminReminderAt],
+    ['leave_close_admin', '提醒管理者結束請假', schedule.leaveSuggestedCloseAt],
+    ['vvip_prepare_admin', '提醒準備 VVIP', schedule.vvipPrepareAt],
+    ['vvip_open_admin', '提醒開放 VVIP', schedule.vvipOpenAt],
+    ['vvip_close_admin', '提醒結束 VVIP', schedule.vvipCloseAt],
+    ['general_booking_admin', '提醒開放一般預約', schedule.generalBookingAt]
+  ];
+  var operationDefinitions = [
+    ['open_leave', '開放請假並通知', schedule.leaveOpenReminderAt, ''],
+    ['send_leave_deadline', '發送請假截止提醒', schedule.leaveDeadlineAdminReminderAt, 'open_leave'],
+    ['close_leave', '結束請假', schedule.leaveSuggestedCloseAt, 'open_leave'],
+    ['open_substitute', '開放代課／特別課並通知', schedule.leaveSuggestedCloseAt, 'close_leave'],
+    ['close_substitute', '結束代課／特別課並通知', schedule.substituteSuggestedCloseAt, 'open_substitute']
+  ];
+  var automatic = automaticDefinitions.map(function(item) {
+    var eventState = state.events[item[0]] || {};
+    return {
+      id: item[0],
+      label: item[1],
+      scheduledAt: item[2],
+      audienceMode: templates[item[0]] ? templates[item[0]].audienceMode : '',
+      status: eventState.sentAt ? 'sent' : (now >= item[2] ? 'due' : 'upcoming'),
+      sentAt: cleanText_(eventState.sentAt),
+      lastError: cleanText_(eventState.lastError)
+    };
+  });
+  var liveLeavePaused = areLeavesPaused_();
+  var liveClaimsPaused = areClaimsPaused_();
+  var invitationSheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.INVITATIONS);
+  assertHeaders_(invitationSheet, SHEET_HEADERS.INVITATIONS);
+  var openInvitationCount = invitationSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
+  }).length;
+  var operations = operationDefinitions.map(function(item) {
+    var operation = state.operations[item[0]] || {};
+    var prerequisite = item[3] ? (state.operations[item[3]] || {}) : null;
+    var notificationIds = getMonthlyOperationDefinition_(item[0]).notificationIds;
+    var notificationPending = notificationIds.some(function(notificationId) {
+      var notification = operation.notifications && operation.notifications[notificationId];
+      return !notification || !cleanText_(notification.sentAt);
+    });
+    var needsSync = false;
+    if (operation.completedAt) {
+      if (item[0] === 'open_leave') needsSync = liveLeavePaused;
+      else if (item[0] === 'close_leave') needsSync = !liveLeavePaused;
+      else if (item[0] === 'open_substitute') needsSync = liveClaimsPaused;
+      else if (item[0] === 'close_substitute') needsSync = !liveClaimsPaused || openInvitationCount > 0;
+    }
+    return {
+      id: item[0],
+      label: item[1],
+      recommendedAt: item[2],
+      prerequisite: item[3],
+      canExecute: !item[3] || Boolean(prerequisite && prerequisite.completedAt),
+      early: now < item[2],
+      status: operation.completedAt ? 'completed' : (cleanText_(operation.status) || 'pending'),
+      completedAt: cleanText_(operation.completedAt),
+      actor: cleanText_(operation.actor),
+      lastError: cleanText_(operation.lastError),
+      needsSync: needsSync,
+      notificationPending: notificationPending,
+      details: operation.details || {}
+    };
+  });
+  return {
+    month: month,
+    now: now,
+    schedule: schedule,
+    automaticReminders: automatic,
+    operations: operations,
+    templates: templates,
+    systemState: {
+      leavePaused: liveLeavePaused,
+      claimsPaused: liveClaimsPaused,
+      openInvitationCount: openInvitationCount
+    }
+  };
+}
+
 function getNotificationAdminDashboard_(session) {
   assertCapabilitySession_(session, 'course_admin');
   return {
@@ -2193,6 +2283,7 @@ function getNotificationAdminDashboard_(session) {
     administrators: getActiveCourseAdminNames_(),
     schedules: getNotificationSchedules_(),
     history: getNotificationHistory_(),
+    monthlyOperations: getMonthlyOperationsDashboard_(session),
     closureWindows: [
       { stage: '第一輪', time: '22:30–22:34' },
       { stage: '第二輪', time: '23:40–23:44' }

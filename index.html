@@ -826,6 +826,16 @@
     .notification-schedule-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
     .notification-window-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .notification-window-strip span { padding: 6px 8px; border-radius: 6px; background: var(--aqua-100); color: var(--sea-800); font-size: 11px; font-weight: 750; }
+    .monthly-operations-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 14px; }
+    .monthly-operations-list { display: grid; gap: 8px; }
+    .monthly-operation-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+    .monthly-operation-row.is-completed { background: var(--success-soft); }
+    .monthly-operation-row.is-blocked { opacity: .65; }
+    .monthly-operation-status { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+    .monthly-automatic-list { display: grid; gap: 8px; margin-top: 10px; }
+    .monthly-automatic-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+    .monthly-template-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .monthly-template-row:last-child { border-bottom: 0; }
     .inbox-button { position: relative; flex: 0 0 auto; }
     .inbox-unread-badge,
     .nav-unread-badge {
@@ -1409,6 +1419,7 @@
       .notification-panel.full { grid-column: auto; }
       .notification-form-grid { grid-template-columns: 1fr; }
       .notification-form-grid .full { grid-column: auto; }
+      .monthly-operation-row { grid-template-columns: 1fr; }
       .notification-recipient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .inbox-header { align-items: stretch; }
       .inbox-header .compact-button { width: 100%; }
@@ -2640,6 +2651,89 @@
         </label>`).join("")}</div>`;
     }
 
+    function formatMonthlyOperationsAt(value) {
+      const text = String(value || "").trim();
+      const match = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2})$/.exec(text);
+      return match ? `${match[2]}/${match[3]} ${match[4]}` : text;
+    }
+
+    function monthlyAutomaticStatusLabel(status) {
+      return ({ sent: "已通知", due: "待補送", upcoming: "尚未到期" })[status] || "待處理";
+    }
+
+    function monthlyOperationStatusLabel(item) {
+      if (item.needsSync) return "需同步確認";
+      if (item.status === "completed" && item.notificationPending) return "操作完成，通知待重試";
+      if (item.status === "completed") return "已完成";
+      if (item.status === "running") return "執行中";
+      if (item.status === "failed") return "上次執行失敗";
+      if (!item.canExecute) return "請先完成上一階段";
+      return item.early ? "可提前操作" : "可操作";
+    }
+
+    function renderMonthlyOperationsPanel(data) {
+      const monthly = data && data.monthlyOperations;
+      if (!monthly) return "";
+      const system = monthly.systemState || {};
+      const operationRows = (monthly.operations || []).map((item) => {
+        const completed = item.status === "completed";
+        const retryNotification = completed && item.notificationPending;
+        const enabled = Boolean(item.canExecute) && (!completed || retryNotification);
+        const buttonLabel = retryNotification ? "重試通知" : (completed ? "已完成" : item.label);
+        return `
+          <article class="monthly-operation-row${completed ? " is-completed" : ""}${!item.canExecute ? " is-blocked" : ""}">
+            <div>
+              <strong>${escapeHtml(item.label)}</strong>
+              <div class="item-meta">建議時間：${escapeHtml(formatMonthlyOperationsAt(item.recommendedAt))}</div>
+              <div class="monthly-operation-status">
+                <span class="status-pill">${escapeHtml(monthlyOperationStatusLabel(item))}</span>
+                ${item.early && !completed ? '<span class="status-pill">提前執行會再次確認</span>' : ""}
+                ${item.needsSync ? '<span class="status-pill">實際開關與月度紀錄不同，請確認目前營運狀態</span>' : ""}
+                ${item.completedAt ? `<span class="item-meta">${escapeHtml(item.completedAt)}｜${escapeHtml(item.actor || "管理員")}</span>` : ""}
+              </div>
+              ${item.lastError ? `<div class="item-meta error">${escapeHtml(item.lastError)}</div>` : ""}
+            </div>
+            <button class="${retryNotification ? "danger-button" : "primary-button"} inline-button" type="button" data-admin-action="execute-monthly-operation" data-operation-id="${escapeHtml(item.id)}"${enabled ? "" : " disabled"}><i data-lucide="${retryNotification ? "refresh-cw" : "play"}"></i>${escapeHtml(buttonLabel)}</button>
+          </article>`;
+      }).join("");
+      const automaticRows = (monthly.automaticReminders || []).map((item) => `
+        <div class="monthly-automatic-row">
+          <div><strong>${escapeHtml(item.label)}</strong><div class="item-meta">${escapeHtml(formatMonthlyOperationsAt(item.scheduledAt))}｜${escapeHtml(notificationAudienceLabel(item.audienceMode))}</div></div>
+          <span class="status-pill">${escapeHtml(monthlyAutomaticStatusLabel(item.status))}</span>
+        </div>`).join("");
+      const templateLabels = Object.fromEntries([
+        ...(monthly.automaticReminders || []).map((item) => [item.id, item.label]),
+        ...(monthly.operations || []).map((item) => [item.id, item.label]),
+        ["close_substitute_admin", "代課結束後提醒管理者"]
+      ]);
+      const templateRows = Object.entries(monthly.templates || {}).map(([id, template]) => `
+        <div class="monthly-template-row" data-monthly-template-id="${escapeHtml(id)}">
+          <strong>${escapeHtml(templateLabels[id] || id)}</strong>
+          <div class="item-meta">固定收件人：${escapeHtml(notificationAudienceLabel(template.audienceMode))}</div>
+          <div class="notification-form-grid">
+            <label class="notification-field full">標題<input class="text-input" type="text" maxlength="80" data-monthly-template-heading value="${escapeHtml(template.heading)}" required></label>
+            <label class="notification-field full">內容<textarea class="text-input" maxlength="500" data-monthly-template-content required>${escapeHtml(template.content)}</textarea></label>
+          </div>
+        </div>`).join("");
+      return `
+        <section class="notification-panel full">
+          <h3>每月營運流程｜${escapeHtml(monthly.month)}</h3>
+          <div class="monthly-operations-summary item-meta">
+            <span>一般預約日：${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</span>
+            <span>請假：${system.leavePaused ? "已關閉" : "開放中"}</span>
+            <span>代課領取：${system.claimsPaused ? "已關閉" : "開放中"}</span>
+            <span>邀請中：${Number(system.openInvitationCount) || 0} 筆</span>
+          </div>
+          <div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="open-monthly-vvip"><i data-lucide="crown"></i>前往 VVIP 管理</button></div>
+          ${monthly.schedule && monthly.schedule.substituteScheduleConflict ? '<div class="notice visible error">本月日期較緊，代課／特別課若要保留完整 5 天，會超過建議結束日；請依現況決定。</div>' : ""}
+          <div class="monthly-operations-list">${operationRows || '<div class="state">目前沒有可顯示的月度操作</div>'}</div>
+          <details class="admin-control"><summary><strong>自動提醒時間</strong></summary><div class="monthly-automatic-list">${automaticRows}</div></details>
+          <details class="admin-control"><summary><strong>編輯月度通知文字</strong></summary>
+            <form id="monthly-operations-template-form">${templateRows}<div class="admin-item-actions"><button class="primary-button inline-button" type="submit"><i data-lucide="save"></i>儲存月度通知文字</button></div></form>
+          </details>
+        </section>`;
+    }
+
     function renderNotificationAdminTab() {
       const content = byId("admin-tab-content");
       const data = notificationDashboard;
@@ -2668,6 +2762,7 @@
       const closureWindows = (data.closureWindows || []).map((item) => `<span>${escapeHtml(item.stage)} ${escapeHtml(item.time)}</span>`).join("");
       content.innerHTML = `
         <div class="notification-layout">
+          ${renderMonthlyOperationsPanel(data)}
           <section class="notification-panel">
             <h3>手動推播</h3>
             <div class="item-meta">勾選收件人後可直接從這裡送出，不必再到 OneSignal。</div>
@@ -2756,6 +2851,55 @@
       await callApi("saveNotificationSchedule", { schedule });
       setNotice("通知排程已儲存。");
       await fetchNotificationAdminDashboard();
+    }
+
+    async function executeMonthlyOperation(operationId, button = null) {
+      const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
+      const operation = ((monthly && monthly.operations) || []).find((item) => item.id === operationId);
+      if (!operation) throw new Error("找不到這個月度營運操作。");
+      if (!operation.canExecute) throw new Error("請先完成上一個月度營運階段。");
+      const retry = operation.status === "completed" && operation.notificationPending;
+      const confirmation = operation.early && !retry
+        ? `目前仍在建議時間前，確定要提前執行「${operation.label}」？`
+        : `確定要執行「${retry ? `${operation.label}（重試通知）` : operation.label}」？`;
+      if (!window.confirm(confirmation)) return;
+      if (button) setButtonBusy(button, true, retry ? "重試中..." : "執行中...");
+      try {
+        const result = await callApi("executeMonthlyOperation", { operation: operationId });
+        if (result.inProgress) {
+          setNotice("另一位管理者正在執行這項操作，稍後重新整理即可。", "error");
+        } else {
+          const notificationFailures = (result.notifications || []).filter((item) => item.accepted !== true);
+          setNotice(notificationFailures.length
+            ? "階段操作已完成，但通知尚未成功；可按同一顆按鈕重試通知。"
+            : `${operation.label}已完成。`, notificationFailures.length ? "error" : "success");
+        }
+        await fetchNotificationAdminDashboard();
+      } finally {
+        if (button) setButtonBusy(button, false, "");
+      }
+    }
+
+    async function submitMonthlyOperationsTemplates() {
+      const templates = {};
+      document.querySelectorAll("[data-monthly-template-id]").forEach((row) => {
+        const id = row.dataset.monthlyTemplateId;
+        const heading = row.querySelector("[data-monthly-template-heading]");
+        const content = row.querySelector("[data-monthly-template-content]");
+        if (!id || !heading || !content) return;
+        templates[id] = { heading: heading.value.trim(), content: content.value.trim() };
+      });
+      await callApi("saveMonthlyOperationsTemplates", { templates });
+      setNotice("月度通知文字已儲存。");
+      await fetchNotificationAdminDashboard();
+    }
+
+    async function openMonthlyVvipAdmin() {
+      if (!authState.managementCapabilities.includes("vvip_admin")) {
+        throw new Error("目前帳號沒有 VVIP 管理權限。");
+      }
+      activeAdminTab = "vvip";
+      await fetchVvipAdminDashboard();
     }
 
     function rememberTeacher(name) {
@@ -6808,6 +6952,14 @@ https://sherryaerial-web.github.io/sub.html/
           await fetchNotificationAdminDashboard();
           return;
         }
+        if (action === "execute-monthly-operation") {
+          await executeMonthlyOperation(button.dataset.operationId, button);
+          return;
+        }
+        if (action === "open-monthly-vvip") {
+          await openMonthlyVvipAdmin();
+          return;
+        }
         if (action === "select-all-ob-cancellations") {
           selectAllMissingObCancellations();
           return;
@@ -6991,6 +7143,7 @@ https://sherryaerial-web.github.io/sub.html/
         if (event.target.id === "vvip-member-form") await saveVvipMember();
         if (event.target.id === "manual-notification-form") await submitManualNotification();
         if (event.target.id === "notification-schedule-form") await submitNotificationSchedule();
+        if (event.target.id === "monthly-operations-template-form") await submitMonthlyOperationsTemplates();
         if (event.target.id === "practice-admin-filter-form") await fetchPracticeAdminDashboard();
       } catch (error) { setNotice(error.message, "error"); }
     });

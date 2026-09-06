@@ -495,6 +495,26 @@ test('course administrators have one notification center for manual sends schedu
     getNotificationAdminDashboard: {
       teachers: ['冠蓉', 'Tako', 'Jina'],
       administrators: ['冠蓉', 'Tako'],
+      monthlyOperations: {
+        month: '2026-10',
+        now: '2026-10-07 21:05',
+        schedule: {
+          bookingDate: '2026-10-23',
+          substituteScheduleConflict: false,
+        },
+        systemState: { leavePaused: true, claimsPaused: true, openInvitationCount: 0 },
+        automaticReminders: [
+          { id: 'course_adjustment_start', label: '課程調整開始', scheduledAt: '2026-10-01 21:00', audienceMode: 'all', status: 'sent', sentAt: '2026-10-01 21:02' },
+          { id: 'vvip_open_admin', label: '提醒開放 VVIP', scheduledAt: '2026-10-19 21:00', audienceMode: 'admins', status: 'upcoming', sentAt: '' },
+        ],
+        operations: [
+          { id: 'open_leave', label: '開放請假並通知', recommendedAt: '2026-10-07 21:00', canExecute: true, early: false, status: 'pending', notificationPending: true },
+          { id: 'close_leave', label: '結束請假', recommendedAt: '2026-10-12 21:00', canExecute: false, early: true, status: 'pending', notificationPending: false },
+        ],
+        templates: {
+          open_leave: { heading: '請假開放', content: '請填寫請假。', audienceMode: 'all' },
+        },
+      },
       closureWindows: [
         { stage: '第一輪', time: '22:30–22:34' },
         { stage: '第二輪', time: '23:40–23:44' },
@@ -508,9 +528,61 @@ test('course administrators have one notification center for manual sends schedu
   await context.fetchNotificationAdminDashboard();
 
   assert.ok(requestActions.includes('getNotificationAdminDashboard'));
-  assert.match(getElement('admin-tab-content').innerHTML, /id=["']manual-notification-form["']/);
-  assert.match(getElement('admin-tab-content').innerHTML, /22:30–22:34/);
-  assert.match(getElement('admin-tab-content').innerHTML, /23:40–23:44/);
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /每月營運流程/);
+  assert.match(rendered, /開放請假並通知/);
+  assert.match(rendered, /2026-10-23/);
+  assert.ok(rendered.indexOf('每月營運流程') < rendered.indexOf('id="manual-notification-form"'));
+  assert.match(rendered, /data-admin-action=["']open-monthly-vvip["']/);
+  assert.match(rendered, /id=["']manual-notification-form["']/);
+  assert.match(rendered, /22:30–22:34/);
+  assert.match(rendered, /23:40–23:44/);
+});
+
+test('monthly operations links to the existing VVIP administration tab', async () => {
+  const { context, requestActions } = createFrontendRuntime({
+    getVvipAdminDashboard: { settings: {}, members: [], selections: [], courses: [] },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin', 'vvip_admin']; activeAdminTab = 'notifications';", context);
+
+  await context.openMonthlyVvipAdmin();
+
+  assert.equal(vm.runInContext('activeAdminTab', context), 'vvip');
+  assert.ok(requestActions.includes('getVvipAdminDashboard'));
+});
+
+test('monthly operation button confirms an early action, posts once, and reloads the workflow', async () => {
+  const dashboard = {
+    teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'], closureWindows: [], schedules: [], history: [],
+    monthlyOperations: {
+      month: '2026-10', now: '2026-10-06 21:00',
+      schedule: { bookingDate: '2026-10-23', substituteScheduleConflict: false },
+      systemState: { leavePaused: true, claimsPaused: true, openInvitationCount: 0 },
+      automaticReminders: [],
+      operations: [
+        { id: 'open_leave', label: '開放請假並通知', recommendedAt: '2026-10-07 21:00', canExecute: true, early: true, status: 'pending', notificationPending: true },
+      ],
+      templates: {},
+    },
+  };
+  const { context, requestActions, submittedForms } = createFrontendRuntime({
+    getNotificationAdminDashboard: dashboard,
+    executeMonthlyOperation: {
+      action: 'open_leave', completed: true, alreadyCompleted: false, inProgress: false,
+      notification: { accepted: true }, notifications: [{ accepted: true }],
+    },
+  });
+  const confirmations = [];
+  context.window.confirm = (message) => { confirmations.push(message); return true; };
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications';", context);
+  await context.fetchNotificationAdminDashboard();
+
+  await context.executeMonthlyOperation('open_leave');
+
+  assert.match(confirmations[0], /建議時間前/);
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'executeMonthlyOperation').length, 1);
+  assert.equal(submittedForms.find((form) => form.fields.action === 'executeMonthlyOperation').fields.operation, 'open_leave');
+  assert.ok(requestActions.filter((action) => action === 'getNotificationAdminDashboard').length >= 2);
 });
 
 test('teacher inbox exposes an unread badge history filters and mark-all control', async () => {

@@ -316,6 +316,8 @@ function createAuthServices() {
       formatDate(value, _timezone, pattern) {
         const date = new Date(value);
         if (pattern === 'yyyy-MM-dd HH:mm:ss') return date.toISOString().replace('T', ' ').slice(0, 19);
+        if (pattern === 'yyyy-MM-dd HH:mm') return date.toISOString().replace('T', ' ').slice(0, 16);
+        if (pattern === 'yyyy-MM') return date.toISOString().slice(0, 7);
         return '';
       },
     },
@@ -1258,6 +1260,68 @@ test('scheduled notifications include monthly operations without creating anothe
   assert.equal(result.sentCount, 1);
   assert.equal(result.failedCount, 0);
   assert.equal(result.items[0].scheduleId, 'course_adjustment_start');
+});
+
+test('notification dashboard exposes the calculated monthly workflow state without adding a Sheet', () => {
+  const { backend, spreadsheet, adminSession } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-10';
+  backend.sendPushNotificationSafely_ = (names) => ({
+    attempted: true,
+    accepted: true,
+    delivered: names.length,
+    messageId: 'dashboard-open-leave',
+    error: '',
+  });
+  const beforeSheets = spreadsheet.sheets.length;
+  backend.executeMonthlyOperation_(adminSession, 'open_leave');
+
+  const dashboard = backend.getNotificationAdminDashboard_(adminSession);
+
+  assert.equal(dashboard.monthlyOperations.month, '2026-10');
+  assert.equal(dashboard.monthlyOperations.schedule.bookingDate, '2026-10-23');
+  assert.equal(dashboard.monthlyOperations.operations.find((item) => item.id === 'open_leave').status, 'completed');
+  assert.equal(dashboard.monthlyOperations.templates.open_leave.audienceMode, 'all');
+  assert.equal(spreadsheet.sheets.length, beforeSheets + 2);
+});
+
+test('monthly dashboard flags a completed phase when the live setting no longer matches', () => {
+  const { backend, adminSession } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-10';
+  backend.sendPushNotificationSafely_ = (names) => ({
+    attempted: true,
+    accepted: true,
+    delivered: names.length,
+    messageId: 'dashboard-live-state',
+    error: '',
+  });
+  backend.executeMonthlyOperation_(adminSession, 'open_leave');
+  backend.pauseLeaves_(adminSession, true);
+
+  const operation = backend.getMonthlyOperationsDashboard_(adminSession)
+    .operations.find((item) => item.id === 'open_leave');
+
+  assert.equal(operation.status, 'completed');
+  assert.equal(operation.needsSync, true);
+});
+
+test('course admin can edit monthly copy while fixed audiences cannot be changed', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend();
+
+  assert.throws(
+    () => backend.saveMonthlyOperationsTemplates_(teacherASession, {
+      open_leave: { heading: '不應儲存', content: '不應儲存' },
+    }),
+    /課程管理權限/
+  );
+  const saved = backend.saveMonthlyOperationsTemplates_(adminSession, {
+    open_leave: { heading: '新的請假通知', content: '請於期限內完成。', audienceMode: 'admins' },
+    vvip_open_admin: { heading: '新的 VVIP 提醒', content: '請開放。', audienceMode: 'all' },
+  });
+
+  assert.equal(saved.open_leave.heading, '新的請假通知');
+  assert.equal(saved.open_leave.audienceMode, 'all');
+  assert.equal(saved.vvip_open_admin.heading, '新的 VVIP 提醒');
+  assert.equal(saved.vvip_open_admin.audienceMode, 'admins');
 });
 
 test('OneSignal failure returns a safe result without throwing or exposing the key', () => {

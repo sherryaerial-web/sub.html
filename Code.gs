@@ -1372,6 +1372,139 @@ function isNotificationScheduleDue_(scheduleValue, dateKeyValue, timeValue) {
   return currentMinutes >= scheduledMinutes && currentMinutes <= scheduledMinutes + 4;
 }
 
+function normalizeMonthlyOperationsMonthKey_(monthKeyValue) {
+  var text = cleanText_(monthKeyValue);
+  if (monthKeyValue instanceof Date && !isNaN(monthKeyValue.getTime())) {
+    text = Utilities.formatDate(monthKeyValue, getTimeZone_(), 'yyyy-MM');
+  }
+  var match = text.match(/^(\d{4})[-/](\d{1,2})(?:[-/]\d{1,2})?/);
+  if (!match) throw new Error('月度營運月份格式不正確。');
+  var year = Number(match[1]);
+  var month = Number(match[2]);
+  if (year < 2000 || year > 9999 || month < 1 || month > 12) {
+    throw new Error('月度營運月份格式不正確。');
+  }
+  return String(year) + '-' + String(month).padStart(2, '0');
+}
+
+function formatMonthlyOperationsUtcDateKey_(dateValue) {
+  return String(dateValue.getUTCFullYear()) + '-' +
+    String(dateValue.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(dateValue.getUTCDate()).padStart(2, '0');
+}
+
+function addMonthlyOperationsDays_(dateKeyValue, daysValue) {
+  var match = cleanText_(dateKeyValue).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error('月度營運日期格式不正確。');
+  var date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  date.setUTCDate(date.getUTCDate() + Number(daysValue || 0));
+  return formatMonthlyOperationsUtcDateKey_(date);
+}
+
+function getSecondLastFridayDateKey_(monthKeyValue) {
+  var monthKey = normalizeMonthlyOperationsMonthKey_(monthKeyValue);
+  var parts = monthKey.split('-').map(Number);
+  var lastDay = new Date(Date.UTC(parts[0], parts[1], 0));
+  var distanceToFriday = (lastDay.getUTCDay() - 5 + 7) % 7;
+  var secondLastFriday = new Date(Date.UTC(parts[0], parts[1] - 1, lastDay.getUTCDate() - distanceToFriday - 7));
+  return formatMonthlyOperationsUtcDateKey_(secondLastFriday);
+}
+
+function normalizeMonthlyOperationsTimestamp_(value) {
+  if (!value) return '';
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM-dd HH:mm');
+  }
+  var text = cleanText_(value).replace('T', ' ');
+  var match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  if (!match) throw new Error('月度營運時間格式不正確。');
+  var hour = Number(match[4]);
+  var minute = Number(match[5]);
+  if (hour > 23 || minute > 59) throw new Error('月度營運時間格式不正確。');
+  return String(Number(match[1])) + '-' + String(Number(match[2])).padStart(2, '0') + '-' +
+    String(Number(match[3])).padStart(2, '0') + ' ' + String(hour).padStart(2, '0') + ':' +
+    String(minute).padStart(2, '0');
+}
+
+function addMonthlyOperationsTimestampDays_(timestampValue, daysValue) {
+  var timestamp = normalizeMonthlyOperationsTimestamp_(timestampValue);
+  return addMonthlyOperationsDays_(timestamp.slice(0, 10), daysValue) + ' ' + timestamp.slice(11, 16);
+}
+
+function getMonthlyOperationsSchedule_(monthKeyValue, substituteOpenedAtValue) {
+  var month = normalizeMonthlyOperationsMonthKey_(monthKeyValue);
+  var bookingDate = getSecondLastFridayDateKey_(month);
+  var leaveCloseDate = addMonthlyOperationsDays_(bookingDate, -7);
+  var dayTwelve = month + '-12';
+  if (dayTwelve < leaveCloseDate) leaveCloseDate = dayTwelve;
+  var substituteOpenedAt = normalizeMonthlyOperationsTimestamp_(substituteOpenedAtValue);
+  var substituteIdealCloseAt = addMonthlyOperationsDays_(bookingDate, -5) + ' 21:00';
+  var substituteLatestCloseAt = addMonthlyOperationsDays_(bookingDate, -2) + ' 21:00';
+  var substituteMinimumCloseAt = substituteOpenedAt
+    ? addMonthlyOperationsTimestampDays_(substituteOpenedAt, 5)
+    : '';
+  var substituteScheduleConflict = Boolean(
+    substituteMinimumCloseAt && substituteMinimumCloseAt > substituteLatestCloseAt
+  );
+  var substituteSuggestedCloseAt = substituteIdealCloseAt;
+  if (substituteMinimumCloseAt && substituteMinimumCloseAt > substituteSuggestedCloseAt) {
+    substituteSuggestedCloseAt = substituteMinimumCloseAt;
+  }
+  if (substituteSuggestedCloseAt > substituteLatestCloseAt) {
+    substituteSuggestedCloseAt = substituteLatestCloseAt;
+  }
+  return {
+    month: month,
+    bookingDate: bookingDate,
+    courseAdjustmentStartAt: month + '-01 21:00',
+    courseAdjustmentEndAt: month + '-05 21:00',
+    leaveOpenReminderAt: month + '-07 21:00',
+    leaveSuggestedCloseAt: leaveCloseDate + ' 21:00',
+    leaveDeadlineAdminReminderAt: addMonthlyOperationsDays_(leaveCloseDate, -1) + ' 21:00',
+    substituteIdealCloseAt: substituteIdealCloseAt,
+    substituteMinimumCloseAt: substituteMinimumCloseAt,
+    substituteLatestCloseAt: substituteLatestCloseAt,
+    substituteSuggestedCloseAt: substituteSuggestedCloseAt,
+    vvipPrepareAt: addMonthlyOperationsDays_(bookingDate, -5) + ' 21:00',
+    vvipOpenAt: addMonthlyOperationsDays_(bookingDate, -4) + ' 21:00',
+    vvipCloseAt: addMonthlyOperationsDays_(bookingDate, -1) + ' 21:00',
+    generalBookingAt: bookingDate + ' 21:00',
+    substituteScheduleConflict: substituteScheduleConflict
+  };
+}
+
+function isMonthlyOperationsTimestampDue_(timestampValue, dateKeyValue, timeValue) {
+  var timestamp = normalizeMonthlyOperationsTimestamp_(timestampValue);
+  var dateKey = cleanText_(dateKeyValue);
+  var currentTime = cleanText_(timeValue);
+  if (timestamp.slice(0, 10) !== dateKey || !/^\d{2}:\d{2}$/.test(currentTime)) return false;
+  var scheduledTime = timestamp.slice(11, 16);
+  var scheduledMinutes = Number(scheduledTime.slice(0, 2)) * 60 + Number(scheduledTime.slice(3));
+  var currentMinutes = Number(currentTime.slice(0, 2)) * 60 + Number(currentTime.slice(3));
+  return currentMinutes >= scheduledMinutes && currentMinutes <= scheduledMinutes + 4;
+}
+
+function getMonthlyOperationDueEventIds_(dateKeyValue, timeValue, contextValue) {
+  var dateKey = cleanText_(dateKeyValue);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) throw new Error('月度營運日期格式不正確。');
+  var context = contextValue || {};
+  var schedule = getMonthlyOperationsSchedule_(dateKey.slice(0, 7), context.substituteOpenedAt);
+  var candidates = [
+    ['course_adjustment_start', schedule.courseAdjustmentStartAt],
+    ['course_adjustment_end', schedule.courseAdjustmentEndAt],
+    ['leave_open_admin', schedule.leaveOpenReminderAt],
+    ['leave_deadline_admin', schedule.leaveDeadlineAdminReminderAt],
+    ['leave_close_admin', schedule.leaveSuggestedCloseAt],
+    ['vvip_prepare_admin', schedule.vvipPrepareAt],
+    ['vvip_open_admin', schedule.vvipOpenAt],
+    ['vvip_close_admin', schedule.vvipCloseAt],
+    ['general_booking_admin', schedule.generalBookingAt]
+  ];
+  return candidates.filter(function(item) {
+    return isMonthlyOperationsTimestampDue_(item[1], dateKey, timeValue);
+  }).map(function(item) { return item[0]; });
+}
+
 function isCourseAdjustmentReminderDue_(dateKeyValue, timeValue) {
   return isNotificationScheduleDue_({
     day: '4',

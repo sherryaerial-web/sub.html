@@ -1065,6 +1065,48 @@ test('notification schedule windows support delayed five-minute trigger executio
   assert.equal(backend.isNotificationScheduleDue_({ day: 'last', time: '22:30', enabled: true }, '2026-08-31', '22:34'), true);
 });
 
+test('monthly operations derives the second-to-last Friday and dynamic phase dates in Taipei time', () => {
+  const backend = loadBackend();
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getMonthlyOperationsSchedule_('2026-09', '2026-09-11 21:00:00'))), {
+    month: '2026-09',
+    bookingDate: '2026-09-18',
+    courseAdjustmentStartAt: '2026-09-01 21:00',
+    courseAdjustmentEndAt: '2026-09-05 21:00',
+    leaveOpenReminderAt: '2026-09-07 21:00',
+    leaveSuggestedCloseAt: '2026-09-11 21:00',
+    leaveDeadlineAdminReminderAt: '2026-09-10 21:00',
+    substituteIdealCloseAt: '2026-09-13 21:00',
+    substituteMinimumCloseAt: '2026-09-16 21:00',
+    substituteLatestCloseAt: '2026-09-16 21:00',
+    substituteSuggestedCloseAt: '2026-09-16 21:00',
+    vvipPrepareAt: '2026-09-13 21:00',
+    vvipOpenAt: '2026-09-14 21:00',
+    vvipCloseAt: '2026-09-17 21:00',
+    generalBookingAt: '2026-09-18 21:00',
+    substituteScheduleConflict: false,
+  });
+});
+
+test('monthly operations handles five-Friday months and reports an impossible five-day substitute window', () => {
+  const backend = loadBackend();
+  assert.equal(backend.getSecondLastFridayDateKey_('2026-10'), '2026-10-23');
+  assert.equal(backend.getSecondLastFridayDateKey_('2026-11'), '2026-11-20');
+  assert.equal(backend.getSecondLastFridayDateKey_('2027-01'), '2027-01-22');
+  assert.equal(backend.getSecondLastFridayDateKey_('2028-02'), '2028-02-18');
+  const late = backend.getMonthlyOperationsSchedule_('2026-10', '2026-10-20 22:00:00');
+  assert.equal(late.substituteMinimumCloseAt, '2026-10-25 22:00');
+  assert.equal(late.substituteSuggestedCloseAt, '2026-10-21 21:00');
+  assert.equal(late.substituteScheduleConflict, true);
+});
+
+test('monthly operations due events use the existing five-minute Taipei scheduler window', () => {
+  const backend = loadBackend();
+  assert.deepEqual(Array.from(backend.getMonthlyOperationDueEventIds_('2026-10-01', '20:59', {})), []);
+  assert.deepEqual(Array.from(backend.getMonthlyOperationDueEventIds_('2026-10-01', '21:00', {})), ['course_adjustment_start']);
+  assert.deepEqual(Array.from(backend.getMonthlyOperationDueEventIds_('2026-10-01', '21:04', {})), ['course_adjustment_start']);
+  assert.deepEqual(Array.from(backend.getMonthlyOperationDueEventIds_('2026-10-01', '21:05', {})), []);
+});
+
 function createNotificationBackend() {
   const services = createAuthServices();
   const bootstrap = loadBackend(services);

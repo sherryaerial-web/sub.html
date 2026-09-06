@@ -6190,14 +6190,15 @@
         .filter((item) => item.status !== "已取消");
       const studentCards = studentRequests.map((item) => {
         const pending = item.qualificationStatus === "待確認資格";
+        const qualificationVenue = item.qualificationVenue || (["A", "B"].includes(item.room) ? "晴光" : "劍潭");
         return `<article class="practice-admin-card" data-student-practice-participant="${escapeHtml(item.participantId)}">
           <div class="practice-admin-card-head">
-            <div><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong><div class="item-meta">${escapeHtml(item.obName)}｜身分尾碼 ${escapeHtml(item.identitySuffix || "未填")}</div></div>
+            <div><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong><div class="item-meta">${escapeHtml(item.obName)}｜身分尾碼 ${escapeHtml(item.identitySuffix || "未填")}｜${escapeHtml(qualificationVenue)}資格</div></div>
             <span class="status-pill ${pending ? "pending" : ""}">${escapeHtml(pending ? "待確認資格" : item.status)}</span>
           </div>
           ${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}
           <div class="admin-item-actions">
-            ${pending ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-student-practice-qualification" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="badge-check"></i>確認資格並成立</button>` : ""}
+            ${pending ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-student-practice-qualification" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="badge-check"></i>確認${escapeHtml(qualificationVenue)}資格並成立</button>` : ""}
             <button class="compact-button" type="button" data-admin-action="move-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-clock"></i>協助換時間</button>
             <button class="danger-button" type="button" data-admin-action="cancel-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-x"></i>取消這位學生</button>
           </div>
@@ -7005,11 +7006,15 @@ https://sherryaerial-web.github.io/sub.html/
           return;
         }
         if (action === "confirm-student-practice-qualification") {
-          if (!window.confirm("確認這位學生已完成開關門與設備安裝教學？確認後會直接保留原申請並成立。")) return;
+          const item = (studentPracticeAdminDashboard?.requests || []).find((request) =>
+            request.participantId === button.dataset.participantId
+          );
+          const qualificationVenue = item?.qualificationVenue || (["A", "B"].includes(item?.room) ? "晴光" : "劍潭");
+          if (!window.confirm(`確認這位學生已完成${qualificationVenue}的開關門與設備安裝教學？確認後只會開通${qualificationVenue}資格，並直接保留原申請成立。`)) return;
           await callApi("confirmStudentPracticeQualification", {
             participantId: button.dataset.participantId
           });
-          setNotice("學生資格已確認，原自主練習申請已成立。");
+          setNotice(`學生${qualificationVenue}資格已確認，原自主練習申請已成立。`);
           await fetchPracticeAdminDashboard();
           return;
         }

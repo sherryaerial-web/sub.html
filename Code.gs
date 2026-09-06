@@ -129,7 +129,9 @@ var SHEET_HEADERS = {
   ],
   STUDENT_PRACTICE_QUALIFICATIONS: [
     '學生 ID', 'OB 登記姓名', '身分辨識尾碼', '裝置 Token 雜湊', '資格狀態',
-    '確認時間', '確認者', '備註', '建立時間', '更新時間'
+    '確認時間', '確認者', '備註', '建立時間', '更新時間',
+    '晴光資格狀態', '晴光確認時間', '晴光確認者',
+    '劍潭資格狀態', '劍潭確認時間', '劍潭確認者'
   ],
   STUDENT_PRACTICE_GROUPS: [
     '場次 ID', '日期', '教室', '開始時間', '結束時間', '狀態', '異動狀態',
@@ -2507,6 +2509,39 @@ function hashStudentPracticeToken_(tokenValue) {
   }).join('');
 }
 
+function getStudentPracticeQualificationVenueForRoom_(roomValue) {
+  var room = requirePracticeRoom_(roomValue);
+  return room === 'A' || room === 'B' ? '晴光' : '劍潭';
+}
+
+function getStudentPracticeQualificationFields_(qualificationValue, venueValue) {
+  var qualification = qualificationValue || {};
+  var venue = cleanText_(venueValue);
+  if (venue === '晴光') {
+    return {
+      venue: venue,
+      status: cleanText_(qualification.sunnyStatus),
+      confirmedAt: cleanText_(qualification.sunnyConfirmedAt),
+      confirmedBy: cleanText_(qualification.sunnyConfirmedBy),
+      statusColumn: 11,
+      confirmedAtColumn: 12,
+      confirmedByColumn: 13
+    };
+  }
+  if (venue === '劍潭') {
+    return {
+      venue: venue,
+      status: cleanText_(qualification.jiantanStatus),
+      confirmedAt: cleanText_(qualification.jiantanConfirmedAt),
+      confirmedBy: cleanText_(qualification.jiantanConfirmedBy),
+      statusColumn: 14,
+      confirmedAtColumn: 15,
+      confirmedByColumn: 16
+    };
+  }
+  throw new Error('學生自主練習資格館別不正確。');
+}
+
 function getStudentPracticeRecordsUnlocked_(spreadsheet) {
   var qualificationSheet = requireSheet_(spreadsheet, SHEETS.STUDENT_PRACTICE_QUALIFICATIONS);
   var groupSheet = requireSheet_(spreadsheet, SHEETS.STUDENT_PRACTICE_GROUPS);
@@ -2535,7 +2570,13 @@ function getStudentPracticeRecordsUnlocked_(spreadsheet) {
         confirmedBy: cleanText_(row[6]),
         note: cleanText_(row[7]),
         createdAt: cleanText_(row[8]),
-        updatedAt: cleanText_(row[9])
+        updatedAt: cleanText_(row[9]),
+        sunnyStatus: cleanText_(row[10]),
+        sunnyConfirmedAt: cleanText_(row[11]),
+        sunnyConfirmedBy: cleanText_(row[12]),
+        jiantanStatus: cleanText_(row[13]),
+        jiantanConfirmedAt: cleanText_(row[14]),
+        jiantanConfirmedBy: cleanText_(row[15])
       };
     }).filter(function(item) { return item.studentId; }),
     groups: groupSheet.getDataRange().getValues().slice(1).map(function(row, index) {
@@ -2673,7 +2714,9 @@ function submitStudentPractice_(inputValue) {
     var now = getTimestamp_();
     var newToken = rawToken;
     var studentId = qualification ? qualification.studentId : Utilities.getUuid();
-    var qualificationStatus = qualification && qualification.status === '已確認'
+    var qualificationVenue = getStudentPracticeQualificationVenueForRoom_(room);
+    var qualificationFields = getStudentPracticeQualificationFields_(qualification, qualificationVenue);
+    var qualificationStatus = qualification && qualificationFields.status === '已確認'
       ? '已確認' : STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
     var registrationStatus = qualificationStatus === '已確認'
       ? STUDENT_PRACTICE_STATUS.ACTIVE : STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
@@ -2690,8 +2733,15 @@ function submitStudentPractice_(inputValue) {
           records.sheets.qualifications,
           SHEET_HEADERS.STUDENT_PRACTICE_QUALIFICATIONS,
           [studentId, obName, identitySuffix, hashStudentPracticeToken_(newToken),
-            STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION, '', '', '', now, now]
+            '', '', '', '', now, now,
+            qualificationVenue === '晴光' ? STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION : '', '', '',
+            qualificationVenue === '劍潭' ? STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION : '', '', '']
         );
+      } else if (!qualificationFields.status) {
+        records.sheets.qualifications
+          .getRange(qualification.rowNumber, qualificationFields.statusColumn)
+          .setValue(STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION);
+        records.sheets.qualifications.getRange(qualification.rowNumber, 10).setValue(now);
       }
       if (!targetGroup) {
         appendStudentPracticeRowUnlocked_(records.sheets.groups, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS, [
@@ -2714,6 +2764,7 @@ function submitStudentPractice_(inputValue) {
         participantId: participantId,
         groupId: groupId,
         studentToken: newToken,
+        qualificationVenue: qualificationVenue,
         status: registrationStatus,
         date: interval.date,
         room: room,
@@ -2897,13 +2948,18 @@ function getStudentPracticeAdminDashboard_(session, filtersValue) {
   var requests = records.participants.map(function(participant) {
     var qualification = qualificationsByStudent[participant.studentId] || {};
     var group = groupsById[participant.groupId] || {};
+    var qualificationVenue = group.room
+      ? getStudentPracticeQualificationVenueForRoom_(group.room) : '';
+    var qualificationFields = qualificationVenue
+      ? getStudentPracticeQualificationFields_(qualification, qualificationVenue) : {};
     return {
       participantId: participant.participantId,
       groupId: participant.groupId,
       studentId: participant.studentId,
       obName: qualification.obName || '',
       identitySuffix: qualification.identitySuffix || '',
-      qualificationStatus: qualification.status || participant.qualificationStatus,
+      qualificationVenue: qualificationVenue,
+      qualificationStatus: qualificationFields.status || STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
       status: participant.status,
       date: group.date || '',
       room: group.room || '',
@@ -2961,9 +3017,19 @@ function confirmStudentPracticeQualification_(session, participantIdValue) {
       return item.studentId === participant.studentId;
     })[0];
     if (!qualification) throw new Error('找不到學生資格資料。');
+    var selectedGroup = records.groups.filter(function(item) {
+      return item.groupId === participant.groupId;
+    })[0];
+    if (!selectedGroup) throw new Error('找不到學生自主練習場次。');
+    var qualificationVenue = getStudentPracticeQualificationVenueForRoom_(selectedGroup.room);
+    var qualificationFields = getStudentPracticeQualificationFields_(qualification, qualificationVenue);
+    var groupsById = {};
+    records.groups.forEach(function(item) { groupsById[item.groupId] = item; });
     var pendingParticipants = records.participants.filter(function(item) {
+      var group = groupsById[item.groupId];
       return item.studentId === participant.studentId &&
-        item.status === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
+        item.status === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION && group &&
+        getStudentPracticeQualificationVenueForRoom_(group.room) === qualificationVenue;
     });
     var affectedGroupIds = {};
     pendingParticipants.forEach(function(item) { affectedGroupIds[item.groupId] = true; });
@@ -2972,9 +3038,10 @@ function confirmStudentPracticeQualification_(session, participantIdValue) {
       records.sheets.qualifications, records.sheets.participants,
       records.sheets.groups, records.sheets.audit
     ], function() {
-      records.sheets.qualifications.getRange(qualification.rowNumber, 5, 1, 6).setValues([[
-        '已確認', now, actor, qualification.note, qualification.createdAt, now
-      ]]);
+      records.sheets.qualifications
+        .getRange(qualification.rowNumber, qualificationFields.statusColumn, 1, 3)
+        .setValues([['已確認', now, actor]]);
+      records.sheets.qualifications.getRange(qualification.rowNumber, 10).setValue(now);
       pendingParticipants.forEach(function(item) {
         records.sheets.participants.getRange(item.rowNumber, 4, 1, 2).setValues([[
           '已確認', STUDENT_PRACTICE_STATUS.ACTIVE
@@ -2991,12 +3058,13 @@ function confirmStudentPracticeQualification_(session, participantIdValue) {
         action: '確認學生自主練習資格',
         targetType: '學生',
         targetId: participant.studentId,
-        before: { status: qualification.status },
-        after: { status: '已確認', activatedRequests: pendingParticipants.length }
+        before: { venue: qualificationVenue, status: qualificationFields.status },
+        after: { venue: qualificationVenue, status: '已確認', activatedRequests: pendingParticipants.length }
       });
       return {
         participantId: participantId,
         studentId: participant.studentId,
+        qualificationVenue: qualificationVenue,
         status: STUDENT_PRACTICE_STATUS.ACTIVE,
         activatedRequests: pendingParticipants.length
       };
@@ -3140,6 +3208,12 @@ function moveStudentPracticeParticipant_(session, inputValue) {
       throw new Error('這個時段已有學生自主練習，請改選空檔或加入該場次。');
     }
 
+    var qualification = records.qualifications.filter(function(item) {
+      return item.studentId === participant.studentId;
+    })[0];
+    if (!qualification) throw new Error('找不到學生資格資料。');
+    var qualificationVenue = getStudentPracticeQualificationVenueForRoom_(room);
+    var qualificationFields = getStudentPracticeQualificationFields_(qualification, qualificationVenue);
     var remaining = records.participants.filter(function(item) {
       return item.groupId === oldGroup.groupId && item.participantId !== participantId && [
         STUDENT_PRACTICE_STATUS.ACTIVE,
@@ -3147,21 +3221,30 @@ function moveStudentPracticeParticipant_(session, inputValue) {
         STUDENT_PRACTICE_STATUS.CHANGE_PENDING
       ].indexOf(item.status) !== -1;
     });
-    var nextStatus = participant.qualificationStatus === '已確認'
+    var nextQualificationStatus = qualificationFields.status === '已確認'
+      ? '已確認' : STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
+    var nextStatus = nextQualificationStatus === '已確認'
       ? STUDENT_PRACTICE_STATUS.ACTIVE
       : STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
     var newGroupId = Utilities.getUuid();
     var now = getTimestamp_();
 
     return runStudentPracticeTransitionUnlocked_([
-      records.sheets.groups, records.sheets.participants, records.sheets.audit
+      records.sheets.qualifications, records.sheets.groups,
+      records.sheets.participants, records.sheets.audit
     ], function() {
+      if (!qualificationFields.status) {
+        records.sheets.qualifications
+          .getRange(qualification.rowNumber, qualificationFields.statusColumn)
+          .setValue(STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION);
+        records.sheets.qualifications.getRange(qualification.rowNumber, 10).setValue(now);
+      }
       appendStudentPracticeRowUnlocked_(records.sheets.groups, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS, [
         newGroupId, interval.date, room, interval.startTime, interval.endTime,
         nextStatus, '', now, now, actor
       ]);
       records.sheets.participants.getRange(participant.rowNumber, 2, 1, 4).setValues([[
-        newGroupId, participant.studentId, participant.qualificationStatus, nextStatus
+        newGroupId, participant.studentId, nextQualificationStatus, nextStatus
       ]]);
       if (!remaining.length) {
         records.sheets.groups.getRange(oldGroup.rowNumber, 6, 1, 5).setValues([[
@@ -3188,6 +3271,7 @@ function moveStudentPracticeParticipant_(session, inputValue) {
           room: room,
           startTime: interval.startTime,
           endTime: interval.endTime,
+          qualificationVenue: qualificationVenue,
           status: nextStatus
         },
         reason: reason
@@ -3199,6 +3283,7 @@ function moveStudentPracticeParticipant_(session, inputValue) {
         status: nextStatus,
         date: interval.date,
         room: room,
+        qualificationVenue: qualificationVenue,
         startTime: interval.startTime,
         endTime: interval.endTime
       };

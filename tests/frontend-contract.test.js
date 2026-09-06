@@ -3697,6 +3697,9 @@ test('practice admin includes student qualification and independent cancellation
   assert.match(html, /studentPracticeAdminDashboard/);
   assert.match(html, /getStudentPracticeAdminDashboard/);
   assert.match(html, /待確認學生資格/);
+  assert.match(html, /qualificationVenue/);
+  assert.match(html, /資格並成立/);
+  assert.match(html, /已完成.*開關門與設備安裝教學/);
   assert.match(html, /data-admin-action="confirm-student-practice-qualification"/);
   assert.match(html, /data-admin-action="cancel-student-practice-participant"/);
   assert.match(html, /data-admin-action="move-student-practice-participant"/);

@@ -1875,6 +1875,7 @@ function failMonthlyOperationReservation_(monthKey, definition, reservationId, e
 function performMonthlyOperationMutation_(session, definition) {
   var details = {};
   if (definition.id === 'open_leave') {
+    details.courseSync = syncCourseListForMonthlyLeaveOpening_(session);
     details.leave = pauseLeaves_(session, false);
   } else if (definition.id === 'close_leave') {
     details.leave = pauseLeaves_(session, true);
@@ -6537,6 +6538,15 @@ function fetchCalendarPages_(token, dateFrom, dateTo) {
 
 function syncCourseListFromApi(sessionToken) {
   var admin = requireCapability_(sessionToken, 'course_admin');
+  return syncCourseListFromApiForSession_(admin);
+}
+
+function syncCourseListForMonthlyLeaveOpening_(session) {
+  return syncCourseListFromApiForSession_(session);
+}
+
+function syncCourseListFromApiForSession_(admin) {
+  assertCapabilitySession_(admin, 'course_admin');
 
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) {

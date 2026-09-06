@@ -640,6 +640,12 @@ function createInvitationBackend(options = {}) {
     ...services,
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
+  backend.syncCourseListForMonthlyLeaveOpening_ = () => ({
+    status: 'success',
+    count: courseSheet.values.length - 1,
+    dateFrom: '2026-08-01',
+    dateTo: '2026-08-31',
+  });
   backend.getNextMonthKey_ = () => options.nextMonth || '2026-08';
   const adminToken = backend.authenticate_('管理員甲', '9999').sessionToken;
   const teacherAToken = backend.authenticate_('老師甲', '1234').sessionToken;
@@ -3668,6 +3674,36 @@ test('monthly leave opening is idempotent and sends one managed notification to 
     [['管理員甲', '老師甲', '老師乙', '老師丙']]
   );
   assert.equal(pushes[0].eventKey, 'monthly_operations_202609_open_leave');
+});
+
+test('monthly leave opening refreshes the next-month OB courses before enabling leave and notifying teachers', () => {
+  const { backend, adminSession } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  const events = [];
+  const originalPauseLeaves = backend.pauseLeaves_;
+  backend.syncCourseListForMonthlyLeaveOpening_ = (session) => {
+    events.push('sync');
+    assert.equal(session.teacherName, '管理員甲');
+    return {
+      status: 'success', count: 42, dateFrom: '2026-09-06', dateTo: '2026-11-01',
+    };
+  };
+  backend.pauseLeaves_ = (session, paused) => {
+    events.push('open');
+    return originalPauseLeaves(session, paused);
+  };
+  backend.sendPushNotificationSafely_ = (names) => {
+    events.push('notify');
+    return {
+      attempted: true, accepted: true, delivered: names.length,
+      messageId: 'monthly-sync-before-open', error: '',
+    };
+  };
+
+  const result = backend.executeMonthlyOperation_(adminSession, 'open_leave');
+
+  assert.deepEqual(events, ['sync', 'open', 'notify']);
+  assert.equal(result.details.courseSync.count, 42);
 });
 
 test('monthly substitute opening suppresses the legacy duplicate push and closing ends every invitation', () => {

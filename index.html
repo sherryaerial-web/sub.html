@@ -2675,6 +2675,7 @@
       if (item.status === "completed") return "已完成";
       if (item.status === "running") return "執行中";
       if (item.status === "failed") return "上次執行失敗";
+      if (item.permissionDenied) return "僅薪資管理者可執行";
       if (!item.canExecute) return "請先完成上一階段";
       return item.early ? "可提前操作" : "可操作";
     }

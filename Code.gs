@@ -1618,6 +1618,11 @@ function getDefaultMonthlyOperationsTemplates_() {
       content: '今天是本月一般預約開放日，請確認 OB 系統並正式開放預約。',
       audienceMode: 'admins'
     },
+    payroll_review_open: {
+      heading: '上月薪資已發布，請協助核對',
+      content: '上月薪資明細已發布，請進入「我的薪資」確認；如有疑問請在系統內提出。',
+      audienceMode: 'all'
+    },
     open_leave: {
       heading: '本月請假登記已開放',
       content: '本月請假登記已開放，請於期限內完成下月請假。',
@@ -1797,33 +1802,105 @@ function getCurrentMonthlyOperationsMonthKey_() {
 function getMonthlyOperationDefinition_(actionValue) {
   var action = cleanText_(actionValue);
   var definitions = {
+    publish_payroll_review: {
+      prerequisite: '',
+      notificationIds: ['payroll_review_open'],
+      requiredCapability: 'payroll_admin'
+    },
     open_leave: {
       prerequisite: '',
-      notificationIds: ['open_leave']
+      notificationIds: ['open_leave'],
+      requiredCapability: 'course_admin'
     },
     send_leave_deadline: {
       prerequisite: 'open_leave',
-      notificationIds: ['send_leave_deadline']
+      notificationIds: ['send_leave_deadline'],
+      requiredCapability: 'course_admin'
     },
     close_leave: {
       prerequisite: 'open_leave',
-      notificationIds: []
+      notificationIds: [],
+      requiredCapability: 'course_admin'
     },
     open_substitute: {
       prerequisite: 'close_leave',
-      notificationIds: ['open_substitute']
+      notificationIds: ['open_substitute'],
+      requiredCapability: 'course_admin'
     },
     close_substitute: {
       prerequisite: 'open_substitute',
-      notificationIds: ['close_substitute', 'close_substitute_admin']
+      notificationIds: ['close_substitute', 'close_substitute_admin'],
+      requiredCapability: 'course_admin'
     }
   };
   if (!definitions[action]) throw new Error('不支援的月度營運操作。');
   return {
     id: action,
     prerequisite: definitions[action].prerequisite,
-    notificationIds: definitions[action].notificationIds.slice()
+    notificationIds: definitions[action].notificationIds.slice(),
+    requiredCapability: definitions[action].requiredCapability
   };
+}
+
+function getPreviousPayrollMonthKey_(monthKeyValue) {
+  var month = normalizeMonthlyOperationsMonthKey_(monthKeyValue);
+  var parts = month.split('-');
+  var year = Number(parts[0]);
+  var monthNumber = Number(parts[1]) - 1;
+  if (monthNumber === 0) {
+    year -= 1;
+    monthNumber = 12;
+  }
+  return year + '-' + String(monthNumber).padStart(2, '0');
+}
+
+function publishPreviousMonthPayrollForReview_(session, currentMonthValue) {
+  var targetMonth = getPreviousPayrollMonthKey_(currentMonthValue);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var summarySheet = requireSheet_(ss, SHEETS.PAYROLL_SUMMARIES);
+  var lineSheet = requireSheet_(ss, SHEETS.PAYROLL_LINES);
+  var snapshotSheet = requireSheet_(ss, SHEETS.PAYROLL_SNAPSHOT);
+  assertHeaders_(summarySheet, SHEET_HEADERS.PAYROLL_SUMMARIES);
+  assertHeaders_(lineSheet, SHEET_HEADERS.PAYROLL_LINES);
+  assertHeaders_(snapshotSheet, SHEET_HEADERS.PAYROLL_SNAPSHOT);
+  var summaryRows = summarySheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return normalizePayrollMonthValue_(row[0]) === targetMonth;
+  });
+  if (!summaryRows.length) throw new Error('找不到上個月可發布的薪資草稿。');
+  var version = cleanText_(summaryRows[summaryRows.length - 1][8]);
+  var currentSummaries = summaryRows.filter(function(row) { return cleanText_(row[8]) === version; });
+  var currentLines = lineSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return normalizePayrollMonthValue_(row[0]) === targetMonth && cleanText_(row[2]) === version;
+  });
+  if (!version || !currentSummaries.length || !currentLines.length) {
+    throw new Error('找不到上個月可發布的薪資草稿。');
+  }
+  var errorCount = snapshotSheet.getDataRange().getValues().slice(1).filter(function(row) {
+    return normalizePayrollMonthValue_(row[1]) === targetMonth && cleanText_(row[0]) === version &&
+      cleanText_(row[14]).indexOf('錯誤：') === 0;
+  }).length;
+  if (errorCount) throw new Error('上個月薪資草稿仍有 ' + errorCount + ' 筆資料錯誤，請先修正後再發布。');
+  var draftSummaries = currentSummaries.filter(function(row) {
+    return cleanText_(row[9]) === CONFIG.PAYROLL_DRAFT_STATUS;
+  }).length;
+  var draftLines = currentLines.filter(function(row) {
+    return cleanText_(row[16]) === CONFIG.PAYROLL_DRAFT_STATUS;
+  }).length;
+  if (!draftSummaries && !draftLines) {
+    return {
+      month: targetMonth,
+      version: version,
+      teachers: currentSummaries.length,
+      lines: currentLines.length,
+      alreadyPublished: true
+    };
+  }
+  if (draftSummaries !== currentSummaries.length || draftLines !== currentLines.length) {
+    throw new Error('上個月薪資版本狀態不一致，請先至薪資管理確認。');
+  }
+  var published = publishPayroll_(session, targetMonth, version);
+  published.alreadyPublished = false;
+  return published;
 }
 
 function assertMonthlyOperationSequence_(definition, state) {
@@ -1900,9 +1977,11 @@ function failMonthlyOperationReservation_(monthKey, definition, reservationId, e
   });
 }
 
-function performMonthlyOperationMutation_(session, definition) {
+function performMonthlyOperationMutation_(session, definition, monthKey) {
   var details = {};
-  if (definition.id === 'open_leave') {
+  if (definition.id === 'publish_payroll_review') {
+    details.payroll = publishPreviousMonthPayrollForReview_(session, monthKey);
+  } else if (definition.id === 'open_leave') {
     details.courseSync = syncCourseListForMonthlyLeaveOpening_(session);
     details.leave = pauseLeaves_(session, false);
   } else if (definition.id === 'close_leave') {
@@ -1959,8 +2038,8 @@ function deliverMonthlyOperationNotifications_(monthKey, definition, actor) {
 }
 
 function executeMonthlyOperation_(session, actionValue) {
-  var actor = assertCapabilitySession_(session, 'course_admin');
   var definition = getMonthlyOperationDefinition_(actionValue);
+  var actor = assertCapabilitySession_(session, definition.requiredCapability);
   var monthKey = getCurrentMonthlyOperationsMonthKey_();
   var reservation = reserveMonthlyOperation_(monthKey, definition, actor);
   if (reservation.inProgress) {
@@ -1980,7 +2059,7 @@ function executeMonthlyOperation_(session, actionValue) {
     : {};
   if (!reservation.alreadyCompleted) {
     try {
-      details = performMonthlyOperationMutation_(session, definition);
+      details = performMonthlyOperationMutation_(session, definition, monthKey);
       completeMonthlyOperationReservation_(
         monthKey,
         definition,
@@ -2234,6 +2313,7 @@ function getMonthlyOperationsDashboard_(session) {
     ['general_booking_admin', '提醒開放一般預約', schedule.generalBookingAt]
   ];
   var operationDefinitions = [
+    ['publish_payroll_review', '發布上月薪資並通知老師', schedule.courseAdjustmentStartAt, ''],
     ['open_leave', '開放請假並通知', schedule.leaveOpenReminderAt, ''],
     ['send_leave_deadline', '發送請假截止提醒', schedule.leaveDeadlineAdminReminderAt, 'open_leave'],
     ['close_leave', '結束請假', schedule.leaveSuggestedCloseAt, 'open_leave'],
@@ -2259,10 +2339,13 @@ function getMonthlyOperationsDashboard_(session) {
   var openInvitationCount = invitationSheet.getDataRange().getValues().slice(1).filter(function(row) {
     return cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
   }).length;
+  var actorCapabilities = getSessionManagementCapabilities_(session);
   var operations = operationDefinitions.map(function(item) {
     var operation = state.operations[item[0]] || {};
     var prerequisite = item[3] ? (state.operations[item[3]] || {}) : null;
-    var notificationIds = getMonthlyOperationDefinition_(item[0]).notificationIds;
+    var definition = getMonthlyOperationDefinition_(item[0]);
+    var notificationIds = definition.notificationIds;
+    var permissionDenied = actorCapabilities.indexOf(definition.requiredCapability) === -1;
     var notificationPending = notificationIds.some(function(notificationId) {
       var notification = operation.notifications && operation.notifications[notificationId];
       return !notification || !cleanText_(notification.sentAt);
@@ -2279,7 +2362,9 @@ function getMonthlyOperationsDashboard_(session) {
       label: item[1],
       recommendedAt: item[2],
       prerequisite: item[3],
-      canExecute: !item[3] || Boolean(prerequisite && prerequisite.completedAt),
+      canExecute: !permissionDenied && (!item[3] || Boolean(prerequisite && prerequisite.completedAt)),
+      permissionDenied: permissionDenied,
+      requiredCapability: definition.requiredCapability,
       early: now < item[2],
       status: operation.completedAt ? 'completed' : (cleanText_(operation.status) || 'pending'),
       completedAt: cleanText_(operation.completedAt),

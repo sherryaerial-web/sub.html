@@ -3768,6 +3768,79 @@ test('a failed monthly operation push can retry without rerunning the completed 
   assert.equal(messages.values.filter((row) => row[1] === 'monthly_operations_202609_open_leave').length, 1);
 });
 
+test('monthly payroll review publishes the previous month once and notifies every active teacher', () => {
+  const { backend, adminSession, spreadsheet } = createInvitationBackend();
+  const augustSheetDate = '2026-08';
+  const snapshot = createSheetFixture('薪資同步快照', [
+    EXPECTED_PAYROLL_SNAPSHOT_HEADERS,
+    ['version-1', augustSheetDate, 'cal-1', '2026/08/01', '10:00', '空環', '["老師甲"]', 4, 8, '', '', 'A', '晴光', 'now', '完成'],
+  ]);
+  const lines = createSheetFixture('薪資明細', [
+    EXPECTED_PAYROLL_LINE_HEADERS,
+    [augustSheetDate, 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '草稿', 'now'],
+  ]);
+  const summaries = createSheetFixture('薪資結算', [
+    EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    [augustSheetDate, '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '草稿', '', 'now'],
+  ]);
+  spreadsheet.sheets.push(snapshot, lines, summaries);
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    pushes.push({ names: names.slice(), heading: message.heading, eventKey: message.eventKey });
+    return { attempted: true, accepted: true, delivered: names.length, messageId: 'payroll-review-ok', error: '' };
+  };
+
+  const first = backend.executeMonthlyOperation_(adminSession, 'publish_payroll_review');
+  const second = backend.executeMonthlyOperation_(adminSession, 'publish_payroll_review');
+  const externallyPublished = backend.publishPreviousMonthPayrollForReview_(adminSession, '2026-09');
+
+  assert.equal(first.details.payroll.month, '2026-08');
+  assert.equal(first.details.payroll.version, 'version-1');
+  assert.equal(first.details.payroll.alreadyPublished, false);
+  assert.equal(lines.values[1][16], '待確認');
+  assert.equal(summaries.values[1][9], '待確認');
+  assert.equal(second.alreadyCompleted, true);
+  assert.equal(externallyPublished.alreadyPublished, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(pushes.map((item) => item.names))), [['管理員甲', '老師甲', '老師乙', '老師丙']]);
+  assert.equal(pushes[0].eventKey, 'monthly_operations_202609_payroll_review_open');
+  assert.equal(backend.getPreviousPayrollMonthKey_('2026-01'), '2025-12');
+});
+
+test('monthly payroll review requires payroll-admin permission and never notifies on failure', () => {
+  const { backend, spreadsheet } = createInvitationBackend();
+  const lines = createSheetFixture('薪資明細', [EXPECTED_PAYROLL_LINE_HEADERS]);
+  const summaries = createSheetFixture('薪資結算', [EXPECTED_PAYROLL_SUMMARY_HEADERS]);
+  const snapshot = createSheetFixture('薪資同步快照', [EXPECTED_PAYROLL_SNAPSHOT_HEADERS]);
+  spreadsheet.sheets.push(snapshot, lines, summaries);
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  let pushCount = 0;
+  backend.sendPushNotificationSafely_ = () => {
+    pushCount += 1;
+    return { attempted: true, accepted: true, delivered: 0, messageId: '', error: '' };
+  };
+  const takoDashboard = backend.getMonthlyOperationsDashboard_({
+    teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'],
+  });
+  const payrollOperation = takoDashboard.operations.find((item) => item.id === 'publish_payroll_review');
+  assert.equal(payrollOperation.permissionDenied, true);
+  assert.equal(payrollOperation.canExecute, false);
+
+  assert.throws(
+    () => backend.executeMonthlyOperation_({
+      teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'],
+    }, 'publish_payroll_review'),
+    /薪資管理權限/
+  );
+  assert.throws(
+    () => backend.executeMonthlyOperation_({
+      teacherName: '管理員甲', role: '管理員', managementCapabilities: ['course_admin', 'payroll_admin'],
+    }, 'publish_payroll_review'),
+    /找不到.*薪資草稿/
+  );
+  assert.equal(pushCount, 0);
+});
+
 test('monthly-operation POST route accepts only a course administrator session', () => {
   const { backend, adminToken, teacherAToken } = createInvitationBackend();
   backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';

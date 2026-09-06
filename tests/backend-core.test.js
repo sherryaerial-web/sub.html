@@ -8178,6 +8178,43 @@ test('practice day view separates OB classes rentals and shared practice by room
   assert.equal(day.rooms[2].blocks.length, 0);
 });
 
+test('practice day view includes active student practice without exposing student identity', () => {
+  const backend = loadBackend();
+  const day = backend.buildPracticeDayView_(
+    { bookings: [], participants: [] },
+    [],
+    '2026/09/10',
+    [
+      { groupId: 'student-group-active', date: '2026/09/10', room: 'D', startTime: '11:00', endTime: '12:00', status: '已成立', updatedBy: '學生甲' },
+      { groupId: 'student-group-cancelled', date: '2026/09/10', room: 'D', startTime: '14:00', endTime: '15:00', status: '已取消', updatedBy: '學生乙' },
+      { groupId: 'student-group-other-day', date: '2026/09/11', room: 'D', startTime: '16:00', endTime: '17:00', status: '已成立', updatedBy: '學生丙' },
+    ]
+  );
+
+  assert.equal(day.rooms[3].blocks.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(day.rooms[3].blocks[0])), {
+    id: 'student-practice:student-group-active',
+    type: 'student-practice',
+    groupId: 'student-group-active',
+    date: '2026/09/10',
+    room: 'D',
+    startTime: '11:00',
+    endTime: '12:00',
+    status: '已成立',
+    label: '學生自主練習',
+    interval: {
+      date: '2026/09/10',
+      startTime: '11:00',
+      endTime: '12:00',
+      startMs: new Date('2026-09-10T11:00:00+08:00').getTime(),
+      endMs: new Date('2026-09-10T12:00:00+08:00').getTime(),
+      durationMinutes: 60,
+    },
+  });
+  assert.equal(JSON.stringify(day).includes('學生甲'), false);
+  assert.equal(JSON.stringify(day).includes('學生乙'), false);
+});
+
 test('practice create stores one UUID booking and its creator without touching CourseList', () => {
   const fixture = createPracticeBackend();
   const beforeCourses = JSON.parse(JSON.stringify(fixture.courseSheet.values));

@@ -3667,6 +3667,27 @@ test('practice card calendar renders formal rental shared and own-highlight bloc
   assert.match(html.match(/<div class="practice-legend"[\s\S]*?<\/div>/)?.[0] || '', /我的登記/);
 });
 
+test('teacher practice calendar renders student practice as private non-interactive occupancy', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__practiceFixture = {
+    date: '2026/09/10', teacherName: 'Tako', quickDurations: [60, 90, 120],
+    rooms: [
+      { room: 'D', blocks: [
+        { id: 'student-practice:group-1', type: 'student-practice', groupId: 'group-1', startTime: '11:00', endTime: '12:00', label: '學生自主練習', status: '已成立' },
+      ] },
+      { room: 'A', blocks: [] }, { room: 'B', blocks: [] }, { room: 'C', blocks: [] },
+    ],
+  };
+
+  vm.runInContext('practiceState.room = "D"; renderPracticeView(__practiceFixture);', context);
+  const calendar = getElement('practice-calendar').innerHTML;
+
+  assert.match(calendar, /practice-block student-practice/);
+  assert.match(calendar, /學生自主練習/);
+  assert.match(calendar, /學生登記已占用/);
+  assert.doesNotMatch(calendar, /data-practice-block="student-practice:group-1"/);
+});
+
 test('custom practice form uses explicit five-minute choices and defaults end one hour later', () => {
   const { context, getElement } = createFrontendRuntime();
   vm.runInContext('practiceState.date = "2026/09/10"; practiceState.room = "A"; openPracticeEditor({ mode: "create", startTime: "14:05" });', context);

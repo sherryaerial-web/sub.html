@@ -3292,7 +3292,7 @@ function moveStudentPracticeParticipant_(session, inputValue) {
   });
 }
 
-function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
+function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, studentGroupsValue) {
   var records = recordsValue || {};
   var date = cleanText_(dateValue).replace(/-/g, '/');
   if (!/^\d{4}\/\d{2}\/\d{2}$/.test(date)) throw new Error('自主練習日期格式不正確。');
@@ -3375,6 +3375,35 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
     });
   });
 
+  (studentGroupsValue || []).forEach(function(group) {
+    var groupDate = cleanText_(group && group.date).replace(/-/g, '/');
+    var room = cleanText_(group && group.room).toUpperCase();
+    var status = cleanText_(group && group.status);
+    if (groupDate !== date || !roomsByName[room] ||
+        [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+          STUDENT_PRACTICE_STATUS.CHANGE_PENDING].indexOf(status) === -1) return;
+    var startTime = cleanText_(group.startTime);
+    var endTime = cleanText_(group.endTime);
+    var groupId = cleanText_(group.groupId);
+    if (!groupId || timeTextToMinutes_(startTime) < 0 || timeTextToMinutes_(endTime) <= timeTextToMinutes_(startTime)) return;
+    roomsByName[room].blocks.push({
+      id: 'student-practice:' + groupId,
+      type: 'student-practice',
+      groupId: groupId,
+      date: date,
+      room: room,
+      startTime: startTime,
+      endTime: endTime,
+      status: status,
+      label: status === STUDENT_PRACTICE_STATUS.ACTIVE
+        ? '學生自主練習'
+        : status === STUDENT_PRACTICE_STATUS.CHANGE_PENDING
+          ? '學生自主練習（時段待處理）'
+          : '學生自主練習（資格待確認）',
+      interval: normalizePracticeInterval_(date, startTime, endTime)
+    });
+  });
+
   return {
     date: date,
     rooms: ['A', 'B', 'C', 'D'].map(function(room) {
@@ -3429,7 +3458,14 @@ function getPracticeDay_(session, dateValue) {
       console.warn('自主練習保守核對失敗。', fallbackError);
     }
   }
-  var view = buildPracticeDayView_(records, courseRows, date);
+  var studentGroups = [];
+  if (ss.getSheetByName(SHEETS.STUDENT_PRACTICE_QUALIFICATIONS) &&
+      ss.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS) &&
+      ss.getSheetByName(SHEETS.STUDENT_PRACTICE_PARTICIPANTS) &&
+      ss.getSheetByName(SHEETS.STUDENT_PRACTICE_AUDIT)) {
+    studentGroups = getStudentPracticeRecordsUnlocked_(ss).groups;
+  }
+  var view = buildPracticeDayView_(records, courseRows, date, studentGroups);
   view.teacherName = teacherName;
   view.actingBy = cleanText_(session && session.impersonatedBy);
   view.quickDurations = [60, 90, 120];

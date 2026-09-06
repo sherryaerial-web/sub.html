@@ -1145,6 +1145,7 @@
     .practice-block.course { border-left-color: #9b8780; background: #faf5f2; }
     .practice-block.rental { border-left-color: #b68b56; background: #fbf5e9; }
     .practice-block.practice { border-left-color: #6f858d; background: #edf3f4; }
+    .practice-block.student-practice { border-left-color: #829ca4; background: #f1f5f5; cursor: default; }
     .practice-block.waitlist { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; }
     .practice-block.is-mine { border-color: #c79689; border-left-color: #a96f61; background: #f7e9e5; box-shadow: 0 5px 14px rgba(123, 84, 74, .10); }
     .practice-block.is-past { opacity: .5; filter: saturate(.45); box-shadow: none; }
@@ -3642,17 +3643,25 @@
     function practiceBlockHtml(block) {
       const participants = Array.isArray(block.participants) ? block.participants : [];
       const names = participants.map((item) => item.teacherName).filter(Boolean).join("、");
+      const isStudentPractice = block.type === "student-practice";
       const selectionKey = block.type === "course" ? getPracticeWaitlistSelectionKey(block) : "";
       const selected = !!selectionKey && !!practiceState.waitlistSelections?.[selectionKey];
-      const title = block.type === "practice" || block.type === "waitlist"
+      const title = isStudentPractice
+        ? (block.label || "學生自主練習")
+        : block.type === "practice" || block.type === "waitlist"
         ? (block.type === "waitlist" ? `${block.creatorName}的候補練習` : `${block.creatorName}的自主練習`)
         : (block.label || "已有行程");
-      const meta = block.type === "course"
+      const meta = isStudentPractice
+        ? "學生登記已占用"
+        : block.type === "course"
         ? `原課程：${block.teacherName || ""}｜${selected ? "已選候補，可跨日期繼續選" : "點選加入候補清單"}`
         : block.type === "rental"
           ? "場地租借已占用，無法登記自主練習"
           : `${names || block.creatorName}｜${block.seriesId ? "每週循環" : "單次"}`;
-      return `<button class="practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}${block.isPast ? " is-past" : ""}${selected ? " is-waitlist-selected" : ""}" type="button" data-practice-block="${escapeHtml(block.id)}"${block.type === "course" ? ` aria-pressed="${selected}"` : ""}><span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span></button>`;
+      const className = `practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}${block.isPast ? " is-past" : ""}${selected ? " is-waitlist-selected" : ""}`;
+      const content = `<span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span>`;
+      if (isStudentPractice) return `<div class="${className}">${content}</div>`;
+      return `<button class="${className}" type="button" data-practice-block="${escapeHtml(block.id)}"${block.type === "course" ? ` aria-pressed="${selected}"` : ""}>${content}</button>`;
     }
 
     function getPracticeSlotConflicts(startMinutes, duration = 60, excludeBookingId = "", roomName = practiceState.room) {

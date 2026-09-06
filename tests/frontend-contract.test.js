@@ -3686,3 +3686,15 @@ test('practice history is queried by month and rendered only from the private AP
   assert.match(getElement('practice-history-list').innerHTML, /2026\/09\/10/);
   assert.match(getElement('practice-history-list').innerHTML, /A 教室/);
 });
+
+test('practice admin includes student qualification and independent cancellation controls', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  assert.match(html, /studentPracticeAdminDashboard/);
+  assert.match(html, /getStudentPracticeAdminDashboard/);
+  assert.match(html, /待確認學生資格/);
+  assert.match(html, /data-admin-action="confirm-student-practice-qualification"/);
+  assert.match(html, /data-admin-action="cancel-student-practice-participant"/);
+  assert.match(html, /confirmStudentPracticeQualification/);
+  assert.match(html, /cancelStudentPracticeParticipant/);
+});

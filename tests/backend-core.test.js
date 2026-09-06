@@ -10189,3 +10189,111 @@ test('student practice public routes expose availability and submission without 
   assert.deepEqual(availability, { status: 'success', data: { date: '2026/09/10', rooms: [] } });
   assert.deepEqual(submission, { status: 'success', data: { status: '待確認資格', room: 'C' } });
 });
+
+function createStudentPracticeAdminFixture(rows = {}) {
+  const qualificationSheet = createSheetFixture('學生自主練習資格', [
+    EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS,
+    ...(rows.qualifications || []),
+  ]);
+  const groupSheet = createSheetFixture('學生自主練習場次', [
+    EXPECTED_STUDENT_PRACTICE_GROUP_HEADERS,
+    ...(rows.groups || []),
+  ]);
+  const participantSheet = createSheetFixture('學生自主練習參與者', [
+    EXPECTED_STUDENT_PRACTICE_PARTICIPANT_HEADERS,
+    ...(rows.participants || []),
+  ]);
+  const auditSheet = createSheetFixture('學生自主練習操作紀錄', [
+    EXPECTED_STUDENT_PRACTICE_AUDIT_HEADERS,
+  ]);
+  const spreadsheet = createSpreadsheetFixture([
+    qualificationSheet, groupSheet, participantSheet, auditSheet,
+  ]);
+  const backend = loadBackend({ SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet } });
+  backend.currentTimeMs_ = () => new Date('2026-09-09T00:00:00+08:00').getTime();
+  return { backend, spreadsheet, qualificationSheet, groupSheet, participantSheet, auditSheet };
+}
+
+test('student practice admin dashboard is course-admin only and joins student identity with requests', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', '1234', 'hash-1', '待確認資格', '', '', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00',
+    ]],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '待確認資格', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00', '學生甲',
+    ]],
+    participants: [[
+      'participant-1', 'group-1', 'student-1', '待確認資格', '待確認資格',
+      '2026-09-08 10:00:00', '', '', '需要空環',
+    ]],
+  });
+
+  assert.throws(() => fixture.backend.getStudentPracticeAdminDashboard_({
+    teacherName: '小琪', role: '老師', managementCapabilities: [],
+  }, {}), /課程管理權限/);
+  const result = fixture.backend.getStudentPracticeAdminDashboard_({
+    teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'],
+  }, {});
+
+  assert.equal(result.summary.pendingQualification, 1);
+  assert.equal(result.requests[0].obName, '學生甲');
+  assert.equal(result.requests[0].identitySuffix, '1234');
+  assert.equal(result.requests[0].note, '需要空環');
+});
+
+test('student practice admin qualification confirmation keeps and activates the original request', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', '1234', 'hash-1', '待確認資格', '', '', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00',
+    ]],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '待確認資格', '',
+      '2026-09-08 10:00:00', '2026-09-08 10:00:00', '學生甲',
+    ]],
+    participants: [[
+      'participant-1', 'group-1', 'student-1', '待確認資格', '待確認資格',
+      '2026-09-08 10:00:00', '', '', '保留原備註',
+    ]],
+  });
+
+  const result = fixture.backend.confirmStudentPracticeQualification_({
+    teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'],
+  }, 'participant-1');
+
+  assert.equal(result.status, '已成立');
+  assert.equal(fixture.qualificationSheet.values[1][4], '已確認');
+  assert.equal(fixture.participantSheet.values[1][3], '已確認');
+  assert.equal(fixture.participantSheet.values[1][4], '已成立');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+  assert.equal(fixture.participantSheet.values[1][8], '保留原備註');
+});
+
+test('student practice admin cancellation removes one student and releases only the final participant', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [
+      ['student-1', '學生甲', '1234', 'hash-1', '已確認', '', '', '', '', ''],
+      ['student-2', '學生乙', '5678', 'hash-2', '已確認', '', '', '', '', ''],
+    ],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [
+      ['participant-1', 'group-1', 'student-1', '已確認', '已成立', '', '', '', ''],
+      ['participant-2', 'group-1', 'student-2', '已確認', '已成立', '', '', '', ''],
+    ],
+  });
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const first = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-1', '學生來訊取消');
+  assert.equal(first.groupStatus, '已成立');
+  assert.equal(fixture.participantSheet.values[1][4], '已取消');
+  assert.equal(fixture.participantSheet.values[2][4], '已成立');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+
+  const final = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-2', '學生來訊取消');
+  assert.equal(final.groupStatus, '已取消');
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+});

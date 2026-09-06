@@ -2878,6 +2878,191 @@ function getPublicStudentPracticeAvailability_(dateValue) {
   return result;
 }
 
+function getStudentPracticeAdminDashboard_(session, filtersValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  var filters = filtersValue || {};
+  var dateFrom = cleanText_(filters.dateFrom).replace(/-/g, '/');
+  var dateTo = cleanText_(filters.dateTo).replace(/-/g, '/');
+  if (dateFrom) parsePracticeDateTime_(dateFrom, '00:00');
+  if (dateTo) parsePracticeDateTime_(dateTo, '00:00');
+  if (dateFrom && dateTo && dateFrom > dateTo) throw new Error('結束日期不可早於開始日期。');
+  var statusFilter = cleanText_(filters.status);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureStudentPracticeStructureUnlocked_(ss);
+  var records = getStudentPracticeRecordsUnlocked_(ss);
+  var qualificationsByStudent = {};
+  var groupsById = {};
+  records.qualifications.forEach(function(item) { qualificationsByStudent[item.studentId] = item; });
+  records.groups.forEach(function(item) { groupsById[item.groupId] = item; });
+  var requests = records.participants.map(function(participant) {
+    var qualification = qualificationsByStudent[participant.studentId] || {};
+    var group = groupsById[participant.groupId] || {};
+    return {
+      participantId: participant.participantId,
+      groupId: participant.groupId,
+      studentId: participant.studentId,
+      obName: qualification.obName || '',
+      identitySuffix: qualification.identitySuffix || '',
+      qualificationStatus: qualification.status || participant.qualificationStatus,
+      status: participant.status,
+      date: group.date || '',
+      room: group.room || '',
+      startTime: group.startTime || '',
+      endTime: group.endTime || '',
+      groupStatus: group.status || '',
+      changeStatus: group.changeStatus || '',
+      joinedAt: participant.joinedAt,
+      cancelledAt: participant.cancelledAt,
+      cancelReason: participant.cancelReason,
+      note: participant.note
+    };
+  }).filter(function(item) {
+    if (dateFrom && item.date < dateFrom) return false;
+    if (dateTo && item.date > dateTo) return false;
+    if (statusFilter && item.status !== statusFilter && item.qualificationStatus !== statusFilter &&
+        item.changeStatus !== statusFilter) return false;
+    return true;
+  }).sort(function(left, right) {
+    return [left.date, left.startTime, left.room, left.obName, left.participantId].join('|')
+      .localeCompare([right.date, right.startTime, right.room, right.obName, right.participantId].join('|'));
+  });
+  return {
+    requests: requests,
+    summary: {
+      total: requests.length,
+      pendingQualification: requests.filter(function(item) {
+        return item.qualificationStatus === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION &&
+          item.status !== STUDENT_PRACTICE_STATUS.CANCELLED;
+      }).length,
+      active: requests.filter(function(item) { return item.status === STUDENT_PRACTICE_STATUS.ACTIVE; }).length,
+      changePending: requests.filter(function(item) {
+        return item.changeStatus === STUDENT_PRACTICE_STATUS.CHANGE_PENDING ||
+          item.status === STUDENT_PRACTICE_STATUS.CHANGE_PENDING;
+      }).length
+    }
+  };
+}
+
+function confirmStudentPracticeQualification_(session, participantIdValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var participantId = cleanText_(participantIdValue);
+  if (!participantId) throw new Error('缺少學生自主練習登記編號。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureStudentPracticeStructureUnlocked_(ss);
+    var records = getStudentPracticeRecordsUnlocked_(ss);
+    var participant = records.participants.filter(function(item) {
+      return item.participantId === participantId;
+    })[0];
+    if (!participant || participant.status === STUDENT_PRACTICE_STATUS.CANCELLED) {
+      throw new Error('找不到可確認的學生自主練習登記。');
+    }
+    var qualification = records.qualifications.filter(function(item) {
+      return item.studentId === participant.studentId;
+    })[0];
+    if (!qualification) throw new Error('找不到學生資格資料。');
+    var pendingParticipants = records.participants.filter(function(item) {
+      return item.studentId === participant.studentId &&
+        item.status === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
+    });
+    var affectedGroupIds = {};
+    pendingParticipants.forEach(function(item) { affectedGroupIds[item.groupId] = true; });
+    var now = getTimestamp_();
+    return runStudentPracticeTransitionUnlocked_([
+      records.sheets.qualifications, records.sheets.participants,
+      records.sheets.groups, records.sheets.audit
+    ], function() {
+      records.sheets.qualifications.getRange(qualification.rowNumber, 5, 1, 6).setValues([[
+        '已確認', now, actor, qualification.note, qualification.createdAt, now
+      ]]);
+      pendingParticipants.forEach(function(item) {
+        records.sheets.participants.getRange(item.rowNumber, 4, 1, 2).setValues([[
+          '已確認', STUDENT_PRACTICE_STATUS.ACTIVE
+        ]]);
+      });
+      records.groups.forEach(function(group) {
+        if (!affectedGroupIds[group.groupId] || group.status === STUDENT_PRACTICE_STATUS.CANCELLED) return;
+        records.sheets.groups.getRange(group.rowNumber, 6, 1, 5).setValues([[
+          STUDENT_PRACTICE_STATUS.ACTIVE, group.changeStatus, group.createdAt, now, actor
+        ]]);
+      });
+      appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: actor,
+        action: '確認學生自主練習資格',
+        targetType: '學生',
+        targetId: participant.studentId,
+        before: { status: qualification.status },
+        after: { status: '已確認', activatedRequests: pendingParticipants.length }
+      });
+      return {
+        participantId: participantId,
+        studentId: participant.studentId,
+        status: STUDENT_PRACTICE_STATUS.ACTIVE,
+        activatedRequests: pendingParticipants.length
+      };
+    });
+  });
+}
+
+function cancelStudentPracticeParticipant_(session, participantIdValue, reasonValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var participantId = cleanText_(participantIdValue);
+  var reason = cleanText_(reasonValue);
+  if (!participantId) throw new Error('缺少學生自主練習登記編號。');
+  if (!reason) throw new Error('請填寫取消原因。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureStudentPracticeStructureUnlocked_(ss);
+    var records = getStudentPracticeRecordsUnlocked_(ss);
+    var participant = records.participants.filter(function(item) {
+      return item.participantId === participantId;
+    })[0];
+    if (!participant || participant.status === STUDENT_PRACTICE_STATUS.CANCELLED) {
+      throw new Error('這筆學生自主練習已無法取消。');
+    }
+    var group = records.groups.filter(function(item) { return item.groupId === participant.groupId; })[0];
+    if (!group) throw new Error('找不到學生自主練習場次。');
+    var interval = normalizePracticeInterval_(group.date, group.startTime, group.endTime);
+    if (interval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
+      throw new Error('學生自主練習最晚需在開始前 2 小時取消或換時間。');
+    }
+    var remaining = records.participants.filter(function(item) {
+      return item.groupId === group.groupId && item.participantId !== participantId &&
+        [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+          STUDENT_PRACTICE_STATUS.CHANGE_PENDING].indexOf(item.status) !== -1;
+    });
+    var nextGroupStatus = remaining.length ? group.status : STUDENT_PRACTICE_STATUS.CANCELLED;
+    var now = getTimestamp_();
+    return runStudentPracticeTransitionUnlocked_([
+      records.sheets.participants, records.sheets.groups, records.sheets.audit
+    ], function() {
+      records.sheets.participants.getRange(participant.rowNumber, 5, 1, 4).setValues([[
+        STUDENT_PRACTICE_STATUS.CANCELLED, participant.joinedAt, now, reason
+      ]]);
+      if (!remaining.length) {
+        records.sheets.groups.getRange(group.rowNumber, 6, 1, 5).setValues([[
+          STUDENT_PRACTICE_STATUS.CANCELLED, group.changeStatus, group.createdAt, now, actor
+        ]]);
+      }
+      appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: actor,
+        action: '取消學生自主練習',
+        targetType: '參與者',
+        targetId: participantId,
+        before: { status: participant.status, groupStatus: group.status },
+        after: { status: STUDENT_PRACTICE_STATUS.CANCELLED, groupStatus: nextGroupStatus },
+        reason: reason
+      });
+      return {
+        participantId: participantId,
+        status: STUDENT_PRACTICE_STATUS.CANCELLED,
+        groupId: group.groupId,
+        groupStatus: nextGroupStatus
+      };
+    });
+  });
+}
+
 function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
   var records = recordsValue || {};
   var date = cleanText_(dateValue).replace(/-/g, '/');
@@ -5768,6 +5953,23 @@ function doPost(e) {
           status: parameters.status,
           teacherName: parameters.teacherName
         });
+      },
+      getStudentPracticeAdminDashboard: function() {
+        return getStudentPracticeAdminDashboard_(session, {
+          dateFrom: parameters.dateFrom,
+          dateTo: parameters.dateTo,
+          status: parameters.status
+        });
+      },
+      confirmStudentPracticeQualification: function() {
+        return confirmStudentPracticeQualification_(session, parameters.participantId);
+      },
+      cancelStudentPracticeParticipant: function() {
+        return cancelStudentPracticeParticipant_(
+          session,
+          parameters.participantId,
+          parameters.reason
+        );
       },
       getMyLeaves: function() {
         return getMyLeaves_(actingSession(), parameters.recordMonth);

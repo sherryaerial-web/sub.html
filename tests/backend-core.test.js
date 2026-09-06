@@ -3552,6 +3552,128 @@ test('admin can pause new leave requests without changing existing leave records
   assert.equal(backend.submitLeave_(teacherASession, [leaveItem]).created, 1);
 });
 
+test('monthly operations require course-admin permission and enforce the leave-to-substitute order', () => {
+  const { backend, adminSession, teacherASession } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+
+  assert.throws(
+    () => backend.executeMonthlyOperation_(teacherASession, 'open_leave'),
+    /課程管理權限/
+  );
+  assert.throws(
+    () => backend.executeMonthlyOperation_(adminSession, 'open_substitute'),
+    /先結束請假/
+  );
+
+  backend.sendPushNotificationSafely_ = (names) => ({
+    attempted: true,
+    accepted: true,
+    delivered: names.length,
+    messageId: 'monthly-order-ok',
+    error: '',
+  });
+  backend.executeMonthlyOperation_(adminSession, 'open_leave');
+  assert.throws(
+    () => backend.executeMonthlyOperation_(adminSession, 'open_substitute'),
+    /先結束請假/
+  );
+  backend.executeMonthlyOperation_(adminSession, 'close_leave');
+  assert.doesNotThrow(() => backend.executeMonthlyOperation_(adminSession, 'open_substitute'));
+});
+
+test('monthly leave opening is idempotent and sends one managed notification to all active accounts', () => {
+  const { backend, adminSession, settingsSheet, auditSheet } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    pushes.push({ names: names.slice(), eventKey: message.eventKey });
+    return { attempted: true, accepted: true, delivered: names.length, messageId: 'open-leave-ok', error: '' };
+  };
+
+  const first = backend.executeMonthlyOperation_(adminSession, 'open_leave');
+  const second = backend.executeMonthlyOperation_(adminSession, 'open_leave');
+
+  assert.equal(first.completed, true);
+  assert.equal(first.alreadyCompleted, false);
+  assert.equal(second.completed, true);
+  assert.equal(second.alreadyCompleted, true);
+  assert.equal(settingsSheet.values.find((row) => row[0] === '暫停全部請假')[1], '否');
+  assert.equal(auditSheet.values.filter((row) => row[2] === '恢復全部請假').length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(pushes.map((item) => item.names))),
+    [['管理員甲', '老師甲', '老師乙', '老師丙']]
+  );
+  assert.equal(pushes[0].eventKey, 'monthly_operations_202609_open_leave');
+});
+
+test('monthly substitute opening suppresses the legacy duplicate push and closing ends every invitation', () => {
+  const { backend, adminSession, settingsSheet, invitationSheet } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    pushes.push({ names: names.slice(), heading: message.heading, eventKey: message.eventKey });
+    return { attempted: true, accepted: true, delivered: names.length, messageId: `push-${pushes.length}`, error: '' };
+  };
+
+  backend.executeMonthlyOperation_(adminSession, 'open_leave');
+  backend.executeMonthlyOperation_(adminSession, 'close_leave');
+  const opened = backend.executeMonthlyOperation_(adminSession, 'open_substitute');
+  const closed = backend.executeMonthlyOperation_(adminSession, 'close_substitute');
+
+  assert.equal(opened.details.invitations.opened, 4);
+  assert.equal(pushes.filter((item) => /代課／特別課已開放/.test(item.heading)).length, 1);
+  assert.equal(pushes.some((item) => item.heading === '新的代課邀請'), false);
+  assert.equal(closed.details.invitations.closedInvitations, 4);
+  assert.ok(invitationSheet.values.slice(1).every((row) => row[4] === '本輪已結束'));
+  assert.equal(settingsSheet.values.find((row) => row[0] === '暫停全部領取')[1], '是');
+  assert.equal(pushes.filter((item) => /代課／特別課已結束|請接續確認 VVIP/.test(item.heading)).length, 2);
+});
+
+test('a failed monthly operation push can retry without rerunning the completed Sheet mutation', () => {
+  const { backend, adminSession, auditSheet, spreadsheet } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  let attempts = 0;
+  backend.sendPushNotificationSafely_ = () => (++attempts === 1)
+    ? { attempted: true, accepted: false, delivered: 0, messageId: '', error: 'temporary' }
+    : { attempted: true, accepted: true, delivered: 4, messageId: 'retry-ok', error: '' };
+
+  const first = backend.executeMonthlyOperation_(adminSession, 'open_leave');
+  const second = backend.executeMonthlyOperation_(adminSession, 'open_leave');
+
+  assert.equal(first.notification.accepted, false);
+  assert.equal(second.notification.accepted, true);
+  assert.equal(second.alreadyCompleted, true);
+  assert.equal(auditSheet.values.filter((row) => row[2] === '恢復全部請假').length, 1);
+  const messages = spreadsheet.getSheetByName('通知訊息');
+  assert.equal(messages.values.filter((row) => row[1] === 'monthly_operations_202609_open_leave').length, 1);
+});
+
+test('monthly-operation POST route accepts only a course administrator session', () => {
+  const { backend, adminToken, teacherAToken } = createInvitationBackend();
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+  backend.sendPushNotificationSafely_ = (names) => ({
+    attempted: true,
+    accepted: true,
+    delivered: names.length,
+    messageId: 'monthly-post-ok',
+    error: '',
+  });
+  backend.console.error = () => {};
+
+  const forbidden = JSON.parse(backend.doPost({ parameter: {
+    action: 'executeMonthlyOperation', sessionToken: teacherAToken, operation: 'open_leave',
+  } }).text);
+  const accepted = JSON.parse(backend.doPost({ parameter: {
+    action: 'executeMonthlyOperation', sessionToken: adminToken, operation: 'open_leave',
+  } }).text);
+
+  assert.equal(forbidden.status, 'error');
+  assert.match(forbidden.message, /課程管理權限/);
+  assert.equal(accepted.status, 'success');
+  assert.equal(accepted.data.completed, true);
+  assert.equal(accepted.data.action, 'open_leave');
+});
+
 test('admin manually closes an invitation and records the close timestamp', () => {
   const { backend, invitationSheet, auditSheet, adminSession, teacherASession } = createInvitationBackend();
   backend.openInvitations_(adminSession, ['老師甲']);

@@ -1760,6 +1760,223 @@ function runMonthlyOperationsNotifications_(dateKeyValue, timeValue) {
   return result;
 }
 
+function getCurrentMonthlyOperationsMonthKey_() {
+  return normalizeMonthlyOperationsMonthKey_(
+    Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'yyyy-MM')
+  );
+}
+
+function getMonthlyOperationDefinition_(actionValue) {
+  var action = cleanText_(actionValue);
+  var definitions = {
+    open_leave: {
+      prerequisite: '',
+      notificationIds: ['open_leave']
+    },
+    send_leave_deadline: {
+      prerequisite: 'open_leave',
+      notificationIds: ['send_leave_deadline']
+    },
+    close_leave: {
+      prerequisite: 'open_leave',
+      notificationIds: []
+    },
+    open_substitute: {
+      prerequisite: 'close_leave',
+      notificationIds: ['open_substitute']
+    },
+    close_substitute: {
+      prerequisite: 'open_substitute',
+      notificationIds: ['close_substitute', 'close_substitute_admin']
+    }
+  };
+  if (!definitions[action]) throw new Error('不支援的月度營運操作。');
+  return {
+    id: action,
+    prerequisite: definitions[action].prerequisite,
+    notificationIds: definitions[action].notificationIds.slice()
+  };
+}
+
+function assertMonthlyOperationSequence_(definition, state) {
+  if (!definition.prerequisite) return;
+  var prerequisite = state.operations && state.operations[definition.prerequisite];
+  if (prerequisite && prerequisite.completedAt) return;
+  var messages = {
+    open_leave: '請先開放請假。',
+    close_leave: '請先結束請假。',
+    open_substitute: '請先開放代課／特別課。'
+  };
+  throw new Error(messages[definition.prerequisite] || '請先完成上一個月度營運步驟。');
+}
+
+function reserveMonthlyOperation_(monthKey, definition, actor) {
+  return withScriptLock_(function() {
+    var state = getMonthlyOperationsState_(monthKey);
+    var existing = state.operations[definition.id] || {};
+    if (existing.completedAt) {
+      return { alreadyCompleted: true, reservationId: '', state: state };
+    }
+    assertMonthlyOperationSequence_(definition, state);
+    var nowMs = currentTimeMs_();
+    if (existing.status === 'running' && nowMs - Number(existing.startedAtMs || 0) < 10 * 60 * 1000) {
+      return { alreadyCompleted: false, inProgress: true, reservationId: '', state: state };
+    }
+    var reservationId = Utilities.getUuid();
+    state.operations[definition.id] = {
+      status: 'running',
+      startedAt: getTimestamp_(),
+      startedAtMs: nowMs,
+      completedAt: '',
+      actor: actor,
+      reservationId: reservationId,
+      notifications: existing.notifications && typeof existing.notifications === 'object'
+        ? existing.notifications
+        : {}
+    };
+    saveMonthlyOperationsState_(monthKey, state);
+    return { alreadyCompleted: false, inProgress: false, reservationId: reservationId, state: state };
+  });
+}
+
+function completeMonthlyOperationReservation_(monthKey, definition, reservationId, actor, details) {
+  return withScriptLock_(function() {
+    var state = getMonthlyOperationsState_(monthKey);
+    var operation = state.operations[definition.id] || {};
+    if (operation.completedAt) return state;
+    if (cleanText_(operation.reservationId) !== cleanText_(reservationId)) {
+      throw new Error('月度營運操作狀態已更新，請重新整理後再試。');
+    }
+    operation.status = 'completed';
+    operation.completedAt = getTimestamp_();
+    operation.completedAtMs = currentTimeMs_();
+    operation.actor = actor;
+    operation.details = details || {};
+    operation.lastError = '';
+    state.operations[definition.id] = operation;
+    if (definition.id === 'open_substitute') state.substituteOpenedAt = operation.completedAt;
+    return saveMonthlyOperationsState_(monthKey, state);
+  });
+}
+
+function failMonthlyOperationReservation_(monthKey, definition, reservationId, error) {
+  withScriptLock_(function() {
+    var state = getMonthlyOperationsState_(monthKey);
+    var operation = state.operations[definition.id] || {};
+    if (cleanText_(operation.reservationId) !== cleanText_(reservationId)) return;
+    operation.status = 'failed';
+    operation.lastError = getErrorMessage_(error);
+    operation.failedAt = getTimestamp_();
+    state.operations[definition.id] = operation;
+    saveMonthlyOperationsState_(monthKey, state);
+  });
+}
+
+function performMonthlyOperationMutation_(session, definition) {
+  var details = {};
+  if (definition.id === 'open_leave') {
+    details.leave = pauseLeaves_(session, false);
+  } else if (definition.id === 'close_leave') {
+    details.leave = pauseLeaves_(session, true);
+  } else if (definition.id === 'open_substitute') {
+    details.claims = pauseClaims_(session, false);
+    details.invitations = openInvitations_(session, getActiveAccountTeacherNames_(), {
+      suppressNotification: true
+    });
+  } else if (definition.id === 'close_substitute') {
+    details.claims = pauseClaims_(session, true);
+    details.invitations = endInvitationRound_(session);
+  }
+  return details;
+}
+
+function deliverMonthlyOperationNotifications_(monthKey, definition, actor) {
+  var templates = getMonthlyOperationsTemplates_();
+  var deliveries = [];
+  definition.notificationIds.forEach(function(notificationId) {
+    var state = getMonthlyOperationsState_(monthKey);
+    var operation = state.operations[definition.id] || {};
+    operation.notifications = operation.notifications && typeof operation.notifications === 'object'
+      ? operation.notifications
+      : {};
+    var notificationState = operation.notifications[notificationId] || {};
+    if (cleanText_(notificationState.sentAt)) {
+      deliveries.push({ id: notificationId, skipped: true, accepted: true });
+      return;
+    }
+    var template = templates[notificationId];
+    if (!template) throw new Error('找不到月度營運通知範本：' + notificationId);
+    var eventKey = 'monthly_operations_' + monthKey.replace(/\D/g, '') + '_' + notificationId;
+    var delivery = sendManagedNotification_(
+      actor,
+      '月度營運操作',
+      notificationId,
+      template.audienceMode,
+      [],
+      template.heading,
+      template.content,
+      eventKey
+    );
+    notificationState.eventKey = eventKey;
+    notificationState.lastAttemptAt = getTimestamp_();
+    notificationState.sentAt = delivery.accepted ? notificationState.lastAttemptAt : '';
+    notificationState.lastError = delivery.accepted ? '' : (delivery.error || '通知服務未接受本次發送。');
+    operation.notifications[notificationId] = notificationState;
+    state.operations[definition.id] = operation;
+    saveMonthlyOperationsState_(monthKey, state);
+    deliveries.push(Object.assign({ id: notificationId, skipped: false }, delivery));
+  });
+  return deliveries;
+}
+
+function executeMonthlyOperation_(session, actionValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var definition = getMonthlyOperationDefinition_(actionValue);
+  var monthKey = getCurrentMonthlyOperationsMonthKey_();
+  var reservation = reserveMonthlyOperation_(monthKey, definition, actor);
+  if (reservation.inProgress) {
+    return {
+      action: definition.id,
+      month: monthKey,
+      completed: false,
+      alreadyCompleted: false,
+      inProgress: true,
+      details: {},
+      notification: null,
+      notifications: []
+    };
+  }
+  var details = reservation.alreadyCompleted
+    ? ((reservation.state.operations[definition.id] || {}).details || {})
+    : {};
+  if (!reservation.alreadyCompleted) {
+    try {
+      details = performMonthlyOperationMutation_(session, definition);
+      completeMonthlyOperationReservation_(
+        monthKey,
+        definition,
+        reservation.reservationId,
+        actor,
+        details
+      );
+    } catch (error) {
+      failMonthlyOperationReservation_(monthKey, definition, reservation.reservationId, error);
+      throw error;
+    }
+  }
+  var deliveries = deliverMonthlyOperationNotifications_(monthKey, definition, actor);
+  return {
+    action: definition.id,
+    month: monthKey,
+    completed: true,
+    alreadyCompleted: reservation.alreadyCompleted,
+    inProgress: false,
+    details: details,
+    notification: deliveries.length ? deliveries[0] : null,
+    notifications: deliveries
+  };
+}
+
 function normalizeNotificationAudienceMode_(modeValue) {
   var mode = cleanText_(modeValue) || 'selected';
   if (['selected', 'admins', 'all'].indexOf(mode) === -1) {
@@ -5065,6 +5282,15 @@ function doPost(e) {
       },
       sendNotificationScheduleNow: function() {
         return sendNotificationScheduleNow_(session, parameters.scheduleId);
+      },
+      executeMonthlyOperation: function() {
+        return executeMonthlyOperation_(session, parameters.operation);
+      },
+      saveMonthlyOperationsTemplates: function() {
+        return saveMonthlyOperationsTemplates_(
+          session,
+          parseJsonObject_(parameters.templates, '月度營運通知範本')
+        );
       },
       getPayrollAdminDashboard: function() {
         return getPayrollAdminDashboard_(session, parameters.month);
@@ -8715,9 +8941,10 @@ function getSessionAuditActor_(session) {
   return administrator ? administrator + '（代 ' + teacher + ' 操作）' : teacher;
 }
 
-function openInvitations_(session, teacherNames) {
+function openInvitations_(session, teacherNames, optionsValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var teachers = normalizeTeacherNames_(teacherNames);
+  var options = optionsValue || {};
   var openedTeachers = [];
   teachers.forEach(assertTeacherExists_);
 
@@ -8775,7 +9002,7 @@ function openInvitations_(session, teacherNames) {
       };
     });
   });
-  if (openedTeachers.length) {
+  if (openedTeachers.length && options.suppressNotification !== true) {
     sendPushAfterMutationSafely_(openedTeachers, {
       heading: '新的代課邀請',
       content: '教室已開放新一輪代課，點此查看目前可領取的課程。',

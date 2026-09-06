@@ -1915,6 +1915,12 @@
         <label for="request-difficulty">難度／等級</label>
         <input id="request-difficulty" class="text-input" type="text" maxlength="40" placeholder="例如：Lv.2~3、Open level">
       </div>
+      <div id="request-student-practice-move-fields" class="practice-form-grid" hidden>
+        <div class="practice-form-field"><label for="request-student-practice-date">日期</label><input id="request-student-practice-date" class="text-input" type="date"></div>
+        <div class="practice-form-field"><label for="request-student-practice-room">教室</label><select id="request-student-practice-room" class="admin-select"><option value="A">A 教室</option><option value="B">B 教室</option><option value="C">C 教室</option><option value="D">D 教室</option></select></div>
+        <div class="practice-form-field"><label for="request-student-practice-start">開始時間</label><input id="request-student-practice-start" class="text-input" type="time" step="300"></div>
+        <div class="practice-form-field"><label for="request-student-practice-duration">時長</label><select id="request-student-practice-duration" class="admin-select"><option value="60">60 分鐘</option><option value="90">90 分鐘</option><option value="120">120 分鐘</option></select></div>
+      </div>
       <label id="request-reason-label" for="request-reason" class="dialog-field-label">原因</label>
       <textarea id="request-reason" class="claim-control" maxlength="240" placeholder="請填寫原因"></textarea>
       <div class="dialog-actions">
@@ -5225,6 +5231,14 @@
       byId("request-amount").value = options.showAmount ? String(options.amount ?? 0) : "";
       byId("request-difficulty-field").hidden = !options.showDifficulty;
       byId("request-difficulty").value = options.showDifficulty ? String(options.difficulty || "") : "";
+      const moveFields = byId("request-student-practice-move-fields");
+      moveFields.hidden = !options.showStudentPracticeMove;
+      if (options.showStudentPracticeMove) {
+        byId("request-student-practice-date").value = String(options.date || "").replace(/\//g, "-");
+        byId("request-student-practice-room").value = String(options.room || "A");
+        byId("request-student-practice-start").value = String(options.startTime || "");
+        byId("request-student-practice-duration").value = String(options.durationMinutes || 60);
+      }
       byId("request-reason-label").textContent = options.reasonLabel || "原因";
       byId("request-reason").placeholder = options.reasonPlaceholder || "請填寫原因";
       byId("request-reason").value = String(options.reason || "");
@@ -5295,6 +5309,24 @@
             }
           });
           setNotice(state.scope === "future" ? "本次及往後的自主練習已取消。" : "這次自主練習已取消。");
+          await fetchPracticeAdminDashboard();
+        } else if (state.action === "move-student-practice") {
+          const date = byId("request-student-practice-date").value;
+          const room = byId("request-student-practice-room").value;
+          const startTime = byId("request-student-practice-start").value;
+          const durationMinutes = Number(byId("request-student-practice-duration").value);
+          if (!date || !startTime) throw new Error("請完整填寫新的日期與時間。");
+          await callApi("moveStudentPracticeParticipant", {
+            practice: {
+              participantId: state.participantId,
+              date: date.replace(/-/g, "/"),
+              room,
+              startTime,
+              durationMinutes,
+              reason
+            }
+          });
+          setNotice("學生自主練習時間已更換，原登記已同步釋出。");
           await fetchPracticeAdminDashboard();
         }
         closeRequestDialog();
@@ -6166,6 +6198,7 @@
           ${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}
           <div class="admin-item-actions">
             ${pending ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-student-practice-qualification" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="badge-check"></i>確認資格並成立</button>` : ""}
+            <button class="compact-button" type="button" data-admin-action="move-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-clock"></i>協助換時間</button>
             <button class="danger-button" type="button" data-admin-action="cancel-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-x"></i>取消這位學生</button>
           </div>
         </article>`;
@@ -6990,6 +7023,28 @@ https://sherryaerial-web.github.io/sub.html/
           });
           setNotice("已取消這位學生的登記；同時段其他學生不受影響。");
           await fetchPracticeAdminDashboard();
+          return;
+        }
+        if (action === "move-student-practice-participant") {
+          const item = (studentPracticeAdminDashboard?.requests || []).find((request) =>
+            request.participantId === button.dataset.participantId
+          );
+          if (!item) throw new Error("找不到這筆學生自主練習登記。");
+          const durationMinutes = Math.max(60,
+            practiceTimeToMinutes(item.endTime) - practiceTimeToMinutes(item.startTime));
+          openRequestDialog({
+            action: "move-student-practice",
+            participantId: item.participantId,
+            showStudentPracticeMove: true,
+            date: item.date,
+            room: item.room,
+            startTime: item.startTime,
+            durationMinutes: [60, 90, 120].includes(durationMinutes) ? durationMinutes : 60,
+            title: "協助學生換時間",
+            copy: "儲存成功後才會釋出原時段；若新時段衝突，原登記會完整保留。",
+            reasonLabel: "換時間原因",
+            reasonPlaceholder: "例如：學生由官方 LINE 申請換時間"
+          });
           return;
         }
         if (action === "toggle-notification-schedule") {

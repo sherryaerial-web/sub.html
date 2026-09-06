@@ -3019,7 +3019,11 @@ test('practice admin dashboard renders participant intervals and failure audit s
     }],
     notificationFailures: [{ time: '2026/09/01 10:01', targetId: 'practice-1', reason: '推播服務無回應' }],
   };
-  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; renderPracticeAdminDashboard();', context);
+  context.__studentPracticeAdminDashboard = {
+    summary: { total: 0, pendingQualification: 0, active: 0, changePending: 0 },
+    requests: [],
+  };
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; renderPracticeAdminDashboard();', context);
   const rendered = getElement('admin-tab-content').innerHTML;
   assert.match(rendered, /Ariel Lu/);
   assert.match(rendered, /Tako/);
@@ -3695,6 +3699,8 @@ test('practice admin includes student qualification and independent cancellation
   assert.match(html, /待確認學生資格/);
   assert.match(html, /data-admin-action="confirm-student-practice-qualification"/);
   assert.match(html, /data-admin-action="cancel-student-practice-participant"/);
+  assert.match(html, /data-admin-action="move-student-practice-participant"/);
   assert.match(html, /confirmStudentPracticeQualification/);
   assert.match(html, /cancelStudentPracticeParticipant/);
+  assert.match(html, /moveStudentPracticeParticipant/);
 });

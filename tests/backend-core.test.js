@@ -2291,6 +2291,8 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
       '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
+      '學生自主練習資格', '學生自主練習場次',
+      '學生自主練習參與者', '學生自主練習操作紀錄',
       '課程調整', '通知訊息', '通知收件人'
       , '課程開課觀測', '優惠課程歷史', '優惠課程推薦'
     ].sort()
@@ -10211,6 +10213,8 @@ function createStudentPracticeAdminFixture(rows = {}) {
   ]);
   const backend = loadBackend({ SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet } });
   backend.currentTimeMs_ = () => new Date('2026-09-09T00:00:00+08:00').getTime();
+  backend.getPracticeCurrentObRowsForDayView_ = () => [];
+  backend.getPracticeRecordsUnlocked_ = () => ({ bookings: [], participants: [] });
   return { backend, spreadsheet, qualificationSheet, groupSheet, participantSheet, auditSheet };
 }
 
@@ -10296,4 +10300,41 @@ test('student practice admin cancellation removes one student and releases only 
   const final = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-2', '學生來訊取消');
   assert.equal(final.groupStatus, '已取消');
   assert.equal(fixture.groupSheet.values[1][5], '已取消');
+});
+
+test('student practice admin can move one student atomically and preserves the original on conflict', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', '1234', 'hash-1', '已確認', '', '', '', '', '',
+    ]],
+    groups: [
+      ['group-old', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako'],
+      ['group-blocker', '2026/09/10', 'B', '14:30', '15:30', '已成立', '', '', '', 'Tako'],
+    ],
+    participants: [
+      ['participant-1', 'group-old', 'student-1', '已確認', '已成立', '', '', '', '原備註'],
+      ['participant-2', 'group-blocker', 'student-2', '已確認', '已成立', '', '', '', ''],
+    ],
+  });
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(() => fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'B',
+    startTime: '14:00', durationMinutes: 60, reason: '學生申請換時間',
+  }), /已有學生/);
+  assert.equal(fixture.participantSheet.values[1][1], 'group-old');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+
+  const result = fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'C',
+    startTime: '16:00', durationMinutes: 90, reason: '學生申請換時間',
+  });
+  assert.notEqual(result.groupId, 'group-old');
+  assert.equal(result.status, '已成立');
+  assert.equal(fixture.participantSheet.values[1][1], result.groupId);
+  assert.equal(fixture.participantSheet.values[1][8], '原備註');
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+  assert.deepEqual(fixture.groupSheet.values.at(-1).slice(1, 6), [
+    '2026/09/10', 'C', '16:00', '17:30', '已成立',
+  ]);
 });

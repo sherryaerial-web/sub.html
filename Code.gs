@@ -3063,6 +3063,149 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
   });
 }
 
+function moveStudentPracticeParticipant_(session, inputValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var input = inputValue || {};
+  var participantId = cleanText_(input.participantId);
+  var reason = cleanText_(input.reason);
+  if (!participantId) throw new Error('缺少學生自主練習登記編號。');
+  if (!reason) throw new Error('請填寫換時間原因。');
+
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureStudentPracticeStructureUnlocked_(ss);
+    var records = getStudentPracticeRecordsUnlocked_(ss);
+    var participant = records.participants.filter(function(item) {
+      return item.participantId === participantId;
+    })[0];
+    if (!participant || [
+      STUDENT_PRACTICE_STATUS.ACTIVE,
+      STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+      STUDENT_PRACTICE_STATUS.CHANGE_PENDING
+    ].indexOf(participant.status) === -1) {
+      throw new Error('找不到可換時間的學生自主練習登記。');
+    }
+    var oldGroup = records.groups.filter(function(item) {
+      return item.groupId === participant.groupId;
+    })[0];
+    if (!oldGroup || oldGroup.status === STUDENT_PRACTICE_STATUS.CANCELLED) {
+      throw new Error('找不到原學生自主練習場次。');
+    }
+    var oldInterval = normalizePracticeInterval_(oldGroup.date, oldGroup.startTime, oldGroup.endTime);
+    if (oldInterval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
+      throw new Error('學生自主練習最晚需在開始前 2 小時取消或換時間。');
+    }
+
+    var room = requirePracticeRoom_(input.room);
+    var duration = Number(input.durationMinutes);
+    if ([60, 90, 120].indexOf(duration) === -1) {
+      throw new Error('請選擇 60、90 或 120 分鐘。');
+    }
+    var startMinutes = timeTextToMinutes_(input.startTime);
+    if (startMinutes < 0) throw new Error('學生自主練習開始時間不正確。');
+    var interval = normalizePracticeInterval_(
+      cleanText_(input.date).replace(/-/g, '/'),
+      input.startTime,
+      minutesToTimeText_(startMinutes + duration)
+    );
+    if (interval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
+      throw new Error('最晚請在自主練習開始前 2 小時完成換時間。');
+    }
+
+    var courseRows;
+    try {
+      courseRows = getPracticeCurrentObRowsForDayView_(interval.date, true);
+    } catch (error) {
+      throw new Error('目前無法即時確認 OB 課表，請稍後再試。');
+    }
+    var teacherRecords = getPracticeRecordsUnlocked_(ss);
+    assertPracticeIntervalAvailable_(
+      { room: room, interval: interval },
+      teacherRecords,
+      courseRows
+    );
+    var studentConflict = records.groups.filter(function(group) {
+      if (group.groupId === oldGroup.groupId || group.date !== interval.date || group.room !== room || [
+        STUDENT_PRACTICE_STATUS.ACTIVE,
+        STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+        STUDENT_PRACTICE_STATUS.CHANGE_PENDING
+      ].indexOf(group.status) === -1) return false;
+      return practiceIntervalsConflict_(
+        interval,
+        normalizePracticeInterval_(group.date, group.startTime, group.endTime),
+        15
+      );
+    })[0];
+    if (studentConflict) {
+      throw new Error('這個時段已有學生自主練習，請改選空檔或加入該場次。');
+    }
+
+    var remaining = records.participants.filter(function(item) {
+      return item.groupId === oldGroup.groupId && item.participantId !== participantId && [
+        STUDENT_PRACTICE_STATUS.ACTIVE,
+        STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+        STUDENT_PRACTICE_STATUS.CHANGE_PENDING
+      ].indexOf(item.status) !== -1;
+    });
+    var nextStatus = participant.qualificationStatus === '已確認'
+      ? STUDENT_PRACTICE_STATUS.ACTIVE
+      : STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
+    var newGroupId = Utilities.getUuid();
+    var now = getTimestamp_();
+
+    return runStudentPracticeTransitionUnlocked_([
+      records.sheets.groups, records.sheets.participants, records.sheets.audit
+    ], function() {
+      appendStudentPracticeRowUnlocked_(records.sheets.groups, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS, [
+        newGroupId, interval.date, room, interval.startTime, interval.endTime,
+        nextStatus, '', now, now, actor
+      ]);
+      records.sheets.participants.getRange(participant.rowNumber, 2, 1, 4).setValues([[
+        newGroupId, participant.studentId, participant.qualificationStatus, nextStatus
+      ]]);
+      if (!remaining.length) {
+        records.sheets.groups.getRange(oldGroup.rowNumber, 6, 1, 5).setValues([[
+          STUDENT_PRACTICE_STATUS.CANCELLED, oldGroup.changeStatus,
+          oldGroup.createdAt, now, actor
+        ]]);
+      }
+      appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: actor,
+        action: '協助學生更換自主練習時間',
+        targetType: '參與者',
+        targetId: participantId,
+        before: {
+          groupId: oldGroup.groupId,
+          date: oldInterval.date,
+          room: oldGroup.room,
+          startTime: oldInterval.startTime,
+          endTime: oldInterval.endTime,
+          status: participant.status
+        },
+        after: {
+          groupId: newGroupId,
+          date: interval.date,
+          room: room,
+          startTime: interval.startTime,
+          endTime: interval.endTime,
+          status: nextStatus
+        },
+        reason: reason
+      });
+      return {
+        participantId: participantId,
+        groupId: newGroupId,
+        oldGroupId: oldGroup.groupId,
+        status: nextStatus,
+        date: interval.date,
+        room: room,
+        startTime: interval.startTime,
+        endTime: interval.endTime
+      };
+    });
+  });
+}
+
 function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue) {
   var records = recordsValue || {};
   var date = cleanText_(dateValue).replace(/-/g, '/');
@@ -5969,6 +6112,12 @@ function doPost(e) {
           session,
           parameters.participantId,
           parameters.reason
+        );
+      },
+      moveStudentPracticeParticipant: function() {
+        return moveStudentPracticeParticipant_(
+          session,
+          parseJsonObject_(parameters.practice, '學生自主練習換時間')
         );
       },
       getMyLeaves: function() {

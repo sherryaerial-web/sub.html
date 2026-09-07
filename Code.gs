@@ -10408,16 +10408,6 @@ function getTeacherHomeDashboard_(session) {
     });
   });
 
-  schedule.sort(function(left, right) {
-    return [left.date, left.startTime, left.title, left.id].join('|')
-      .localeCompare([right.date, right.startTime, right.title, right.id].join('|'));
-  });
-  var scheduleByDate = {};
-  schedule.forEach(function(item) {
-    if (!scheduleByDate[item.date]) scheduleByDate[item.date] = [];
-    scheduleByDate[item.date].push(item);
-  });
-
   var upcoming = [];
   leaveRows.forEach(function(row) {
     var date = formatMyDate(row[2]);
@@ -10462,17 +10452,42 @@ function getTeacherHomeDashboard_(session) {
       if (!booking || participant.teacherName !== teacher ||
           cleanText_(participant.status) !== PRACTICE_PARTICIPANT_STATUS.ACTIVE ||
           [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(cleanText_(booking.status)) === -1 ||
-          booking.date < today || booking.date > throughDate) return;
+          booking.date < today || booking.date > throughDate ||
+          (cleanText_(booking.status) === PRACTICE_STATUS.WAITLISTED &&
+            isPracticeIntervalPast_(booking.date, participant.endTime || booking.endTime, todayMs))) return;
+      var isWaitlisted = cleanText_(booking.status) === PRACTICE_STATUS.WAITLISTED;
+      var practiceItem = {
+        id: 'practice:' + booking.bookingId,
+        date: booking.date,
+        startTime: participant.startTime || booking.startTime,
+        endTime: participant.endTime || booking.endTime,
+        room: booking.room,
+        title: '自主練習',
+        kind: isWaitlisted ? 'waitlist' : 'practice',
+        status: isWaitlisted ? '候補' : '練習',
+        targetView: 'practice'
+      };
+      schedule.push(practiceItem);
       upcoming.push({
         id: 'practice:' + booking.bookingId,
         date: booking.date,
         time: participant.startTime || booking.startTime,
         title: '自主練習',
-        meta: booking.room + ' 教室｜' + (booking.status === PRACTICE_STATUS.WAITLISTED ? '候補' : '已成立'),
+        meta: booking.room + ' 教室｜' + (isWaitlisted ? '候補' : '已成立'),
         targetView: 'practice'
       });
     });
   }
+
+  schedule.sort(function(left, right) {
+    return [left.date, left.startTime, left.title, left.id].join('|')
+      .localeCompare([right.date, right.startTime, right.title, right.id].join('|'));
+  });
+  var scheduleByDate = {};
+  schedule.forEach(function(item) {
+    if (!scheduleByDate[item.date]) scheduleByDate[item.date] = [];
+    scheduleByDate[item.date].push(item);
+  });
 
   upcoming.sort(function(left, right) {
     return [left.date, left.time, left.id].join('|').localeCompare([right.date, right.time, right.id].join('|'));
@@ -10491,7 +10506,10 @@ function getTeacherHomeDashboard_(session) {
     monthLabel: Number(monthParts[1]) + ' 月',
     weekSummary: {
       regular: firstWeek.filter(function(item) { return item.kind === 'regular'; }).length,
-      substitute: firstWeek.filter(function(item) { return item.kind === 'substitute'; }).length
+      substitute: firstWeek.filter(function(item) { return item.kind === 'substitute'; }).length,
+      practice: firstWeek.filter(function(item) {
+        return item.kind === 'practice' || item.kind === 'waitlist';
+      }).length
     },
     dates: dates,
     scheduleByDate: scheduleByDate,

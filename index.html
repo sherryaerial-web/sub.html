@@ -1791,6 +1791,17 @@
       border-bottom: 1px solid #eee6df;
     }
     [data-shell-mode="teacher"] .teacher-schedule-row:last-child { border-bottom: 0; }
+    [data-shell-mode="teacher"] button.teacher-schedule-row {
+      width: 100%;
+      border-top: 0;
+      border-right: 0;
+      border-left: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
     [data-shell-mode="teacher"] .teacher-schedule-row time { color: #9c665d; font-size: 14px; font-weight: 800; }
     [data-shell-mode="teacher"] .teacher-schedule-copy,
     [data-shell-mode="teacher"] .teacher-upcoming-copy { display: grid; min-width: 0; gap: 5px; text-align: left; }
@@ -1812,6 +1823,8 @@
       font-weight: 800;
     }
     [data-shell-mode="teacher"] .teacher-status-pill.regular { background: #f2eee9; color: #796d66; }
+    [data-shell-mode="teacher"] .teacher-status-pill.practice { background: #e7f0f2; color: #607b80; }
+    [data-shell-mode="teacher"] .teacher-status-pill.waitlist { background: #f4eadc; color: #8b6b42; }
     [data-shell-mode="teacher"] .teacher-upcoming-row {
       display: grid;
       width: 100%;
@@ -2656,20 +2669,29 @@
         ? `今天 · ${parts.full}`
         : parts.full;
       const items = (teacherHomeDashboard.scheduleByDate || {})[teacherHomeSelectedDate] || [];
-      byId("teacher-home-schedule").innerHTML = items.length ? items.map((item) => `
-        <article class="teacher-schedule-row">
+      byId("teacher-home-schedule").innerHTML = items.length ? items.map((item) => {
+        const isPractice = item.kind === "practice" || item.kind === "waitlist";
+        const rowTag = isPractice ? "button" : "article";
+        const rowAction = isPractice ? ' type="button" data-view="view-practice"' : "";
+        const statusClass = ["substitute", "practice", "waitlist"].includes(item.kind) ? item.kind : "regular";
+        return `
+        <${rowTag} class="teacher-schedule-row"${rowAction}>
           <time>${escapeHtml(item.startTime)}</time>
           <span class="teacher-schedule-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.room ? `${item.room} 教室` : "", `${item.startTime}–${item.endTime}`].filter(Boolean).join(" · "))}</small></span>
-          <span class="teacher-status-pill ${item.kind === "substitute" ? "substitute" : "regular"}">${escapeHtml(item.status)}</span>
-        </article>
-      `).join("") : '<div class="teacher-home-empty"><i data-lucide="calendar-check"></i><strong>這天沒有課程</strong><span>可以安排自己的時間。</span></div>';
+          <span class="teacher-status-pill ${statusClass}">${escapeHtml(item.status)}</span>
+        </${rowTag}>
+      `;
+      }).join("") : '<div class="teacher-home-empty"><i data-lucide="calendar-check"></i><strong>這天沒有課程或練習</strong><span>可以安排自己的時間。</span></div>';
       refreshIcons();
     }
 
     function renderTeacherHome(data) {
       teacherHomeDashboard = data || { dates: [], scheduleByDate: {}, upcoming: [], weekSummary: {} };
       const summary = teacherHomeDashboard.weekSummary || {};
-      byId("teacher-home-summary").innerHTML = `本週 ${Number(summary.regular || 0)} 堂課 <span aria-hidden="true">·</span> ${Number(summary.substitute || 0)} 堂代課`;
+      const practiceSummary = Number(summary.practice || 0)
+        ? ` <span aria-hidden="true">·</span> ${Number(summary.practice)} 次自主練習`
+        : "";
+      byId("teacher-home-summary").innerHTML = `本週 ${Number(summary.regular || 0)} 堂課 <span aria-hidden="true">·</span> ${Number(summary.substitute || 0)} 堂代課${practiceSummary}`;
       byId("teacher-home-month").textContent = teacherHomeDashboard.monthLabel || "";
       const upcoming = Array.isArray(teacherHomeDashboard.upcoming) ? teacherHomeDashboard.upcoming : [];
       byId("teacher-home-pending").textContent = teacherHomeDashboard.pendingCount ? `${teacherHomeDashboard.pendingCount} 件待處理` : "";

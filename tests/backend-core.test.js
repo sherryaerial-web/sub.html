@@ -2111,6 +2111,66 @@ test('teacher home dashboard returns only the acting teacher schedule in chronol
   assert.equal(JSON.stringify(fixture.spreadsheet.sheets.map((sheet) => sheet.values)), before);
 });
 
+test('teacher home dashboard mixes active and waitlisted practice into the schedule and drops stale records', () => {
+  const fixture = createLeaveBackend({
+    courseRows: [
+      ['2026/09/08', '18:30', 'A－空環 Lv.0', '老師甲', 'calendar-regular', 'class-a', 'teacher-a', '否', ''],
+    ],
+  });
+  fixture.backend.ensurePracticeStructure_();
+  const bookingSheet = fixture.spreadsheet.getSheetByName('自主練習場次');
+  const participantSheet = fixture.spreadsheet.getSheetByName('自主練習參與者');
+  bookingSheet.values.push(
+    ['practice-active', '', '2026/09/08', 'C', '14:00', '15:00', '已成立', '老師甲', '', '', '', '', ''],
+    ['practice-waitlist', '', '2026/09/09', 'A', '11:00', '12:00', '候補', '老師甲', 'calendar-waitlist', '', '', '', ''],
+    ['practice-cancelled', '', '2026/09/09', 'B', '15:00', '16:00', '已取消', '老師甲', '', '', '', '', ''],
+    ['practice-other', '', '2026/09/09', 'D', '17:00', '18:00', '已成立', '老師乙', '', '', '', '', ''],
+    ['practice-left', '', '2026/09/10', 'A', '09:00', '10:00', '已成立', '老師甲', '', '', '', '', ''],
+    ['practice-expired-waitlist', '', '2026/09/07', 'B', '10:00', '11:00', '候補', '老師甲', 'calendar-expired', '', '', '', ''],
+  );
+  participantSheet.values.push(
+    ['participant-active', 'practice-active', '', '老師甲', '建立者', '14:00', '15:00', '單次', '有效', '', ''],
+    ['participant-waitlist', 'practice-waitlist', '', '老師甲', '建立者', '11:00', '12:00', '單次', '有效', '', ''],
+    ['participant-cancelled', 'practice-cancelled', '', '老師甲', '建立者', '15:00', '16:00', '單次', '有效', '', ''],
+    ['participant-other', 'practice-other', '', '老師乙', '建立者', '17:00', '18:00', '單次', '有效', '', ''],
+    ['participant-left', 'practice-left', '', '老師甲', '建立者', '09:00', '10:00', '單次', '已退出', '', ''],
+    ['participant-expired', 'practice-expired-waitlist', '', '老師甲', '建立者', '10:00', '11:00', '單次', '有效', '', ''],
+  );
+  fixture.backend.Utilities.formatDate = formatTaipeiDate;
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-07T12:00:00+08:00').getTime();
+  const before = JSON.stringify(fixture.spreadsheet.sheets.map((sheet) => sheet.values));
+
+  const result = fixture.backend.getTeacherHomeDashboard_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.scheduleByDate['2026/09/08'])),
+    [
+      {
+        id: 'practice:practice-active', date: '2026/09/08', startTime: '14:00', endTime: '15:00',
+        room: 'C', title: '自主練習', kind: 'practice', status: '練習', targetView: 'practice',
+      },
+      {
+        id: 'course:calendar-regular', date: '2026/09/08', startTime: '18:30', endTime: '19:30',
+        room: 'A', title: 'A－空環 Lv.0', kind: 'regular', status: '授課',
+      },
+    ]
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.scheduleByDate['2026/09/09'])),
+    [{
+      id: 'practice:practice-waitlist', date: '2026/09/09', startTime: '11:00', endTime: '12:00',
+      room: 'A', title: '自主練習', kind: 'waitlist', status: '候補', targetView: 'practice',
+    }]
+  );
+  assert.equal(result.weekSummary.practice, 2);
+  assert.equal(result.dates.find((item) => item.date === '2026/09/09').hasSchedule, true);
+  assert.equal(JSON.stringify(result).includes('practice-cancelled'), false);
+  assert.equal(JSON.stringify(result).includes('practice-other'), false);
+  assert.equal(JSON.stringify(result).includes('practice-left'), false);
+  assert.equal(JSON.stringify(result).includes('practice-expired-waitlist'), false);
+  assert.equal(JSON.stringify(fixture.spreadsheet.sheets.map((sheet) => sheet.values)), before);
+});
+
 test('teacher home dashboard POST route resolves the authorized acting teacher', () => {
   const bootstrap = loadBackend(createAuthServices());
   const services = createAuthServices();

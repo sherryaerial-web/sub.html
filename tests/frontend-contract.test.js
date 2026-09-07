@@ -371,7 +371,7 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
   context.renderTeacherHome({
     today: '2026/09/08',
     monthLabel: '9 月',
-    weekSummary: { regular: 1, substitute: 1 },
+    weekSummary: { regular: 1, substitute: 1, practice: 2 },
     dates: [
       { date: '2026/09/08', hasSchedule: true },
       { date: '2026/09/09', hasSchedule: false },
@@ -380,6 +380,8 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
       '2026/09/08': [
         { id: 'course:1', date: '2026/09/08', startTime: '18:30', endTime: '19:30', room: 'A', title: 'A－舞綢 Lv.1', kind: 'regular', status: '授課' },
         { id: 'substitute:2', date: '2026/09/08', startTime: '20:00', endTime: '21:00', room: 'C', title: 'C－空環 Lv.2', kind: 'substitute', status: '代課' },
+        { id: 'practice:3', date: '2026/09/08', startTime: '21:00', endTime: '22:00', room: 'D', title: '自主練習', kind: 'practice', status: '練習', targetView: 'practice' },
+        { id: 'practice:4', date: '2026/09/08', startTime: '22:00', endTime: '23:00', room: 'A', title: '自主練習', kind: 'waitlist', status: '候補', targetView: 'practice' },
       ],
     },
     upcoming: [
@@ -391,9 +393,13 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
 
   assert.match(getElement('teacher-home-summary').innerHTML, /本週 1 堂課/);
   assert.match(getElement('teacher-home-summary').innerHTML, /1 堂代課/);
+  assert.match(getElement('teacher-home-summary').innerHTML, /2 次自主練習/);
   assert.match(getElement('teacher-home-dates').innerHTML, /09\/08/);
   assert.match(getElement('teacher-home-schedule').innerHTML, /授課/);
   assert.match(getElement('teacher-home-schedule').innerHTML, /代課/);
+  assert.match(getElement('teacher-home-schedule').innerHTML, /teacher-status-pill practice[^>]*>練習</);
+  assert.match(getElement('teacher-home-schedule').innerHTML, /teacher-status-pill waitlist[^>]*>候補</);
+  assert.match(getElement('teacher-home-schedule').innerHTML, /data-view="view-practice"/);
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-practice"/);
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-myleaves"/);
 });

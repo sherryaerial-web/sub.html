@@ -32,7 +32,7 @@ test('student page maps public empty and shared slots without exposing names', (
 
 test('student page submission uses the selected duration or exact shared group id', () => {
   const page = loadStudentPracticePage();
-  const identity = { studentToken: 'opaque-token', obName: '', identitySuffix: '' };
+  const identity = { studentToken: 'opaque-token', appName: '', email: '' };
   const empty = page.buildSubmissionPayload({
     date: '2026/09/10', room: 'B', type: 'empty', startTime: '09:00', durations: [60, 90], groupId: '',
   }, 90, identity, '需要鞦韆');
@@ -46,6 +46,14 @@ test('student page submission uses the selected duration or exact shared group i
   assert.deepEqual(JSON.parse(JSON.stringify(shared)), {
     studentToken: 'opaque-token', groupId: 'group-2', note: '',
   });
+
+  const firstBooking = page.buildSubmissionPayload({
+    date: '2026/09/10', room: 'A', type: 'empty', startTime: '10:00', durations: [60], groupId: '',
+  }, 60, { studentToken: '', appName: '學生甲', email: ' Student@Example.COM ' }, '');
+  assert.deepEqual(JSON.parse(JSON.stringify(firstBooking)), {
+    studentToken: '', appName: '學生甲', email: 'Student@Example.COM',
+    date: '2026/09/10', room: 'A', startTime: '10:00', durationMinutes: 60, note: '',
+  });
 });
 
 test('student page is a focused mobile booking surface with the confirmed deadline copy', () => {
@@ -54,5 +62,11 @@ test('student page is a focused mobile booking surface with the confirmed deadli
   assert.match(html, /選擇自主練習時間/);
   assert.match(html, /開始前 2 小時/);
   assert.match(html, /取消或換時間請洽官方 LINE/);
+  assert.match(html, /APP 名稱/);
+  assert.match(html, /APP 內註冊 Email/);
+  assert.match(html, /id="app-email"[^>]*type="email"/);
+  assert.doesNotMatch(html, /身分辨識尾碼/);
   assert.doesNotMatch(html, /薪資|代課紀錄|管理工作台/);
+  const scriptPath = path.join(__dirname, '..', 'student-practice.js');
+  assert.match(fs.readFileSync(scriptPath, 'utf8'), /sherry_student_practice_token_v2/);
 });

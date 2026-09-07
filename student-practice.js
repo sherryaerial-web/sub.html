@@ -2,7 +2,7 @@
   'use strict';
 
   var APP_URL = 'https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec';
-  var STORAGE_KEY = 'sherry_student_practice_token_v1';
+  var STORAGE_KEY = 'sherry_student_practice_token_v2';
 
   function buildSlotCards(data) {
     var date = String(data && data.date || '');
@@ -36,8 +36,8 @@
       note: String(noteValue || '').trim()
     };
     if (!payload.studentToken) {
-      payload.obName = String(identity && identity.obName || '').trim();
-      payload.identitySuffix = String(identity && identity.identitySuffix || '').trim();
+      payload.appName = String(identity && identity.appName || '').trim();
+      payload.email = String(identity && identity.email || '').trim();
     }
     if (slot.type === 'shared') {
       payload.groupId = String(slot.groupId || '');
@@ -182,8 +182,8 @@
     syncStartOptions();
     var hasToken = !!localStorage.getItem(STORAGE_KEY);
     byId('identity-fields').hidden = hasToken;
-    byId('ob-name').required = !hasToken;
-    byId('identity-suffix').required = !hasToken;
+    byId('app-name').required = !hasToken;
+    byId('app-email').required = !hasToken;
     byId('booking-dialog').showModal();
   }
 
@@ -197,8 +197,8 @@
       var card = Object.assign({}, state.selected, { selectedStartTime: byId('start-time').value });
       var payload = buildSubmissionPayload(card, byId('duration').value, {
         studentToken: localStorage.getItem(STORAGE_KEY) || '',
-        obName: byId('ob-name').value,
-        identitySuffix: byId('identity-suffix').value
+        appName: byId('app-name').value,
+        email: byId('app-email').value
       }, byId('student-note').value);
       var result = await callApi('submitStudentPractice', { practice: payload }, 'POST');
       if (result.studentToken) localStorage.setItem(STORAGE_KEY, result.studentToken);
@@ -250,4 +250,3 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })(typeof window !== 'undefined' ? window : this);
-

@@ -143,7 +143,7 @@ const EXPECTED_PAYROLL_DISPUTE_HEADERS = [
 ];
 
 const EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS = [
-  '學生 ID', 'OB 登記姓名', '身分辨識尾碼', '裝置 Token 雜湊', '資格狀態',
+  '學生 ID', 'APP 名稱', 'APP 內註冊 Email', '裝置 Token 雜湊', '資格狀態',
   '確認時間', '確認者', '備註', '建立時間', '更新時間',
   '晴光資格狀態', '晴光確認時間', '晴光確認者',
   '劍潭資格狀態', '劍潭確認時間', '劍潭確認者',
@@ -10199,20 +10199,29 @@ test('student practice structure is isolated from teacher practice and formal co
   assert.equal(result.qualifications, '學生自主練習資格');
 });
 
-test('student practice qualification schema appends venue columns without changing existing rows', () => {
-  const legacyHeaders = EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS.slice(0, 10);
-  const existingRow = [
-    'student-legacy', '舊學生', '1234', 'hash-legacy', '已確認',
-    '2026-09-01 10:00:00', 'Tako', '舊備註', '2026-09-01 09:00:00', '2026-09-01 10:00:00',
+test('student practice identity migration removes only old student test records and replaces legacy headers', () => {
+  const legacyHeaders = [
+    '學生 ID', 'OB 登記姓名', '身分辨識尾碼', '裝置 Token 雜湊', '資格狀態',
+    '確認時間', '確認者', '備註', '建立時間', '更新時間',
+    '晴光資格狀態', '晴光確認時間', '晴光確認者',
+    '劍潭資格狀態', '劍潭確認時間', '劍潭確認者',
   ];
-  const qualificationSheet = createSheetFixture('學生自主練習資格', [legacyHeaders, existingRow]);
-  const spreadsheet = createSpreadsheetFixture([qualificationSheet]);
+  const qualificationSheet = createSheetFixture('學生自主練習資格', [legacyHeaders, ['student-test', '測試學生', '1234']]);
+  const groupSheet = createSheetFixture('學生自主練習場次', [EXPECTED_STUDENT_PRACTICE_GROUP_HEADERS, ['group-test']]);
+  const participantSheet = createSheetFixture('學生自主練習參與者', [EXPECTED_STUDENT_PRACTICE_PARTICIPANT_HEADERS, ['participant-test']]);
+  const auditSheet = createSheetFixture('學生自主練習操作紀錄', [EXPECTED_STUDENT_PRACTICE_AUDIT_HEADERS, ['audit-test']]);
+  const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, ['2026/09/10', '10:00', 'A－空環']]);
+  const spreadsheet = createSpreadsheetFixture([qualificationSheet, groupSheet, participantSheet, auditSheet, courseSheet]);
   const backend = loadBackend();
 
   backend.ensureStudentPracticeStructureUnlocked_(spreadsheet);
 
   assert.deepEqual(qualificationSheet.values[0], EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS);
-  assert.deepEqual(qualificationSheet.values[1].slice(0, 10), existingRow);
+  assert.equal(qualificationSheet.values.length, 1);
+  assert.equal(groupSheet.values.length, 1);
+  assert.equal(participantSheet.values.length, 1);
+  assert.equal(auditSheet.values.length, 1);
+  assert.equal(courseSheet.values.length, 2);
 });
 
 test('student practice submission preserves pending request and confirmed student establishes immediately', () => {
@@ -10247,14 +10256,21 @@ test('student practice submission preserves pending request and confirmed studen
   backend.getPracticeCurrentObRowsForDayView_ = () => [];
   backend.getPracticeRecordsUnlocked_ = () => ({ bookings: [], participants: [] });
 
+  assert.throws(() => backend.submitStudentPractice_({
+    appName: '學生甲', email: 'not-an-email', date: '2026/09/10', room: 'A',
+    startTime: '10:00', durationMinutes: 60,
+  }), /APP 內註冊 Email/);
+
   const pending = backend.submitStudentPractice_({
-    obName: '學生甲', identitySuffix: '1234', date: '2026/09/10', room: 'A',
+    appName: '學生甲', email: ' Student@Example.COM ', date: '2026/09/10', room: 'A',
     startTime: '10:00', durationMinutes: 60,
   });
   assert.equal(pending.status, '待確認資格');
   assert.match(pending.studentToken, /^[A-Za-z0-9-]{10,}$/);
   assert.equal(spreadsheet.getSheetByName('學生自主練習場次').values.length, 2);
   assert.equal(spreadsheet.getSheetByName('學生自主練習參與者').values[1][4], '待確認資格');
+  assert.equal(spreadsheet.getSheetByName('學生自主練習資格').values[1][1], '學生甲');
+  assert.equal(spreadsheet.getSheetByName('學生自主練習資格').values[1][2], 'student@example.com');
 
   spreadsheet.getSheetByName('學生自主練習資格').values[1][10] = '已確認';
   const active = backend.submitStudentPractice_({
@@ -10284,7 +10300,7 @@ test('student practice public routes expose availability and submission without 
   } }).text);
   const submission = JSON.parse(backend.doPost({ parameter: {
     action: 'submitStudentPractice',
-    practice: JSON.stringify({ obName: '學生甲', identitySuffix: '1234', room: 'C' }),
+    practice: JSON.stringify({ appName: '學生甲', email: 'student@example.com', room: 'C' }),
   } }).text);
 
   assert.deepEqual(availability, { status: 'success', data: { date: '2026/09/10', rooms: [] } });
@@ -10320,7 +10336,7 @@ function createStudentPracticeAdminFixture(rows = {}) {
 test('student practice admin dashboard is course-admin only and joins student identity with requests', () => {
   const fixture = createStudentPracticeAdminFixture({
     qualifications: [[
-      'student-1', '學生甲', '1234', 'hash-1', '待確認資格', '', '', '',
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '待確認資格', '', '', '',
       '2026-09-08 10:00:00', '2026-09-08 10:00:00',
       '待確認資格', '', '', '', '', '',
     ]],
@@ -10342,8 +10358,8 @@ test('student practice admin dashboard is course-admin only and joins student id
   }, {});
 
   assert.equal(result.summary.pendingQualification, 1);
-  assert.equal(result.requests[0].obName, '學生甲');
-  assert.equal(result.requests[0].identitySuffix, '1234');
+  assert.equal(result.requests[0].appName, '學生甲');
+  assert.equal(result.requests[0].email, 'student@example.com');
   assert.equal(result.requests[0].note, '需要空環');
   assert.equal(result.requests[0].qualificationVenue, '晴光');
   assert.equal(result.requests[0].qualificationStatus, '待確認資格');
@@ -10352,7 +10368,7 @@ test('student practice admin dashboard is course-admin only and joins student id
 test('student practice admin qualification confirmation applies only to the selected venue', () => {
   const fixture = createStudentPracticeAdminFixture({
     qualifications: [[
-      'student-1', '學生甲', '1234', 'hash-1', '待確認資格', '', '', '',
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '待確認資格', '', '', '',
       '2026-09-08 10:00:00', '2026-09-08 10:00:00',
       '待確認資格', '', '', '待確認資格', '', '',
     ]],
@@ -10390,7 +10406,7 @@ test('student practice admin qualification confirmation applies only to the sele
 test('student practice admin cancellation removes one student and releases only the final participant', () => {
   const fixture = createStudentPracticeAdminFixture({
     qualifications: [
-      ['student-1', '學生甲', '1234', 'hash-1', '已確認', '', '', '', '', ''],
+      ['student-1', '學生甲', 'student@example.com', 'hash-1', '已確認', '', '', '', '', ''],
       ['student-2', '學生乙', '5678', 'hash-2', '已確認', '', '', '', '', ''],
     ],
     groups: [[
@@ -10417,7 +10433,7 @@ test('student practice admin cancellation removes one student and releases only 
 test('student practice admin can move one student atomically and preserves the original on conflict', () => {
   const fixture = createStudentPracticeAdminFixture({
     qualifications: [[
-      'student-1', '學生甲', '1234', 'hash-1', '', '', '', '', '', '',
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '', '', '', '', '', '',
       '已確認', '', 'Tako', '待確認資格', '', '',
     ]],
     groups: [

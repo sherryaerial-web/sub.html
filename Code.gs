@@ -128,7 +128,7 @@ var SHEET_HEADERS = {
     '修改後 JSON', '原因'
   ],
   STUDENT_PRACTICE_QUALIFICATIONS: [
-    '學生 ID', 'OB 登記姓名', '身分辨識尾碼', '裝置 Token 雜湊', '資格狀態',
+    '學生 ID', 'APP 名稱', 'APP 內註冊 Email', '裝置 Token 雜湊', '資格狀態',
     '確認時間', '確認者', '備註', '建立時間', '更新時間',
     '晴光資格狀態', '晴光確認時間', '晴光確認者',
     '劍潭資格狀態', '劍潭確認時間', '劍潭確認者'
@@ -2480,6 +2480,7 @@ function ensurePracticeStructureUnlocked_(spreadsheet) {
 }
 
 function ensureStudentPracticeStructureUnlocked_(spreadsheet) {
+  migrateLegacyStudentPracticeIdentityUnlocked_(spreadsheet);
   var result = {};
   [
     ['qualifications', SHEETS.STUDENT_PRACTICE_QUALIFICATIONS, SHEET_HEADERS.STUDENT_PRACTICE_QUALIFICATIONS],
@@ -2494,6 +2495,30 @@ function ensureStudentPracticeStructureUnlocked_(spreadsheet) {
     ).getName();
   });
   return result;
+}
+
+function migrateLegacyStudentPracticeIdentityUnlocked_(spreadsheet) {
+  var qualificationSheet = spreadsheet.getSheetByName(SHEETS.STUDENT_PRACTICE_QUALIFICATIONS);
+  if (!qualificationSheet) return false;
+  var legacyIdentityHeaders = qualificationSheet.getRange(1, 2, 1, 2).getValues()[0].map(cleanText_);
+  if (legacyIdentityHeaders[0] !== 'OB 登記姓名' || legacyIdentityHeaders[1] !== '身分辨識尾碼') return false;
+
+  var studentPracticeSheets = [
+    SHEETS.STUDENT_PRACTICE_QUALIFICATIONS,
+    SHEETS.STUDENT_PRACTICE_GROUPS,
+    SHEETS.STUDENT_PRACTICE_PARTICIPANTS,
+    SHEETS.STUDENT_PRACTICE_AUDIT
+  ].map(function(sheetName) {
+    return spreadsheet.getSheetByName(sheetName);
+  }).filter(function(sheet) { return !!sheet; });
+  return runStudentPracticeTransitionUnlocked_(studentPracticeSheets, function() {
+    studentPracticeSheets.forEach(function(sheet) {
+      if (sheet.getLastRow() < 2) return;
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(1, sheet.getLastColumn())).clearContent();
+    });
+    qualificationSheet.getRange(1, 2, 1, 2).setValues([['APP 名稱', 'APP 內註冊 Email']]);
+    return true;
+  });
 }
 
 function hashStudentPracticeToken_(tokenValue) {
@@ -2563,8 +2588,8 @@ function getStudentPracticeRecordsUnlocked_(spreadsheet) {
       return {
         rowNumber: index + 2,
         studentId: cleanText_(row[0]),
-        obName: cleanText_(row[1]),
-        identitySuffix: cleanText_(row[2]),
+        appName: cleanText_(row[1]),
+        email: cleanText_(row[2]).toLowerCase(),
         tokenHash: cleanText_(row[3]),
         status: cleanText_(row[4]),
         confirmedAt: cleanText_(row[5]),
@@ -2660,10 +2685,12 @@ function submitStudentPractice_(inputValue) {
       if (!qualification) throw new Error('學生身分驗證已失效，請從官方 LINE 重新開啟。');
     }
 
-    var obName = qualification ? qualification.obName : cleanText_(input.obName);
-    var identitySuffix = qualification ? qualification.identitySuffix : cleanText_(input.identitySuffix);
-    if (!obName) throw new Error('請填寫 OB 登記姓名。');
-    if (!qualification && !/^\d{4}$/.test(identitySuffix)) throw new Error('請填寫 4 位身分辨識尾碼。');
+    var appName = qualification ? qualification.appName : cleanText_(input.appName);
+    var email = qualification ? qualification.email : cleanText_(input.email).toLowerCase();
+    if (!appName) throw new Error('請填寫 APP 名稱。');
+    if (!qualification && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) {
+      throw new Error('請填寫有效的 APP 內註冊 Email。');
+    }
 
     var requestedGroupId = cleanText_(input.groupId);
     var room;
@@ -2733,7 +2760,7 @@ function submitStudentPractice_(inputValue) {
         appendStudentPracticeRowUnlocked_(
           records.sheets.qualifications,
           SHEET_HEADERS.STUDENT_PRACTICE_QUALIFICATIONS,
-          [studentId, obName, identitySuffix, hashStudentPracticeToken_(newToken),
+          [studentId, appName, email, hashStudentPracticeToken_(newToken),
             '', '', '', '', now, now,
             qualificationVenue === '晴光' ? STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION : '', '', '',
             qualificationVenue === '劍潭' ? STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION : '', '', '']
@@ -2747,7 +2774,7 @@ function submitStudentPractice_(inputValue) {
       if (!targetGroup) {
         appendStudentPracticeRowUnlocked_(records.sheets.groups, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS, [
           groupId, interval.date, room, interval.startTime, interval.endTime,
-          registrationStatus, '', now, now, obName
+          registrationStatus, '', now, now, appName
         ]);
       }
       appendStudentPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.STUDENT_PRACTICE_PARTICIPANTS, [
@@ -2755,7 +2782,7 @@ function submitStudentPractice_(inputValue) {
         now, '', '', cleanText_(input.note)
       ]);
       appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
-        actor: obName,
+        actor: appName,
         action: targetGroup ? '加入學生自主練習' : '送出學生自主練習',
         targetType: '參與者',
         targetId: participantId,
@@ -2957,8 +2984,8 @@ function getStudentPracticeAdminDashboard_(session, filtersValue) {
       participantId: participant.participantId,
       groupId: participant.groupId,
       studentId: participant.studentId,
-      obName: qualification.obName || '',
-      identitySuffix: qualification.identitySuffix || '',
+      appName: qualification.appName || '',
+      email: qualification.email || '',
       qualificationVenue: qualificationVenue,
       qualificationStatus: qualificationFields.status || STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
       status: participant.status,

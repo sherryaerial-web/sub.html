@@ -6202,7 +6202,7 @@
         const qualificationVenue = item.qualificationVenue || (["A", "B"].includes(item.room) ? "晴光" : "劍潭");
         return `<article class="practice-admin-card" data-student-practice-participant="${escapeHtml(item.participantId)}">
           <div class="practice-admin-card-head">
-            <div><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong><div class="item-meta">${escapeHtml(item.obName)}｜身分尾碼 ${escapeHtml(item.identitySuffix || "未填")}｜${escapeHtml(qualificationVenue)}資格</div></div>
+            <div><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong><div class="item-meta">${escapeHtml(item.appName)}｜${escapeHtml(item.email)}｜${escapeHtml(qualificationVenue)}資格</div></div>
             <span class="status-pill ${pending ? "pending" : ""}">${escapeHtml(pending ? "待確認資格" : item.status)}</span>
           </div>
           ${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}

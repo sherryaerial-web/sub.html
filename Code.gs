@@ -6372,6 +6372,9 @@ function doPost(e) {
       getMyCourses: function() {
         return getMyCourses_(actingSession());
       },
+      getTeacherHomeDashboard: function() {
+        return getTeacherHomeDashboard_(actingSession());
+      },
       getPracticeDay: function() {
         return getPracticeDay_(actingSession(), parameters.date);
       },
@@ -10060,6 +10063,173 @@ function getPayrollAdminDashboard_(session, monthValue) {
       openDisputes: disputes.filter(function(item) { return item.status === '待處理'; }).length,
       errors: snapshotRows.filter(function(row) { return cleanText_(row[14]).indexOf('錯誤：') === 0; }).length
     }
+  };
+}
+
+function formatTeacherHomeDateFromMs_(milliseconds) {
+  return Utilities.formatDate(
+    new Date(milliseconds),
+    getTimeZone_(),
+    'yyyy-MM-dd HH:mm:ss'
+  ).slice(0, 10).replace(/-/g, '/');
+}
+
+function getTeacherHomeDashboard_(session) {
+  var teacher = getSessionTeacherName_(session);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
+  var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
+  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+  assertHeaders_(leaveSheet, SHEET_HEADERS.LEAVES);
+
+  var todayMs = currentTimeMs_();
+  var today = formatTeacherHomeDateFromMs_(todayMs);
+  var throughDate = formatTeacherHomeDateFromMs_(todayMs + 31 * 24 * 60 * 60 * 1000);
+  var firstWeekEnd = formatTeacherHomeDateFromMs_(todayMs + 6 * 24 * 60 * 60 * 1000);
+  var leaveRows = leaveSheet.getDataRange().getValues().slice(1);
+  var activeLeaveIds = {};
+  leaveRows.forEach(function(row) {
+    if (cleanText_(row[1]) !== teacher) return;
+    if (['確認中', '已領取'].indexOf(cleanText_(row[5])) === -1) return;
+    var calendarId = cleanText_(row[10]);
+    if (calendarId) activeLeaveIds[calendarId] = true;
+  });
+
+  var schedule = [];
+  courseSheet.getDataRange().getValues().slice(1).forEach(function(row) {
+    var date = formatMyDate(row[0]);
+    var calendarId = cleanText_(row[4]);
+    if (cleanText_(row[3]) !== teacher || !calendarId || activeLeaveIds[calendarId] ||
+        !date || date < today || date > throughDate) return;
+    var startTime = formatMyTime(row[1]);
+    var title = cleanText_(row[2]);
+    var startMinutes = timeTextToMinutes_(startTime);
+    if (!startTime || !title || startMinutes < 0) return;
+    schedule.push({
+      id: 'course:' + calendarId,
+      date: date,
+      startTime: startTime,
+      endTime: minutesToTimeText_(startMinutes + getScheduledCourseDurationMinutes_(title)),
+      room: getCourseRoom_(title),
+      title: title,
+      kind: 'regular',
+      status: '授課'
+    });
+  });
+
+  leaveRows.forEach(function(row) {
+    var date = formatMyDate(row[2]);
+    if (cleanText_(row[6]) !== teacher || cleanText_(row[5]) !== '已領取' ||
+        !date || date < today || date > throughDate) return;
+    var substituteId = cleanText_(row[9]);
+    var title = cleanText_(row[12]) || cleanText_(row[4]);
+    var startTime = formatMyTime(row[25]) || formatMyTime(row[3]);
+    var specialEndTime = formatMyTime(row[24]);
+    var startMinutes = timeTextToMinutes_(startTime);
+    if (!substituteId || !title || startMinutes < 0) return;
+    schedule.push({
+      id: 'substitute:' + substituteId,
+      date: date,
+      startTime: startTime,
+      endTime: specialEndTime || minutesToTimeText_(startMinutes + getScheduledCourseDurationMinutes_(title)),
+      room: getCourseRoom_(title) || getCourseRoom_(row[4]),
+      title: title,
+      kind: 'substitute',
+      status: '代課'
+    });
+  });
+
+  schedule.sort(function(left, right) {
+    return [left.date, left.startTime, left.title, left.id].join('|')
+      .localeCompare([right.date, right.startTime, right.title, right.id].join('|'));
+  });
+  var scheduleByDate = {};
+  schedule.forEach(function(item) {
+    if (!scheduleByDate[item.date]) scheduleByDate[item.date] = [];
+    scheduleByDate[item.date].push(item);
+  });
+
+  var upcoming = [];
+  leaveRows.forEach(function(row) {
+    var date = formatMyDate(row[2]);
+    if (!date || date < today || date > throughDate) return;
+    var isOwnLeave = cleanText_(row[1]) === teacher;
+    var isOwnSubstitute = cleanText_(row[6]) === teacher;
+    var changeState = cleanText_(row[18]);
+    if (isOwnLeave && (cleanText_(row[5]) === '確認中' || changeState)) {
+      upcoming.push({
+        id: 'leave:' + cleanText_(row[9]),
+        date: date,
+        time: formatMyTime(row[3]),
+        title: cleanText_(row[4]),
+        meta: changeState || '請假處理中',
+        targetView: 'myleaves'
+      });
+    } else if (isOwnSubstitute && changeState) {
+      upcoming.push({
+        id: 'sub-change:' + cleanText_(row[9]),
+        date: date,
+        time: formatMyTime(row[25]) || formatMyTime(row[3]),
+        title: cleanText_(row[12]) || cleanText_(row[4]),
+        meta: changeState,
+        targetView: 'mysubs'
+      });
+    }
+  });
+
+  var practiceSheetNames = [
+    SHEETS.PRACTICE_SERIES,
+    SHEETS.PRACTICE_BOOKINGS,
+    SHEETS.PRACTICE_PARTICIPANTS,
+    SHEETS.PRACTICE_EXCEPTIONS,
+    SHEETS.PRACTICE_AUDIT
+  ];
+  if (practiceSheetNames.every(function(name) { return !!ss.getSheetByName(name); })) {
+    var practiceRecords = getPracticeRecordsUnlocked_(ss);
+    var bookingsById = {};
+    practiceRecords.bookings.forEach(function(booking) { bookingsById[booking.bookingId] = booking; });
+    practiceRecords.participants.forEach(function(participant) {
+      var booking = bookingsById[participant.bookingId];
+      if (!booking || participant.teacherName !== teacher ||
+          cleanText_(participant.status) !== PRACTICE_PARTICIPANT_STATUS.ACTIVE ||
+          [PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(cleanText_(booking.status)) === -1 ||
+          booking.date < today || booking.date > throughDate) return;
+      upcoming.push({
+        id: 'practice:' + booking.bookingId,
+        date: booking.date,
+        time: participant.startTime || booking.startTime,
+        title: '自主練習',
+        meta: booking.room + ' 教室｜' + (booking.status === PRACTICE_STATUS.WAITLISTED ? '候補' : '已成立'),
+        targetView: 'practice'
+      });
+    });
+  }
+
+  upcoming.sort(function(left, right) {
+    return [left.date, left.time, left.id].join('|').localeCompare([right.date, right.time, right.id].join('|'));
+  });
+  upcoming = upcoming.slice(0, 12);
+
+  var dates = [];
+  for (var offset = 0; offset < 8; offset += 1) {
+    var dateValue = formatTeacherHomeDateFromMs_(todayMs + offset * 24 * 60 * 60 * 1000);
+    dates.push({ date: dateValue, hasSchedule: !!scheduleByDate[dateValue] });
+  }
+  var monthParts = today.split('/');
+  var firstWeek = schedule.filter(function(item) { return item.date <= firstWeekEnd; });
+  return {
+    today: today,
+    monthLabel: Number(monthParts[1]) + ' 月',
+    weekSummary: {
+      regular: firstWeek.filter(function(item) { return item.kind === 'regular'; }).length,
+      substitute: firstWeek.filter(function(item) { return item.kind === 'substitute'; }).length
+    },
+    dates: dates,
+    scheduleByDate: scheduleByDate,
+    upcoming: upcoming,
+    pendingCount: upcoming.filter(function(item) {
+      return item.targetView === 'myleaves' || item.targetView === 'mysubs';
+    }).length
   };
 }
 

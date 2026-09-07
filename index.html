@@ -2804,6 +2804,11 @@
       return item.early ? "可提前操作" : "可操作";
     }
 
+    function monthlyOperationDate(value) {
+      const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(value || "").trim());
+      return match ? match[1] : "";
+    }
+
     function renderMonthlyOperationsPanel(data) {
       const monthly = data && data.monthlyOperations;
       if (!monthly) return "";
@@ -2830,9 +2835,17 @@
             <button class="${retryNotification ? "danger-button" : "primary-button"} inline-button" type="button" data-admin-action="execute-monthly-operation" data-operation-id="${escapeHtml(item.id)}"${enabled ? "" : " disabled"}><i data-lucide="${retryNotification ? "refresh-cw" : "play"}"></i>${escapeHtml(buttonLabel)}</button>
           </article>`;
       };
-      const nextOperation = operations.find((item) => Boolean(item.canExecute) && (item.status !== "completed" || item.notificationPending))
-        || operations.find((item) => item.status !== "completed")
-        || null;
+      const currentDate = monthlyOperationDate(monthly.now);
+      const notificationRetry = operations.find((item) => item.status === "completed" && item.notificationPending && item.canExecute);
+      const upcomingOperations = operations
+        .map((item, index) => ({ item, index, date: monthlyOperationDate(item.recommendedAt) }))
+        .filter(({ item, date }) => item.status !== "completed" && (!currentDate || !date || date >= currentDate))
+        .sort((a, b) => {
+          if (a.date && b.date && a.date !== b.date) return a.date.localeCompare(b.date);
+          if (a.date !== b.date) return a.date ? -1 : 1;
+          return a.index - b.index;
+        });
+      const nextOperation = notificationRetry || (upcomingOperations[0] && upcomingOperations[0].item) || null;
       const nextCompleted = nextOperation && nextOperation.status === "completed";
       const nextRetry = Boolean(nextCompleted && nextOperation.notificationPending);
       const nextEnabled = Boolean(nextOperation && nextOperation.canExecute) && (!nextCompleted || nextRetry);

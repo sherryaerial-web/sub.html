@@ -396,6 +396,34 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-myleaves"/);
 });
 
+test('five-destination teacher navigation groups records and exposes account actions', () => {
+  const tabbar = html.match(/<nav id="mobile-tabbar"[\s\S]*?<\/nav>/)[0];
+  assert.equal((tabbar.match(/class="mobile-tab-item/g) || []).length, 5);
+  ['課表', '請假', '代課', '練習', '我的'].forEach((label) => assert.match(tabbar, new RegExp(`>${label}<`)));
+  assert.match(html, /class="teacher-flow-switcher"[^>]*data-teacher-flow="leave"/);
+  assert.match(html, /data-view="view-leave"[^>]*>登記請假</);
+  assert.match(html, /data-view="view-myleaves"[^>]*>請假紀錄</);
+  assert.match(html, /class="teacher-flow-switcher"[^>]*data-teacher-flow="substitute"/);
+  assert.match(html, /data-view="view-claim"[^>]*>領取代課</);
+  assert.match(html, /data-view="view-mysubs"[^>]*>代課紀錄</);
+  assert.match(html, /id="view-account"/);
+  assert.match(html, /data-view="view-payroll"/);
+  assert.match(html, /data-view="view-inbox"/);
+  assert.match(html, /id="account-admin-entry"/);
+  assert.match(html, /id="account-logout"/);
+});
+
+test('teacher destinations opt into the app visual shell while admin keeps its existing workspace', () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = 'Tako'; authState.managementCapabilities = ['course_admin'];", context);
+
+  vm.runInContext("switchView('view-home')", context);
+  assert.equal(getElement('app-shell').dataset.shellMode, 'teacher');
+
+  vm.runInContext("switchView('view-admin')", context);
+  assert.equal(getElement('app-shell').dataset.shellMode, 'admin');
+});
+
 test('shows backend errors instead of always claiming success', () => {
   assert.match(html, /throw new Error\(payload\.message/);
   assert.match(html, /catch\s*\(error\)/);

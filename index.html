@@ -1655,6 +1655,278 @@
       .push-permission-actions { width: 100%; }
       .push-permission-actions > button { flex: 1; }
     }
+
+    /* Teacher app shell: schedule-first, mobile-first, and isolated from admin. */
+    [data-shell-mode="teacher"] {
+      --teacher-canvas: #f8f4ef;
+      --teacher-card: #fffdfa;
+      --teacher-taupe: #918078;
+      --teacher-taupe-deep: #786861;
+      --teacher-blush: #f2dfdb;
+      --teacher-blush-line: #dfbab2;
+      --teacher-blue: #e8f0f1;
+      --teacher-blue-ink: #60767d;
+      --teacher-line: #ded4cb;
+    }
+    [data-shell-mode="teacher"] .workspace { background: var(--teacher-canvas); }
+    [data-shell-mode="teacher"] .view:not(#view-admin) { max-width: 980px; }
+    [data-shell-mode="teacher"] button { min-height: 44px; }
+    [data-shell-mode="teacher"] .view-header { margin-bottom: 18px; }
+    [data-shell-mode="teacher"] .teacher-home-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+    [data-shell-mode="teacher"] .teacher-home-heading .section-heading { margin-bottom: 6px; }
+    [data-shell-mode="teacher"] .teacher-home-heading .section-copy span { margin: 0 4px; color: #ae9f97; }
+    [data-shell-mode="teacher"] .teacher-month-chip {
+      display: inline-grid;
+      min-width: 52px;
+      min-height: 38px;
+      place-items: center;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: var(--teacher-blue);
+      color: var(--teacher-blue-ink);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    [data-shell-mode="teacher"] .teacher-date-strip {
+      display: grid;
+      grid-auto-columns: minmax(118px, 1fr);
+      grid-auto-flow: column;
+      gap: 10px;
+      overflow-x: auto;
+      margin: 0 0 22px;
+      padding: 2px 2px 7px;
+      scroll-snap-type: x proximity;
+      scrollbar-width: thin;
+    }
+    [data-shell-mode="teacher"] .teacher-date-card {
+      position: relative;
+      display: grid;
+      min-height: 86px;
+      place-content: center;
+      gap: 5px;
+      scroll-snap-align: start;
+      border: 1px solid var(--teacher-line);
+      border-radius: 16px;
+      background: var(--teacher-card);
+      color: #514844;
+      cursor: pointer;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(75, 61, 54, .035);
+    }
+    [data-shell-mode="teacher"] .teacher-date-card strong { font-size: 16px; }
+    [data-shell-mode="teacher"] .teacher-date-card span { color: #81756f; font-size: 12px; }
+    [data-shell-mode="teacher"] .teacher-date-card i {
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #ae7a6f;
+    }
+    [data-shell-mode="teacher"] .teacher-date-card.active {
+      border-color: var(--teacher-blush-line);
+      background: var(--teacher-blush);
+      color: #6e514b;
+      box-shadow: 0 4px 14px rgba(143, 95, 87, .08);
+    }
+    [data-shell-mode="teacher"] .teacher-home-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+    [data-shell-mode="teacher"] .teacher-home-panel {
+      overflow: hidden;
+      border: 1px solid var(--teacher-line);
+      border-radius: 18px;
+      background: var(--teacher-card);
+      box-shadow: 0 4px 18px rgba(72, 57, 50, .045);
+    }
+    [data-shell-mode="teacher"] .teacher-panel-heading {
+      display: flex;
+      min-height: 56px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 18px;
+      border-bottom: 1px solid #ebe3dc;
+      color: #4c423e;
+    }
+    [data-shell-mode="teacher"] .teacher-panel-heading > strong { font-size: 14px; }
+    [data-shell-mode="teacher"] .teacher-panel-count { color: #9a6a61; font-size: 12px; font-weight: 750; }
+    [data-shell-mode="teacher"] .teacher-text-button {
+      display: inline-flex;
+      min-height: 40px;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 0 6px 10px;
+      border: 0;
+      background: transparent;
+      color: #986b62;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    [data-shell-mode="teacher"] .teacher-text-button svg { width: 15px; height: 15px; }
+    [data-shell-mode="teacher"] .teacher-schedule-list,
+    [data-shell-mode="teacher"] .teacher-upcoming-list { padding: 0 18px; }
+    [data-shell-mode="teacher"] .teacher-schedule-row {
+      display: grid;
+      grid-template-columns: 62px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      min-height: 86px;
+      padding: 14px 0;
+      border-bottom: 1px solid #eee6df;
+    }
+    [data-shell-mode="teacher"] .teacher-schedule-row:last-child { border-bottom: 0; }
+    [data-shell-mode="teacher"] .teacher-schedule-row time { color: #9c665d; font-size: 14px; font-weight: 800; }
+    [data-shell-mode="teacher"] .teacher-schedule-copy,
+    [data-shell-mode="teacher"] .teacher-upcoming-copy { display: grid; min-width: 0; gap: 5px; text-align: left; }
+    [data-shell-mode="teacher"] .teacher-schedule-copy strong,
+    [data-shell-mode="teacher"] .teacher-upcoming-copy strong { overflow: hidden; color: #453d39; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+    [data-shell-mode="teacher"] .teacher-schedule-copy small,
+    [data-shell-mode="teacher"] .teacher-upcoming-copy small { color: #887c76; font-size: 11px; }
+    [data-shell-mode="teacher"] .teacher-status-pill {
+      display: inline-flex;
+      min-width: 48px;
+      min-height: 32px;
+      align-items: center;
+      justify-content: center;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: var(--teacher-blue);
+      color: var(--teacher-blue-ink);
+      font-size: 11px;
+      font-weight: 800;
+    }
+    [data-shell-mode="teacher"] .teacher-status-pill.regular { background: #f2eee9; color: #796d66; }
+    [data-shell-mode="teacher"] .teacher-upcoming-row {
+      display: grid;
+      width: 100%;
+      grid-template-columns: 54px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 76px;
+      padding: 12px 0;
+      border: 0;
+      border-bottom: 1px solid #eee6df;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    [data-shell-mode="teacher"] .teacher-upcoming-row:last-child { border-bottom: 0; }
+    [data-shell-mode="teacher"] .teacher-upcoming-row > svg { width: 16px; color: #aa9a92; }
+    [data-shell-mode="teacher"] .teacher-upcoming-date { color: #8b6159; font-size: 12px; font-weight: 800; }
+    [data-shell-mode="teacher"] .teacher-home-empty { display: grid; min-height: 130px; place-items: center; align-content: center; gap: 6px; color: #8f837d; text-align: center; }
+    [data-shell-mode="teacher"] .teacher-home-empty.compact { min-height: 108px; }
+    [data-shell-mode="teacher"] .teacher-home-empty svg { color: #9aafb4; }
+    [data-shell-mode="teacher"] .teacher-home-empty span { font-size: 12px; }
+    [data-shell-mode="teacher"] .teacher-flow-switcher {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      margin-bottom: 18px;
+      padding: 4px;
+      border: 1px solid var(--teacher-line);
+      border-radius: 14px;
+      background: #eee8e1;
+    }
+    [data-shell-mode="teacher"] .teacher-flow-switcher button {
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: #766b65;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 750;
+    }
+    [data-shell-mode="teacher"] .teacher-flow-switcher button.active { background: var(--teacher-card); color: #5e4f49; box-shadow: 0 2px 7px rgba(65, 52, 46, .07); }
+    [data-shell-mode="teacher"] .account-menu { display: grid; gap: 10px; }
+    [data-shell-mode="teacher"] .account-menu > button {
+      display: grid;
+      width: 100%;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 76px;
+      padding: 13px 15px;
+      border: 1px solid var(--teacher-line);
+      border-radius: 16px;
+      background: var(--teacher-card);
+      color: #4b423e;
+      cursor: pointer;
+      text-align: left;
+    }
+    [data-shell-mode="teacher"] .account-menu-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; background: var(--teacher-blush); color: #8d655d; }
+    [data-shell-mode="teacher"] .account-menu button:nth-child(2) .account-menu-icon { background: var(--teacher-blue); color: var(--teacher-blue-ink); }
+    [data-shell-mode="teacher"] .account-menu button > span:nth-child(2) { display: grid; gap: 3px; }
+    [data-shell-mode="teacher"] .account-menu small { color: #8a7e78; }
+    [data-shell-mode="teacher"] .account-count { display: inline-grid; min-width: 24px; min-height: 24px; place-items: center; border-radius: 999px; background: #986b62; color: #fff; font-size: 11px; }
+    [data-shell-mode="teacher"] .account-logout { display: flex; width: 100%; align-items: center; justify-content: center; gap: 8px; margin-top: 22px; border: 1px solid #ddc6c2; border-radius: 14px; background: transparent; color: #8f5f68; cursor: pointer; font-weight: 750; }
+
+    @media (min-width: 900px) {
+      [data-shell-mode="teacher"] .teacher-home-grid { grid-template-columns: minmax(0, 1.35fr) minmax(0, .65fr); align-items: start; }
+    }
+
+    @media (max-width: 760px) {
+      [data-shell-mode="teacher"] { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+      [data-shell-mode="teacher"] .topbar { min-height: 68px; padding: 8px 14px; background: var(--teacher-taupe); }
+      [data-shell-mode="teacher"] .topbar .brand { gap: 9px; }
+      [data-shell-mode="teacher"] .topbar .app-icon-mark { display: block; width: 42px; height: 42px; border-radius: 12px; }
+      [data-shell-mode="teacher"] .mobile-page-title { max-width: 145px; font-size: 17px; }
+      [data-shell-mode="teacher"] .current-user { max-width: 68px; min-height: 42px; display: grid; place-items: center; border-radius: 10px; font-size: 12px; }
+      [data-shell-mode="teacher"] .workspace { min-height: calc(100dvh - 68px); padding: 28px 20px calc(98px + env(safe-area-inset-bottom)); }
+      [data-shell-mode="teacher"] .view:not(#view-admin) { max-width: 100%; }
+      [data-shell-mode="teacher"] .teacher-home-heading { margin-bottom: 20px; }
+      [data-shell-mode="teacher"] .teacher-home-heading .eyebrow { display: none; }
+      [data-shell-mode="teacher"] .teacher-home-heading .section-heading { font-size: 29px; }
+      [data-shell-mode="teacher"] .teacher-month-chip { min-width: 48px; }
+      [data-shell-mode="teacher"] .teacher-date-strip {
+        width: calc(100% + 20px);
+        grid-auto-columns: calc((100% - 30px) / 3.15);
+        margin-right: -20px;
+        margin-bottom: 18px;
+        padding-right: 20px;
+        scrollbar-width: none;
+      }
+      [data-shell-mode="teacher"] .teacher-date-strip::-webkit-scrollbar { display: none; }
+      [data-shell-mode="teacher"] .teacher-date-card { min-height: 82px; border-radius: 15px; }
+      [data-shell-mode="teacher"] .teacher-home-grid { grid-template-columns: 1fr; gap: 16px; }
+      [data-shell-mode="teacher"] .teacher-home-panel { border-radius: 17px; }
+      [data-shell-mode="teacher"] .teacher-panel-heading { padding-right: 16px; padding-left: 16px; }
+      [data-shell-mode="teacher"] .teacher-schedule-list,
+      [data-shell-mode="teacher"] .teacher-upcoming-list { padding: 0 16px; }
+      [data-shell-mode="teacher"] .teacher-schedule-row { grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; min-height: 82px; }
+      [data-shell-mode="teacher"] .teacher-upcoming-row { grid-template-columns: 48px minmax(0, 1fr) auto; gap: 9px; }
+      [data-shell-mode="teacher"] .teacher-status-pill { min-width: 44px; padding: 5px 7px; }
+      [data-shell-mode="teacher"] .view-header { padding-bottom: 12px; }
+      [data-shell-mode="teacher"] .teacher-flow-switcher { position: sticky; top: 76px; z-index: 15; margin: -6px 0 16px; background: rgba(238, 232, 225, .94); backdrop-filter: blur(12px); }
+      [data-shell-mode="teacher"] .mobile-tabbar {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        min-height: 70px;
+        padding: 7px 7px calc(5px + env(safe-area-inset-bottom));
+        background: rgba(255, 253, 250, .97);
+      }
+      [data-shell-mode="teacher"] .mobile-tab-item { min-height: 54px; border-radius: 12px; color: #81756f; font-size: 10px; }
+      [data-shell-mode="teacher"] .mobile-tab-item.active { background: var(--teacher-blush); color: #7a554e; }
+      [data-shell-mode="teacher"] .mobile-tab-item.active::after { background: #a36f65; }
+      [data-shell-mode="teacher"] .account-view-header { margin-bottom: 15px; }
+      [data-shell-mode="teacher"] .account-menu > button { border-radius: 15px; }
+    }
+
+    @media (max-width: 380px) {
+      [data-shell-mode="teacher"] .workspace { padding-right: 14px; padding-left: 14px; }
+      [data-shell-mode="teacher"] .teacher-date-strip { width: calc(100% + 14px); margin-right: -14px; padding-right: 14px; }
+      [data-shell-mode="teacher"] .teacher-home-heading .section-heading { font-size: 26px; }
+      [data-shell-mode="teacher"] .mobile-page-title { max-width: 112px; }
+      [data-shell-mode="teacher"] .teacher-schedule-row { grid-template-columns: 50px minmax(0, 1fr); }
+      [data-shell-mode="teacher"] .teacher-status-pill { grid-column: 2; justify-self: start; }
+    }
   </style>
 </head>
 <body>
@@ -1734,15 +2006,12 @@
     <div class="app-layout">
       <aside class="sidebar">
         <nav class="primary-nav" aria-label="主要功能">
-          <button class="nav-item active" type="button" data-view="view-home"><i data-lucide="layout-dashboard"></i><span>首頁</span></button>
+          <button class="nav-item active" type="button" data-view="view-home"><i data-lucide="calendar-days"></i><span>課表</span></button>
           <button class="nav-item" type="button" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
-          <button class="nav-item" type="button" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>請假紀錄</span></button>
-          <button class="nav-item" type="button" data-view="view-claim"><i data-lucide="hand"></i><span>領取代課</span></button>
-          <button class="nav-item" type="button" data-view="view-mysubs"><i data-lucide="badge-check"></i><span>代課紀錄</span></button>
-          <button class="nav-item" type="button" data-view="view-practice"><i data-lucide="sparkles"></i><span>自主練習</span></button>
-          <button class="nav-item" type="button" data-view="view-payroll"><i data-lucide="receipt-text"></i><span>我的薪資</span></button>
-          <button class="nav-item" type="button" data-view="view-inbox"><i data-lucide="bell"></i><span>訊息</span><span id="sidebar-inbox-badge" class="nav-unread-badge" hidden>0</span></button>
-          <button id="admin-entry" class="nav-item" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
+          <button class="nav-item" type="button" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
+          <button class="nav-item" type="button" data-view="view-practice"><i data-lucide="sparkles"></i><span>練習</span></button>
+          <button class="nav-item" type="button" data-view="view-account"><i data-lucide="circle-user-round"></i><span>我的</span><span id="sidebar-inbox-badge" class="nav-unread-badge" hidden>0</span></button>
+          <button id="admin-entry" class="nav-item admin-direct-entry" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
         </nav>
       </aside>
 
@@ -1780,6 +2049,7 @@
         </section>
 
         <section id="view-leave" class="view">
+          <div class="teacher-flow-switcher" data-teacher-flow="leave" role="tablist" aria-label="請假功能"><button class="active" type="button" data-view="view-leave">登記請假</button><button type="button" data-view="view-myleaves">請假紀錄</button></div>
           <div class="view-header">
             <div><span class="eyebrow">Leave</span><h2 class="section-heading">請假登記</h2><p class="section-copy">可登記課程</p></div>
           </div>
@@ -1801,10 +2071,7 @@
         </section>
 
         <section id="view-myleaves" class="view">
-          <div class="mobile-record-switcher" role="tablist" aria-label="紀錄類型">
-            <button class="mobile-record-button active" type="button" data-view="view-myleaves">請假紀錄</button>
-            <button class="mobile-record-button" type="button" data-view="view-mysubs">代課紀錄</button>
-          </div>
+          <div class="teacher-flow-switcher" data-teacher-flow="leave" role="tablist" aria-label="請假功能"><button type="button" data-view="view-leave">登記請假</button><button class="active" type="button" data-view="view-myleaves">請假紀錄</button></div>
           <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的請假紀錄</h2><p class="section-copy">請假、代課與 OB 核對進度</p></div></div>
           <div class="record-period-bar">
             <div class="record-period-copy"><strong id="my-leaves-period-label">顯示本月＋下個月</strong><span>舊紀錄仍完整保留，可按月份查詢。</span></div>
@@ -1819,6 +2086,7 @@
         </section>
 
         <section id="view-claim" class="view">
+          <div class="teacher-flow-switcher" data-teacher-flow="substitute" role="tablist" aria-label="代課功能"><button class="active" type="button" data-view="view-claim">領取代課</button><button type="button" data-view="view-mysubs">代課紀錄</button></div>
           <div class="view-header"><div><span class="eyebrow">Substitute</span><h2 class="section-heading">領取代課</h2><p class="section-copy">目前開放的代課課程</p></div></div>
           <div class="claim-mode-switch" role="group" aria-label="代課安排方式">
             <label class="handling-option claim-mode-option"><input type="radio" name="claim-mode" value="ordinary" checked>普通代課</label>
@@ -1846,10 +2114,7 @@
         </section>
 
         <section id="view-mysubs" class="view">
-          <div class="mobile-record-switcher" role="tablist" aria-label="紀錄類型">
-            <button class="mobile-record-button" type="button" data-view="view-myleaves">請假紀錄</button>
-            <button class="mobile-record-button active" type="button" data-view="view-mysubs">代課紀錄</button>
-          </div>
+          <div class="teacher-flow-switcher" data-teacher-flow="substitute" role="tablist" aria-label="代課功能"><button type="button" data-view="view-claim">領取代課</button><button class="active" type="button" data-view="view-mysubs">代課紀錄</button></div>
           <div class="view-header"><div><span class="eyebrow">Records</span><h2 class="section-heading">我的代課紀錄</h2><p class="section-copy">已領取課程與改課內容</p></div></div>
           <div class="record-period-bar">
             <div class="record-period-copy"><strong id="my-subs-period-label">顯示本月＋下個月</strong><span>舊紀錄仍完整保留，可按月份查詢。</span></div>
@@ -1915,6 +2180,16 @@
           <div id="inbox-list" class="inbox-list" aria-live="polite"><div class="state">載入訊息中...</div></div>
         </section>
 
+        <section id="view-account" class="view">
+          <div class="view-header account-view-header"><div><span class="eyebrow">Account</span><h2 class="section-heading">我的</h2><p id="account-teacher-name" class="section-copy"></p></div></div>
+          <div class="account-menu">
+            <button type="button" data-view="view-payroll"><span class="account-menu-icon"><i data-lucide="receipt-text"></i></span><span><strong>我的薪資</strong><small>核對明細與確認薪資</small></span><i data-lucide="chevron-right"></i></button>
+            <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 45 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
+            <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
+          </div>
+          <button id="account-logout" class="account-logout" type="button"><i data-lucide="log-out"></i>登出這個帳號</button>
+        </section>
+
         <section id="view-admin" class="view">
           <div class="view-header">
             <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
@@ -1976,11 +2251,11 @@
       </main>
     </div>
     <nav id="mobile-tabbar" class="mobile-tabbar" aria-label="手機主要功能">
-      <button id="mobile-primary-entry" class="mobile-tab-item active" type="button" data-mobile-tab="primary" data-view="view-home"><i data-lucide="layout-dashboard"></i><span id="mobile-primary-label">首頁</span></button>
+      <button id="mobile-primary-entry" class="mobile-tab-item active" type="button" data-mobile-tab="schedule" data-view="view-home"><i data-lucide="calendar-days"></i><span id="mobile-primary-label">課表</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="leave" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
-      <button class="mobile-tab-item" type="button" data-mobile-tab="claim" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
-      <button class="mobile-tab-item" type="button" data-mobile-tab="records" data-view="view-myleaves"><i data-lucide="clipboard-list"></i><span>紀錄</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="substitute" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="practice" data-view="view-practice"><i data-lucide="sparkles"></i><span>練習</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="account" data-view="view-account"><i data-lucide="circle-user-round"></i><span>我的</span></button>
     </nav>
   </div>
 
@@ -2151,14 +2426,15 @@
 
     const byId = (id) => document.getElementById(id);
     const MOBILE_VIEW_TITLES = {
-      "view-home": "首頁",
-      "view-leave": "請假登記",
-      "view-myleaves": "我的紀錄",
-      "view-claim": "領取代課",
-      "view-mysubs": "我的紀錄",
+      "view-home": "我的課表",
+      "view-leave": "請假",
+      "view-myleaves": "請假",
+      "view-claim": "代課",
+      "view-mysubs": "代課",
       "view-practice": "自主練習",
       "view-payroll": "我的薪資",
       "view-inbox": "訊息",
+      "view-account": "我的",
       "view-admin": "管理工作台"
     };
 
@@ -2449,7 +2725,7 @@
     function renderInboxBadge(countValue) {
       const count = Math.max(0, Number(countValue) || 0);
       const label = count > 99 ? "99+" : String(count);
-      ["inbox-unread-badge", "sidebar-inbox-badge"].forEach((id) => {
+      ["inbox-unread-badge", "sidebar-inbox-badge", "account-inbox-badge"].forEach((id) => {
         const badge = byId(id);
         if (!badge) return;
         badge.textContent = label;
@@ -3444,15 +3720,16 @@
       byId("home-greeting").textContent = target
         ? `${target}，您好（由 ${authState.teacherName} 代操作）。`
         : `${authState.teacherName}，您好。`;
+      byId("account-teacher-name").textContent = target
+        ? `${target}｜${authState.teacherName} 代操作`
+        : authState.teacherName;
       updateMobileNavigation();
     }
 
     function updateMobileNavigation() {
-      const defaultView = authState.managementCapabilities.length ? "view-admin" : "view-home";
-      const targetView = authState.actingTeacherName ? "view-home" : defaultView;
       const primaryButton = byId("mobile-primary-entry");
-      primaryButton.dataset.view = targetView;
-      byId("mobile-primary-label").textContent = targetView === "view-admin" ? "管理" : "首頁";
+      primaryButton.dataset.view = "view-home";
+      byId("mobile-primary-label").textContent = "課表";
     }
 
     function getInitialAppRoute(searchValue) {
@@ -3466,6 +3743,7 @@
         practice: "view-practice",
         payroll: "view-payroll",
         inbox: "view-inbox",
+        account: "view-account",
         admin: "view-admin"
       };
       const allowedAdminTabs = new Set([
@@ -3482,15 +3760,16 @@
     }
 
     function syncMobileTabState(viewId) {
-      const activeTab = viewId === "view-myleaves" || viewId === "view-mysubs"
-        ? "records"
-        : ({
-          "view-home": "primary",
-          "view-admin": "primary",
+      const activeTab = ({
+          "view-home": "schedule",
           "view-leave": "leave",
-          "view-claim": "claim",
+          "view-myleaves": "leave",
+          "view-claim": "substitute",
+          "view-mysubs": "substitute",
           "view-practice": "practice",
-          "view-payroll": "payroll"
+          "view-payroll": "account",
+          "view-inbox": "account",
+          "view-account": "account"
         })[viewId] || "";
 
       document.querySelectorAll(".mobile-tab-item").forEach((button) => {
@@ -3499,7 +3778,7 @@
         if (active) button.setAttribute("aria-current", "page");
         else button.removeAttribute("aria-current");
       });
-      document.querySelectorAll(".mobile-record-button").forEach((button) => {
+      document.querySelectorAll(".teacher-flow-switcher button").forEach((button) => {
         const active = button.dataset.view === viewId;
         button.classList.toggle("active", active);
         button.setAttribute("aria-selected", String(active));
@@ -3700,6 +3979,7 @@
       byId("app-shell").hidden = false;
       updateActingMode();
       byId("admin-entry").hidden = !authState.managementCapabilities.length;
+      byId("account-admin-entry").hidden = !authState.managementCapabilities.length;
       byId("admin-act-as-control").hidden = !authState.managementCapabilities.includes("course_admin");
       byId("practice-refresh").hidden = !authState.managementCapabilities.includes("course_admin");
       document.querySelectorAll(".admin-tab[data-capability]").forEach((button) => {
@@ -3726,8 +4006,9 @@
         }
       }
       if (preserveView && targetView === activeViewId) {
+        byId("app-shell").dataset.shellMode = targetView === "view-admin" ? "admin" : "teacher";
         syncMobileTabState(targetView);
-        byId("back-button").classList.toggle("visible", targetView !== "view-home" && targetView !== "view-admin");
+        byId("back-button").classList.toggle("visible", !["view-home", "view-account", "view-admin"].includes(targetView));
       } else {
         switchView(targetView);
       }
@@ -3776,6 +4057,7 @@
       byId("push-permission-card").hidden = true;
       renderInboxBadge(0);
       byId("admin-entry").hidden = true;
+      byId("account-admin-entry").hidden = true;
       byId("app-shell").hidden = true;
       byId("auth-shell").hidden = false;
       byId("login-pin").value = "";
@@ -3858,18 +4140,22 @@
         return setNotice("需要管理權限。", "error");
       }
       activeViewId = viewId;
+      byId("app-shell").dataset.shellMode = viewId === "view-admin" ? "admin" : "teacher";
       clearNotice();
       document.querySelectorAll(".view").forEach((view) => {
         view.classList.toggle("active", view.id === viewId);
       });
+      const desktopDestination = viewId === "view-myleaves" ? "view-leave"
+        : viewId === "view-mysubs" ? "view-claim"
+          : ["view-payroll", "view-inbox"].includes(viewId) ? "view-account" : viewId;
       document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
-        const active = button.dataset.view === viewId;
+        const active = button.dataset.view === desktopDestination;
         button.classList.toggle("active", active);
         if (active) button.setAttribute("aria-current", "page");
         else button.removeAttribute("aria-current");
       });
       syncMobileTabState(viewId);
-      byId("back-button").classList.toggle("visible", viewId !== "view-home" && viewId !== "view-admin");
+      byId("back-button").classList.toggle("visible", !["view-home", "view-account", "view-admin"].includes(viewId));
 
       if (viewId === "view-home") loadTeacherHome();
       if (viewId === "view-leave") loadMyCourses();
@@ -7449,6 +7735,7 @@ https://sherryaerial-web.github.io/sub.html/
 
     byId("login-form").addEventListener("submit", login);
     byId("logout-button").addEventListener("click", logout);
+    byId("account-logout").addEventListener("click", logout);
     byId("acting-stop").addEventListener("click", stopActingAsTeacher);
     byId("admin-act-as").addEventListener("change", (event) => {
       if (event.target.value) startActingAsTeacher(event.target.value);

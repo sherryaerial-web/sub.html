@@ -45,6 +45,8 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
         setAttribute() {},
         removeAttribute() {},
         classList: { add() {}, remove() {}, toggle() {} },
+        showModal() { this.open = true; this.hidden = false; },
+        close() { this.open = false; this.hidden = true; },
       });
     }
     return elements.get(id);
@@ -551,7 +553,7 @@ test('monthly operations links to the existing VVIP administration tab', async (
   assert.ok(requestActions.includes('getVvipAdminDashboard'));
 });
 
-test('monthly operation button confirms an early action, posts once, and reloads the workflow', async () => {
+test('monthly operation button opens editable notification preview before posting', async () => {
   const dashboard = {
     teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'], closureWindows: [], schedules: [], history: [],
     monthlyOperations: {
@@ -560,29 +562,99 @@ test('monthly operation button confirms an early action, posts once, and reloads
       systemState: { leavePaused: true, claimsPaused: true, openInvitationCount: 0 },
       automaticReminders: [],
       operations: [
-        { id: 'open_leave', label: '開放請假並通知', recommendedAt: '2026-10-07 21:00', canExecute: true, early: true, status: 'pending', notificationPending: true },
+        { id: 'open_leave', label: '開放請假並通知', recommendedAt: '2026-10-07 21:00', canExecute: true, early: true, status: 'pending', notificationPending: true, notificationIds: ['open_leave'], pendingNotificationIds: ['open_leave'] },
       ],
-      templates: {},
+      templates: {
+        open_leave: { heading: '本月請假登記已開放', content: '請於期限內完成。', audienceMode: 'all' },
+      },
     },
   };
-  const { context, requestActions, submittedForms } = createFrontendRuntime({
+  const { context, requestActions, submittedForms, getElement } = createFrontendRuntime({
     getNotificationAdminDashboard: dashboard,
     executeMonthlyOperation: {
       action: 'open_leave', completed: true, alreadyCompleted: false, inProgress: false,
       notification: { accepted: true }, notifications: [{ accepted: true }],
     },
   });
-  const confirmations = [];
-  context.window.confirm = (message) => { confirmations.push(message); return true; };
   vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications';", context);
   await context.fetchNotificationAdminDashboard();
 
   await context.executeMonthlyOperation('open_leave');
 
-  assert.match(confirmations[0], /建議時間前/);
+  assert.equal(getElement('notification-preview-dialog').open, true);
+  assert.match(getElement('notification-preview-copy').textContent, /建議時間前/);
+  assert.equal(getElement('notification-preview-heading-0').value, '本月請假登記已開放');
+  assert.equal(getElement('notification-preview-content-0').value, '請於期限內完成。');
+  assert.equal(getElement('notification-preview-audience-0').textContent, '全部在職老師');
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'executeMonthlyOperation').length, 0);
+
+  getElement('notification-preview-heading-0').value = '今晚開放請假';
+  getElement('notification-preview-content-0').value = '請記得填寫。';
+  await context.confirmNotificationPreview({ preventDefault() {} });
+
   assert.equal(submittedForms.filter((form) => form.fields.action === 'executeMonthlyOperation').length, 1);
-  assert.equal(submittedForms.find((form) => form.fields.action === 'executeMonthlyOperation').fields.operation, 'open_leave');
+  const submission = submittedForms.find((form) => form.fields.action === 'executeMonthlyOperation');
+  assert.equal(submission.fields.operation, 'open_leave');
+  assert.deepEqual(JSON.parse(submission.fields.notificationOverrides), {
+    open_leave: { heading: '今晚開放請假', content: '請記得填寫。' },
+  });
   assert.ok(requestActions.filter((action) => action === 'getNotificationAdminDashboard').length >= 2);
+});
+
+test('manual notification does not send until its editable preview is confirmed', async () => {
+  const { context, submittedForms, getElement } = createFrontendRuntime({
+    sendManualNotification: { accepted: true, recipientCount: 2 },
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'],
+      monthlyOperations: null, closureWindows: [], schedules: [], history: [],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications'; notificationDashboard = { teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'], monthlyOperations: null, closureWindows: [], schedules: [], history: [] };", context);
+  getElement('manual-notification-heading').value = '原標題';
+  getElement('manual-notification-content').value = '原內容';
+  getElement('manual-notification-audience').value = 'admins';
+
+  await context.submitManualNotification();
+
+  assert.equal(getElement('notification-preview-dialog').open, true);
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'sendManualNotification').length, 0);
+  getElement('notification-preview-heading-0').value = '預覽修改標題';
+  getElement('notification-preview-content-0').value = '預覽修改內容';
+  await context.confirmNotificationPreview({ preventDefault() {} });
+
+  const submission = submittedForms.find((form) => form.fields.action === 'sendManualNotification');
+  assert.ok(submission);
+  assert.deepEqual(JSON.parse(submission.fields.notification), {
+    heading: '預覽修改標題', content: '預覽修改內容', audienceMode: 'admins', teacherNames: [],
+  });
+});
+
+test('sending a saved schedule now previews editable copy without changing its recipients', async () => {
+  const { context, submittedForms, getElement } = createFrontendRuntime({
+    sendNotificationScheduleNow: { accepted: true, recipientCount: 2 },
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'],
+      monthlyOperations: null, closureWindows: [], schedules: [], history: [],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications'; notificationDashboard = { teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'], monthlyOperations: null, closureWindows: [], schedules: [], history: [] };", context);
+
+  context.previewNotificationScheduleNow({
+    id: 'schedule-1', name: '月底提醒', heading: '原標題', content: '原內容',
+    audienceMode: 'admins', teacherNames: [],
+  });
+
+  assert.equal(getElement('notification-preview-dialog').open, true);
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'sendNotificationScheduleNow').length, 0);
+  getElement('notification-preview-heading-0').value = '本次標題';
+  getElement('notification-preview-content-0').value = '本次內容';
+  await context.confirmNotificationPreview({ preventDefault() {} });
+
+  const submission = submittedForms.find((form) => form.fields.action === 'sendNotificationScheduleNow');
+  assert.equal(submission.fields.scheduleId, 'schedule-1');
+  assert.deepEqual(JSON.parse(submission.fields.notificationOverride), {
+    heading: '本次標題', content: '本次內容',
+  });
 });
 
 test('teacher inbox exposes an unread badge history filters and mark-all control', async () => {

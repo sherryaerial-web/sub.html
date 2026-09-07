@@ -1487,7 +1487,7 @@ function getMonthlyOperationsSchedule_(monthKeyValue, substituteOpenedAtValue) {
     month: month,
     bookingDate: bookingDate,
     courseAdjustmentStartAt: month + '-01 21:00',
-    courseAdjustmentEndAt: month + '-05 21:00',
+    courseAdjustmentEndAt: month + '-04 21:00',
     leaveOpenReminderAt: month + '-07 21:00',
     leaveSuggestedCloseAt: leaveCloseDate + ' 21:00',
     leaveDeadlineAdminReminderAt: addMonthlyOperationsDays_(leaveCloseDate, -1) + ' 21:00',
@@ -1575,12 +1575,12 @@ function getDefaultMonthlyOperationsTemplates_() {
   return {
     course_adjustment_start: {
       heading: '本月課程調整開始',
-      content: '本月課程調整期間已開始，如需調整下月課程，請於期限內完成或告知管理員。',
+      content: '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前完成或告知管理員。',
       audienceMode: 'all'
     },
     course_adjustment_end: {
-      heading: '本月課程調整即將截止',
-      content: '本月課程調整即將截止，尚有調整需求請盡快完成或告知管理員。',
+      heading: '本月課程調整明天截止',
+      content: '本月課程調整明天 5 日截止，尚有調整需求請盡快完成或告知管理員。',
       audienceMode: 'all'
     },
     leave_open_admin: {
@@ -1661,6 +1661,16 @@ function getMonthlyOperationsTemplates_() {
     Object.keys(defaults).forEach(function(id) {
       if (!saved[id]) return;
       var copy = validateNotificationCopy_(saved[id].heading, saved[id].content);
+      if (id === 'course_adjustment_start' &&
+          copy.heading === '本月課程調整開始' &&
+          copy.content === '本月課程調整期間已開始，如需調整下月課程，請於期限內完成或告知管理員。') {
+        return;
+      }
+      if (id === 'course_adjustment_end' &&
+          copy.heading === '本月課程調整即將截止' &&
+          copy.content === '本月課程調整即將截止，尚有調整需求請盡快完成或告知管理員。') {
+        return;
+      }
       defaults[id] = {
         heading: copy.heading,
         content: copy.content,
@@ -1998,8 +2008,29 @@ function performMonthlyOperationMutation_(session, definition, monthKey) {
   return details;
 }
 
-function deliverMonthlyOperationNotifications_(monthKey, definition, actor) {
+function normalizeMonthlyOperationNotificationOverrides_(definition, overridesValue) {
+  var input = overridesValue && typeof overridesValue === 'object' && !Array.isArray(overridesValue)
+    ? overridesValue
+    : {};
+  var allowed = {};
+  definition.notificationIds.forEach(function(notificationId) { allowed[notificationId] = true; });
+  Object.keys(input).forEach(function(notificationId) {
+    if (!allowed[notificationId]) throw new Error('通知預覽包含不屬於本次操作的項目。');
+  });
+  var normalized = {};
+  definition.notificationIds.forEach(function(notificationId) {
+    if (!input[notificationId]) return;
+    normalized[notificationId] = validateNotificationCopy_(
+      input[notificationId].heading,
+      input[notificationId].content
+    );
+  });
+  return normalized;
+}
+
+function deliverMonthlyOperationNotifications_(monthKey, definition, actor, overridesValue) {
   var templates = getMonthlyOperationsTemplates_();
+  var overrides = normalizeMonthlyOperationNotificationOverrides_(definition, overridesValue);
   var deliveries = [];
   definition.notificationIds.forEach(function(notificationId) {
     var state = getMonthlyOperationsState_(monthKey);
@@ -2014,6 +2045,7 @@ function deliverMonthlyOperationNotifications_(monthKey, definition, actor) {
     }
     var template = templates[notificationId];
     if (!template) throw new Error('找不到月度營運通知範本：' + notificationId);
+    var copy = overrides[notificationId] || template;
     var eventKey = 'monthly_operations_' + monthKey.replace(/\D/g, '') + '_' + notificationId;
     var delivery = sendManagedNotification_(
       actor,
@@ -2021,8 +2053,8 @@ function deliverMonthlyOperationNotifications_(monthKey, definition, actor) {
       notificationId,
       template.audienceMode,
       [],
-      template.heading,
-      template.content,
+      copy.heading,
+      copy.content,
       eventKey
     );
     notificationState.eventKey = eventKey;
@@ -2037,9 +2069,13 @@ function deliverMonthlyOperationNotifications_(monthKey, definition, actor) {
   return deliveries;
 }
 
-function executeMonthlyOperation_(session, actionValue) {
+function executeMonthlyOperation_(session, actionValue, notificationOverridesValue) {
   var definition = getMonthlyOperationDefinition_(actionValue);
   var actor = assertCapabilitySession_(session, definition.requiredCapability);
+  var notificationOverrides = normalizeMonthlyOperationNotificationOverrides_(
+    definition,
+    notificationOverridesValue
+  );
   var monthKey = getCurrentMonthlyOperationsMonthKey_();
   var reservation = reserveMonthlyOperation_(monthKey, definition, actor);
   if (reservation.inProgress) {
@@ -2072,7 +2108,12 @@ function executeMonthlyOperation_(session, actionValue) {
       throw error;
     }
   }
-  var deliveries = deliverMonthlyOperationNotifications_(monthKey, definition, actor);
+  var deliveries = deliverMonthlyOperationNotifications_(
+    monthKey,
+    definition,
+    actor,
+    notificationOverrides
+  );
   return {
     action: definition.id,
     month: monthKey,
@@ -2256,21 +2297,24 @@ function setNotificationScheduleEnabled_(session, scheduleIdValue, enabledValue)
   return found;
 }
 
-function sendNotificationScheduleNow_(session, scheduleIdValue) {
+function sendNotificationScheduleNow_(session, scheduleIdValue, notificationOverrideValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var scheduleId = cleanText_(scheduleIdValue);
   var schedule = getNotificationSchedules_().filter(function(item) {
     return cleanText_(item.id) === scheduleId;
   })[0];
   if (!schedule) throw new Error('找不到這筆通知排程。');
+  var copy = notificationOverrideValue && typeof notificationOverrideValue === 'object'
+    ? validateNotificationCopy_(notificationOverrideValue.heading, notificationOverrideValue.content)
+    : { heading: schedule.heading, content: schedule.content };
   return sendManagedNotification_(
     actor,
     '排程手動送出',
     schedule.id,
     schedule.audienceMode,
     schedule.teacherNames,
-    schedule.heading,
-    schedule.content
+    copy.heading,
+    copy.content
   );
 }
 
@@ -2372,6 +2416,11 @@ function getMonthlyOperationsDashboard_(session) {
       lastError: cleanText_(operation.lastError),
       needsSync: needsSync,
       notificationPending: notificationPending,
+      notificationIds: notificationIds.slice(),
+      pendingNotificationIds: notificationIds.filter(function(notificationId) {
+        var notification = operation.notifications && operation.notifications[notificationId];
+        return !notification || !cleanText_(notification.sentAt);
+      }),
       details: operation.details || {}
     };
   });
@@ -6409,10 +6458,22 @@ function doPost(e) {
         );
       },
       sendNotificationScheduleNow: function() {
-        return sendNotificationScheduleNow_(session, parameters.scheduleId);
+        return sendNotificationScheduleNow_(
+          session,
+          parameters.scheduleId,
+          parameters.notificationOverride
+            ? parseJsonObject_(parameters.notificationOverride, '通知預覽')
+            : null
+        );
       },
       executeMonthlyOperation: function() {
-        return executeMonthlyOperation_(session, parameters.operation);
+        return executeMonthlyOperation_(
+          session,
+          parameters.operation,
+          parameters.notificationOverrides
+            ? parseJsonObject_(parameters.notificationOverrides, '通知預覽')
+            : null
+        );
       },
       saveMonthlyOperationsTemplates: function() {
         return saveMonthlyOperationsTemplates_(

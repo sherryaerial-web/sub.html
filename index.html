@@ -836,6 +836,10 @@
     .monthly-automatic-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
     .monthly-template-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
     .monthly-template-row:last-child { border-bottom: 0; }
+    .notification-preview-list { display: grid; gap: 12px; margin-top: 14px; }
+    .notification-preview-message { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .notification-preview-audience { color: var(--sea-800); font-size: 12px; font-weight: 750; }
+    .notification-preview-message textarea { min-height: 104px; resize: vertical; }
     .inbox-button { position: relative; flex: 0 0 auto; }
     .inbox-unread-badge,
     .nav-unread-badge {
@@ -1943,6 +1947,29 @@
     </div>
   </dialog>
 
+  <dialog id="notification-preview-dialog" aria-labelledby="notification-preview-title" aria-describedby="notification-preview-copy">
+    <form id="notification-preview-form" class="dialog-body">
+      <h3 id="notification-preview-title">預覽通知</h3>
+      <p id="notification-preview-copy" class="section-copy">確認收件人與文字後才會送出。</p>
+      <div class="notification-preview-list">
+        <section id="notification-preview-message-0" class="notification-preview-message">
+          <div id="notification-preview-audience-0" class="notification-preview-audience"></div>
+          <label class="notification-field">通知標題<input id="notification-preview-heading-0" class="text-input" type="text" maxlength="80" required></label>
+          <label class="notification-field">通知內容<textarea id="notification-preview-content-0" class="text-input" maxlength="500" required></textarea></label>
+        </section>
+        <section id="notification-preview-message-1" class="notification-preview-message" hidden>
+          <div id="notification-preview-audience-1" class="notification-preview-audience"></div>
+          <label class="notification-field">通知標題<input id="notification-preview-heading-1" class="text-input" type="text" maxlength="80"></label>
+          <label class="notification-field">通知內容<textarea id="notification-preview-content-1" class="text-input" maxlength="500"></textarea></label>
+        </section>
+      </div>
+      <div class="dialog-actions">
+        <button id="notification-preview-cancel" class="compact-button" type="button"><i data-lucide="arrow-left"></i>返回修改</button>
+        <button id="notification-preview-confirm" class="primary-button" type="submit"><i data-lucide="send"></i><span id="notification-preview-confirm-label">確認送出</span></button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="practice-dialog" aria-labelledby="practice-dialog-title">
     <form id="practice-form" class="dialog-body">
       <h3 id="practice-dialog-title" tabindex="-1" autofocus>登記自主練習</h3>
@@ -2007,6 +2034,7 @@
     const myPayrollSnapshotHtml = new Map();
     let activeAdminTab = "pendingInvitations";
     let requestDialogState = null;
+    let notificationPreviewState = null;
     let pushSdk = null;
     let pushSdkAppId = "";
     let pushIdentityExternalId = "";
@@ -2659,6 +2687,64 @@
         </label>`).join("")}</div>`;
     }
 
+    function notificationAudienceSummary(mode, teacherNames = []) {
+      if (mode !== "selected") return notificationAudienceLabel(mode, teacherNames);
+      return teacherNames.length
+        ? `${teacherNames.length} 位指定老師：${teacherNames.join("、")}`
+        : "尚未選擇指定老師";
+    }
+
+    function openNotificationPreview(options) {
+      const messages = Array.isArray(options.messages) ? options.messages.slice(0, 2) : [];
+      if (!messages.length) throw new Error("找不到要預覽的通知內容。");
+      notificationPreviewState = { messages, onConfirm: options.onConfirm };
+      byId("notification-preview-title").textContent = options.title || "預覽通知";
+      byId("notification-preview-copy").textContent = options.copy || "確認收件人與文字後才會送出。";
+      byId("notification-preview-confirm-label").textContent = options.confirmLabel || "確認送出";
+      [0, 1].forEach((index) => {
+        const message = messages[index];
+        const section = byId(`notification-preview-message-${index}`);
+        section.hidden = !message;
+        byId(`notification-preview-heading-${index}`).required = Boolean(message);
+        byId(`notification-preview-content-${index}`).required = Boolean(message);
+        byId(`notification-preview-heading-${index}`).value = message ? String(message.heading || "") : "";
+        byId(`notification-preview-content-${index}`).value = message ? String(message.content || "") : "";
+        byId(`notification-preview-audience-${index}`).textContent = message ? String(message.audienceLabel || "") : "";
+      });
+      const dialog = byId("notification-preview-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+      refreshIcons();
+    }
+
+    function closeNotificationPreview() {
+      notificationPreviewState = null;
+      const dialog = byId("notification-preview-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+    }
+
+    async function confirmNotificationPreview(event) {
+      if (event) event.preventDefault();
+      if (!notificationPreviewState) return;
+      const state = notificationPreviewState;
+      const messages = state.messages.map((message, index) => {
+        const heading = byId(`notification-preview-heading-${index}`).value.trim();
+        const content = byId(`notification-preview-content-${index}`).value.trim();
+        if (!heading) throw new Error("請填寫通知標題。");
+        if (!content) throw new Error("請填寫通知內容。");
+        return { ...message, heading, content };
+      });
+      const button = byId("notification-preview-confirm");
+      setButtonBusy(button, true, "送出中...");
+      try {
+        await state.onConfirm(messages);
+        closeNotificationPreview();
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
     function formatMonthlyOperationsAt(value) {
       const text = String(value || "").trim();
       const match = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2})$/.exec(text);
@@ -2838,12 +2924,46 @@
       const content = byId("manual-notification-content").value.trim();
       const audienceMode = byId("manual-notification-audience").value;
       const teacherNames = selectedNotificationRecipients("manual");
-      const audience = notificationAudienceLabel(audienceMode, teacherNames);
-      if (!window.confirm(`確定要將「${heading}」推播給${audience}？`)) return;
-      const result = await callApi("sendManualNotification", { notification: { heading, content, audienceMode, teacherNames } });
-      if (!result.accepted) throw new Error(result.error || "通知送出失敗，請稍後重試。");
-      setNotice(`通知已送出給 ${result.recipientCount} 位。`);
-      await fetchNotificationAdminDashboard();
+      openNotificationPreview({
+        title: "預覽手動推播",
+        messages: [{
+          id: "manual",
+          heading,
+          content,
+          audienceLabel: notificationAudienceSummary(audienceMode, teacherNames)
+        }],
+        onConfirm: async ([message]) => {
+          const result = await callApi("sendManualNotification", {
+            notification: { heading: message.heading, content: message.content, audienceMode, teacherNames }
+          });
+          if (!result.accepted) throw new Error(result.error || "通知送出失敗，請稍後重試。");
+          setNotice(`通知已送出給 ${result.recipientCount} 位。`);
+          await fetchNotificationAdminDashboard();
+        }
+      });
+    }
+
+    function previewNotificationScheduleNow(schedule) {
+      if (!schedule) throw new Error("找不到這筆通知排程。");
+      openNotificationPreview({
+        title: `預覽「${schedule.name}」`,
+        copy: "這次修改只影響立即送出的內容，不會覆蓋原排程。",
+        messages: [{
+          id: schedule.id,
+          heading: schedule.heading,
+          content: schedule.content,
+          audienceLabel: notificationAudienceSummary(schedule.audienceMode, schedule.teacherNames || [])
+        }],
+        onConfirm: async ([message]) => {
+          const result = await callApi("sendNotificationScheduleNow", {
+            scheduleId: schedule.id,
+            notificationOverride: { heading: message.heading, content: message.content }
+          });
+          if (!result.accepted) throw new Error(result.error || "通知送出失敗，請稍後重試。");
+          setNotice(`通知已送出給 ${result.recipientCount} 位。`);
+          await fetchNotificationAdminDashboard();
+        }
+      });
     }
 
     async function submitNotificationSchedule() {
@@ -2862,19 +2982,14 @@
       await fetchNotificationAdminDashboard();
     }
 
-    async function executeMonthlyOperation(operationId, button = null) {
-      const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
-      const operation = ((monthly && monthly.operations) || []).find((item) => item.id === operationId);
-      if (!operation) throw new Error("找不到這個月度營運操作。");
-      if (!operation.canExecute) throw new Error("請先完成上一個月度營運階段。");
+    async function performMonthlyOperation(operation, button, notificationOverrides = {}) {
       const retry = operation.status === "completed" && operation.notificationPending;
-      const confirmation = operation.early && !retry
-        ? `目前仍在建議時間前，確定要提前執行「${operation.label}」？`
-        : `確定要執行「${retry ? `${operation.label}（重試通知）` : operation.label}」？`;
-      if (!window.confirm(confirmation)) return;
       if (button) setButtonBusy(button, true, retry ? "重試中..." : "執行中...");
       try {
-        const result = await callApi("executeMonthlyOperation", { operation: operationId });
+        const result = await callApi("executeMonthlyOperation", {
+          operation: operation.id,
+          notificationOverrides
+        });
         if (result.inProgress) {
           setNotice("另一位管理者正在執行這項操作，稍後重新整理即可。", "error");
         } else {
@@ -2887,6 +3002,45 @@
       } finally {
         if (button) setButtonBusy(button, false, "");
       }
+    }
+
+    async function executeMonthlyOperation(operationId, button = null) {
+      const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
+      const operation = ((monthly && monthly.operations) || []).find((item) => item.id === operationId);
+      if (!operation) throw new Error("找不到這個月度營運操作。");
+      if (!operation.canExecute) throw new Error("請先完成上一個月度營運階段。");
+      const retry = operation.status === "completed" && operation.notificationPending;
+      const notificationIds = (operation.pendingNotificationIds || operation.notificationIds || []).slice();
+      if (!notificationIds.length) {
+        if (!window.confirm(`確定要執行「${operation.label}」？`)) return;
+        await performMonthlyOperation(operation, button);
+        return;
+      }
+      const messages = notificationIds.map((notificationId) => {
+        const template = monthly.templates && monthly.templates[notificationId];
+        if (!template) throw new Error(`找不到「${operation.label}」的通知文字。`);
+        return {
+          id: notificationId,
+          heading: template.heading,
+          content: template.content,
+          audienceLabel: notificationAudienceLabel(template.audienceMode)
+        };
+      });
+      openNotificationPreview({
+        title: `預覽「${retry ? `${operation.label}（重試通知）` : operation.label}」`,
+        copy: operation.early && !retry
+          ? "目前仍在建議時間前；確認後會提前執行操作並送出下列通知。"
+          : "確認後會執行操作並送出下列通知。",
+        confirmLabel: retry ? "確認重試通知" : "確認執行並送出",
+        messages,
+        onConfirm: async (editedMessages) => {
+          const notificationOverrides = Object.fromEntries(editedMessages.map((message) => [
+            message.id,
+            { heading: message.heading, content: message.content }
+          ]));
+          await performMonthlyOperation(operation, button, notificationOverrides);
+        }
+      });
     }
 
     async function submitMonthlyOperationsTemplates() {
@@ -6900,6 +7054,10 @@ https://sherryaerial-web.github.io/sub.html/
     byId("claim-success-records").addEventListener("click", openClaimRecordsFromSuccess);
     byId("request-form").addEventListener("submit", submitRequestDialog);
     byId("request-cancel").addEventListener("click", closeRequestDialog);
+    byId("notification-preview-form").addEventListener("submit", async (event) => {
+      try { await confirmNotificationPreview(event); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("notification-preview-cancel").addEventListener("click", closeNotificationPreview);
     byId("my-leaves-month-search").addEventListener("click", async () => {
       const month = byId("my-leaves-month").value;
       if (!month) {
@@ -7073,12 +7231,7 @@ https://sherryaerial-web.github.io/sub.html/
         }
         if (action === "send-notification-schedule-now") {
           const schedule = ((notificationDashboard && notificationDashboard.schedules) || []).find((item) => item.id === button.dataset.scheduleId);
-          if (!schedule) throw new Error("找不到這筆通知排程。");
-          if (!window.confirm(`確定現在送出「${schedule.name}」？`)) return;
-          const result = await callApi("sendNotificationScheduleNow", { scheduleId: schedule.id });
-          if (!result.accepted) throw new Error(result.error || "通知送出失敗，請稍後重試。");
-          setNotice(`通知已送出給 ${result.recipientCount} 位。`);
-          await fetchNotificationAdminDashboard();
+          previewNotificationScheduleNow(schedule);
           return;
         }
         if (action === "execute-monthly-operation") {

@@ -282,6 +282,30 @@ const fixtures = {
         updatedAt: "2026-08-31 22:30:00"
       }
     }
+  },
+  getNotificationAdminDashboard: {
+    teachers: ["Ivy", "Tako", "Ariel Lu"],
+    administrators: ["Ivy", "Tako"],
+    closureWindows: [
+      { stage: "第一輪", time: "22:30–22:34" },
+      { stage: "第二輪", time: "23:40–23:44" }
+    ],
+    schedules: [],
+    history: [],
+    monthlyOperations: {
+      month: "2026-09",
+      schedule: { bookingDate: "2026-09-18", substituteScheduleConflict: false },
+      systemState: { leavePaused: false, claimsPaused: false, openInvitationCount: 7 },
+      automaticReminders: [],
+      templates: {},
+      operations: [
+        { id: "open_leave", label: "開放請假並通知", recommendedAt: "2026-09-07 21:00", status: "completed", notificationPending: false },
+        { id: "leave_deadline", label: "發送請假截止提醒", recommendedAt: "2026-09-10 21:00", status: "pending", notificationPending: false },
+        { id: "close_leave", label: "結束請假", recommendedAt: "2026-09-11 21:00", status: "pending", notificationPending: false },
+        { id: "open_substitute", label: "開放代課／特別課並通知", recommendedAt: "2026-09-11 21:00", status: "pending", notificationPending: false },
+        { id: "close_substitute", label: "結束代課／特別課並通知", recommendedAt: "2026-09-13 21:00", status: "pending", notificationPending: false }
+      ]
+    }
   }
 };
 
@@ -687,15 +711,33 @@ try {
     await login(page, "Ivy");
     await openView(page, "view-admin");
     await page.locator("#admin-reminders .summary-item").first().waitFor();
+    results.push(await capture(page, viewport.name, "admin-0-home"));
+    const adminHomeLayout = await page.evaluate(() => {
+      const sections = document.querySelector(".admin-sections");
+      const home = document.querySelector(".admin-home-grid");
+      return {
+        pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        hasSections: Boolean(sections && sections.getBoundingClientRect().width > 0),
+        homeColumns: home ? getComputedStyle(home).gridTemplateColumns.split(" ").filter(Boolean).length : 0,
+      };
+    });
+    if (adminHomeLayout.pageOverflow) throw new Error(`${viewport.name}: admin home overflows horizontally`);
+    if (!adminHomeLayout.hasSections) throw new Error(`${viewport.name}: admin sections are not visible`);
+    if (viewport.width > 760 && adminHomeLayout.homeColumns !== 2) throw new Error(`${viewport.name}: admin home is not a two-column desktop layout`);
+    if (viewport.width <= 760 && adminHomeLayout.homeColumns !== 1) throw new Error(`${viewport.name}: admin home is not a one-column mobile layout`);
     const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "closureManagement", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {
       const tab = adminTabs[index];
+      const section = tab === "closureManagement" ? "operations" : "courses";
+      await page.locator(`[data-admin-section="${section}"]`).click();
       await page.locator(`[data-admin-tab="${tab}"]`).click();
       results.push(await capture(page, viewport.name, `admin-${index + 1}-${tab}`));
     }
+    await page.locator('[data-admin-section="payroll"]').click();
     await page.locator('[data-admin-tab="payroll"]').click();
     await page.locator(".payroll-toolbar").waitFor();
     results.push(await capture(page, viewport.name, "admin-7-payroll"));
+    await page.locator('[data-admin-section="practice"]').click();
     await page.locator('[data-admin-tab="practice"]').click();
     await page.locator(".practice-admin-card").first().waitFor();
     results.push(await capture(page, viewport.name, "admin-8-practice"));

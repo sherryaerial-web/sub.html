@@ -529,14 +529,20 @@ test('course administrators have one notification center for manual sends schedu
 
   assert.ok(requestActions.includes('getNotificationAdminDashboard'));
   const rendered = getElement('admin-tab-content').innerHTML;
-  assert.match(rendered, /每月營運流程/);
-  assert.match(rendered, /開放請假並通知/);
-  assert.match(rendered, /2026-10-23/);
-  assert.ok(rendered.indexOf('每月營運流程') < rendered.indexOf('id="manual-notification-form"'));
-  assert.match(rendered, /data-admin-action=["']open-monthly-vvip["']/);
+  assert.doesNotMatch(rendered, /每月營運流程/);
   assert.match(rendered, /id=["']manual-notification-form["']/);
+  assert.match(rendered, /id=["']monthly-operations-template-form["']/);
+  assert.match(rendered, /編輯月度通知文字/);
   assert.match(rendered, /22:30–22:34/);
   assert.match(rendered, /23:40–23:44/);
+
+  vm.runInContext("activeAdminSection = 'operations'; activeAdminTab = 'operationsOverview'; renderAdminTab(true);", context);
+  const operations = getElement('admin-tab-content').innerHTML;
+  assert.match(operations, /每月營運流程/);
+  assert.doesNotMatch(operations, /id=["']monthly-operations-template-form["']/);
+  assert.match(operations, /開放請假並通知/);
+  assert.match(operations, /2026-10-23/);
+  assert.match(operations, /data-admin-action=["']open-monthly-vvip["']/);
 });
 
 test('monthly operations links to the existing VVIP administration tab', async () => {
@@ -3055,6 +3061,28 @@ test('provides self-only payroll review and protected sync publish dispute contr
 test('admin queue rendering does not leak Array.map indexes into cards', () => {
   assert.doesNotMatch(html, /\.map\(renderAdminItem\)/);
   assert.match(html, /rows\.map\(\(row\)\s*=>\s*renderRow\(row\)\)/);
+});
+
+test('admin workspace groups legacy tools behind a task-first home without changing teacher navigation', () => {
+  const sectionNames = ['dashboard', 'courses', 'practice', 'payroll', 'operations', 'notifications', 'tools'];
+  sectionNames.forEach((section) => {
+    assert.match(html, new RegExp(`data-admin-section=["']${section}["']`));
+  });
+  assert.match(html, /今天要處理/);
+  assert.match(html, /本月流程/);
+  assert.match(html, /const ADMIN_TAB_SECTIONS\s*=/);
+  assert.match(html, /function renderAdminHome\s*\(/);
+  assert.match(html, /function renderAdminTools\s*\(/);
+  assert.match(html, /function renderNotificationToolsPanel\s*\(/);
+
+  const legacyTabMarkup = html.match(/<div[^>]*id=["']admin-subtabs["'][\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
+  const legacyTabs = legacyTabMarkup.match(/data-admin-tab=["'][^"']+["']/g) || [];
+  assert.equal(new Set(legacyTabs).size, 15);
+  ['admin-sync', 'admin-reconcile', 'admin-leave-pause', 'admin-export-all', 'admin-act-as'].forEach((id) => {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  });
+  assert.match(html, /data-view=["']view-leave["']/);
+  assert.match(html, /data-view=["']view-claim["']/);
 });
 
 test('optimizes login and navigation for the supplied four-digit PIN workflow', () => {

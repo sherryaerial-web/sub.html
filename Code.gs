@@ -1949,6 +1949,48 @@ function publishPreviousMonthPayrollForReview_(session, currentMonthValue) {
   return published;
 }
 
+function getPublishedPreviousMonthPayrollReview_(currentMonthValue) {
+  var targetMonth = getPreviousPayrollMonthKey_(currentMonthValue);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var summarySheet = ss.getSheetByName(SHEETS.PAYROLL_SUMMARIES);
+  var lineSheet = ss.getSheetByName(SHEETS.PAYROLL_LINES);
+  if (!summarySheet || !lineSheet) return null;
+  try {
+    assertHeaders_(summarySheet, SHEET_HEADERS.PAYROLL_SUMMARIES);
+    assertHeaders_(lineSheet, SHEET_HEADERS.PAYROLL_LINES);
+    var summaries = summarySheet.getDataRange().getValues().slice(1).filter(function(row) {
+      return normalizePayrollMonthValue_(row[0]) === targetMonth;
+    });
+    if (!summaries.length) return null;
+    var version = cleanText_(summaries[summaries.length - 1][8]);
+    if (!version) return null;
+    var currentSummaries = summaries.filter(function(row) {
+      return cleanText_(row[8]) === version;
+    });
+    var currentLines = lineSheet.getDataRange().getValues().slice(1).filter(function(row) {
+      return normalizePayrollMonthValue_(row[0]) === targetMonth && cleanText_(row[2]) === version;
+    });
+    var allPublished = currentSummaries.length > 0 && currentLines.length > 0 &&
+      currentSummaries.every(function(row) {
+        return cleanText_(row[9]) && cleanText_(row[9]) !== CONFIG.PAYROLL_DRAFT_STATUS;
+      }) && currentLines.every(function(row) {
+        return cleanText_(row[16]) && cleanText_(row[16]) !== CONFIG.PAYROLL_DRAFT_STATUS;
+      });
+    if (!allPublished) return null;
+    return {
+      month: targetMonth,
+      version: version,
+      teachers: currentSummaries.length,
+      lines: currentLines.length,
+      alreadyPublished: true,
+      completedAt: cleanText_(currentSummaries[currentSummaries.length - 1][11])
+    };
+  } catch (error) {
+    console.warn('無法核對上月薪資發布狀態，將沿用月度流程紀錄。', error);
+    return null;
+  }
+}
+
 function assertMonthlyOperationSequence_(definition, state) {
   if (!definition.prerequisite) return;
   var prerequisite = state.operations && state.operations[definition.prerequisite];
@@ -2420,18 +2462,24 @@ function getMonthlyOperationsDashboard_(session) {
     return cleanText_(row[4]) === CONFIG.INVITATION_OPEN_STATUS;
   }).length;
   var actorCapabilities = getSessionManagementCapabilities_(session);
+  var publishedPayrollReview = getPublishedPreviousMonthPayrollReview_(month);
   var operations = operationDefinitions.map(function(item) {
     var operation = state.operations[item[0]] || {};
+    var externallyCompletedPayroll = item[0] === 'publish_payroll_review' &&
+      !operation.completedAt && publishedPayrollReview;
+    var completedAt = cleanText_(operation.completedAt) ||
+      (externallyCompletedPayroll ? cleanText_(publishedPayrollReview.completedAt) : '');
+    var completed = Boolean(completedAt || externallyCompletedPayroll);
     var prerequisite = item[3] ? (state.operations[item[3]] || {}) : null;
     var definition = getMonthlyOperationDefinition_(item[0]);
     var notificationIds = definition.notificationIds;
     var permissionDenied = actorCapabilities.indexOf(definition.requiredCapability) === -1;
-    var notificationPending = notificationIds.some(function(notificationId) {
+    var notificationPending = !externallyCompletedPayroll && notificationIds.some(function(notificationId) {
       var notification = operation.notifications && operation.notifications[notificationId];
       return !notification || !cleanText_(notification.sentAt);
     });
     var needsSync = false;
-    if (operation.completedAt) {
+    if (completed) {
       if (item[0] === 'open_leave') needsSync = liveLeavePaused;
       else if (item[0] === 'close_leave') needsSync = !liveLeavePaused;
       else if (item[0] === 'open_substitute') needsSync = liveClaimsPaused;
@@ -2442,22 +2490,24 @@ function getMonthlyOperationsDashboard_(session) {
       label: item[1],
       recommendedAt: item[2],
       prerequisite: item[3],
-      canExecute: !permissionDenied && (!item[3] || Boolean(prerequisite && prerequisite.completedAt)),
+      canExecute: !externallyCompletedPayroll && !permissionDenied && (!item[3] || Boolean(prerequisite && prerequisite.completedAt)),
       permissionDenied: permissionDenied,
       requiredCapability: definition.requiredCapability,
       early: now < item[2],
-      status: operation.completedAt ? 'completed' : (cleanText_(operation.status) || 'pending'),
-      completedAt: cleanText_(operation.completedAt),
-      actor: cleanText_(operation.actor),
+      status: completed ? 'completed' : (cleanText_(operation.status) || 'pending'),
+      completedAt: completedAt,
+      actor: cleanText_(operation.actor) || (externallyCompletedPayroll ? '薪資系統' : ''),
       lastError: cleanText_(operation.lastError),
       needsSync: needsSync,
       notificationPending: notificationPending,
       notificationIds: notificationIds.slice(),
-      pendingNotificationIds: notificationIds.filter(function(notificationId) {
+      pendingNotificationIds: externallyCompletedPayroll ? [] : notificationIds.filter(function(notificationId) {
         var notification = operation.notifications && operation.notifications[notificationId];
         return !notification || !cleanText_(notification.sentAt);
       }),
-      details: operation.details || {}
+      details: externallyCompletedPayroll
+        ? { payroll: publishedPayrollReview }
+        : (operation.details || {})
     };
   });
   return {

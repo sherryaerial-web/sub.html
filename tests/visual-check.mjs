@@ -718,13 +718,14 @@ try {
       return {
         pageOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
         hasSections: Boolean(sections && sections.getBoundingClientRect().width > 0),
+        sectionDisplay: sections ? getComputedStyle(sections).display : "",
         homeColumns: home ? getComputedStyle(home).gridTemplateColumns.split(" ").filter(Boolean).length : 0,
       };
     });
     if (adminHomeLayout.pageOverflow) throw new Error(`${viewport.name}: admin home overflows horizontally`);
     if (!adminHomeLayout.hasSections) throw new Error(`${viewport.name}: admin sections are not visible`);
-    if (viewport.width > 760 && adminHomeLayout.homeColumns !== 2) throw new Error(`${viewport.name}: admin home is not a two-column desktop layout`);
-    if (viewport.width <= 760 && adminHomeLayout.homeColumns !== 1) throw new Error(`${viewport.name}: admin home is not a one-column mobile layout`);
+    if (adminHomeLayout.sectionDisplay !== "flex") throw new Error(`${viewport.name}: admin sections are not in the top horizontal bar`);
+    if (adminHomeLayout.homeColumns !== 1) throw new Error(`${viewport.name}: admin home is not a one-column task flow`);
     const adminTabs = ["pendingInvitations", "missingObCancellations", "activeInvitees", "obWork", "closureManagement", "changeRequests", "exceptions", "completed"];
     for (let index = 0; index < adminTabs.length; index += 1) {
       const tab = adminTabs[index];

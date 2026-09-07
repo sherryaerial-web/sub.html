@@ -3229,6 +3229,14 @@ test('admin workspace groups legacy tools behind a task-first home without chang
   assert.match(html, /data-view=["']view-claim["']/);
 });
 
+test('admin workspace uses a top section bar and a compact next-action home', () => {
+  assert.match(html, /\.admin-layout\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(html, /\.admin-sections\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/s);
+  assert.match(html, /function renderAdminHome\s*\([\s\S]*monthly-next-card/);
+  assert.doesNotMatch(html, /function renderAdminHome\s*\([\s\S]*operations\.slice\(0,\s*5\)/);
+  assert.match(html, /admin-home-actions-wide/);
+});
+
 test('optimizes login and navigation for the supplied four-digit PIN workflow', () => {
   assert.match(html, /id=["']login-pin["'][^>]*maxlength=["']4["']/s);
   assert.match(html, /id=["']login-pin["'][^>]*pattern=["']\[0-9\]\{4\}["']/s);

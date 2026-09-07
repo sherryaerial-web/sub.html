@@ -772,23 +772,30 @@
     .admin-all-clear { display: flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--success); font-size: 12px; font-weight: 700; }
     .admin-all-clear > svg.lucide { width: 17px; height: 17px; }
     .admin-workspace { min-width: 0; }
-    .admin-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .admin-layout { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
     .admin-sections {
       position: sticky;
-      top: 82px;
-      display: grid;
-      gap: 5px;
-      padding: 7px;
+      top: 72px;
+      z-index: 19;
+      display: flex;
+      gap: 4px;
+      padding: 6px;
+      overflow-x: auto;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
       box-shadow: var(--shadow-sm);
+      scrollbar-width: none;
     }
+    .admin-sections::-webkit-scrollbar { display: none; }
     .admin-section {
       display: flex;
-      width: 100%;
+      width: auto;
+      min-width: max-content;
+      flex: 1 0 auto;
       min-height: 42px;
       align-items: center;
+      justify-content: center;
       gap: 9px;
       padding: 9px 10px;
       border: 1px solid transparent;
@@ -798,7 +805,7 @@
       cursor: pointer;
       font-size: 12px;
       font-weight: 750;
-      text-align: left;
+      text-align: center;
     }
     .admin-section:hover { background: var(--soft); color: var(--sea-800); }
     .admin-section.active { border-color: #d2beb7; background: var(--aqua-100); color: var(--sea-800); }
@@ -808,7 +815,7 @@
     .admin-priority-head, .admin-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
     .admin-priority-head h3, .admin-panel-heading h3 { margin: 0; font-size: 16px; }
     .admin-priority-head span, .admin-panel-heading span { color: var(--muted); font-size: 11px; }
-    .admin-home-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(250px, .65fr); gap: 14px; }
+    .admin-home-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
     .admin-home-card { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
     .admin-home-flow { display: grid; gap: 8px; }
     .admin-home-flow-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px; border-radius: 8px; background: var(--soft); }
@@ -817,6 +824,7 @@
     .admin-home-flow-row strong { display: block; font-size: 13px; }
     .admin-home-flow-row small { color: var(--muted); }
     .admin-home-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .admin-home-actions-wide { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .admin-home-action { display: flex; min-height: 74px; align-items: flex-start; flex-direction: column; justify-content: space-between; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); color: var(--ink); cursor: pointer; text-align: left; }
     .admin-home-action:hover { border-color: #c9b7b1; background: var(--aqua-50); }
     .admin-home-action strong { font-size: 13px; }
@@ -6421,22 +6429,26 @@
       const content = byId("admin-tab-content");
       const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
       const operations = (monthly && monthly.operations) || [];
-      const flowRows = operations.slice(0, 5).map((item, index) => {
-        const completed = item.status === "completed" && !item.notificationPending;
-        return `<div class="admin-home-flow-row${completed ? " is-done" : ""}">
-          <span class="admin-home-flow-step">${completed ? "✓" : index + 1}</span>
-          <span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(formatMonthlyOperationsAt(item.recommendedAt))}</small></span>
-          <span class="status-pill">${escapeHtml(monthlyOperationStatusLabel(item))}</span>
-        </div>`;
-      }).join("");
+      const notificationRetry = operations.find((item) => item.status === "completed" && item.notificationPending && item.canExecute);
+      const nextOperation = notificationRetry || operations.find((item) => item.status !== "completed" && item.canExecute) || null;
+      const nextRetry = Boolean(nextOperation && nextOperation.status === "completed" && nextOperation.notificationPending);
+      const nextAction = nextOperation ? `<article class="monthly-next-card">
+        <div>
+          <div class="monthly-next-label">本月下一步</div>
+          <h3 class="monthly-next-title">${escapeHtml(nextOperation.label)}</h3>
+          <div class="item-meta">建議時間：${escapeHtml(formatMonthlyOperationsAt(nextOperation.recommendedAt))}</div>
+          <div class="monthly-operation-status"><span class="status-pill">${escapeHtml(monthlyOperationStatusLabel(nextOperation))}</span></div>
+        </div>
+        <button class="${nextRetry ? "danger-button" : "primary-button"} inline-button" type="button" data-admin-action="execute-monthly-operation" data-operation-id="${escapeHtml(nextOperation.id)}"><i data-lucide="${nextRetry ? "refresh-cw" : "play"}"></i>${escapeHtml(nextRetry ? "重試通知" : nextOperation.label)}</button>
+      </article>` : `<article class="monthly-next-card"><div><div class="monthly-next-label">本月進度</div><h3 class="monthly-next-title">目前沒有待處理流程</h3></div></article>`;
       content.innerHTML = `<div class="admin-home-grid">
         <section class="admin-home-card">
-          <div class="admin-panel-heading"><h3>本月流程</h3><button class="compact-button" type="button" data-admin-go-section="operations">查看全部</button></div>
-          ${monthly ? `<div class="item-meta" style="margin-bottom:10px">${escapeHtml(monthly.month)}｜一般預約日 ${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</div>${flowRows || '<div class="state">本月目前沒有待執行流程</div>'}` : '<div class="state">載入本月流程中...</div>'}
+          <div class="admin-panel-heading"><h3>本月流程</h3><button class="compact-button" type="button" data-admin-go-section="operations">查看完整流程</button></div>
+          ${monthly ? `<div class="item-meta" style="margin-bottom:10px">${escapeHtml(monthly.month)}｜一般預約日 ${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</div>${nextAction}` : '<div class="state">載入本月流程中...</div>'}
         </section>
         <section class="admin-home-card">
           <div class="admin-panel-heading"><h3>常用操作</h3><span>快速前往</span></div>
-          <div class="admin-home-actions">
+          <div class="admin-home-actions admin-home-actions-wide">
             <button class="admin-home-action" type="button" data-admin-go-tab="pendingInvitations"><i data-lucide="send"></i><strong>代課邀請</strong><span>開放與追蹤領課</span></button>
             <button class="admin-home-action" type="button" data-admin-go-tab="obWork"><i data-lucide="database"></i><strong>處理 OB</strong><span>核對課程差異</span></button>
             <button class="admin-home-action" type="button" data-admin-go-tab="practice"><i data-lucide="sparkles"></i><strong>自主練習</strong><span>查看登記與異常</span></button>

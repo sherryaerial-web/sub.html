@@ -3963,6 +3963,30 @@ test('monthly payroll review publishes the previous month once and notifies ever
   assert.equal(backend.getPreviousPayrollMonthKey_('2026-01'), '2025-12');
 });
 
+test('monthly operations treats an already published payroll review as completed even when workflow history is missing', () => {
+  const { backend, adminSession, spreadsheet } = createInvitationBackend();
+  const month = '2026-08';
+  spreadsheet.sheets.push(
+    createSheetFixture('薪資明細', [
+      EXPECTED_PAYROLL_LINE_HEADERS,
+      [month, 'cal-1:老師甲', 'version-1', 'cal-1', '老師甲', '2026/08/01', '10:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '待確認', '2026-09-01 21:00:00'],
+    ]),
+    createSheetFixture('薪資結算', [
+      EXPECTED_PAYROLL_SUMMARY_HEADERS,
+      [month, '老師甲', 900, 0, 0, 0, 900, 1200, 'version-1', '待確認', '', '2026-09-01 21:00:00'],
+    ])
+  );
+  backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+
+  const dashboard = backend.getMonthlyOperationsDashboard_(adminSession);
+  const payrollOperation = dashboard.operations.find((item) => item.id === 'publish_payroll_review');
+
+  assert.equal(payrollOperation.status, 'completed');
+  assert.equal(payrollOperation.canExecute, false);
+  assert.equal(payrollOperation.notificationPending, false);
+  assert.equal(payrollOperation.details.payroll.alreadyPublished, true);
+});
+
 test('monthly payroll review requires payroll-admin permission and never notifies on failure', () => {
   const { backend, spreadsheet } = createInvitationBackend();
   const lines = createSheetFixture('薪資明細', [EXPECTED_PAYROLL_LINE_HEADERS]);

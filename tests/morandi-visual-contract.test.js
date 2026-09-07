@@ -68,8 +68,10 @@ test('mobile app shell groups records and keeps primary actions reachable', () =
 test('management workspace uses a task-first home and responsive section navigation', () => {
   const html = pages[0];
 
-  assert.match(html, /\.admin-layout\s*\{[^}]*grid-template-columns:\s*190px\s+minmax\(0,\s*1fr\)/s);
-  assert.match(html, /\.admin-home-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s+minmax\(250px,\s*\.65fr\)/s);
+  assert.match(html, /\.admin-layout\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(html, /\.admin-sections\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/s);
+  assert.match(html, /\.admin-home-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
+  assert.match(html, /\.admin-home-actions-wide\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.admin-layout\s*\{[^}]*grid-template-columns:\s*1fr/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.admin-sections\s*\{[^}]*overflow-x:\s*auto/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.admin-home-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);

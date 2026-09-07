@@ -1761,47 +1761,21 @@
           </div>
         </aside>
         <section id="view-home" class="view active">
-          <div class="view-header">
-            <div>
-              <span class="eyebrow">Workspace</span>
-              <h2 class="section-heading">教室工作台</h2>
-            </div>
+          <div class="teacher-home-heading">
+            <div><span class="eyebrow">Schedule</span><h2 class="section-heading">近期課程</h2><p id="teacher-home-summary" class="section-copy">載入本週課表中…</p></div>
+            <span id="teacher-home-month" class="teacher-month-chip"></span>
           </div>
-          <div class="home-welcome">
-            <i data-lucide="circle-user-round"></i>
-            <p id="home-greeting" class="section-copy"></p>
-          </div>
-          <div class="home-actions">
-            <button class="action-button" type="button" data-view="view-leave">
-              <span class="action-icon"><i data-lucide="calendar-plus"></i></span>
-              <span><span class="action-title">請假登記</span><span class="action-copy">選擇日期與課程</span></span>
-              <i class="action-arrow" data-lucide="chevron-right"></i>
-            </button>
-            <button class="action-button" type="button" data-view="view-myleaves">
-              <span class="action-icon"><i data-lucide="clipboard-list"></i></span>
-              <span><span class="action-title">我的請假紀錄</span><span class="action-copy">查看處理進度</span></span>
-              <i class="action-arrow" data-lucide="chevron-right"></i>
-            </button>
-            <button class="action-button" type="button" data-view="view-claim">
-              <span class="action-icon"><i data-lucide="hand"></i></span>
-              <span><span class="action-title">尋找與領取代課</span><span class="action-copy">查看開放課程</span></span>
-              <i class="action-arrow" data-lucide="chevron-right"></i>
-            </button>
-            <button class="action-button" type="button" data-view="view-mysubs">
-              <span class="action-icon"><i data-lucide="badge-check"></i></span>
-              <span><span class="action-title">查看我的代課紀錄</span><span class="action-copy">確認課程與改課內容</span></span>
-              <i class="action-arrow" data-lucide="chevron-right"></i>
-            </button>
-            <button class="action-button" type="button" data-view="view-practice">
-              <span class="action-icon"><i data-lucide="sparkles"></i></span>
-              <span><span class="action-title">登記自主練習</span><span class="action-copy">看教室空檔、加入或候補</span></span>
-              <i class="action-arrow" data-lucide="chevron-right"></i>
-            </button>
-            <button class="action-button" type="button" data-view="view-payroll">
-              <span class="action-icon"><i data-lucide="receipt-text"></i></span>
-              <span><span class="action-title">查看我的薪資</span><span class="action-copy">核對明細與確認薪資</span></span>
-              <i class="action-arrow" data-lucide="chevron-right"></i>
-            </button>
+          <p id="home-greeting" class="sr-only"></p>
+          <div id="teacher-home-dates" class="teacher-date-strip" aria-label="選擇日期"></div>
+          <div class="teacher-home-grid">
+            <section class="teacher-home-panel">
+              <div class="teacher-panel-heading"><strong id="teacher-home-selected-label">今天</strong><button id="teacher-home-full-schedule" class="teacher-text-button" type="button">完整課表 <i data-lucide="arrow-right"></i></button></div>
+              <div id="teacher-home-schedule" class="teacher-schedule-list"><div class="state">載入課表中…</div></div>
+            </section>
+            <section class="teacher-home-panel">
+              <div class="teacher-panel-heading"><strong>接下來</strong><span id="teacher-home-pending" class="teacher-panel-count"></span></div>
+              <div id="teacher-home-upcoming" class="teacher-upcoming-list"><div class="state">載入待辦中…</div></div>
+            </section>
           </div>
         </section>
 
@@ -2109,6 +2083,9 @@
 
     const authState = { sessionToken: "", teacherName: "", actingTeacherName: "", role: "", managementCapabilities: [] };
     let globalCourseList = [];
+    let teacherHomeDashboard = null;
+    let teacherHomeSelectedDate = "";
+    let teacherHomeExpanded = false;
     let pendingLeaves = [];
     let claimOptions = { capabilities: [], classes: [] };
     let claimPageState = "notInvited";
@@ -2350,6 +2327,98 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
+    }
+
+    function getTeacherHomeDateParts(dateValue) {
+      const match = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(String(dateValue || ""));
+      if (!match) return { short: "", weekday: "", full: "" };
+      const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+      const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getUTCDay()];
+      return { short: `${match[2]}/${match[3]}`, weekday, full: `${match[2]}/${match[3]}（${weekday}）` };
+    }
+
+    function getTeacherHomeViewId(targetView) {
+      return ({
+        leave: "view-leave",
+        myleaves: "view-myleaves",
+        claim: "view-claim",
+        mysubs: "view-mysubs",
+        practice: "view-practice",
+        payroll: "view-payroll",
+        inbox: "view-inbox"
+      })[targetView] || "view-home";
+    }
+
+    function renderTeacherHomeDateStrip() {
+      const data = teacherHomeDashboard || { dates: [], scheduleByDate: {} };
+      const initialDates = Array.isArray(data.dates) ? data.dates : [];
+      const visibleDates = teacherHomeExpanded
+        ? [...new Set(initialDates.map((item) => item.date).concat(Object.keys(data.scheduleByDate || {})))]
+            .sort().map((date) => ({ date, hasSchedule: !!(data.scheduleByDate || {})[date] }))
+        : initialDates;
+      byId("teacher-home-dates").innerHTML = visibleDates.map((item) => {
+        const parts = getTeacherHomeDateParts(item.date);
+        const selected = item.date === teacherHomeSelectedDate;
+        return `<button class="teacher-date-card${selected ? " active" : ""}" type="button" data-teacher-home-date="${escapeHtml(item.date)}" aria-pressed="${selected}"><strong>${escapeHtml(parts.short)}</strong><span>${escapeHtml(parts.weekday)}</span>${item.hasSchedule ? '<i aria-hidden="true"></i>' : ""}</button>`;
+      }).join("");
+    }
+
+    function selectTeacherHomeDate(dateValue) {
+      if (!teacherHomeDashboard) return;
+      teacherHomeSelectedDate = String(dateValue || teacherHomeDashboard.today || "");
+      renderTeacherHomeDateStrip();
+      const parts = getTeacherHomeDateParts(teacherHomeSelectedDate);
+      byId("teacher-home-selected-label").textContent = teacherHomeSelectedDate === teacherHomeDashboard.today
+        ? `今天 · ${parts.full}`
+        : parts.full;
+      const items = (teacherHomeDashboard.scheduleByDate || {})[teacherHomeSelectedDate] || [];
+      byId("teacher-home-schedule").innerHTML = items.length ? items.map((item) => `
+        <article class="teacher-schedule-row">
+          <time>${escapeHtml(item.startTime)}</time>
+          <span class="teacher-schedule-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.room ? `${item.room} 教室` : "", `${item.startTime}–${item.endTime}`].filter(Boolean).join(" · "))}</small></span>
+          <span class="teacher-status-pill ${item.kind === "substitute" ? "substitute" : "regular"}">${escapeHtml(item.status)}</span>
+        </article>
+      `).join("") : '<div class="teacher-home-empty"><i data-lucide="calendar-check"></i><strong>這天沒有課程</strong><span>可以安排自己的時間。</span></div>';
+      refreshIcons();
+    }
+
+    function renderTeacherHome(data) {
+      teacherHomeDashboard = data || { dates: [], scheduleByDate: {}, upcoming: [], weekSummary: {} };
+      const summary = teacherHomeDashboard.weekSummary || {};
+      byId("teacher-home-summary").innerHTML = `本週 ${Number(summary.regular || 0)} 堂課 <span aria-hidden="true">·</span> ${Number(summary.substitute || 0)} 堂代課`;
+      byId("teacher-home-month").textContent = teacherHomeDashboard.monthLabel || "";
+      const upcoming = Array.isArray(teacherHomeDashboard.upcoming) ? teacherHomeDashboard.upcoming : [];
+      byId("teacher-home-pending").textContent = teacherHomeDashboard.pendingCount ? `${teacherHomeDashboard.pendingCount} 件待處理` : "";
+      byId("teacher-home-upcoming").innerHTML = upcoming.length ? upcoming.map((item) => {
+        const parts = getTeacherHomeDateParts(item.date);
+        return `<button class="teacher-upcoming-row" type="button" data-view="${escapeHtml(getTeacherHomeViewId(item.targetView))}"><span class="teacher-upcoming-date">${escapeHtml(parts.short)}</span><span class="teacher-upcoming-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.time, item.meta].filter(Boolean).join(" · "))}</small></span><i data-lucide="chevron-right"></i></button>`;
+      }).join("") : '<div class="teacher-home-empty compact"><i data-lucide="circle-check-big"></i><strong>目前沒有待處理事項</strong></div>';
+      const populatedDate = (teacherHomeDashboard.dates || []).find((item) => item.hasSchedule);
+      const selectedStillExists = teacherHomeSelectedDate &&
+        (teacherHomeDashboard.dates || []).some((item) => item.date === teacherHomeSelectedDate);
+      teacherHomeSelectedDate = selectedStillExists
+        ? teacherHomeSelectedDate
+        : (teacherHomeDashboard.today || (populatedDate && populatedDate.date) || "");
+      selectTeacherHomeDate(teacherHomeSelectedDate);
+      refreshIcons();
+    }
+
+    async function loadTeacherHome() {
+      const schedule = byId("teacher-home-schedule");
+      const upcoming = byId("teacher-home-upcoming");
+      if (!teacherHomeDashboard) {
+        schedule.innerHTML = '<div class="state">載入課表中…</div>';
+        upcoming.innerHTML = '<div class="state">載入待辦中…</div>';
+      }
+      try {
+        renderTeacherHome(await callPostApi("getTeacherHomeDashboard"));
+      } catch (error) {
+        if (!teacherHomeDashboard) {
+          schedule.innerHTML = '<div class="state error">課表暫時載入失敗，請稍後再試。</div>';
+          upcoming.innerHTML = '<div class="state">已保留目前頁面。</div>';
+        }
+        setNotice(error.message || "課表載入失敗。", "error");
+      }
     }
 
     function formatDateWithWeekday(dateValue) {
@@ -3346,6 +3415,9 @@
 
     function resetTeacherViewSnapshots() {
       globalCourseList = [];
+      teacherHomeDashboard = null;
+      teacherHomeSelectedDate = "";
+      teacherHomeExpanded = false;
       pendingLeaves = [];
       hasCourseSnapshot = false;
       hasClaimSnapshot = false;
@@ -3673,6 +3745,9 @@
       authState.role = "";
       authState.managementCapabilities = [];
       globalCourseList = [];
+      teacherHomeDashboard = null;
+      teacherHomeSelectedDate = "";
+      teacherHomeExpanded = false;
       pendingLeaves = [];
       claimPageState = "notInvited";
       hasCourseSnapshot = false;
@@ -3796,6 +3871,7 @@
       syncMobileTabState(viewId);
       byId("back-button").classList.toggle("visible", viewId !== "view-home" && viewId !== "view-admin");
 
+      if (viewId === "view-home") loadTeacherHome();
       if (viewId === "view-leave") loadMyCourses();
       if (viewId === "view-myleaves") fetchMyLeaves();
       if (viewId === "view-claim") fetchAvailableSubstitutes();
@@ -7386,6 +7462,22 @@ https://sherryaerial-web.github.io/sub.html/
       button.addEventListener("click", () => openAdminSection(button.dataset.adminSection));
     });
     byId("back-button").addEventListener("click", () => switchView("view-home"));
+    byId("teacher-home-dates").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-teacher-home-date]") : null;
+      if (button) selectTeacherHomeDate(button.dataset.teacherHomeDate);
+    });
+    byId("teacher-home-upcoming").addEventListener("click", (event) => {
+      const button = event.target.closest ? event.target.closest("[data-view]") : null;
+      if (button) switchView(button.dataset.view);
+    });
+    byId("teacher-home-full-schedule").addEventListener("click", () => {
+      teacherHomeExpanded = !teacherHomeExpanded;
+      byId("teacher-home-full-schedule").innerHTML = teacherHomeExpanded
+        ? '收起課表 <i data-lucide="arrow-up"></i>'
+        : '完整課表 <i data-lucide="arrow-right"></i>';
+      renderTeacherHomeDateStrip();
+      refreshIcons();
+    });
     byId("select-all-visible-dates").addEventListener("click", selectAllVisibleDates);
     byId("clear-leave-dates").addEventListener("click", clearLeaveDates);
     byId("leave-submit").addEventListener("click", submitLeave);

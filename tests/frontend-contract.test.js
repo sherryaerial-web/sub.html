@@ -357,6 +357,45 @@ test('keeps the three required workflows and mobile viewport', () => {
   assert.match(html, /查看我的代課紀錄/);
 });
 
+test('schedule-first teacher home renders dates, teaching roles, and upcoming routes', () => {
+  assert.match(html, /id=["']teacher-home-summary["']/);
+  assert.match(html, /id=["']teacher-home-dates["']/);
+  assert.match(html, /id=["']teacher-home-schedule["']/);
+  assert.match(html, /id=["']teacher-home-upcoming["']/);
+  assert.match(html, /近期課程/);
+  assert.match(html, /接下來/);
+
+  const { context, getElement } = createFrontendRuntime();
+  context.renderTeacherHome({
+    today: '2026/09/08',
+    monthLabel: '9 月',
+    weekSummary: { regular: 1, substitute: 1 },
+    dates: [
+      { date: '2026/09/08', hasSchedule: true },
+      { date: '2026/09/09', hasSchedule: false },
+    ],
+    scheduleByDate: {
+      '2026/09/08': [
+        { id: 'course:1', date: '2026/09/08', startTime: '18:30', endTime: '19:30', room: 'A', title: 'A－舞綢 Lv.1', kind: 'regular', status: '授課' },
+        { id: 'substitute:2', date: '2026/09/08', startTime: '20:00', endTime: '21:00', room: 'C', title: 'C－空環 Lv.2', kind: 'substitute', status: '代課' },
+      ],
+    },
+    upcoming: [
+      { id: 'practice:1', date: '2026/09/10', time: '14:00', title: '自主練習', meta: 'C 教室｜已成立', targetView: 'practice' },
+      { id: 'leave:1', date: '2026/09/12', time: '18:30', title: 'A－空環 Lv.0', meta: '請假處理中', targetView: 'myleaves' },
+    ],
+    pendingCount: 1,
+  });
+
+  assert.match(getElement('teacher-home-summary').innerHTML, /本週 1 堂課/);
+  assert.match(getElement('teacher-home-summary').innerHTML, /1 堂代課/);
+  assert.match(getElement('teacher-home-dates').innerHTML, /09\/08/);
+  assert.match(getElement('teacher-home-schedule').innerHTML, /授課/);
+  assert.match(getElement('teacher-home-schedule').innerHTML, /代課/);
+  assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-practice"/);
+  assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-myleaves"/);
+});
+
 test('shows backend errors instead of always claiming success', () => {
   assert.match(html, /throw new Error\(payload\.message/);
   assert.match(html, /catch\s*\(error\)/);

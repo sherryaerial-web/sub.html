@@ -2068,6 +2068,74 @@ test('getMyCourses hides active leave IDs but keeps cancelled leave courses avai
   assert.deepEqual(result.map((item) => item['OB Calendar ID']), ['calendar-cancelled']);
 });
 
+test('teacher home dashboard returns only the acting teacher schedule in chronological order without writes', () => {
+  const fixture = createLeaveBackend({
+    courseRows: [
+      ['2026/09/09', '18:30', 'A－舞綢 Lv.1', '老師乙', 'calendar-other', 'class-other', 'teacher-b', '否', ''],
+      ['2026/09/08', '20:00', 'B－空環 Lv.1', '老師甲', 'calendar-regular-2', 'class-a2', 'teacher-a', '否', ''],
+      ['2026/09/08', '18:30', 'A－空環 Lv.0', '老師甲', 'calendar-regular-1', 'class-a1', 'teacher-a', '否', ''],
+      ['2026/10/10', '10:00', 'C－空環 Lv.2', '老師甲', 'calendar-too-late', 'class-late', 'teacher-a', '否', ''],
+    ],
+    leaveRows: [
+      ['2026-09-01 12:00:00', '老師乙', '2026/09/08', '19:30', 'C－舞綢 Lv.2', '已領取', '老師甲', '', '', 'leave-claimed', 'calendar-claimed'],
+      ['2026-09-01 12:05:00', '老師甲', '2026/09/10', '19:30', 'D－空環 Lv.2', '已領取', '老師乙', '', '', 'leave-private', 'calendar-private'],
+    ],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-07T12:00:00+08:00').getTime();
+  const before = JSON.stringify(fixture.spreadsheet.sheets.map((sheet) => sheet.values));
+
+  const result = fixture.backend.getTeacherHomeDashboard_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.scheduleByDate['2026/09/08'])),
+    [
+      {
+        id: 'course:calendar-regular-1', date: '2026/09/08', startTime: '18:30', endTime: '19:30',
+        room: 'A', title: 'A－空環 Lv.0', kind: 'regular', status: '授課',
+      },
+      {
+        id: 'substitute:leave-claimed', date: '2026/09/08', startTime: '19:30', endTime: '20:30',
+        room: 'C', title: 'C－舞綢 Lv.2', kind: 'substitute', status: '代課',
+      },
+      {
+        id: 'course:calendar-regular-2', date: '2026/09/08', startTime: '20:00', endTime: '21:00',
+        room: 'B', title: 'B－空環 Lv.1', kind: 'regular', status: '授課',
+      },
+    ]
+  );
+  assert.equal(JSON.stringify(result).includes('calendar-other'), false);
+  assert.equal(JSON.stringify(result).includes('leave-private'), false);
+  assert.equal(JSON.stringify(result).includes('calendar-too-late'), false);
+  assert.equal(result.weekSummary.regular, 2);
+  assert.equal(result.weekSummary.substitute, 1);
+  assert.equal(JSON.stringify(fixture.spreadsheet.sheets.map((sheet) => sheet.values)), before);
+});
+
+test('teacher home dashboard POST route resolves the authorized acting teacher', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '管理員甲', '9999', { role: '管理員', managementCapabilities: 'course_admin' }),
+    createAccount(bootstrap, '老師甲', '1234'),
+  ], services);
+  const sessionToken = backend.authenticate_('管理員甲', '9999').sessionToken;
+  backend.assertTeacherExists_ = () => true;
+  let receivedTeacher = '';
+  backend.getTeacherHomeDashboard_ = (session) => {
+    receivedTeacher = session.teacherName;
+    return { scheduleByDate: {} };
+  };
+
+  const response = JSON.parse(backend.doPost({ parameter: {
+    action: 'getTeacherHomeDashboard',
+    sessionToken,
+    actingTeacherName: '老師甲',
+  } }).text);
+
+  assert.equal(response.status, 'success');
+  assert.equal(receivedTeacher, '老師甲');
+});
+
 test('getMyLeaves returns personal status, substitute, intended course, verification, and cancellation state', () => {
   const { backend } = createLeaveBackend({
     courseRows: [],

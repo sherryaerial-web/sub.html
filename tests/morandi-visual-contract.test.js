@@ -49,17 +49,23 @@ test('mobile app shell uses a fixed five-item safe-area tab bar', () => {
   assert.ok(tabbar, 'mobile tab bar must exist');
   assert.equal((tabbar.match(/class="mobile-tab-item/g) || []).length, 5);
   assert.match(tabbar, /id="mobile-primary-entry"/);
-  assert.match(tabbar, /data-mobile-tab="records"/);
+  ['schedule', 'leave', 'substitute', 'practice', 'account'].forEach((destination) => {
+    assert.match(tabbar, new RegExp(`data-mobile-tab="${destination}"`));
+  });
+  assert.doesNotMatch(tabbar, /data-mobile-tab="records"/);
   assert.match(html, /\.mobile-tabbar\s*\{[^}]*display:\s*none/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.sidebar\s*\{[^}]*display:\s*none/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.mobile-tabbar\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*0[^}]*display:\s*grid/s);
   assert.match(html, /padding-bottom:\s*env\(safe-area-inset-bottom\)/);
 });
 
-test('mobile app shell groups records and keeps primary actions reachable', () => {
+test('teacher app groups leave and substitute records while keeping primary actions reachable', () => {
   const html = pages[0];
 
-  assert.equal((html.match(/class="mobile-record-switcher"/g) || []).length, 2);
+  assert.equal((html.match(/class="teacher-flow-switcher"/g) || []).length, 4);
+  assert.match(html, /data-teacher-flow="leave"[^>]*>[\s\S]*?data-view="view-leave"[\s\S]*?data-view="view-myleaves"/);
+  assert.match(html, /data-teacher-flow="substitute"[^>]*>[\s\S]*?data-view="view-claim"[\s\S]*?data-view="view-mysubs"/);
+  assert.match(html, /id="view-account"[\s\S]*?data-view="view-payroll"[\s\S]*?data-view="view-inbox"/);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#claim-submit[\s\S]*position:\s*sticky/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*#leave-submit[\s\S]*position:\s*sticky/s);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*\.admin-tabs\s*\{[^}]*position:\s*sticky/s);

@@ -1275,8 +1275,38 @@ test('course adjustment reminders state the fifth-day deadline and the last remi
   assert.equal(backend.runMonthlyOperationsNotifications_('2026-10-01', '21:00').sentCount, 1);
   assert.equal(backend.runMonthlyOperationsNotifications_('2026-10-04', '21:00').sentCount, 1);
   assert.equal(backend.runMonthlyOperationsNotifications_('2026-10-05', '21:00').sentCount, 0);
-  assert.match(deliveries[0].content, /5 日截止/);
-  assert.match(deliveries[1].content, /明天 5 日截止/);
+  assert.deepEqual(deliveries[0], {
+    names: ['冠蓉', 'Tako', 'Jina'],
+    heading: '本月課程調整開始',
+    content: '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前告知小幫手。',
+  });
+  assert.deepEqual(deliveries[1], {
+    names: ['冠蓉', 'Tako', 'Jina'],
+    heading: '本月課程調整明天截止',
+    content: '本月課程調整明天(5)日截止，尚有調整需求請盡快告知小幫手。',
+  });
+});
+
+test('leave-opening and deadline reminders use approved copy and the calculated deadline date', () => {
+  const { backend } = createNotificationBackend();
+  const deliveries = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    deliveries.push({ names: Array.from(names), heading: message.heading, content: message.content });
+    return { attempted: true, accepted: true, delivered: names.length, messageId: `leave-${deliveries.length}`, error: '' };
+  };
+
+  assert.equal(backend.runMonthlyOperationsNotifications_('2026-09-07', '21:00').sentCount, 1);
+  assert.equal(backend.runMonthlyOperationsNotifications_('2026-09-10', '21:00').sentCount, 1);
+  assert.deepEqual(deliveries[0], {
+    names: ['冠蓉', 'Tako'],
+    heading: '請準備開放請假',
+    content: '本月課程調整期已結束，確認課程調整無誤，即可準備開放請假登記。',
+  });
+  assert.deepEqual(deliveries[1], {
+    names: ['冠蓉', 'Tako'],
+    heading: '請假登記明天截止',
+    content: '本月請假登記將於明天（9/11）截止，請確認是否需要發送截止提醒給老師。',
+  });
 });
 
 test('legacy saved course-adjustment copy is upgraded while custom copy stays untouched', () => {
@@ -1296,6 +1326,35 @@ test('legacy saved course-adjustment copy is upgraded while custom copy stays un
   assert.match(templates.course_adjustment_start.content, /5 日截止/);
   assert.equal(templates.course_adjustment_end.heading, '自訂截止標題');
   assert.equal(templates.course_adjustment_end.content, '這是管理員自行修改過的內容。');
+});
+
+test('current default monthly copy upgrades to the newly approved wording while custom wording remains', () => {
+  const { backend, services } = createNotificationBackend();
+  services.PropertiesService.getScriptProperties().setProperty('MONTHLY_OPERATIONS_TEMPLATES_V1', JSON.stringify({
+    course_adjustment_start: {
+      heading: '本月課程調整開始',
+      content: '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前完成或告知管理員。',
+    },
+    course_adjustment_end: {
+      heading: '本月課程調整明天截止',
+      content: '本月課程調整明天 5 日截止，尚有調整需求請盡快完成或告知管理員。',
+    },
+    leave_open_admin: {
+      heading: '請準備開放請假',
+      content: '本月課程調整期已結束，可進入管理後台開放請假登記。',
+    },
+    leave_deadline_admin: {
+      heading: '管理員自己的標題',
+      content: '管理員自己的內容。',
+    },
+  }));
+
+  const templates = backend.getMonthlyOperationsTemplates_();
+  assert.equal(templates.course_adjustment_start.content, '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前告知小幫手。');
+  assert.equal(templates.course_adjustment_end.content, '本月課程調整明天(5)日截止，尚有調整需求請盡快告知小幫手。');
+  assert.equal(templates.leave_open_admin.content, '本月課程調整期已結束，確認課程調整無誤，即可準備開放請假登記。');
+  assert.equal(templates.leave_deadline_admin.heading, '管理員自己的標題');
+  assert.equal(templates.leave_deadline_admin.content, '管理員自己的內容。');
 });
 
 test('a failed monthly automatic reminder remains retryable without duplicating its inbox event', () => {

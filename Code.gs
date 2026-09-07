@@ -1575,22 +1575,22 @@ function getDefaultMonthlyOperationsTemplates_() {
   return {
     course_adjustment_start: {
       heading: '本月課程調整開始',
-      content: '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前完成或告知管理員。',
+      content: '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前告知小幫手。',
       audienceMode: 'all'
     },
     course_adjustment_end: {
       heading: '本月課程調整明天截止',
-      content: '本月課程調整明天 5 日截止，尚有調整需求請盡快完成或告知管理員。',
+      content: '本月課程調整明天(5)日截止，尚有調整需求請盡快告知小幫手。',
       audienceMode: 'all'
     },
     leave_open_admin: {
       heading: '請準備開放請假',
-      content: '本月課程調整期已結束，可進入管理後台開放請假登記。',
+      content: '本月課程調整期已結束，確認課程調整無誤，即可準備開放請假登記。',
       audienceMode: 'admins'
     },
     leave_deadline_admin: {
-      heading: '請假截止提醒待處理',
-      content: '明天是本月建議請假截止日，可視情況發送老師截止提醒。',
+      heading: '請假登記明天截止',
+      content: '本月請假登記將於明天截止，請確認是否需要發送截止提醒給老師。',
       audienceMode: 'admins'
     },
     leave_close_admin: {
@@ -1651,6 +1651,28 @@ function getDefaultMonthlyOperationsTemplates_() {
   };
 }
 
+function isLegacyMonthlyOperationsDefaultCopy_(id, copy) {
+  var legacyCopies = {
+    course_adjustment_start: [
+      ['本月課程調整開始', '本月課程調整期間已開始，如需調整下月課程，請於期限內完成或告知管理員。'],
+      ['本月課程調整開始', '本月課程調整期間已開始，如需調整下月課程，請於本月 5 日截止前完成或告知管理員。']
+    ],
+    course_adjustment_end: [
+      ['本月課程調整即將截止', '本月課程調整即將截止，尚有調整需求請盡快完成或告知管理員。'],
+      ['本月課程調整明天截止', '本月課程調整明天 5 日截止，尚有調整需求請盡快完成或告知管理員。']
+    ],
+    leave_open_admin: [
+      ['請準備開放請假', '本月課程調整期已結束，可進入管理後台開放請假登記。']
+    ],
+    leave_deadline_admin: [
+      ['請假截止提醒待處理', '明天是本月建議請假截止日，可視情況發送老師截止提醒。']
+    ]
+  };
+  return (legacyCopies[id] || []).some(function(item) {
+    return copy.heading === item[0] && copy.content === item[1];
+  });
+}
+
 function getMonthlyOperationsTemplates_() {
   var defaults = getDefaultMonthlyOperationsTemplates_();
   var properties = getScriptProperties_();
@@ -1661,16 +1683,7 @@ function getMonthlyOperationsTemplates_() {
     Object.keys(defaults).forEach(function(id) {
       if (!saved[id]) return;
       var copy = validateNotificationCopy_(saved[id].heading, saved[id].content);
-      if (id === 'course_adjustment_start' &&
-          copy.heading === '本月課程調整開始' &&
-          copy.content === '本月課程調整期間已開始，如需調整下月課程，請於期限內完成或告知管理員。') {
-        return;
-      }
-      if (id === 'course_adjustment_end' &&
-          copy.heading === '本月課程調整即將截止' &&
-          copy.content === '本月課程調整即將截止，尚有調整需求請盡快完成或告知管理員。') {
-        return;
-      }
+      if (isLegacyMonthlyOperationsDefaultCopy_(id, copy)) return;
       defaults[id] = {
         heading: copy.heading,
         content: copy.content,
@@ -1681,6 +1694,27 @@ function getMonthlyOperationsTemplates_() {
     console.warn('月度營運通知範本無法解析，已改用預設文字。', error);
   }
   return defaults;
+}
+
+function getMonthlyOperationsNotificationCopy_(eventId, template, schedule) {
+  var copy = {
+    heading: cleanText_(template && template.heading),
+    content: cleanText_(template && template.content)
+  };
+  var defaults = getDefaultMonthlyOperationsTemplates_();
+  var defaultTemplate = defaults[eventId];
+  if (eventId === 'leave_deadline_admin' && defaultTemplate &&
+      copy.heading === defaultTemplate.heading && copy.content === defaultTemplate.content) {
+    var deadlineTimestamp = cleanText_(schedule && schedule.leaveSuggestedCloseAt);
+    var match = deadlineTimestamp.match(/^\d{4}-(\d{2})-(\d{2})\s/);
+    if (match) {
+      copy.content = copy.content.replace(
+        '明天截止',
+        '明天（' + Number(match[1]) + '/' + Number(match[2]) + '）截止'
+      );
+    }
+  }
+  return copy;
 }
 
 function saveMonthlyOperationsTemplates_(session, templatesValue) {
@@ -1763,6 +1797,7 @@ function runMonthlyOperationsNotifications_(dateKeyValue, timeValue) {
     substituteOpenedAt: state.substituteOpenedAt
   });
   var templates = getMonthlyOperationsTemplates_();
+  var schedule = getMonthlyOperationsSchedule_(month, state.substituteOpenedAt);
   var result = { sentCount: 0, skippedCount: 0, failedCount: 0, items: [] };
   dueIds.forEach(function(eventId) {
     var eventState = state.events[eventId] || {};
@@ -1776,6 +1811,7 @@ function runMonthlyOperationsNotifications_(dateKeyValue, timeValue) {
       result.items.push({ scheduleId: eventId, error: '找不到月度通知範本。' });
       return;
     }
+    var copy = getMonthlyOperationsNotificationCopy_(eventId, template, schedule);
     var eventKey = 'monthly_operations_' + month.replace(/\D/g, '') + '_' + eventId;
     var delivery = sendManagedNotification_(
       '系統通知排程',
@@ -1783,8 +1819,8 @@ function runMonthlyOperationsNotifications_(dateKeyValue, timeValue) {
       eventId,
       template.audienceMode,
       [],
-      template.heading,
-      template.content,
+      copy.heading,
+      copy.content,
       eventKey
     );
     var attemptedAt = dateKey + ' ' + time + ':00';

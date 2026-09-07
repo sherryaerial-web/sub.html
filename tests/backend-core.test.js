@@ -8499,14 +8499,20 @@ test('practice day view separates OB classes rentals and shared practice by room
   assert.equal(day.rooms[2].blocks.length, 0);
 });
 
-test('practice day view includes active student practice without exposing student identity', () => {
+test('practice day view shows student participant names and qualification roles to teachers', () => {
   const backend = loadBackend();
   const day = backend.buildPracticeDayView_(
     { bookings: [], participants: [] },
     [],
     '2026/09/10',
     [
-      { groupId: 'student-group-active', date: '2026/09/10', room: 'D', startTime: '11:00', endTime: '12:00', status: '已成立', updatedBy: '學生甲' },
+      {
+        groupId: 'student-group-active', date: '2026/09/10', room: 'D', startTime: '11:00', endTime: '12:00', status: '已成立', updatedBy: '學生甲',
+        participants: [
+          { appName: '學生甲', qualificationRole: '已確認' },
+          { appName: '學生乙', qualificationRole: '陪同者' },
+        ],
+      },
       { groupId: 'student-group-cancelled', date: '2026/09/10', room: 'D', startTime: '14:00', endTime: '15:00', status: '已取消', updatedBy: '學生乙' },
       { groupId: 'student-group-other-day', date: '2026/09/11', room: 'D', startTime: '16:00', endTime: '17:00', status: '已成立', updatedBy: '學生丙' },
     ]
@@ -8523,6 +8529,10 @@ test('practice day view includes active student practice without exposing studen
     endTime: '12:00',
     status: '已成立',
     label: '學生自主練習',
+    participants: [
+      { appName: '學生甲', qualificationRole: '已確認' },
+      { appName: '學生乙', qualificationRole: '陪同者' },
+    ],
     interval: {
       date: '2026/09/10',
       startTime: '11:00',
@@ -8532,8 +8542,9 @@ test('practice day view includes active student practice without exposing studen
       durationMinutes: 60,
     },
   });
-  assert.equal(JSON.stringify(day).includes('學生甲'), false);
-  assert.equal(JSON.stringify(day).includes('學生乙'), false);
+  assert.equal(JSON.stringify(day).includes('學生甲'), true);
+  assert.equal(JSON.stringify(day).includes('學生乙'), true);
+  assert.equal(JSON.stringify(day).includes('student@example.com'), false);
 });
 
 test('practice create stores one UUID booking and its creator without touching CourseList', () => {
@@ -10812,6 +10823,68 @@ test('student practice admin qualification confirmation applies only to the sele
   assert.equal(fixture.participantSheet.values[2][3], '待確認資格');
   assert.equal(fixture.participantSheet.values[2][4], '待確認資格');
   assert.equal(fixture.groupSheet.values[2][5], '待確認資格');
+});
+
+test('student practice admin can establish one pending participant as companion without granting venue qualification', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [
+      ['student-1', '學生甲', 'one@example.com', 'hash-1', '', '', '', '', '', '', '已確認', '', 'Tako', '', '', ''],
+      ['student-2', '學生乙', 'two@example.com', 'hash-2', '', '', '', '', '', '', '待確認資格', '', '', '', '', ''],
+    ],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', '學生甲',
+    ]],
+    participants: [
+      ['participant-1', 'group-1', 'student-1', '已確認', '已成立', '', '', '', ''],
+      ['participant-2', 'group-1', 'student-2', '待確認資格', '待確認資格', '', '', '', ''],
+    ],
+  });
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const result = fixture.backend.markStudentPracticeParticipantAsCompanion_(admin, 'participant-2');
+
+  assert.equal(result.status, '已成立');
+  assert.equal(result.qualificationRole, '陪同者');
+  assert.equal(fixture.qualificationSheet.values[2][10], '待確認資格');
+  assert.equal(fixture.participantSheet.values[2][3], '陪同者');
+  assert.equal(fixture.participantSheet.values[2][4], '已成立');
+  assert.equal(fixture.groupSheet.values[1][5], '已成立');
+});
+
+test('cancelling the final qualified student also cancels companions and alerts course admins', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [
+      ['student-1', '學生甲', 'one@example.com', 'hash-1', '', '', '', '', '', '', '已確認', '', 'Tako', '', '', ''],
+      ['student-2', '學生乙', 'two@example.com', 'hash-2', '', '', '', '', '', '待確認資格', '', '', '', '', ''],
+    ],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', '學生甲',
+    ]],
+    participants: [
+      ['participant-1', 'group-1', 'student-1', '已確認', '已成立', '2026-09-08 10:00:00', '', '', ''],
+      ['participant-2', 'group-1', 'student-2', '陪同者', '已成立', '2026-09-08 10:01:00', '', '', ''],
+    ],
+  });
+  const deliveries = [];
+  fixture.backend.getActiveCourseAdminNames_ = () => ['冠蓉', 'Tako'];
+  fixture.backend.sendManagedNotification_ = (...args) => {
+    deliveries.push(args);
+    return { accepted: true, error: '' };
+  };
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const result = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-1', '學生來訊取消');
+
+  assert.equal(result.groupStatus, '已取消');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.autoCancelledCompanions)), ['學生乙']);
+  assert.equal(fixture.participantSheet.values[1][4], '已取消');
+  assert.equal(fixture.participantSheet.values[2][4], '已取消');
+  assert.equal(fixture.participantSheet.values[2][7], '合格陪同者已取消');
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual(deliveries[0][4], ['冠蓉', 'Tako']);
+  assert.match(deliveries[0][5], /陪同學生已自動取消/);
+  assert.match(deliveries[0][6], /學生乙/);
 });
 
 test('student practice admin cancellation removes one student and releases only the final participant', () => {

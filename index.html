@@ -4411,6 +4411,14 @@
     function practiceBlockHtml(block) {
       const participants = Array.isArray(block.participants) ? block.participants : [];
       const names = participants.map((item) => item.teacherName).filter(Boolean).join("、");
+      const studentNames = participants.map((item) => {
+        const role = item.qualificationRole === "陪同者"
+          ? "陪同者"
+          : item.qualificationRole === "待確認資格"
+            ? "資格待確認"
+            : "資格已確認";
+        return item.appName ? `${item.appName}（${role}）` : "";
+      }).filter(Boolean).join("、");
       const isStudentPractice = block.type === "student-practice";
       const selectionKey = block.type === "course" ? getPracticeWaitlistSelectionKey(block) : "";
       const selected = !!selectionKey && !!practiceState.waitlistSelections?.[selectionKey];
@@ -4420,7 +4428,7 @@
         ? (block.type === "waitlist" ? `${block.creatorName}的候補練習` : `${block.creatorName}的自主練習`)
         : (block.label || "已有行程");
       const meta = isStudentPractice
-        ? "學生登記已占用"
+        ? (studentNames || "學生登記已占用")
         : block.type === "course"
         ? `原課程：${block.teacherName || ""}｜${selected ? "已選候補，可跨日期繼續選" : "點選加入候補清單"}`
         : block.type === "rental"
@@ -7040,16 +7048,19 @@
       const studentRequests = (Array.isArray(studentData.requests) ? studentData.requests : [])
         .filter((item) => item.status !== "已取消");
       const studentCards = studentRequests.map((item) => {
-        const pending = item.qualificationStatus === "待確認資格";
+        const pending = item.status === "待確認資格";
+        const companion = item.qualificationRole === "陪同者";
         const qualificationVenue = item.qualificationVenue || (["A", "B"].includes(item.room) ? "晴光" : "劍潭");
+        const statusText = companion ? "陪同者" : pending ? "待確認資格" : item.status;
         return `<article class="practice-admin-card" data-student-practice-participant="${escapeHtml(item.participantId)}">
           <div class="practice-admin-card-head">
             <div><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong><div class="item-meta">${escapeHtml(item.appName)}｜${escapeHtml(item.email)}｜${escapeHtml(qualificationVenue)}資格</div></div>
-            <span class="status-pill ${pending ? "pending" : ""}">${escapeHtml(pending ? "待確認資格" : item.status)}</span>
+            <span class="status-pill ${pending ? "pending" : ""}">${escapeHtml(statusText)}</span>
           </div>
           ${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}
           <div class="admin-item-actions">
             ${pending ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-student-practice-qualification" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="badge-check"></i>確認${escapeHtml(qualificationVenue)}資格並成立</button>` : ""}
+            ${item.canMarkAsCompanion ? `<button class="compact-button" type="button" data-admin-action="mark-student-practice-companion" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="users"></i>設為陪同者並成立</button>` : ""}
             <button class="compact-button" type="button" data-admin-action="move-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-clock"></i>協助換時間</button>
             <button class="danger-button" type="button" data-admin-action="cancel-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-x"></i>取消這位學生</button>
           </div>
@@ -7946,15 +7957,31 @@ https://sherryaerial-web.github.io/sub.html/
           await fetchPracticeAdminDashboard();
           return;
         }
+        if (action === "mark-student-practice-companion") {
+          const item = (studentPracticeAdminDashboard?.requests || []).find((request) =>
+            request.participantId === button.dataset.participantId
+          );
+          if (!window.confirm(`將 ${item?.appName || "這位學生"} 設為陪同者並成立本次登記？這不會授予場館資格；最後一位具資格學生取消時，陪同者也會自動取消。`)) return;
+          await callApi("markStudentPracticeParticipantAsCompanion", {
+            participantId: button.dataset.participantId
+          });
+          setNotice("已設為陪同者並成立本次登記；學生的場館資格沒有變更。");
+          await fetchPracticeAdminDashboard();
+          return;
+        }
         if (action === "cancel-student-practice-participant") {
           const reason = window.prompt("請填寫取消原因（例如：學生由官方 LINE 申請取消）", "");
           if (reason === null) return;
           if (!reason.trim()) throw new Error("請填寫取消原因。");
-          await callApi("cancelStudentPracticeParticipant", {
+          const result = await callApi("cancelStudentPracticeParticipant", {
             participantId: button.dataset.participantId,
             reason: reason.trim()
           });
-          setNotice("已取消這位學生的登記；同時段其他學生不受影響。");
+          const dependentNames = Array.isArray(result?.autoCancelledCompanions)
+            ? result.autoCancelledCompanions : [];
+          setNotice(dependentNames.length
+            ? `已取消這位學生；未具資格的 ${dependentNames.join("、")} 也已自動取消，並通知管理員由官方 LINE 告知。`
+            : "已取消這位學生的登記；同時段其他學生不受影響。");
           await fetchPracticeAdminDashboard();
           return;
         }

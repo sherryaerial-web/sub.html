@@ -190,6 +190,12 @@ var STUDENT_PRACTICE_STATUS = {
   CANCELLED: '已取消'
 };
 
+var STUDENT_PRACTICE_QUALIFICATION_ROLE = {
+  CONFIRMED: '已確認',
+  COMPANION: '陪同者',
+  PENDING: '待確認資格'
+};
+
 var CONFIG = {
   COURSE_SHEET: SHEETS.COURSE_LIST,
   LEAVE_SHEET: SHEETS.LEAVES,
@@ -3205,8 +3211,15 @@ function getStudentPracticeAdminDashboard_(session, filtersValue) {
   var records = getStudentPracticeRecordsUnlocked_(ss);
   var qualificationsByStudent = {};
   var groupsById = {};
+  var hasQualifiedParticipantByGroup = {};
   records.qualifications.forEach(function(item) { qualificationsByStudent[item.studentId] = item; });
   records.groups.forEach(function(item) { groupsById[item.groupId] = item; });
+  records.participants.forEach(function(item) {
+    if (item.status === STUDENT_PRACTICE_STATUS.ACTIVE &&
+        item.qualificationStatus === STUDENT_PRACTICE_QUALIFICATION_ROLE.CONFIRMED) {
+      hasQualifiedParticipantByGroup[item.groupId] = true;
+    }
+  });
   var requests = records.participants.map(function(participant) {
     var qualification = qualificationsByStudent[participant.studentId] || {};
     var group = groupsById[participant.groupId] || {};
@@ -3222,6 +3235,9 @@ function getStudentPracticeAdminDashboard_(session, filtersValue) {
       email: qualification.email || '',
       qualificationVenue: qualificationVenue,
       qualificationStatus: qualificationFields.status || STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+      qualificationRole: participant.qualificationStatus || STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+      canMarkAsCompanion: participant.status === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION &&
+        Boolean(hasQualifiedParticipantByGroup[participant.groupId]),
       status: participant.status,
       date: group.date || '',
       room: group.room || '',
@@ -3249,8 +3265,7 @@ function getStudentPracticeAdminDashboard_(session, filtersValue) {
     summary: {
       total: requests.length,
       pendingQualification: requests.filter(function(item) {
-        return item.qualificationStatus === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION &&
-          item.status !== STUDENT_PRACTICE_STATUS.CANCELLED;
+        return item.status === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;
       }).length,
       active: requests.filter(function(item) { return item.status === STUDENT_PRACTICE_STATUS.ACTIVE; }).length,
       changePending: requests.filter(function(item) {
@@ -3340,6 +3355,69 @@ function confirmStudentPracticeQualification_(session, participantIdValue) {
   return result;
 }
 
+function markStudentPracticeParticipantAsCompanion_(session, participantIdValue) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var participantId = cleanText_(participantIdValue);
+  if (!participantId) throw new Error('缺少學生自主練習登記編號。');
+  var result = withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensureStudentPracticeStructureUnlocked_(ss);
+    var records = getStudentPracticeRecordsUnlocked_(ss);
+    var participant = records.participants.filter(function(item) {
+      return item.participantId === participantId;
+    })[0];
+    if (!participant || participant.status !== STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION) {
+      throw new Error('找不到可設為陪同者的學生自主練習登記。');
+    }
+    var group = records.groups.filter(function(item) {
+      return item.groupId === participant.groupId;
+    })[0];
+    if (!group || group.status === STUDENT_PRACTICE_STATUS.CANCELLED) {
+      throw new Error('找不到可成立的學生自主練習場次。');
+    }
+    var hasQualifiedParticipant = records.participants.some(function(item) {
+      return item.groupId === group.groupId && item.participantId !== participantId &&
+        item.status === STUDENT_PRACTICE_STATUS.ACTIVE &&
+        item.qualificationStatus === STUDENT_PRACTICE_QUALIFICATION_ROLE.CONFIRMED;
+    });
+    if (!hasQualifiedParticipant) {
+      throw new Error('這個場次目前沒有已確認場館資格的學生，不能設為陪同者。');
+    }
+    var now = getTimestamp_();
+    return runStudentPracticeTransitionUnlocked_([
+      records.sheets.participants, records.sheets.groups, records.sheets.audit
+    ], function() {
+      records.sheets.participants.getRange(participant.rowNumber, 4, 1, 2).setValues([[
+        STUDENT_PRACTICE_QUALIFICATION_ROLE.COMPANION, STUDENT_PRACTICE_STATUS.ACTIVE
+      ]]);
+      records.sheets.groups.getRange(group.rowNumber, 6, 1, 5).setValues([[
+        STUDENT_PRACTICE_STATUS.ACTIVE, group.changeStatus, group.createdAt, now, actor
+      ]]);
+      appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
+        actor: actor,
+        action: '標記學生自主練習陪同者',
+        targetType: '參與者',
+        targetId: participantId,
+        before: { qualificationRole: participant.qualificationStatus, status: participant.status },
+        after: {
+          qualificationRole: STUDENT_PRACTICE_QUALIFICATION_ROLE.COMPANION,
+          status: STUDENT_PRACTICE_STATUS.ACTIVE
+        }
+      });
+      return {
+        participantId: participantId,
+        groupId: group.groupId,
+        qualificationRole: STUDENT_PRACTICE_QUALIFICATION_ROLE.COMPANION,
+        status: STUDENT_PRACTICE_STATUS.ACTIVE,
+        affectedDates: [group.date]
+      };
+    });
+  });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
+  return result;
+}
+
 function cancelStudentPracticeParticipant_(session, participantIdValue, reasonValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var participantId = cleanText_(participantIdValue);
@@ -3367,7 +3445,23 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
         [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
           STUDENT_PRACTICE_STATUS.CHANGE_PENDING].indexOf(item.status) !== -1;
     });
-    var nextGroupStatus = remaining.length ? group.status : STUDENT_PRACTICE_STATUS.CANCELLED;
+    var remainingQualified = remaining.filter(function(item) {
+      return item.status === STUDENT_PRACTICE_STATUS.ACTIVE &&
+        item.qualificationStatus === STUDENT_PRACTICE_QUALIFICATION_ROLE.CONFIRMED;
+    });
+    var autoCancelledDependents = participant.qualificationStatus === STUDENT_PRACTICE_QUALIFICATION_ROLE.CONFIRMED &&
+        !remainingQualified.length
+      ? remaining.filter(function(item) {
+          return item.qualificationStatus !== STUDENT_PRACTICE_QUALIFICATION_ROLE.CONFIRMED;
+        })
+      : [];
+    var autoCancelledById = {};
+    autoCancelledDependents.forEach(function(item) { autoCancelledById[item.participantId] = true; });
+    var activeAfterCancellation = remaining.filter(function(item) {
+      return !autoCancelledById[item.participantId];
+    });
+    var nextGroupStatus = activeAfterCancellation.length
+      ? group.status : STUDENT_PRACTICE_STATUS.CANCELLED;
     var now = getTimestamp_();
     return runStudentPracticeTransitionUnlocked_([
       records.sheets.participants, records.sheets.groups, records.sheets.audit
@@ -3375,7 +3469,21 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
       records.sheets.participants.getRange(participant.rowNumber, 5, 1, 4).setValues([[
         STUDENT_PRACTICE_STATUS.CANCELLED, participant.joinedAt, now, reason
       ]]);
-      if (!remaining.length) {
+      autoCancelledDependents.forEach(function(item) {
+        records.sheets.participants.getRange(item.rowNumber, 5, 1, 4).setValues([[
+          STUDENT_PRACTICE_STATUS.CANCELLED, item.joinedAt, now, '合格陪同者已取消'
+        ]]);
+        appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
+          actor: actor,
+          action: '自動取消未具資格學生自主練習',
+          targetType: '參與者',
+          targetId: item.participantId,
+          before: { qualificationRole: item.qualificationStatus, status: item.status },
+          after: { status: STUDENT_PRACTICE_STATUS.CANCELLED },
+          reason: '合格陪同者已取消'
+        });
+      });
+      if (!activeAfterCancellation.length) {
         records.sheets.groups.getRange(group.rowNumber, 6, 1, 5).setValues([[
           STUDENT_PRACTICE_STATUS.CANCELLED, group.changeStatus, group.createdAt, now, actor
         ]]);
@@ -3394,12 +3502,40 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
         status: STUDENT_PRACTICE_STATUS.CANCELLED,
         groupId: group.groupId,
         groupStatus: nextGroupStatus,
+        autoCancelledCompanions: autoCancelledDependents.map(function(item) {
+          var qualification = records.qualifications.filter(function(candidate) {
+            return candidate.studentId === item.studentId;
+          })[0];
+          return qualification ? qualification.appName : item.studentId;
+        }),
+        date: group.date,
+        room: group.room,
+        startTime: group.startTime,
+        endTime: group.endTime,
         affectedDates: [group.date]
       };
     });
   });
   invalidatePracticeDayViewCache_(result.affectedDates);
   delete result.affectedDates;
+  if (result.autoCancelledCompanions && result.autoCancelledCompanions.length) {
+    try {
+      result.notification = sendManagedNotification_(
+        actor,
+        '學生自主練習',
+        result.groupId,
+        'selected',
+        getActiveCourseAdminNames_(),
+        '陪同學生已自動取消',
+        result.date + ' ' + result.room + ' 教室 ' + result.startTime + '–' + result.endTime +
+          '：合格學生取消後，未具資格的 ' + result.autoCancelledCompanions.join('、') +
+          ' 已一併取消，請由官方 LINE 告知。',
+        'student_practice_dependent_cancel_' + participantId
+      );
+    } catch (error) {
+      result.notification = { accepted: false, error: getErrorMessage_(error) };
+    }
+  }
   return result;
 }
 
@@ -3675,6 +3811,12 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
         : status === STUDENT_PRACTICE_STATUS.CHANGE_PENDING
           ? '學生自主練習（時段待處理）'
           : '學生自主練習（資格待確認）',
+      participants: (group.participants || []).map(function(participant) {
+        return {
+          appName: cleanText_(participant && participant.appName),
+          qualificationRole: cleanText_(participant && participant.qualificationRole)
+        };
+      }).filter(function(participant) { return participant.appName; }),
       interval: normalizePracticeInterval_(date, startTime, endTime)
     });
   });
@@ -3728,7 +3870,27 @@ function buildSharedPracticeDayView_(dateValue) {
       ss.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS) &&
       ss.getSheetByName(SHEETS.STUDENT_PRACTICE_PARTICIPANTS) &&
       ss.getSheetByName(SHEETS.STUDENT_PRACTICE_AUDIT)) {
-    studentGroups = getStudentPracticeRecordsUnlocked_(ss).groups;
+    var studentRecords = getStudentPracticeRecordsUnlocked_(ss);
+    var qualificationsByStudent = {};
+    var participantsByGroup = {};
+    studentRecords.qualifications.forEach(function(item) {
+      qualificationsByStudent[item.studentId] = item;
+    });
+    studentRecords.participants.forEach(function(participant) {
+      if ([STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+        STUDENT_PRACTICE_STATUS.CHANGE_PENDING].indexOf(participant.status) === -1) return;
+      var qualification = qualificationsByStudent[participant.studentId] || {};
+      if (!participantsByGroup[participant.groupId]) participantsByGroup[participant.groupId] = [];
+      participantsByGroup[participant.groupId].push({
+        appName: qualification.appName || '',
+        qualificationRole: participant.qualificationStatus || STUDENT_PRACTICE_QUALIFICATION_ROLE.PENDING
+      });
+    });
+    studentGroups = studentRecords.groups.map(function(group) {
+      return Object.assign({}, group, {
+        participants: participantsByGroup[group.groupId] || []
+      });
+    });
   }
   var view = buildPracticeDayView_(records, courseRows, date, studentGroups);
   view.courseSource = courseSource;
@@ -6542,6 +6704,9 @@ function doPost(e) {
       },
       confirmStudentPracticeQualification: function() {
         return confirmStudentPracticeQualification_(session, parameters.participantId);
+      },
+      markStudentPracticeParticipantAsCompanion: function() {
+        return markStudentPracticeParticipantAsCompanion_(session, parameters.participantId);
       },
       cancelStudentPracticeParticipant: function() {
         return cancelStudentPracticeParticipant_(

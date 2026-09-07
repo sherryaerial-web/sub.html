@@ -3946,13 +3946,19 @@ test('practice card calendar renders formal rental shared and own-highlight bloc
   assert.match(html.match(/<div class="practice-legend"[\s\S]*?<\/div>/)?.[0] || '', /我的登記/);
 });
 
-test('teacher practice calendar renders student practice as private non-interactive occupancy', () => {
+test('teacher practice calendar renders student practice names and qualification roles as non-interactive occupancy', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceFixture = {
     date: '2026/09/10', teacherName: 'Tako', quickDurations: [60, 90, 120],
     rooms: [
       { room: 'D', blocks: [
-        { id: 'student-practice:group-1', type: 'student-practice', groupId: 'group-1', startTime: '11:00', endTime: '12:00', label: '學生自主練習', status: '已成立' },
+        {
+          id: 'student-practice:group-1', type: 'student-practice', groupId: 'group-1', startTime: '11:00', endTime: '12:00', label: '學生自主練習', status: '已成立',
+          participants: [
+            { appName: '學生甲', qualificationRole: '已確認' },
+            { appName: '學生乙', qualificationRole: '陪同者' },
+          ],
+        },
       ] },
       { room: 'A', blocks: [] }, { room: 'B', blocks: [] }, { room: 'C', blocks: [] },
     ],
@@ -3963,7 +3969,8 @@ test('teacher practice calendar renders student practice as private non-interact
 
   assert.match(calendar, /practice-block student-practice/);
   assert.match(calendar, /學生自主練習/);
-  assert.match(calendar, /學生登記已占用/);
+  assert.match(calendar, /學生甲（資格已確認）/);
+  assert.match(calendar, /學生乙（陪同者）/);
   assert.doesNotMatch(calendar, /data-practice-block="student-practice:group-1"/);
 });
 
@@ -4004,6 +4011,7 @@ test('practice admin includes student qualification and independent cancellation
   assert.match(html, /data-admin-action="cancel-student-practice-participant"/);
   assert.match(html, /data-admin-action="move-student-practice-participant"/);
   assert.match(html, /confirmStudentPracticeQualification/);
+  assert.match(html, /markStudentPracticeParticipantAsCompanion/);
   assert.match(html, /cancelStudentPracticeParticipant/);
   assert.match(html, /moveStudentPracticeParticipant/);
 });

@@ -353,8 +353,10 @@ test('submits structured claim adjustments by UUID', () => {
 test('keeps the three required workflows and mobile viewport', () => {
   assert.match(html, /name=['"]viewport['"]/);
   assert.match(html, /請假登記/);
-  assert.match(html, /尋找與領取代課/);
-  assert.match(html, /查看我的代課紀錄/);
+  assert.match(html, /<section id="view-claim"/);
+  assert.match(html, /<section id="view-mysubs"/);
+  assert.match(html, /領取代課/);
+  assert.match(html, /我的代課紀錄/);
 });
 
 test('schedule-first teacher home renders dates, teaching roles, and upcoming routes', () => {

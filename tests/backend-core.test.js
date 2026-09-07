@@ -10212,10 +10212,11 @@ test('student practice identity migration removes only old student test records 
   const auditSheet = createSheetFixture('學生自主練習操作紀錄', [EXPECTED_STUDENT_PRACTICE_AUDIT_HEADERS, ['audit-test']]);
   const courseSheet = createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS, ['2026/09/10', '10:00', 'A－空環']]);
   const spreadsheet = createSpreadsheetFixture([qualificationSheet, groupSheet, participantSheet, auditSheet, courseSheet]);
-  const backend = loadBackend();
+  const backend = loadBackend({ SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet } });
 
-  backend.ensureStudentPracticeStructureUnlocked_(spreadsheet);
+  const result = backend.migrateStudentPracticeIdentitySchema();
 
+  assert.equal(result.migrated, true);
   assert.deepEqual(qualificationSheet.values[0], EXPECTED_STUDENT_PRACTICE_QUALIFICATION_HEADERS);
   assert.equal(qualificationSheet.values.length, 1);
   assert.equal(groupSheet.values.length, 1);

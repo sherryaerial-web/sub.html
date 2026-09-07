@@ -2461,6 +2461,17 @@ function ensurePracticeStructure_() {
   });
 }
 
+function migrateStudentPracticeIdentitySchema() {
+  return withScriptLock_(function() {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var migrated = migrateLegacyStudentPracticeIdentityUnlocked_(spreadsheet);
+    return {
+      migrated: migrated,
+      sheets: ensureStudentPracticeStructureUnlocked_(spreadsheet)
+    };
+  });
+}
+
 function ensurePracticeStructureUnlocked_(spreadsheet) {
   var result = {};
   [

@@ -9370,6 +9370,85 @@ test('practice day briefly reuses one live OB read while booking mutations still
   assert.equal(liveReads, 2);
 });
 
+test('practice day shares one assembled day view across teachers without sharing identity', () => {
+  const cache = new Map();
+  const fixture = createPracticeBackend({
+    courseRows: [],
+    services: {
+      CacheService: {
+        getScriptCache() {
+          return {
+            get(key) { return cache.get(key) || null; },
+            put(key, value) { cache.set(key, value); },
+            remove(key) { cache.delete(key); },
+          };
+        },
+      },
+    },
+  });
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  let builds = 0;
+  const originalBuild = fixture.backend.buildPracticeDayView_;
+  fixture.backend.buildPracticeDayView_ = (...args) => {
+    builds += 1;
+    return originalBuild(...args);
+  };
+
+  const first = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+  const second = fixture.backend.getPracticeDay_(fixture.teacher('Tako'), '2026/09/10');
+
+  assert.equal(builds, 1);
+  assert.equal(first.teacherName, '小琪');
+  assert.equal(second.teacherName, 'Tako');
+  const firstBooking = first.rooms.find((room) => room.room === 'A').blocks.find((block) => block.type === 'practice');
+  const secondBooking = second.rooms.find((room) => room.room === 'A').blocks.find((block) => block.type === 'practice');
+  assert.equal(firstBooking.isMine, true);
+  assert.equal(secondBooking.isMine, false);
+});
+
+test('practice booking mutations invalidate the affected cached day immediately', () => {
+  const cache = new Map();
+  const fixture = createPracticeBackend({
+    courseRows: [],
+    services: {
+      CacheService: {
+        getScriptCache() {
+          return {
+            get(key) { return cache.get(key) || null; },
+            put(key, value) { cache.set(key, value); },
+            remove(key) { cache.delete(key); },
+          };
+        },
+      },
+    },
+  });
+
+  const before = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+  assert.equal(before.rooms.find((room) => room.room === 'A').blocks.length, 0);
+
+  fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  const after = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(after.rooms.find((room) => room.room === 'A').blocks[0].type, 'practice');
+});
+
+test('ordinary practice day reads never run full waitlist reconciliation', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  let reconciliations = 0;
+  fixture.backend.reconcilePracticeBookings_ = () => {
+    reconciliations += 1;
+    return { checked: 0, activated: 0, reverted: 0, cancelled: 0 };
+  };
+
+  fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(reconciliations, 0);
+});
+
 test('practice day prefers the selected day live OB rows so cancelled snapshot courses disappear', () => {
   const staleCourse = [
     '2026/09/10', '11:00', 'A－綢吊', 'Josty Lin',
@@ -9390,7 +9469,7 @@ test('practice day prefers the selected day live OB rows so cancelled snapshot c
   assert.equal(result.courseWarning, '');
 });
 
-test('practice day live refresh immediately promotes a waitlist when the linked OB course is gone', () => {
+test('ordinary practice reads leave waitlists unchanged until an administrator refreshes the day', () => {
   const cancelledCourse = [
     '2026/09/07', '10:30', 'C\uff0d\u7a7a\u74b0 Lv.0', 'Tako',
     'cal-tako-cancelled', 'class-ring', 'teacher-tako', '\u5426', 'old-sync',
@@ -9405,8 +9484,19 @@ test('practice day live refresh immediately promotes a waitlist when the linked 
     attempted: true, accepted: true, delivered: 1, error: '',
   });
 
-  const result = fixture.backend.getPracticeDay_(fixture.teacher('\u51a0\u84c9'), '2026/09/07');
-  const practiceBlock = result.rooms.find((room) => room.room === 'C').blocks
+  const ordinaryResult = fixture.backend.getPracticeDay_(fixture.teacher('\u51a0\u84c9'), '2026/09/07');
+  const waitlistBlock = ordinaryResult.rooms.find((room) => room.room === 'C').blocks
+    .find((block) => block.bookingId === waitlist.bookingId);
+
+  assert.equal(waitlistBlock.type, 'waitlist');
+  assert.equal(waitlistBlock.status, '\u5019\u88dc');
+  assert.equal(fixture.bookingSheet.values[1][6], '\u5019\u88dc');
+
+  fixture.backend.refreshPracticeDay_({
+    teacherName: '\u51a0\u84c9', role: '\u7ba1\u7406\u54e1', managementCapabilities: ['course_admin'],
+  }, '2026/09/07');
+  const refreshedResult = fixture.backend.getPracticeDay_(fixture.teacher('\u51a0\u84c9'), '2026/09/07');
+  const practiceBlock = refreshedResult.rooms.find((room) => room.room === 'C').blocks
     .find((block) => block.bookingId === waitlist.bookingId);
 
   assert.equal(practiceBlock.type, 'practice');
@@ -9430,7 +9520,7 @@ test('practice day fails closed to the CourseList snapshot when live OB is unava
   assert.equal(result.rooms.find((room) => room.room === 'A').blocks[0].calendarId, 'cal-cached');
 });
 
-test('practice day live outage conservatively returns an activated linked waitlist to waitlisted', () => {
+test('practice day live outage does not mutate an already activated waitlist', () => {
   const restoredCourse = [
     '2026/09/10', '11:00', 'C－空環 Lv.0', '蜜莉 戴',
     'cal-restored', 'class-ring', 'teacher-milly', '否', 'last-sync',
@@ -9462,11 +9552,10 @@ test('practice day live outage conservatively returns an activated linked waitli
     .find((item) => item.bookingId === waitlist.bookingId);
 
   assert.equal(result.courseSource, 'snapshot');
-  assert.match(result.courseWarning, /保守核對/);
-  assert.equal(fixture.bookingSheet.values[1][6], '候補');
-  assert.equal(block.type, 'waitlist');
-  assert.equal(deliveries.length, 1);
-  assert.equal(deliveries[0].message.heading, '原課程恢復，已改回候補');
+  assert.match(result.courseWarning, /即時課表讀取失敗/);
+  assert.equal(fixture.bookingSheet.values[1][6], '已成立');
+  assert.equal(block.type, 'practice');
+  assert.equal(deliveries.length, 0);
 });
 
 test('conservative practice snapshot never activates missing waitlists or cancels unrelated practice', () => {

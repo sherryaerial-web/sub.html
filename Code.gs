@@ -242,6 +242,7 @@ var CONFIG = {
   MONTHLY_OPERATIONS_TEMPLATES_PROPERTY: 'MONTHLY_OPERATIONS_TEMPLATES_V1',
   COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
   PRACTICE_OB_DAY_CACHE_SECONDS: 60 * 60,
+  PRACTICE_DAY_VIEW_CACHE_SECONDS: 60,
   PRACTICE_RECONCILE_HOUR_PROPERTY: 'PRACTICE_RECONCILE_HOUR_V1',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
@@ -2902,7 +2903,7 @@ function runStudentPracticeTransitionUnlocked_(sheets, callback) {
 
 function submitStudentPractice_(inputValue) {
   var input = inputValue || {};
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureStudentPracticeStructureUnlocked_(ss);
     var records = getStudentPracticeRecordsUnlocked_(ss);
@@ -3032,6 +3033,8 @@ function submitStudentPractice_(inputValue) {
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.date);
+  return result;
 }
 
 function buildStudentPracticeAvailability_(inputValue) {
@@ -3262,7 +3265,7 @@ function confirmStudentPracticeQualification_(session, participantIdValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var participantId = cleanText_(participantIdValue);
   if (!participantId) throw new Error('缺少學生自主練習登記編號。');
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureStudentPracticeStructureUnlocked_(ss);
     var records = getStudentPracticeRecordsUnlocked_(ss);
@@ -3325,10 +3328,16 @@ function confirmStudentPracticeQualification_(session, participantIdValue) {
         studentId: participant.studentId,
         qualificationVenue: qualificationVenue,
         status: STUDENT_PRACTICE_STATUS.ACTIVE,
-        activatedRequests: pendingParticipants.length
+        activatedRequests: pendingParticipants.length,
+        affectedDates: pendingParticipants.map(function(item) {
+          return groupsById[item.groupId].date;
+        })
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
+  return result;
 }
 
 function cancelStudentPracticeParticipant_(session, participantIdValue, reasonValue) {
@@ -3337,7 +3346,7 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
   var reason = cleanText_(reasonValue);
   if (!participantId) throw new Error('缺少學生自主練習登記編號。');
   if (!reason) throw new Error('請填寫取消原因。');
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureStudentPracticeStructureUnlocked_(ss);
     var records = getStudentPracticeRecordsUnlocked_(ss);
@@ -3384,10 +3393,14 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
         participantId: participantId,
         status: STUDENT_PRACTICE_STATUS.CANCELLED,
         groupId: group.groupId,
-        groupStatus: nextGroupStatus
+        groupStatus: nextGroupStatus,
+        affectedDates: [group.date]
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
+  return result;
 }
 
 function moveStudentPracticeParticipant_(session, inputValue) {
@@ -3398,7 +3411,7 @@ function moveStudentPracticeParticipant_(session, inputValue) {
   if (!participantId) throw new Error('缺少學生自主練習登記編號。');
   if (!reason) throw new Error('請填寫換時間原因。');
 
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureStudentPracticeStructureUnlocked_(ss);
     var records = getStudentPracticeRecordsUnlocked_(ss);
@@ -3544,10 +3557,14 @@ function moveStudentPracticeParticipant_(session, inputValue) {
         room: room,
         qualificationVenue: qualificationVenue,
         startTime: interval.startTime,
-        endTime: interval.endTime
+        endTime: interval.endTime,
+        affectedDates: [oldGroup.date, interval.date]
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
+  return result;
 }
 
 function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, studentGroupsValue) {
@@ -3674,10 +3691,23 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
   };
 }
 
-function getPracticeDay_(session, dateValue) {
-  var teacherName = getSessionTeacherName_(session);
+function getPracticeDayViewCacheKey_(dateValue) {
+  return 'practice_day_view_v2_' + cleanText_(dateValue).replace(/\D/g, '');
+}
+
+function invalidatePracticeDayViewCache_(dateValues) {
+  var dates = Array.isArray(dateValues) ? dateValues : [dateValues];
+  var seen = {};
+  dates.forEach(function(dateValue) {
+    var date = cleanText_(dateValue).replace(/-/g, '/');
+    if (!date || seen[date]) return;
+    seen[date] = true;
+    removeCachedValue_(getPracticeDayViewCacheKey_(date));
+  });
+}
+
+function buildSharedPracticeDayView_(dateValue) {
   var date = cleanText_(dateValue).replace(/-/g, '/');
-  parsePracticeDateTime_(date, '00:00');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ensurePracticeStructureUnlocked_(ss);
   var records = getPracticeRecordsUnlocked_(ss);
@@ -3689,32 +3719,9 @@ function getPracticeDay_(session, dateValue) {
   try {
     courseRows = getPracticeCurrentObRowsForDayView_(date);
     courseSource = 'live';
-    try {
-      reconcilePracticeBookings_({
-        today: date,
-        throughDate: date,
-        currentObRows: courseRows
-      });
-      records = getPracticeRecordsUnlocked_(ss);
-    } catch (reconciliationError) {
-      courseWarning = '候補狀態核對失敗，請稍後重新整理。';
-      console.warn(courseWarning, reconciliationError);
-    }
   } catch (error) {
-    courseWarning = 'OB 即時課表讀取失敗，已以最後同步課表保守核對；新候補仍會等即時 OB 確認後才補入。';
+    courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示；候補狀態會由排程或管理員更新。';
     console.warn(courseWarning, error);
-    try {
-      reconcilePracticeBookings_({
-        today: date,
-        throughDate: date,
-        currentObRows: courseRows,
-        conservativeFallback: true
-      });
-      records = getPracticeRecordsUnlocked_(ss);
-    } catch (fallbackError) {
-      courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示。';
-      console.warn('自主練習保守核對失敗。', fallbackError);
-    }
   }
   var studentGroups = [];
   if (ss.getSheetByName(SHEETS.STUDENT_PRACTICE_QUALIFICATIONS) &&
@@ -3724,15 +3731,33 @@ function getPracticeDay_(session, dateValue) {
     studentGroups = getStudentPracticeRecordsUnlocked_(ss).groups;
   }
   var view = buildPracticeDayView_(records, courseRows, date, studentGroups);
-  view.teacherName = teacherName;
-  view.actingBy = cleanText_(session && session.impersonatedBy);
-  view.quickDurations = [60, 90, 120];
   view.courseSource = courseSource;
   view.courseWarning = courseWarning;
   var nowMs = currentTimeMs_();
   view.rooms.forEach(function(room) {
     room.blocks.forEach(function(block) {
       block.isPast = isPracticeIntervalPast_(block.date, block.endTime, nowMs);
+    });
+  });
+  return view;
+}
+
+function getPracticeDay_(session, dateValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var date = cleanText_(dateValue).replace(/-/g, '/');
+  parsePracticeDateTime_(date, '00:00');
+  var cacheKey = getPracticeDayViewCacheKey_(date);
+  var sharedView = getCachedJsonValue_(cacheKey);
+  if (!sharedView || !Array.isArray(sharedView.rooms)) {
+    sharedView = buildSharedPracticeDayView_(date);
+    putCachedJsonValue_(cacheKey, sharedView, CONFIG.PRACTICE_DAY_VIEW_CACHE_SECONDS);
+  }
+  var view = JSON.parse(JSON.stringify(sharedView));
+  view.teacherName = teacherName;
+  view.actingBy = cleanText_(session && session.impersonatedBy);
+  view.quickDurations = [60, 90, 120];
+  view.rooms.forEach(function(room) {
+    room.blocks.forEach(function(block) {
       if (block.type !== 'practice' && block.type !== 'waitlist') return;
       block.isMine = block.participants.some(function(participant) {
         return participant.teacherName === teacherName &&
@@ -3766,6 +3791,7 @@ function refreshPracticeDay_(session, dateValue) {
     throughDate: date,
     currentObRows: currentObRows
   });
+  invalidatePracticeDayViewCache_(date);
   result.courseSource = 'live';
   result.courseWarning = '';
   return result;
@@ -4693,7 +4719,7 @@ function createPracticeBooking_(session, inputValue) {
   var interval = normalizePracticeInterval_(input.date, input.startTime, input.endTime);
   var recurrence = cleanText_(input.recurrence) === 'weekly' ? 'weekly' : 'once';
 
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var records = getPracticeRecordsUnlocked_(ss);
     var snapshotRows = requireSheet_(ss, SHEETS.COURSE_LIST).getDataRange().getValues().slice(1);
@@ -4756,7 +4782,10 @@ function createPracticeBooking_(session, inputValue) {
             return item.seriesId === seriesId && item.date === interval.date;
           })[0].bookingId,
           status: PRACTICE_STATUS.ACTIVE,
-          createdOccurrences: expansion.created
+          createdOccurrences: expansion.created,
+          affectedDates: records.bookings.filter(function(item) {
+            return item.seriesId === seriesId;
+          }).map(function(item) { return item.date; })
         };
       }
 
@@ -4785,9 +4814,15 @@ function createPracticeBooking_(session, inputValue) {
         after: interval.date + ' ' + room + ' ' + interval.startTime + '–' + interval.endTime,
         reason: ''
       }]);
-      return { bookingId: bookingId, seriesId: '', status: PRACTICE_STATUS.ACTIVE };
+      return {
+        bookingId: bookingId, seriesId: '', status: PRACTICE_STATUS.ACTIVE,
+        affectedDates: [interval.date]
+      };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
+  return result;
 }
 
 function createPracticeWaitlist_(session, inputValue) {
@@ -4799,7 +4834,7 @@ function createPracticeWaitlist_(session, inputValue) {
     throw new Error('候補自主練習目前只支援單次登記。');
   }
 
-  return withScriptLock_(function() {
+  var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
     assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
@@ -4895,10 +4930,14 @@ function createPracticeWaitlist_(session, inputValue) {
         seriesId: '',
         status: PRACTICE_STATUS.WAITLISTED,
         calendarId: calendarId,
-        calendarIds: linkedCalendarIds
+        calendarIds: linkedCalendarIds,
+        affectedDates: [date]
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
+  return result;
 }
 
 function joinPracticeBooking_(session, inputValue) {
@@ -5024,10 +5063,13 @@ function joinPracticeBooking_(session, inputValue) {
         date: booking.date,
         room: booking.room,
         startTime: interval.startTime,
-        endTime: interval.endTime
+        endTime: interval.endTime,
+        affectedDates: targetBookings.map(function(item) { return item.date; })
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
   var recipients = result.creatorName && result.creatorName !== teacherName
     ? [result.creatorName]
     : [];
@@ -5198,10 +5240,13 @@ function leavePracticeBooking_(session, inputValue) {
         date: booking.date,
         room: booking.room,
         startTime: primaryResult.startTime || booking.startTime,
-        endTime: primaryResult.endTime || booking.endTime
+        endTime: primaryResult.endTime || booking.endTime,
+        affectedDates: targetBookings.map(function(item) { return item.date; })
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
   if (result.notifyTeacherNames.length) {
     var message = {
       heading: '有人退出自主練習',
@@ -5395,10 +5440,13 @@ function updatePracticeBooking_(session, inputValue) {
         startTime: interval.startTime,
         endTime: interval.endTime,
         affectedOccurrences: targetBookings.length,
-        teacherNames: activeParticipants.map(function(item) { return item.teacherName; })
+        teacherNames: activeParticipants.map(function(item) { return item.teacherName; }),
+        affectedDates: targetBookings.map(function(item) { return item.date; }).concat([interval.date])
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
   var recipients = result.teacherNames.filter(function(name, index, all) {
     return name && name !== actor && all.indexOf(name) === index;
   });
@@ -5499,10 +5547,13 @@ function cancelPracticeBooking_(session, inputValue) {
         room: booking.room,
         startTime: booking.startTime,
         endTime: booking.endTime,
-        teacherNames: targetParticipants.map(function(item) { return item.teacherName; })
+        teacherNames: targetParticipants.map(function(item) { return item.teacherName; }),
+        affectedDates: targetBookings.map(function(item) { return item.date; })
       };
     });
   });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  delete result.affectedDates;
   var recipients = result.teacherNames.filter(function(name, index, all) {
     return name && name !== actor && all.indexOf(name) === index;
   });
@@ -6006,6 +6057,7 @@ function runScheduledPracticeReconciliation() {
       currentObRows: getPracticeSnapshotRowsForDates_(dates),
       conservativeFallback: true
     });
+    invalidatePracticeDayViewCache_(dates);
     fallbackResult.courseSource = 'snapshot';
     fallbackResult.courseWarning = 'OB 即時課表讀取失敗，已以最後同步課表保守核對。';
     return fallbackResult;
@@ -6015,6 +6067,7 @@ function runScheduledPracticeReconciliation() {
     throughDate: throughDate,
     currentObRows: currentObRows
   });
+  invalidatePracticeDayViewCache_(dates);
   liveResult.courseSource = 'live';
   liveResult.courseWarning = '';
   return liveResult;
@@ -7639,6 +7692,7 @@ function refreshPracticeAfterCourseClosure_(resultValue) {
       courseSource: 'unavailable'
     };
   }
+  invalidatePracticeDayViewCache_(date);
   return result.practiceRefresh;
 }
 

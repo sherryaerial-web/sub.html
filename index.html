@@ -2383,7 +2383,7 @@
     let inboxFilter = "all";
     let practiceAdminDashboard = null;
     let studentPracticeAdminDashboard = null;
-    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+    let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, dayRequests: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
     let activeViewId = "";
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
@@ -3713,7 +3713,7 @@
       mySubsRecordMonth = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
-      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+      practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, dayRequests: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
     }
 
     function updateActingMode() {
@@ -4236,23 +4236,28 @@
         renderPracticeView(cached);
         return;
       }
-      const requestSerial = Number(practiceState.requestSerial || 0) + 1;
-      practiceState.requestSerial = requestSerial;
       const calendar = byId("practice-calendar");
       if (cached) renderPracticeView(cached);
       beginReadRefresh(calendar, !!cached, '<div class="state">載入教室行程中...</div>');
+      let request = practiceState.dayRequests?.[date];
+      if (!request || options.forceRefresh === true) {
+        request = callPostApi("getPracticeDay", { date });
+        practiceState.dayRequests[date] = request;
+        request.finally(() => {
+          if (practiceState.dayRequests[date] === request) delete practiceState.dayRequests[date];
+        }).catch(() => {});
+      }
       try {
-        const data = await callPostApi("getPracticeDay", { date });
-        if (requestSerial !== practiceState.requestSerial) return;
+        const data = await request;
         practiceState.dayCache[date] = data;
         practiceState.dayCacheFetchedAt[date] = Date.now();
-        renderPracticeView(data);
+        if (practiceState.date === date) renderPracticeView(data);
       } catch (error) {
-        if (requestSerial !== practiceState.requestSerial) return;
+        if (practiceState.date !== date) return;
         if (!cached) calendar.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
         else setNotice(`自主練習更新失敗：${error.message}`, "error");
       } finally {
-        if (requestSerial === practiceState.requestSerial) endReadRefresh(calendar);
+        if (practiceState.date === date) endReadRefresh(calendar);
       }
     }
 

@@ -3589,6 +3589,36 @@ test('practice day reuses a fresh same-date response instead of repeatedly calli
   assert.equal(requestActions.filter((action) => action === 'getPracticeDay').length, 1);
 });
 
+test('practice day shares one in-flight request when the same date is opened twice', async () => {
+  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  const first = vm.runInContext('loadPracticeDay("2026/09/10")', context);
+  const second = vm.runInContext('loadPracticeDay("2026/09/10")', context);
+  await Promise.resolve();
+
+  const requests = submittedForms.filter((form) => form.fields.action === 'getPracticeDay');
+  assert.equal(requests.length, 1);
+
+  const request = requests[0];
+  emitWindowEvent('message', {
+    origin: 'https://script.googleusercontent.com',
+    source: request.frameWindow,
+    data: {
+      source: 'sherry-gas-relay',
+      requestId: request.fields.requestId,
+      payload: {
+        status: 'success',
+        data: {
+          date: '2026/09/10', teacherName: '小琪', quickDurations: [60, 90, 120],
+          rooms: ['A', 'B', 'C', 'D'].map((room) => ({ room, blocks: [] })),
+        },
+      },
+    },
+  });
+  await Promise.all([first, second]);
+
+  assert.equal(vm.runInContext('practiceState.data.date', context), '2026/09/10');
+});
+
 test('practice calendar orders cards by actual start time and puts simultaneous cards in one row', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceFixture = {

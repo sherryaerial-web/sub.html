@@ -532,13 +532,45 @@ test('course administrators have one notification center for manual sends schedu
   assert.ok(requestActions.includes('getNotificationAdminDashboard'));
   const rendered = getElement('admin-tab-content').innerHTML;
   assert.match(rendered, /每月營運流程/);
+  assert.match(rendered, /下一步/);
   assert.match(rendered, /開放請假並通知/);
   assert.match(rendered, /2026-10-23/);
-  assert.ok(rendered.indexOf('每月營運流程') < rendered.indexOf('id="manual-notification-form"'));
   assert.match(rendered, /data-admin-action=["']open-monthly-vvip["']/);
-  assert.match(rendered, /id=["']manual-notification-form["']/);
+  assert.match(rendered, /data-notification-section=["']schedules["']/);
+  assert.match(rendered, /data-notification-section=["']manual["']/);
+  assert.match(rendered, /data-notification-section=["']history["']/);
+  assert.match(rendered, /查看完整流程/);
+  assert.doesNotMatch(rendered, /id=["']manual-notification-form["']/);
+  assert.doesNotMatch(rendered, /id=["']notification-schedule-form["']/);
   assert.match(rendered, /22:30–22:34/);
   assert.match(rendered, /23:40–23:44/);
+});
+
+test('notification center reveals compact forms only in their selected workspace', async () => {
+  const dashboard = {
+    teachers: ['冠蓉', 'Tako', 'Jina'], administrators: ['冠蓉', 'Tako'], closureWindows: [], history: [],
+    schedules: [{ id: 'schedule-1', name: '月底提醒', day: 'last', time: '21:00', audienceMode: 'admins', teacherNames: [], heading: '提醒', content: '請處理', enabled: true }],
+  };
+  const { context, getElement } = createFrontendRuntime({ getNotificationAdminDashboard: dashboard });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications';", context);
+
+  await context.fetchNotificationAdminDashboard();
+  let rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /月底提醒/);
+  assert.match(rendered, /新增排程/);
+  assert.doesNotMatch(rendered, /id=["']notification-schedule-form["']/);
+
+  vm.runInContext("notificationCenterSection = 'manual'; renderNotificationAdminTab();", context);
+  rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /id=["']manual-notification-form["']/);
+  assert.match(rendered, /id=["']manual-recipient-search["']/);
+  assert.match(rendered, /data-notification-recipient-field=["']manual["'][^>]*hidden/);
+  assert.doesNotMatch(rendered, /id=["']notification-schedule-form["']/);
+
+  vm.runInContext("notificationCenterSection = 'schedules'; notificationScheduleEditorOpen = true; renderNotificationAdminTab();", context);
+  rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /id=["']notification-schedule-form["']/);
+  assert.match(rendered, /data-notification-recipient-field=["']schedule["'][^>]*hidden/);
 });
 
 test('monthly operations links to the existing VVIP administration tab', async () => {

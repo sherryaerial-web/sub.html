@@ -811,14 +811,22 @@
     .admin-tab-count { display: inline-grid; min-width: 20px; height: 20px; place-items: center; padding: 0 5px; border-radius: 4px; background: var(--soft); color: var(--muted); font-size: 10px; }
     .admin-tab.active .admin-tab-count { background: var(--surface); color: var(--sea-700); }
     .admin-tab-content { margin-top: 12px; }
-    .notification-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+    .notification-layout { display: grid; gap: 12px; }
     .notification-panel { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
     .notification-panel.full { grid-column: 1 / -1; }
     .notification-panel h3 { margin: 0 0 4px; font-size: 15px; }
+    .notification-section-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .notification-section-button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 7px; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 750; }
+    .notification-section-button.active { background: var(--surface); color: var(--sea-800); box-shadow: var(--shadow-sm); }
+    .notification-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .notification-section-head-copy { min-width: 0; }
     .notification-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
     .notification-form-grid .full { grid-column: 1 / -1; }
     .notification-field { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
     .notification-field textarea { min-height: 92px; resize: vertical; }
+    .notification-recipient-field[hidden] { display: none; }
+    .notification-recipient-tools { display: grid; gap: 7px; }
+    .notification-recipient-summary { color: var(--sea-800); font-size: 11px; font-weight: 750; }
     .notification-recipient-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; max-height: 210px; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
     .notification-recipient { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 6px; background: var(--surface); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
     .notification-schedule-list, .notification-history-list { display: grid; gap: 8px; margin-top: 12px; }
@@ -826,7 +834,17 @@
     .notification-schedule-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
     .notification-window-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .notification-window-strip span { padding: 6px 8px; border-radius: 6px; background: var(--aqua-100); color: var(--sea-800); font-size: 11px; font-weight: 750; }
-    .monthly-operations-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 14px; }
+    .monthly-operations-summary { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .monthly-summary-chip { padding: 5px 8px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: 700; }
+    .monthly-next-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 18px; border: 1px solid #d7c0b8; border-radius: 14px; background: linear-gradient(135deg, #fffaf7 0%, var(--aqua-100) 100%); }
+    .monthly-next-label { margin-bottom: 7px; color: #9a6d62; font-size: 10px; font-weight: 850; letter-spacing: .12em; }
+    .monthly-next-title { margin: 0; font-size: 18px; line-height: 1.35; }
+    .monthly-flow-details { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    .monthly-flow-details > summary { display: flex; min-height: 44px; align-items: center; justify-content: space-between; padding: 10px 12px; color: var(--sea-800); cursor: pointer; font-size: 12px; font-weight: 750; list-style: none; }
+    .monthly-flow-details > summary::-webkit-details-marker { display: none; }
+    .monthly-flow-details > summary::after { content: "＋"; color: var(--subtle); font-size: 16px; }
+    .monthly-flow-details[open] > summary::after { content: "－"; }
+    .monthly-flow-body { display: grid; gap: 10px; padding: 0 12px 12px; }
     .monthly-operations-list { display: grid; gap: 8px; }
     .monthly-operation-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
     .monthly-operation-row.is-completed { background: var(--success-soft); }
@@ -1422,9 +1440,15 @@
       .course-adjustment-arrow { min-height: 24px; transform: rotate(90deg); }
       .notification-layout { grid-template-columns: 1fr; }
       .notification-panel.full { grid-column: auto; }
+      .notification-section-nav { position: sticky; top: 112px; z-index: 17; margin-right: -14px; margin-left: -14px; padding: 7px 14px; border-right: 0; border-left: 0; border-radius: 0; background: rgba(243, 240, 235, .96); backdrop-filter: blur(12px); }
+      .notification-section-button { min-height: 40px; padding: 7px 8px; }
+      .notification-section-head { align-items: stretch; flex-direction: column; }
+      .notification-section-head .primary-button { width: 100%; justify-content: center; }
       .notification-form-grid { grid-template-columns: 1fr; }
       .notification-form-grid .full { grid-column: auto; }
       .monthly-operation-row { grid-template-columns: 1fr; }
+      .monthly-next-card { grid-template-columns: 1fr; padding: 15px; }
+      .monthly-next-card .primary-button, .monthly-next-card .danger-button { width: 100%; justify-content: center; }
       .notification-recipient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .inbox-header { align-items: stretch; }
       .inbox-header .compact-button { width: 100%; }
@@ -2033,6 +2057,8 @@
     let mySubsRecordMonth = "";
     const myPayrollSnapshotHtml = new Map();
     let activeAdminTab = "pendingInvitations";
+    let notificationCenterSection = "schedules";
+    let notificationScheduleEditorOpen = false;
     let requestDialogState = null;
     let notificationPreviewState = null;
     let pushSdk = null;
@@ -2681,10 +2707,22 @@
       const teachers = (notificationDashboard && notificationDashboard.teachers) || [];
       const selected = new Set(selectedNames || []);
       return `<div class="notification-recipient-grid">${teachers.map((name) => `
-        <label class="notification-recipient">
+        <label class="notification-recipient" data-notification-recipient-name="${escapeHtml(String(name).toLowerCase())}">
           <input type="checkbox" name="${escapeHtml(prefix)}-recipient" value="${escapeHtml(name)}"${selected.has(name) ? " checked" : ""}>
           <span>${escapeHtml(name)}</span>
         </label>`).join("")}</div>`;
+    }
+
+    function renderNotificationRecipientPicker(prefix, audienceMode = "admins", selectedNames = []) {
+      return `
+        <div class="notification-field full notification-recipient-field" data-notification-recipient-field="${escapeHtml(prefix)}"${audienceMode === "selected" ? "" : " hidden"}>
+          <span>指定老師</span>
+          <div class="notification-recipient-tools">
+            <input id="${escapeHtml(prefix)}-recipient-search" class="text-input" type="search" placeholder="搜尋老師">
+            <div class="notification-recipient-summary" data-notification-recipient-summary="${escapeHtml(prefix)}">${selectedNames.length ? `已選 ${selectedNames.length} 位` : "尚未選擇老師"}</div>
+            ${renderNotificationRecipientGrid(prefix, selectedNames)}
+          </div>
+        </div>`;
     }
 
     function notificationAudienceSummary(mode, teacherNames = []) {
@@ -2770,7 +2808,8 @@
       const monthly = data && data.monthlyOperations;
       if (!monthly) return "";
       const system = monthly.systemState || {};
-      const operationRows = (monthly.operations || []).map((item) => {
+      const operations = monthly.operations || [];
+      const renderOperationRow = (item) => {
         const completed = item.status === "completed";
         const retryNotification = completed && item.notificationPending;
         const enabled = Boolean(item.canExecute) && (!completed || retryNotification);
@@ -2790,7 +2829,26 @@
             </div>
             <button class="${retryNotification ? "danger-button" : "primary-button"} inline-button" type="button" data-admin-action="execute-monthly-operation" data-operation-id="${escapeHtml(item.id)}"${enabled ? "" : " disabled"}><i data-lucide="${retryNotification ? "refresh-cw" : "play"}"></i>${escapeHtml(buttonLabel)}</button>
           </article>`;
-      }).join("");
+      };
+      const nextOperation = operations.find((item) => Boolean(item.canExecute) && (item.status !== "completed" || item.notificationPending))
+        || operations.find((item) => item.status !== "completed")
+        || null;
+      const nextCompleted = nextOperation && nextOperation.status === "completed";
+      const nextRetry = Boolean(nextCompleted && nextOperation.notificationPending);
+      const nextEnabled = Boolean(nextOperation && nextOperation.canExecute) && (!nextCompleted || nextRetry);
+      const nextAction = nextOperation ? `
+        <article class="monthly-next-card">
+          <div>
+            <div class="monthly-next-label">下一步</div>
+            <h3 class="monthly-next-title">${escapeHtml(nextOperation.label)}</h3>
+            <div class="item-meta">建議時間：${escapeHtml(formatMonthlyOperationsAt(nextOperation.recommendedAt))}</div>
+            <div class="monthly-operation-status"><span class="status-pill">${escapeHtml(monthlyOperationStatusLabel(nextOperation))}</span></div>
+            ${nextOperation.lastError ? `<div class="item-meta error">${escapeHtml(nextOperation.lastError)}</div>` : ""}
+          </div>
+          <button class="${nextRetry ? "danger-button" : "primary-button"} inline-button" type="button" data-admin-action="execute-monthly-operation" data-operation-id="${escapeHtml(nextOperation.id)}"${nextEnabled ? "" : " disabled"}><i data-lucide="${nextRetry ? "refresh-cw" : "play"}"></i>${escapeHtml(nextRetry ? "重試通知" : nextOperation.label)}</button>
+        </article>` : `
+        <article class="monthly-next-card"><div><div class="monthly-next-label">本月進度</div><h3 class="monthly-next-title">目前沒有待處理操作</h3></div></article>`;
+      const operationRows = operations.map(renderOperationRow).join("");
       const automaticRows = (monthly.automaticReminders || []).map((item) => `
         <div class="monthly-automatic-row">
           <div><strong>${escapeHtml(item.label)}</strong><div class="item-meta">${escapeHtml(formatMonthlyOperationsAt(item.scheduledAt))}｜${escapeHtml(notificationAudienceLabel(item.audienceMode))}</div></div>
@@ -2811,20 +2869,28 @@
           </div>
         </div>`).join("");
       return `
-        <section class="notification-panel full">
-          <h3>每月營運流程｜${escapeHtml(monthly.month)}</h3>
-          <div class="monthly-operations-summary item-meta">
-            <span>一般預約日：${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</span>
-            <span>請假：${system.leavePaused ? "已關閉" : "開放中"}</span>
-            <span>代課領取：${system.claimsPaused ? "已關閉" : "開放中"}</span>
-            <span>邀請中：${Number(system.openInvitationCount) || 0} 筆</span>
+        <section class="notification-panel full notification-monthly-panel">
+          <div class="notification-section-head">
+            <div class="notification-section-head-copy">
+              <h3>每月營運流程｜${escapeHtml(monthly.month)}</h3>
+              <div class="monthly-operations-summary">
+                <span class="monthly-summary-chip">預約日 ${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</span>
+                <span class="monthly-summary-chip">請假 ${system.leavePaused ? "已關閉" : "開放中"}</span>
+                <span class="monthly-summary-chip">代課 ${system.claimsPaused ? "已關閉" : "開放中"}</span>
+                <span class="monthly-summary-chip">邀請中 ${Number(system.openInvitationCount) || 0}</span>
+              </div>
+            </div>
+            <button class="compact-button" type="button" data-admin-action="open-monthly-vvip"><i data-lucide="crown"></i>VVIP 管理</button>
           </div>
-          <div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="open-monthly-vvip"><i data-lucide="crown"></i>前往 VVIP 管理</button></div>
           ${monthly.schedule && monthly.schedule.substituteScheduleConflict ? '<div class="notice visible error">本月日期較緊，代課／特別課若要保留完整 5 天，會超過建議結束日；請依現況決定。</div>' : ""}
-          <div class="monthly-operations-list">${operationRows || '<div class="state">目前沒有可顯示的月度操作</div>'}</div>
-          <details class="admin-control"><summary><strong>自動提醒時間</strong></summary><div class="monthly-automatic-list">${automaticRows}</div></details>
-          <details class="admin-control"><summary><strong>編輯月度通知文字</strong></summary>
-            <form id="monthly-operations-template-form">${templateRows}<div class="admin-item-actions"><button class="primary-button inline-button" type="submit"><i data-lucide="save"></i>儲存月度通知文字</button></div></form>
+          ${nextAction}
+          <details class="monthly-flow-details"><summary>查看完整流程</summary><div class="monthly-flow-body">
+            <div class="monthly-operations-list">${operationRows || '<div class="state">目前沒有可顯示的月度操作</div>'}</div>
+            <details class="admin-control"><summary><strong>自動提醒時間</strong></summary><div class="monthly-automatic-list">${automaticRows}</div></details>
+            <details class="admin-control"><summary><strong>編輯月度通知文字</strong></summary>
+              <form id="monthly-operations-template-form">${templateRows}<div class="admin-item-actions"><button class="primary-button inline-button" type="submit"><i data-lucide="save"></i>儲存月度通知文字</button></div></form>
+            </details>
+          </div>
           </details>
         </section>`;
     }
@@ -2855,44 +2921,76 @@
           <div class="item-meta">${escapeHtml(item.sentAt)}｜${escapeHtml(item.actor)}｜${escapeHtml(item.recipients || "未記錄收件人")}</div>
         </div>`).join("") || '<div class="state">目前尚無推播紀錄</div>';
       const closureWindows = (data.closureWindows || []).map((item) => `<span>${escapeHtml(item.stage)} ${escapeHtml(item.time)}</span>`).join("");
+      const navigation = `
+        <nav class="notification-section-nav" aria-label="通知中心功能">
+          <button class="notification-section-button${notificationCenterSection === "schedules" ? " active" : ""}" type="button" data-admin-action="switch-notification-section" data-notification-section="schedules"><i data-lucide="calendar-clock"></i>自動排程</button>
+          <button class="notification-section-button${notificationCenterSection === "manual" ? " active" : ""}" type="button" data-admin-action="switch-notification-section" data-notification-section="manual"><i data-lucide="send"></i>手動推播</button>
+          <button class="notification-section-button${notificationCenterSection === "history" ? " active" : ""}" type="button" data-admin-action="switch-notification-section" data-notification-section="history"><i data-lucide="history"></i>發送紀錄</button>
+        </nav>`;
+      const manualPanel = `
+        <section class="notification-panel full">
+          <div class="notification-section-head"><div class="notification-section-head-copy"><h3>手動推播</h3><div class="item-meta">先選收件方式，確認預覽後才會送出。</div></div></div>
+          <form id="manual-notification-form" class="notification-form-grid">
+            <label class="notification-field full">通知標題<input id="manual-notification-heading" class="text-input" type="text" maxlength="80" required></label>
+            <label class="notification-field full">通知內容<textarea id="manual-notification-content" class="text-input" maxlength="500" required></textarea></label>
+            <label class="notification-field full">收件方式<select id="manual-notification-audience" class="admin-select"><option value="admins">冠蓉＋Tako 管理員</option><option value="all">全部在職老師</option><option value="selected">指定老師</option></select></label>
+            ${renderNotificationRecipientPicker("manual", "admins")}
+            <div class="admin-item-actions full"><button class="primary-button inline-button" type="submit"><i data-lucide="eye"></i>預覽並送出</button></div>
+          </form>
+        </section>`;
+      const scheduleEditor = notificationScheduleEditorOpen ? `
+        <section class="notification-panel full notification-schedule-editor">
+          <div class="notification-section-head"><div class="notification-section-head-copy"><h3>${"建立／編輯排程"}</h3><div class="item-meta">儲存後由既有觸發器依時間執行，不會重複發送。</div></div></div>
+          <form id="notification-schedule-form" class="notification-form-grid">
+            <input id="notification-schedule-id" type="hidden">
+            <label class="notification-field">排程名稱<input id="notification-schedule-name" class="text-input" type="text" maxlength="60" required></label>
+            <label class="notification-field">每月日期<select id="notification-schedule-day" class="admin-select"><option value="last">月底</option>${Array.from({ length: 31 }, (_, index) => `<option value="${index + 1}">${index + 1} 日</option>`).join("")}</select></label>
+            <label class="notification-field">時間<input id="notification-schedule-time" class="text-input" type="time" required></label>
+            <label class="notification-field">收件方式<select id="notification-schedule-audience" class="admin-select"><option value="admins">冠蓉＋Tako 管理員</option><option value="all">全部在職老師</option><option value="selected">指定老師</option></select></label>
+            <label class="notification-field full">通知標題<input id="notification-schedule-heading" class="text-input" type="text" maxlength="80" required></label>
+            <label class="notification-field full">通知內容<textarea id="notification-schedule-content" class="text-input" maxlength="500" required></textarea></label>
+            ${renderNotificationRecipientPicker("schedule", "admins")}
+            <div class="admin-item-actions full"><button class="primary-button inline-button" type="submit"><i data-lucide="save"></i>儲存排程</button><button class="compact-button" type="button" data-admin-action="close-notification-schedule-editor"><i data-lucide="x"></i>取消</button></div>
+          </form>
+        </section>` : "";
+      const schedulesPanel = `
+        <section class="notification-panel full">
+          <div class="notification-section-head">
+            <div class="notification-section-head-copy"><h3>固定排程</h3><div class="item-meta">固定提醒會在設定時間自動送出。</div></div>
+            <button class="primary-button inline-button" type="button" data-admin-action="open-notification-schedule-editor"><i data-lucide="plus"></i>新增排程</button>
+          </div>
+          ${closureWindows ? `<div class="notification-window-strip">${closureWindows}</div>` : ""}
+          <div class="notification-schedule-list">${schedules}</div>
+        </section>${scheduleEditor}`;
+      const historyPanel = `<section class="notification-panel full"><div class="notification-section-head"><div class="notification-section-head-copy"><h3>最近發送紀錄</h3><div class="item-meta">由新到舊顯示最近的通知結果。</div></div></div><div class="notification-history-list">${history}</div></section>`;
       content.innerHTML = `
         <div class="notification-layout">
           ${renderMonthlyOperationsPanel(data)}
-          <section class="notification-panel">
-            <h3>手動推播</h3>
-            <div class="item-meta">勾選收件人後可直接從這裡送出，不必再到 OneSignal。</div>
-            <form id="manual-notification-form" class="notification-form-grid">
-              <label class="notification-field full">通知標題<input id="manual-notification-heading" class="text-input" type="text" maxlength="80" required></label>
-              <label class="notification-field full">通知內容<textarea id="manual-notification-content" class="text-input" maxlength="500" required></textarea></label>
-              <label class="notification-field full">收件方式<select id="manual-notification-audience" class="admin-select"><option value="selected">指定老師</option><option value="admins">冠蓉＋Tako 管理員</option><option value="all">全部在職老師</option></select></label>
-              <div class="notification-field full">指定老師${renderNotificationRecipientGrid("manual")}</div>
-              <div class="admin-item-actions full"><button class="primary-button inline-button" type="submit"><i data-lucide="send"></i>確認並送出</button></div>
-            </form>
-          </section>
-          <section class="notification-panel">
-            <h3>固定排程</h3>
-            <div class="item-meta">現有每 5 分鐘觸發器會在下列容許時間內執行，不會重複送出。</div>
-            <div class="notification-window-strip">${closureWindows}</div>
-            <form id="notification-schedule-form" class="notification-form-grid">
-              <input id="notification-schedule-id" type="hidden">
-              <label class="notification-field">排程名稱<input id="notification-schedule-name" class="text-input" type="text" maxlength="60" required></label>
-              <label class="notification-field">每月日期<select id="notification-schedule-day" class="admin-select"><option value="last">月底</option>${Array.from({ length: 31 }, (_, index) => `<option value="${index + 1}">${index + 1} 日</option>`).join("")}</select></label>
-              <label class="notification-field">時間<input id="notification-schedule-time" class="text-input" type="time" required></label>
-              <label class="notification-field">收件方式<select id="notification-schedule-audience" class="admin-select"><option value="admins">冠蓉＋Tako 管理員</option><option value="all">全部在職老師</option><option value="selected">指定老師</option></select></label>
-              <label class="notification-field full">通知標題<input id="notification-schedule-heading" class="text-input" type="text" maxlength="80" required></label>
-              <label class="notification-field full">通知內容<textarea id="notification-schedule-content" class="text-input" maxlength="500" required></textarea></label>
-              <div class="notification-field full">指定老師${renderNotificationRecipientGrid("schedule")}</div>
-              <div class="admin-item-actions full"><button class="primary-button inline-button" type="submit"><i data-lucide="save"></i>儲存排程</button><button class="compact-button" type="button" data-admin-action="clear-notification-schedule"><i data-lucide="rotate-ccw"></i>清空表單</button></div>
-            </form>
-          </section>
-          <section class="notification-panel full"><h3>已設定排程</h3><div class="notification-schedule-list">${schedules}</div></section>
-          <section class="notification-panel full"><h3>最近發送紀錄</h3><div class="notification-history-list">${history}</div></section>
+          ${navigation}
+          ${notificationCenterSection === "manual" ? manualPanel : notificationCenterSection === "history" ? historyPanel : schedulesPanel}
         </div>`;
       refreshIcons();
     }
 
     function selectedNotificationRecipients(prefix) {
       return [...document.querySelectorAll(`input[name="${prefix}-recipient"]:checked`)].map((input) => input.value);
+    }
+
+    function syncNotificationRecipientPicker(prefix) {
+      const audience = byId(`${prefix === "manual" ? "manual-notification" : "notification-schedule"}-audience`);
+      const field = document.querySelector(`[data-notification-recipient-field="${prefix}"]`);
+      if (!audience || !field) return;
+      field.hidden = audience.value !== "selected";
+      const selected = selectedNotificationRecipients(prefix);
+      const summary = field.querySelector(`[data-notification-recipient-summary="${prefix}"]`);
+      if (summary) summary.textContent = selected.length ? `已選 ${selected.length} 位` : "尚未選擇老師";
+    }
+
+    function filterNotificationRecipients(prefix, query) {
+      const normalized = String(query || "").trim().toLowerCase();
+      document.querySelectorAll(`[data-notification-recipient-field="${prefix}"] [data-notification-recipient-name]`).forEach((label) => {
+        label.hidden = Boolean(normalized) && !String(label.dataset.notificationRecipientName || "").includes(normalized);
+      });
     }
 
     function clearNotificationScheduleForm() {
@@ -2916,6 +3014,7 @@
       byId("notification-schedule-audience").value = schedule.audienceMode;
       const selected = new Set(schedule.teacherNames || []);
       document.querySelectorAll('input[name="schedule-recipient"]').forEach((input) => { input.checked = selected.has(input.value); });
+      syncNotificationRecipientPicker("schedule");
       byId("notification-schedule-form").scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
@@ -2979,6 +3078,7 @@
       };
       await callApi("saveNotificationSchedule", { schedule });
       setNotice("通知排程已儲存。");
+      notificationScheduleEditorOpen = false;
       await fetchNotificationAdminDashboard();
     }
 
@@ -7123,11 +7223,32 @@ https://sherryaerial-web.github.io/sub.html/
       if (!button) return;
       try {
         const action = button.dataset.adminAction;
+        if (action === "switch-notification-section") {
+          notificationCenterSection = button.dataset.notificationSection || "schedules";
+          notificationScheduleEditorOpen = false;
+          renderNotificationAdminTab();
+          return;
+        }
+        if (action === "open-notification-schedule-editor") {
+          notificationCenterSection = "schedules";
+          notificationScheduleEditorOpen = true;
+          renderNotificationAdminTab();
+          byId("notification-schedule-name")?.focus();
+          return;
+        }
+        if (action === "close-notification-schedule-editor") {
+          notificationScheduleEditorOpen = false;
+          renderNotificationAdminTab();
+          return;
+        }
         if (action === "toggle-teacher-round") {
           toggleAdminTeacherRound(button);
           return;
         }
         if (action === "edit-notification-schedule") {
+          notificationCenterSection = "schedules";
+          notificationScheduleEditorOpen = true;
+          renderNotificationAdminTab();
           populateNotificationScheduleForm(button.dataset.scheduleId);
           return;
         }
@@ -7413,8 +7534,25 @@ https://sherryaerial-web.github.io/sub.html/
       } catch (error) { setNotice(error.message, "error"); }
     });
     byId("admin-tab-content").addEventListener("change", (event) => {
-      if (!event.target.matches || !event.target.matches(".admin-teacher-checkbox")) return;
-      syncAdminTeacherRoundButton(event.target.closest(".teacher-round"));
+      if (!event.target.matches) return;
+      if (event.target.matches(".admin-teacher-checkbox")) {
+        syncAdminTeacherRoundButton(event.target.closest(".teacher-round"));
+        return;
+      }
+      if (event.target.id === "manual-notification-audience") {
+        syncNotificationRecipientPicker("manual");
+        return;
+      }
+      if (event.target.id === "notification-schedule-audience") {
+        syncNotificationRecipientPicker("schedule");
+        return;
+      }
+      if (event.target.name === "manual-recipient") syncNotificationRecipientPicker("manual");
+      if (event.target.name === "schedule-recipient") syncNotificationRecipientPicker("schedule");
+    });
+    byId("admin-tab-content").addEventListener("input", (event) => {
+      if (event.target.id === "manual-recipient-search") filterNotificationRecipients("manual", event.target.value);
+      if (event.target.id === "schedule-recipient-search") filterNotificationRecipients("schedule", event.target.value);
     });
     byId("admin-tab-content").addEventListener("submit", async (event) => {
       event.preventDefault();

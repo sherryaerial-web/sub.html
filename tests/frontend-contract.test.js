@@ -557,6 +557,41 @@ test('course administrators have one notification center for manual sends schedu
   assert.match(operations, /data-admin-action=["']open-monthly-vvip["']/);
 });
 
+test('monthly operations next step skips overdue actions but keeps them in the full flow', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉', 'Tako'],
+      administrators: ['冠蓉', 'Tako'],
+      monthlyOperations: {
+        month: '2026-09',
+        now: '2026-09-07 14:34',
+        schedule: { bookingDate: '2026-09-18', substituteScheduleConflict: false },
+        systemState: { leavePaused: false, claimsPaused: false, openInvitationCount: 0 },
+        automaticReminders: [],
+        operations: [
+          { id: 'publish_payroll_review', label: '發布上月薪資並通知老師', recommendedAt: '2026-09-01 21:00', canExecute: true, early: false, status: 'pending', notificationPending: false },
+          { id: 'open_leave', label: '開放請假並通知', recommendedAt: '2026-09-07 21:00', canExecute: false, early: false, status: 'completed', notificationPending: false },
+          { id: 'leave_deadline_reminder', label: '發送請假截止提醒', recommendedAt: '2026-09-10 21:00', canExecute: true, early: true, status: 'pending', notificationPending: false },
+        ],
+        templates: {},
+      },
+      closureWindows: [],
+      schedules: [],
+      history: [],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin']; activeAdminTab = 'notifications';", context);
+
+  await context.fetchNotificationAdminDashboard();
+
+  vm.runInContext("activeAdminSection = 'operations'; activeAdminTab = 'operationsOverview'; renderAdminTab(true);", context);
+  const rendered = getElement('admin-tab-content').innerHTML;
+  const nextCard = rendered.match(/<article class="monthly-next-card">([\s\S]*?)<\/article>/)?.[1] || '';
+  assert.match(nextCard, /發送請假截止提醒/);
+  assert.doesNotMatch(nextCard, /發布上月薪資並通知老師/);
+  assert.match(rendered, /發布上月薪資並通知老師/);
+});
+
 test('notification center reveals compact forms only in their selected workspace', async () => {
   const dashboard = {
     teachers: ['冠蓉', 'Tako', 'Jina'], administrators: ['冠蓉', 'Tako'], closureWindows: [], history: [],

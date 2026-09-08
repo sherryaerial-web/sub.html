@@ -11,7 +11,9 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, '..');
 const source = await fs.readFile(path.join(repoDir, 'student-practice.html'), 'utf8');
 
-const html = source.replace('<script src="student-practice.js"></script>', '');
+const html = source
+  .replace('<script src="student-practice.js"></script>', '')
+  .replace(/\s*<script src="https:\/\/challenges\.cloudflare\.com\/turnstile\/[^>]+><\/script>/, '');
 
 const browser = await chromium.launch({
   headless: true,

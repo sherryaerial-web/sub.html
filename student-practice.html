@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#897b72">
+  <meta name="sherry-public-gateway-url" content="">
+  <meta name="sherry-turnstile-site-key" content="">
   <title>學生自主練習｜Sherry Aerial</title>
   <link rel="icon" href="assets/app-icon-192.png">
   <style>
@@ -24,8 +26,9 @@
     <aside class="policy"><b>登記前請注意</b><br>最晚請於開始前 2 小時完成登記。第一次使用可能需由老師確認自主練習資格；取消或換時間請洽官方 LINE，請勿重複登記。</aside>
   </main>
 
-  <dialog id="booking-dialog"><form id="booking-form" class="dialog-body"><h2 id="dialog-title">登記自主練習</h2><div id="dialog-summary" class="dialog-summary"></div><div id="identity-fields" class="identity"><label class="field">APP 名稱<input id="app-name" autocomplete="name" placeholder="請輸入 APP 內的姓名"></label><label class="field">APP 內註冊 Email<input id="app-email" type="email" autocomplete="email" placeholder="name@example.com"></label><p class="fineprint full">請填寫 APP 內使用的姓名與註冊 Email，供老師確認資格。</p></div><label id="start-field" class="field">開始時間<select id="start-time"></select></label><label id="duration-field" class="field">練習時長<select id="duration"></select></label><label class="field">備註（選填）<textarea id="student-note" rows="2" placeholder="例如：需要鞦韆"></textarea></label><div class="dialog-actions"><button id="close-booking" class="btn" type="button">返回</button><button id="submit-booking" class="btn primary" type="submit">確認送出</button></div></form></dialog>
+  <dialog id="booking-dialog"><form id="booking-form" class="dialog-body"><h2 id="dialog-title">登記自主練習</h2><div id="dialog-summary" class="dialog-summary"></div><div id="identity-fields" class="identity"><label class="field">APP 名稱<input id="app-name" autocomplete="name" placeholder="請輸入 APP 內的姓名"></label><label class="field">APP 內註冊 Email<input id="app-email" type="email" autocomplete="email" placeholder="name@example.com"></label><p class="fineprint full">請填寫 APP 內使用的姓名與註冊 Email，供老師確認資格。</p></div><label id="start-field" class="field">開始時間<select id="start-time"></select></label><label id="duration-field" class="field">練習時長<select id="duration"></select></label><label class="field">備註（選填）<textarea id="student-note" rows="2" placeholder="例如：需要鞦韆"></textarea></label><div id="student-turnstile" class="full" aria-label="人機驗證"></div><div class="dialog-actions"><button id="close-booking" class="btn" type="button">返回</button><button id="submit-booking" class="btn primary" type="submit">確認送出</button></div></form></dialog>
   <dialog id="success-dialog"><div class="dialog-body"><div class="success-mark">✓</div><h2 id="success-title">登記已成立</h2><p id="success-copy" class="success-copy"></p><button id="close-success" class="btn primary" type="button" style="width:100%">我知道了</button></div></dialog>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
   <script src="student-practice.js"></script>
 </body>
 </html>

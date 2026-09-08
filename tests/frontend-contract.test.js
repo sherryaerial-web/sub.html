@@ -362,6 +362,32 @@ test('keeps credential values out of every tracked production and documentation 
   assert.deepEqual(findings, []);
 });
 
+test('public gateway source keeps secrets local and public pages away from direct GAS', () => {
+  const repositoryRoot = path.join(__dirname, '..');
+  const ignore = fs.readFileSync(path.join(repositoryRoot, '.gitignore'), 'utf8');
+  const studentScript = fs.readFileSync(path.join(repositoryRoot, 'student-practice.js'), 'utf8');
+  const vvipHtml = fs.readFileSync(path.join(repositoryRoot, 'vvip.html'), 'utf8');
+  const workerSource = fs.readdirSync(path.join(repositoryRoot, 'cloudflare-gateway', 'src'))
+    .filter((file) => file.endsWith('.js'))
+    .map((file) => fs.readFileSync(path.join(repositoryRoot, 'cloudflare-gateway', 'src', file), 'utf8'))
+    .join('\n');
+  const readme = fs.readFileSync(path.join(repositoryRoot, 'README.md'), 'utf8');
+  const wrangler = fs.readFileSync(path.join(repositoryRoot, 'cloudflare-gateway', 'wrangler.toml'), 'utf8');
+
+  assert.match(ignore, /^\.dev\.vars$/m);
+  assert.match(ignore, /^\.env$/m);
+  assert.match(ignore, /^cloudflare-gateway\/\.wrangler\/$/m);
+  assert.doesNotMatch(studentScript, /script\.google\.com\/macros\/s\//);
+  assert.doesNotMatch(vvipHtml, /script\.google\.com\/macros\/s\//);
+  assert.match(html, /script\.google\.com\/macros\/s\//);
+  assert.doesNotMatch(workerSource, /console\.(?:log|info|warn|error)\s*\(/);
+  assert.match(wrangler, /ALLOWED_ORIGINS = "https:\/\/sherryaerial-web\.github\.io"/);
+  assert.match(wrangler, /TURNSTILE_HOSTNAMES = "sherryaerial-web\.github\.io"/);
+  assert.match(readme, /公開 API 安全閘道/);
+  assert.match(readme, /PUBLIC_GATEWAY_ENFORCED=true/);
+  assert.match(readme, /Cloudflare.*回復|回復.*Cloudflare/s);
+});
+
 test('does not use no-cors blind success writes', () => {
   assert.doesNotMatch(html, /mode\s*:\s*['"]no-cors['"]/);
   assert.match(html, /status\s*!==\s*['"]success['"]/);

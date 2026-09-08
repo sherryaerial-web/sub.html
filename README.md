@@ -221,6 +221,37 @@ OB `calendar` API 可提供課程、完整指導者、容量與出席人數，�
 
 手動執行 `initializeFirstAdminFromProperties` 一次。成功或失敗後，兩個暫存屬性都會立即刪除。必須在匯入 37 位老師前完成，因為已有帳號後不能再使用首次管理員初始化。
 
+## 公開 API 安全閘道
+
+學生自主練習與 VVIP 公開頁改由獨立 Cloudflare Worker `sherry-classroom-gateway` 存取 GAS；老師登入、管理、請假、代課與薪資仍由 `index.html` 直接連 GAS。Google Sheets 仍只由 GAS 讀寫，沒有移到 Cloudflare，也沒有新增或搬動任何試算表欄位。
+
+公開寫入須同時通過 Turnstile、每分鐘頻率限制與 Worker 到 GAS 的 HMAC 簽章。`student-practice.html`、`student-practice.js` 與 `vvip.html` 不得出現 GAS Web App URL；Turnstile site key 可以公開，Turnstile secret、GAS URL 與共用簽章秘密不可放入 Git、前端或對話。
+
+### 正式上線順序
+
+以下各階段都要分開取得明確允許；不得因為已允許寫程式，就自行推送、部署、改 Script Properties 或測試寫入正式 Sheet。
+
+1. 到 Omcean 撤銷曾出現在程式碼或對話中的舊 token；只把新 token 寫入 GAS Script Property `OMCEAN_API_TOKEN`，並確認舊 token 已失效。
+2. 在 Cloudflare 建立 staging 與 production Turnstile widget。正式 hostname 只允許 `sherryaerial-web.github.io`；記錄各環境的公開 site key，但 secret key 只存 Worker Secret。
+3. 本機產生至少 32 bytes 的隨機共用秘密。相同內容分別存入 Worker Secret `GAS_GATEWAY_SECRET` 與 GAS Script Property `CLOUDFLARE_GATEWAY_SECRET`，不可貼入文件或 commit。
+4. 在 staging Worker 設定 `GAS_UPSTREAM_URL`、`GAS_GATEWAY_SECRET`、`TURNSTILE_SECRET_KEY`；GAS 先設定 `PUBLIC_GATEWAY_ENFORCED=false`，再部署相容版 GAS。
+5. 部署 staging Worker，先驗證 `/health`、錯誤 Origin、錯誤 Turnstile、頻率限制與簽章拒絕；這些測試不得寫入正式 Sheet。
+6. 經另行允許後，使用明確命名的測試學生與 VVIP 做各一筆端到端測試，記錄實際追加的資料 ID／列，並確認 Tako 管理頁同步。清理只能依 ID 處理已核准測試列，不得清空或覆寫整張表。
+7. 設定並部署 production Worker，把實際 Worker URL 與 production Turnstile site key 填入 `student-practice.html`、`vvip.html` 的 meta 設定；完整測試通過並另行允許後才推送 GitHub Pages。
+8. 前端正式頁先在 `PUBLIC_GATEWAY_ENFORCED=false` 下驗證讀取與送出正常，確認老師／管理員首頁仍可直接登入 GAS。
+9. 最後將 GAS Script Property 改成 `PUBLIC_GATEWAY_ENFORCED=true` 並重新部署 GAS。此時直接對 GAS 送出未簽章的 `submitStudentPractice` 與 `submitVvipSelection` 必須失敗，且正式 Sheet 列數不變；經 Worker 的正常送出則必須成功。
+
+只有完成第 9 步，公開寫入才算真正被閘道保護。
+
+### Cloudflare 回復順序
+
+1. 若正式 Worker 或 Turnstile 異常，先把 GAS `PUBLIC_GATEWAY_ENFORCED` 改回 `false` 並部署，避免舊版／回復版前端被鎖死。
+2. 將 `student-practice.html`、`student-practice.js`、`vvip.html` 回復到同一個已知可用的 Git commit；不可只回復其中一頁。
+3. 確認學生自主練習與 VVIP 恢復後，再處理 Worker 回退或秘密輪替。
+4. 回復不需要還原、搬動或整張覆寫任何 Google Sheet；故障期間新增資料先保留並按 ID 人工核對。
+
+Worker 的本機測試、設定名稱與 smoke check 詳見 `cloudflare-gateway/README.md`。
+
 ## 完整部署順序
 
 1. 建立正式 Google 試算表完整副本，記錄副本名稱與建立時間；同時記錄目前可用的 Apps Script 版本號、Web App deployment ID，以及正式前端 Git commit。三者必須視為同一組可回復版本。

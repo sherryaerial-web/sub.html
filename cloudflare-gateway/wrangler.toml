@@ -2,6 +2,10 @@ name = "sherry-classroom-gateway"
 main = "src/index.js"
 compatibility_date = "2026-09-09"
 
+[vars]
+ALLOWED_ORIGINS = "https://sherryaerial-web.github.io"
+TURNSTILE_HOSTNAMES = "sherryaerial-web.github.io"
+
 [[ratelimits]]
 name = "PUBLIC_WRITE_LIMITER"
 namespace_id = "31001"
@@ -20,6 +24,10 @@ period = 60
 
 [env.staging]
 name = "sherry-classroom-gateway-staging"
+
+[env.staging.vars]
+ALLOWED_ORIGINS = "https://sherryaerial-web.github.io,http://127.0.0.1:4173,http://localhost:4173"
+TURNSTILE_HOSTNAMES = "sherryaerial-web.github.io,localhost,127.0.0.1"
 
 [[env.staging.ratelimits]]
 name = "PUBLIC_WRITE_LIMITER"

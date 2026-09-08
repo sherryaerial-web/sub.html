@@ -248,7 +248,7 @@ var CONFIG = {
   MONTHLY_OPERATIONS_TEMPLATES_PROPERTY: 'MONTHLY_OPERATIONS_TEMPLATES_V1',
   COURSE_CLOSURE_SOCIAL_COPY_PREFIX: 'COURSE_CLOSURE_SOCIAL_COPY_',
   PRACTICE_OB_DAY_CACHE_SECONDS: 60 * 60,
-  PRACTICE_DAY_VIEW_CACHE_SECONDS: 60,
+  PRACTICE_DAY_VIEW_CACHE_SECONDS: 5 * 60,
   PRACTICE_RECONCILE_HOUR_PROPERTY: 'PRACTICE_RECONCILE_HOUR_V1',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
@@ -2811,10 +2811,19 @@ function getStudentPracticeRecordsUnlocked_(spreadsheet) {
   var groupSheet = requireSheet_(spreadsheet, SHEETS.STUDENT_PRACTICE_GROUPS);
   var participantSheet = requireSheet_(spreadsheet, SHEETS.STUDENT_PRACTICE_PARTICIPANTS);
   var auditSheet = requireSheet_(spreadsheet, SHEETS.STUDENT_PRACTICE_AUDIT);
-  assertHeaders_(qualificationSheet, SHEET_HEADERS.STUDENT_PRACTICE_QUALIFICATIONS);
-  assertHeaders_(groupSheet, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS);
-  assertHeaders_(participantSheet, SHEET_HEADERS.STUDENT_PRACTICE_PARTICIPANTS);
-  assertHeaders_(auditSheet, SHEET_HEADERS.STUDENT_PRACTICE_AUDIT);
+  var qualificationValues = getSheetValuesWithExpectedHeaders_(
+    qualificationSheet,
+    SHEET_HEADERS.STUDENT_PRACTICE_QUALIFICATIONS
+  );
+  var groupValues = getSheetValuesWithExpectedHeaders_(
+    groupSheet,
+    SHEET_HEADERS.STUDENT_PRACTICE_GROUPS
+  );
+  var participantValues = getSheetValuesWithExpectedHeaders_(
+    participantSheet,
+    SHEET_HEADERS.STUDENT_PRACTICE_PARTICIPANTS
+  );
+  getSheetValuesWithExpectedHeaders_(auditSheet, SHEET_HEADERS.STUDENT_PRACTICE_AUDIT);
   return {
     sheets: {
       qualifications: qualificationSheet,
@@ -2822,7 +2831,7 @@ function getStudentPracticeRecordsUnlocked_(spreadsheet) {
       participants: participantSheet,
       audit: auditSheet
     },
-    qualifications: qualificationSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    qualifications: qualificationValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         studentId: cleanText_(row[0]),
@@ -2843,7 +2852,7 @@ function getStudentPracticeRecordsUnlocked_(spreadsheet) {
         jiantanConfirmedBy: cleanText_(row[15])
       };
     }).filter(function(item) { return item.studentId; }),
-    groups: groupSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    groups: groupValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         groupId: cleanText_(row[0]),
@@ -2858,7 +2867,7 @@ function getStudentPracticeRecordsUnlocked_(spreadsheet) {
         updatedBy: cleanText_(row[9])
       };
     }).filter(function(item) { return item.groupId; }),
-    participants: participantSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    participants: participantValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         participantId: cleanText_(row[0]),
@@ -3900,25 +3909,21 @@ function invalidatePracticeDayViewCache_(dateValues) {
 function buildSharedPracticeDayView_(dateValue) {
   var date = cleanText_(dateValue).replace(/-/g, '/');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  ensurePracticeStructureUnlocked_(ss);
   var records = getPracticeRecordsUnlocked_(ss);
-  var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
-  assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
-  var courseRows = courseSheet.getDataRange().getValues().slice(1);
+  var courseRows = [];
   var courseSource = 'snapshot';
   var courseWarning = '';
   try {
     courseRows = getPracticeCurrentObRowsForDayView_(date);
     courseSource = 'live';
   } catch (error) {
+    var courseSheet = requireSheet_(ss, SHEETS.COURSE_LIST);
+    courseRows = getSheetValuesWithExpectedHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST).slice(1);
     courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示；候補狀態會由排程或管理員更新。';
     console.warn(courseWarning, error);
   }
   var studentGroups = [];
-  if (ss.getSheetByName(SHEETS.STUDENT_PRACTICE_QUALIFICATIONS) &&
-      ss.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS) &&
-      ss.getSheetByName(SHEETS.STUDENT_PRACTICE_PARTICIPANTS) &&
-      ss.getSheetByName(SHEETS.STUDENT_PRACTICE_AUDIT)) {
+  if (ss.getSheetByName(SHEETS.STUDENT_PRACTICE_QUALIFICATIONS)) {
     var studentRecords = getStudentPracticeRecordsUnlocked_(ss);
     var qualificationsByStudent = {};
     var participantsByGroup = {};
@@ -4172,10 +4177,15 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
   var bookingSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_BOOKINGS);
   var participantSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_PARTICIPANTS);
   var exceptionSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_EXCEPTIONS);
-  assertHeaders_(seriesSheet, SHEET_HEADERS.PRACTICE_SERIES);
-  assertHeaders_(bookingSheet, SHEET_HEADERS.PRACTICE_BOOKINGS);
-  assertHeaders_(participantSheet, SHEET_HEADERS.PRACTICE_PARTICIPANTS);
-  assertHeaders_(exceptionSheet, SHEET_HEADERS.PRACTICE_EXCEPTIONS);
+  var auditSheet = requireSheet_(spreadsheet, SHEETS.PRACTICE_AUDIT);
+  var seriesValues = getSheetValuesWithExpectedHeaders_(seriesSheet, SHEET_HEADERS.PRACTICE_SERIES);
+  var bookingValues = getSheetValuesWithExpectedHeaders_(bookingSheet, SHEET_HEADERS.PRACTICE_BOOKINGS);
+  var participantValues = getSheetValuesWithExpectedHeaders_(
+    participantSheet,
+    SHEET_HEADERS.PRACTICE_PARTICIPANTS
+  );
+  var exceptionValues = getSheetValuesWithExpectedHeaders_(exceptionSheet, SHEET_HEADERS.PRACTICE_EXCEPTIONS);
+  getSheetValuesWithExpectedHeaders_(auditSheet, SHEET_HEADERS.PRACTICE_AUDIT);
 
   return {
     sheets: {
@@ -4183,9 +4193,9 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
       bookings: bookingSheet,
       participants: participantSheet,
       exceptions: exceptionSheet,
-      audit: requireSheet_(spreadsheet, SHEETS.PRACTICE_AUDIT)
+      audit: auditSheet
     },
-    series: seriesSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    series: seriesValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         seriesId: cleanText_(row[0]),
@@ -4202,7 +4212,7 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
         updatedBy: cleanText_(row[11])
       };
     }).filter(function(item) { return item.seriesId; }),
-    bookings: bookingSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    bookings: bookingValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         bookingId: cleanText_(row[0]),
@@ -4220,7 +4230,7 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
         updatedBy: cleanText_(row[12])
       };
     }).filter(function(item) { return item.bookingId; }),
-    participants: participantSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    participants: participantValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         participantId: cleanText_(row[0]),
@@ -4236,7 +4246,7 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
         leftAt: cleanText_(row[10])
       };
     }).filter(function(item) { return item.participantId; }),
-    exceptions: exceptionSheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    exceptions: exceptionValues.slice(1).map(function(row, index) {
       return {
         rowNumber: index + 2,
         exceptionId: cleanText_(row[0]),
@@ -15626,6 +15636,19 @@ function requireSheet_(spreadsheet, sheetName) {
   var sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) throw new Error('找不到工作表：「' + sheetName + '」。');
   return sheet;
+}
+
+function getSheetValuesWithExpectedHeaders_(sheet, expectedHeaders) {
+  var values = sheet.getDataRange().getValues();
+  var actual = values[0] || [];
+  expectedHeaders.forEach(function(header, index) {
+    if (cleanText_(actual[index]) !== header) {
+      throw new Error(
+        sheet.getName() + ' 第 ' + (index + 1) + ' 欄標題應為「' + header + '」。'
+      );
+    }
+  });
+  return values;
 }
 
 function assertHeaders_(sheet, expectedHeaders) {

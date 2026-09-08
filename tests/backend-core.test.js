@@ -299,6 +299,28 @@ function injectSetValuesFailureOnce(sheet, predicate, message = 'injected Sheet 
   return () => fired;
 }
 
+function trackSeparateHeaderReads(sheets) {
+  let count = 0;
+  sheets.forEach((sheet) => {
+    const originalGetRange = sheet.getRange.bind(sheet);
+    const originalGetDataRange = sheet.getDataRange.bind(sheet);
+    let readingDataRange = false;
+    sheet.getRange = (...args) => {
+      if (!readingDataRange && args[0] === 1 && args[1] === 1 && args[2] === 1) count += 1;
+      return originalGetRange(...args);
+    };
+    sheet.getDataRange = () => {
+      readingDataRange = true;
+      try {
+        return originalGetDataRange();
+      } finally {
+        readingDataRange = false;
+      }
+    };
+  });
+  return () => count;
+}
+
 function createSpreadsheetFixture(sheets) {
   return {
     sheets,
@@ -9536,6 +9558,95 @@ test('practice day briefly reuses one live OB read while booking mutations still
     date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
   });
   assert.equal(liveReads, 2);
+});
+
+test('practice day does not read the full CourseList snapshot when live OB rows are available', () => {
+  const fixture = createPracticeBackend({
+    courseRows: [[
+      '2026/09/10', '13:00', 'A－空環 Lv.1', '老師甲',
+      'cal-live', 'class-1', 'teacher-1', '否', 'stamp',
+    ]],
+  });
+  const originalGetDataRange = fixture.courseSheet.getDataRange.bind(fixture.courseSheet);
+  let snapshotReads = 0;
+  fixture.courseSheet.getDataRange = () => {
+    snapshotReads += 1;
+    return originalGetDataRange();
+  };
+
+  const result = fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(result.courseSource, 'live');
+  assert.equal(snapshotReads, 0);
+});
+
+test('practice day validates each practice sheet from its single data read', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  const getSeparateHeaderReads = trackSeparateHeaderReads([
+    fixture.seriesSheet,
+    fixture.bookingSheet,
+    fixture.participantSheet,
+    fixture.exceptionSheet,
+    fixture.practiceAuditSheet,
+  ]);
+
+  fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(getSeparateHeaderReads(), 0);
+});
+
+test('practice day validates each student practice sheet from its single data read', () => {
+  const fixture = createPracticeBackend({ courseRows: [] });
+  fixture.backend.ensureStudentPracticeStructureUnlocked_(fixture.spreadsheet);
+  const getSeparateHeaderReads = trackSeparateHeaderReads([
+    fixture.spreadsheet.getSheetByName('學生自主練習資格'),
+    fixture.spreadsheet.getSheetByName('學生自主練習場次'),
+    fixture.spreadsheet.getSheetByName('學生自主練習參與者'),
+    fixture.spreadsheet.getSheetByName('學生自主練習操作紀錄'),
+  ]);
+
+  fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+
+  assert.equal(getSeparateHeaderReads(), 0);
+});
+
+test('assembled practice day stays reusable for five minutes', () => {
+  let now = 0;
+  const cache = new Map();
+  const fixture = createPracticeBackend({
+    courseRows: [],
+    services: {
+      CacheService: {
+        getScriptCache() {
+          return {
+            get(key) {
+              const item = cache.get(key);
+              if (!item || item.expiresAt <= now) return null;
+              return item.value;
+            },
+            put(key, value, seconds) {
+              cache.set(key, { value, expiresAt: now + Number(seconds) * 1000 });
+            },
+            remove(key) { cache.delete(key); },
+          };
+        },
+      },
+    },
+  });
+  let builds = 0;
+  const originalBuild = fixture.backend.buildPracticeDayView_;
+  fixture.backend.buildPracticeDayView_ = (...args) => {
+    builds += 1;
+    return originalBuild(...args);
+  };
+
+  fixture.backend.getPracticeDay_(fixture.teacher('小琪'), '2026/09/10');
+  now = 2 * 60 * 1000;
+  fixture.backend.getPracticeDay_(fixture.teacher('Tako'), '2026/09/10');
+  now = 5 * 60 * 1000 + 1;
+  fixture.backend.getPracticeDay_(fixture.teacher('Tako'), '2026/09/10');
+
+  assert.equal(builds, 2);
 });
 
 test('practice day shares one assembled day view across teachers without sharing identity', () => {

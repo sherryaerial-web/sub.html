@@ -1,15 +1,30 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import playwright from 'playwright';
-import pngjs from 'pngjs';
+
+const require = createRequire(import.meta.url);
+const dependencyRoot = process.env.CODEX_NODE_MODULES || '';
+const playwright = require(dependencyRoot ? path.join(dependencyRoot, 'playwright') : 'playwright');
+const pngjs = require(dependencyRoot ? path.join(dependencyRoot, 'pngjs') : 'pngjs');
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, '..');
 const outputDir = '/private/tmp/substitute-vvip-screenshots';
-const html = await fs.readFile(path.join(repoDir, 'vvip.html'), 'utf8');
+const rawHtml = await fs.readFile(path.join(repoDir, 'vvip.html'), 'utf8');
+const html = rawHtml
+  .replace('<script>', `<script>
+    globalThis.SHERRY_PUBLIC_GATEWAY_URL = 'https://gateway.example.test';
+    globalThis.SHERRY_TURNSTILE_SITE_KEY = 'test-site-key';
+    globalThis.turnstile = {
+      render(selector) { return selector; },
+      getResponse() { return 'turnstile-token'; },
+      reset() {}
+    };
+  </script><script>`)
+  .replace(/\s*<script src="https:\/\/challenges\.cloudflare\.com\/turnstile\/[^>]+><\/script>/, '');
 const courses = [
   { calendarId: 'cal-special', date: '2026/09/01', time: '14:00', courseName: '後彎充電特別課 (150min)', teacherName: '卡拉' },
   { calendarId: 'cal-existing', date: '2026/09/02', time: '10:00', courseName: '空環基礎', teacherName: 'Ariel' },
@@ -20,22 +35,21 @@ const courses = [
 let submitted = false;
 
 function payload(request) {
-  const params = new URLSearchParams(request.postData() || '');
-  const action = params.get('action');
+  const pathname = new URL(request.url()).pathname;
   const existing = [
     { ...courses[1], status: '待人工確認' },
     { calendarId: 'cal-cancelled', date: '2026/09/06', time: '15:30', courseName: '空環 Lv.1', teacherName: '原老師丙', status: '課程已取消', courseCancelled: true },
   ];
-  if (action === 'getVvipMembers') {
+  if (pathname === '/api/vvip/members') {
     return [{ id: 'vvip-1', name: '測試會員' }];
   }
-  if (action === 'getVvipSelection') {
+  if (pathname === '/api/vvip/selection') {
     const selections = submitted
       ? [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }]
       : existing;
     return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: selections.filter((item) => !item.courseCancelled).length, selections, courses };
   }
-  if (action === 'submitVvipSelection') {
+  if (pathname === '/api/vvip/submit') {
     submitted = true;
     return { email: 'vvip@example.com', month: '2026-09', limit: 3, count: 3, selections: [...existing, { ...courses[2], status: '待人工確認' }, { ...courses[3], status: '待人工確認' }], courses };
   }
@@ -62,9 +76,11 @@ async function runJourney(browser, viewport) {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.route('https://script.google.com/**', async (route) => {
+  await page.route('https://gateway.example.test/**', async (route) => {
     const request = route.request();
-    if (request.method() !== 'POST') throw new Error('VVIP API request must use POST');
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === '/api/vvip/members' && request.method() !== 'GET') throw new Error('VVIP member list must use GET');
+    if (pathname !== '/api/vvip/members' && request.method() !== 'POST') throw new Error('Protected VVIP API request must use POST');
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'success', data: payload(request) }) });
   });
   await page.setContent(html, { waitUntil: 'networkidle' });

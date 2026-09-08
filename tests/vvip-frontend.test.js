@@ -16,6 +16,8 @@ function createVvipPageHarness(options = {}) {
       globalThis.__renderCourses = renderCourses;
       globalThis.__renderSummary = renderSummary;
       globalThis.__submitVvipSelection = submitVvipSelection;
+      globalThis.__callVvipApi = callVvipApi;
+      globalThis.__lookupVvip = lookupVvip;
       globalThis.__formatVvipDateWithWeekday = typeof formatVvipDateWithWeekday === "function" ? formatVvipDateWithWeekday : undefined;
       globalThis.__isVvipSpecialCourse = typeof isVvipSpecialCourse === "function" ? isVvipSpecialCourse : undefined;
       globalThis.__toggleVvipDate = typeof toggleVvipDate === "function" ? toggleVvipDate : undefined;
@@ -35,6 +37,8 @@ function createVvipPageHarness(options = {}) {
     requestSubmit() {},
   });
   const context = {
+    SHERRY_PUBLIC_GATEWAY_URL: 'https://gateway.example.test',
+    SHERRY_TURNSTILE_SITE_KEY: 'site-key',
     document: {
       getElementById(id) {
         if (!elements.has(id)) elements.set(id, makeElement());
@@ -42,7 +46,13 @@ function createVvipPageHarness(options = {}) {
       },
     },
     fetch: options.fetch || (async () => ({ ok: true, json: async () => ({ status: 'success', data: [] }) })),
+    turnstile: options.turnstile || {
+      render() { return 'widget'; },
+      getResponse() { return 'turnstile-token'; },
+      reset() {},
+    },
     URLSearchParams,
+    URL,
     Set,
     console,
   };
@@ -74,8 +84,12 @@ test('VVIP public page posts member ID and never exposes Email', () => {
   assert.match(html, /callVvipApi\(["']submitVvipSelection["']/);
   assert.match(html, /vvipId/);
   assert.match(html, /method:\s*["']POST["']/);
-  assert.match(html, /application\/x-www-form-urlencoded/);
+  assert.match(html, /application\/json/);
   assert.doesNotMatch(html, /type=["']email["']/i);
+  assert.doesNotMatch(html, /script\.google\.com\/macros\/s\//);
+  assert.match(html, /name="sherry-public-gateway-url"/);
+  assert.match(html, /name="sherry-turnstile-site-key"/);
+  assert.match(html, /challenges\.cloudflare\.com\/turnstile/);
 });
 
 test('VVIP public page groups courses, searches them, and enforces the cumulative three-course view', () => {
@@ -101,7 +115,7 @@ test('VVIP successful submission keeps the complete accumulated list visible', (
   assert.match(html, /displayed\.map\(\(course\)/);
 });
 
-test('VVIP submission re-reads the backend before showing success and clearing the pending choice', async () => {
+test('VVIP submission verifies the returned saved result before clearing the pending choice', async () => {
   const calls = [];
   const confirmed = {
     memberId: 'vvip-member-1', memberName: '會員一', month: '2026-09', limit: 3, count: 1,
@@ -109,9 +123,8 @@ test('VVIP submission re-reads the backend before showing success and clearing t
     courses: [{ calendarId: 'cal-1', date: '2026/09/01', time: '10:00', courseName: '空環', teacherName: '老師甲' }],
   };
   const { context, elements } = createVvipPageHarness({
-    fetch: async (_url, request) => {
-      const body = new URLSearchParams(request.body);
-      calls.push(body.get('action'));
+    fetch: async (url, request) => {
+      calls.push(new URL(url).pathname);
       return { ok: true, json: async () => ({ status: 'success', data: confirmed }) };
     },
   });
@@ -121,10 +134,53 @@ test('VVIP submission re-reads the backend before showing success and clearing t
 
   await context.__submitVvipSelection();
 
-  assert.deepEqual(calls, ['submitVvipSelection', 'getVvipSelection']);
+  assert.deepEqual(calls, ['/api/vvip/submit']);
   assert.equal(context.__state.selectedCalendarIds.size, 0);
   assert.equal(context.__state.existingCalendarIds.has('cal-1'), true);
   assert.match(elements.get('vvip-notice').textContent, /已確認選課成功/);
+});
+
+test('VVIP gateway routes keep member list public and require Turnstile for protected requests', async () => {
+  const calls = [];
+  const { context } = createVvipPageHarness({
+    fetch: async (url, request) => {
+      calls.push({ url, request, body: request.body ? JSON.parse(request.body) : null });
+      return { ok: true, status: 200, json: async () => ({ status: 'success', data: [] }) };
+    },
+  });
+
+  await context.__callVvipApi('getVvipMembers');
+  await assert.rejects(context.__callVvipApi('getVvipSelection', { vvipId: 'member-1' }, ''), /人機驗證/);
+  await context.__callVvipApi('getVvipSelection', { vvipId: 'member-1' }, 'lookup-token');
+  await context.__callVvipApi('submitVvipSelection', { vvipId: 'member-1', calendarIds: ['cal-1'] }, 'submit-token');
+
+  assert.equal(calls[0].url, 'https://gateway.example.test/api/vvip/members');
+  assert.equal(calls[0].request.method, 'GET');
+  assert.equal(calls[0].request.credentials, 'omit');
+  assert.equal(new URL(calls[1].url).pathname, '/api/vvip/selection');
+  assert.deepEqual(calls[1].body, { vvipId: 'member-1', turnstileToken: 'lookup-token' });
+  assert.equal(new URL(calls[2].url).pathname, '/api/vvip/submit');
+  assert.deepEqual(calls[2].body, { vvipId: 'member-1', calendarIds: ['cal-1'], turnstileToken: 'submit-token' });
+});
+
+test('VVIP failed submission preserves selected courses and resets the submit challenge', async () => {
+  let resetWidget = null;
+  const { context } = createVvipPageHarness({
+    fetch: async () => ({ ok: false, status: 503, json: async () => ({ status: 'error', error: { message: '服務忙碌' } }) }),
+    turnstile: {
+      render() { return 'submit-widget'; },
+      getResponse() { return 'submit-token'; },
+      reset(widgetId) { resetWidget = widgetId; },
+    },
+  });
+  context.__state.memberId = 'member-1';
+  context.__state.data = { selections: [], courses: [{ calendarId: 'cal-1' }] };
+  context.__state.selectedCalendarIds.add('cal-1');
+
+  await context.__submitVvipSelection();
+
+  assert.equal(context.__state.selectedCalendarIds.has('cal-1'), true);
+  assert.equal(resetWidget, 'submit-widget');
 });
 
 test('VVIP selected-course summary appears before the long course list', () => {

@@ -11,12 +11,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoDir = path.resolve(testDir, '..');
 const source = await fs.readFile(path.join(repoDir, 'student-practice.html'), 'utf8');
 
-// iOS/LINE WebView gives date inputs an intrinsic minimum width. Inject the
-// equivalent low-priority style before the app stylesheet so this check can
-// reproduce that browser behavior in Chromium.
-const html = source
-  .replace('<style>', '<style>input[type="date"]{min-width:460px}</style><style>')
-  .replace('<script src="student-practice.js"></script>', '');
+const html = source.replace('<script src="student-practice.js"></script>', '');
 
 const browser = await chromium.launch({
   headless: true,
@@ -24,28 +19,45 @@ const browser = await chromium.launch({
 });
 
 try {
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await page.setContent(html, { waitUntil: 'domcontentloaded' });
-  const layout = await page.evaluate(() => {
-    const input = document.querySelector('#practice-date');
-    const app = document.querySelector('.app');
-    const inputRect = input.getBoundingClientRect();
-    const appRect = app.getBoundingClientRect();
-    return {
-      viewportWidth: document.documentElement.clientWidth,
-      scrollWidth: document.documentElement.scrollWidth,
-      inputLeft: inputRect.left,
-      inputRight: inputRect.right,
-      appLeft: appRect.left,
-      appRight: appRect.right,
-    };
-  });
+  for (const width of [320, 375, 390, 430]) {
+    const page = await browser.newPage({ viewport: { width, height: 844 } });
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
+    const layout = await page.evaluate(() => {
+      const input = document.querySelector('#practice-date');
+      const field = input.closest('.field');
+      const app = document.querySelector('.app');
+      const inputRect = input.getBoundingClientRect();
+      const fieldRect = field.getBoundingClientRect();
+      const appRect = app.getBoundingClientRect();
+      const style = getComputedStyle(input);
+      const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      return {
+        viewportWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        inputLeft: inputRect.left,
+        inputRight: inputRect.right,
+        fieldLeft: fieldRect.left,
+        fieldRight: fieldRect.right,
+        appLeft: appRect.left,
+        appRight: appRect.right,
+        horizontalPadding,
+        iosInputRight: inputRect.right + horizontalPadding,
+      };
+    });
 
-  if (layout.scrollWidth > layout.viewportWidth + 1) {
-    throw new Error(`student practice page overflows horizontally: ${JSON.stringify(layout)}`);
-  }
-  if (layout.inputLeft < layout.appLeft - 1 || layout.inputRight > layout.appRight + 1) {
-    throw new Error(`student practice date escapes its container: ${JSON.stringify(layout)}`);
+    if (layout.scrollWidth > layout.viewportWidth + 1) {
+      throw new Error(`student practice page overflows horizontally: ${JSON.stringify(layout)}`);
+    }
+    if (layout.inputLeft < layout.fieldLeft - 1 || layout.inputRight > layout.fieldRight + 1) {
+      throw new Error(`student practice date escapes its container: ${JSON.stringify(layout)}`);
+    }
+    // WebKit bug 301648 calculates date inputs as 100% wide and then adds
+    // horizontal padding on iOS. Model that extra width here so the test fails
+    // if padding is accidentally restored to the full-width date input.
+    if (layout.iosInputRight > layout.fieldRight + 1) {
+      throw new Error(`student practice date triggers iOS padded-width overflow: ${JSON.stringify(layout)}`);
+    }
+    await page.close();
   }
 } finally {
   await browser.close();

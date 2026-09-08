@@ -1,0 +1,38 @@
+name = "sherry-classroom-gateway"
+main = "src/index.js"
+compatibility_date = "2026-09-09"
+
+[[ratelimits]]
+name = "PUBLIC_WRITE_LIMITER"
+namespace_id = "31001"
+
+[ratelimits.simple]
+limit = 5
+period = 60
+
+[[ratelimits]]
+name = "PUBLIC_READ_LIMITER"
+namespace_id = "31002"
+
+[ratelimits.simple]
+limit = 60
+period = 60
+
+[env.staging]
+name = "sherry-classroom-gateway-staging"
+
+[[env.staging.ratelimits]]
+name = "PUBLIC_WRITE_LIMITER"
+namespace_id = "31101"
+
+[env.staging.ratelimits.simple]
+limit = 5
+period = 60
+
+[[env.staging.ratelimits]]
+name = "PUBLIC_READ_LIMITER"
+namespace_id = "31102"
+
+[env.staging.ratelimits.simple]
+limit = 60
+period = 60

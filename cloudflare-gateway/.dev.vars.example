@@ -1,0 +1,5 @@
+GAS_UPSTREAM_URL=
+GAS_GATEWAY_SECRET=
+TURNSTILE_SECRET_KEY=
+ALLOWED_ORIGINS=https://sherryaerial-web.github.io,http://127.0.0.1:4173,http://localhost:4173
+TURNSTILE_HOSTNAMES=sherryaerial-web.github.io,localhost,127.0.0.1

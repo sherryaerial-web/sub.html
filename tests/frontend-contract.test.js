@@ -402,6 +402,7 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
   assert.match(getElement('teacher-home-schedule').innerHTML, /data-view="view-practice"/);
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-practice"/);
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-myleaves"/);
+  assert.equal(getElement('teacher-home-pending').textContent, '1 件申請進度');
 });
 
 test('five-destination teacher navigation groups records and exposes account actions', () => {

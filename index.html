@@ -2694,11 +2694,11 @@
       byId("teacher-home-summary").innerHTML = `本週 ${Number(summary.regular || 0)} 堂課 <span aria-hidden="true">·</span> ${Number(summary.substitute || 0)} 堂代課${practiceSummary}`;
       byId("teacher-home-month").textContent = teacherHomeDashboard.monthLabel || "";
       const upcoming = Array.isArray(teacherHomeDashboard.upcoming) ? teacherHomeDashboard.upcoming : [];
-      byId("teacher-home-pending").textContent = teacherHomeDashboard.pendingCount ? `${teacherHomeDashboard.pendingCount} 件待處理` : "";
+      byId("teacher-home-pending").textContent = teacherHomeDashboard.pendingCount ? `${teacherHomeDashboard.pendingCount} 件申請進度` : "";
       byId("teacher-home-upcoming").innerHTML = upcoming.length ? upcoming.map((item) => {
         const parts = getTeacherHomeDateParts(item.date);
         return `<button class="teacher-upcoming-row" type="button" data-view="${escapeHtml(getTeacherHomeViewId(item.targetView))}"><span class="teacher-upcoming-date">${escapeHtml(parts.short)}</span><span class="teacher-upcoming-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.time, item.meta].filter(Boolean).join(" · "))}</small></span><i data-lucide="chevron-right"></i></button>`;
-      }).join("") : '<div class="teacher-home-empty compact"><i data-lucide="circle-check-big"></i><strong>目前沒有待處理事項</strong></div>';
+      }).join("") : '<div class="teacher-home-empty compact"><i data-lucide="circle-check-big"></i><strong>目前沒有近期事項</strong></div>';
       const populatedDate = (teacherHomeDashboard.dates || []).find((item) => item.hasSchedule);
       const selectedStillExists = teacherHomeSelectedDate &&
         (teacherHomeDashboard.dates || []).some((item) => item.date === teacherHomeSelectedDate);

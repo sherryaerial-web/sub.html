@@ -10343,6 +10343,12 @@ function formatTeacherHomeDateFromMs_(milliseconds) {
   ).slice(0, 10).replace(/-/g, '/');
 }
 
+function formatTeacherHomeChangeState_(stateValue, kind) {
+  var state = cleanText_(stateValue);
+  if (state !== '待處理') return state;
+  return kind === 'substitute' ? '代課課程調整中' : '請假申請確認中';
+}
+
 function getTeacherHomeDashboard_(session) {
   var teacher = getSessionTeacherName_(session);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -10355,6 +10361,16 @@ function getTeacherHomeDashboard_(session) {
   var today = formatTeacherHomeDateFromMs_(todayMs);
   var throughDate = formatTeacherHomeDateFromMs_(todayMs + 31 * 24 * 60 * 60 * 1000);
   var firstWeekEnd = formatTeacherHomeDateFromMs_(todayMs + 6 * 24 * 60 * 60 * 1000);
+  var cancelledCourseIds = {};
+  var closureLogSheet = ss.getSheetByName(SHEETS.COURSE_CLOSURE_LOG);
+  if (closureLogSheet) {
+    assertHeaders_(closureLogSheet, SHEET_HEADERS.COURSE_CLOSURE_LOG);
+    closureLogSheet.getDataRange().getValues().slice(1).forEach(function(row) {
+      if (cleanText_(row[9]) !== '已取消') return;
+      var cancelledCalendarId = cleanText_(row[3]);
+      if (cancelledCalendarId) cancelledCourseIds[cancelledCalendarId] = true;
+    });
+  }
   var leaveRows = leaveSheet.getDataRange().getValues().slice(1);
   var activeLeaveIds = {};
   leaveRows.forEach(function(row) {
@@ -10369,6 +10385,7 @@ function getTeacherHomeDashboard_(session) {
     var date = formatMyDate(row[0]);
     var calendarId = cleanText_(row[4]);
     if (cleanText_(row[3]) !== teacher || !calendarId || activeLeaveIds[calendarId] ||
+        cancelledCourseIds[calendarId] ||
         !date || date < today || date > throughDate) return;
     var startTime = formatMyTime(row[1]);
     var title = cleanText_(row[2]);
@@ -10388,7 +10405,9 @@ function getTeacherHomeDashboard_(session) {
 
   leaveRows.forEach(function(row) {
     var date = formatMyDate(row[2]);
+    var effectiveCalendarId = getEffectiveOpenLeaveCalendarId_(row);
     if (cleanText_(row[6]) !== teacher || cleanText_(row[5]) !== '已領取' ||
+        (effectiveCalendarId && cancelledCourseIds[effectiveCalendarId]) ||
         !date || date < today || date > throughDate) return;
     var substituteId = cleanText_(row[9]);
     var title = cleanText_(row[12]) || cleanText_(row[4]);
@@ -10421,7 +10440,7 @@ function getTeacherHomeDashboard_(session) {
         date: date,
         time: formatMyTime(row[3]),
         title: cleanText_(row[4]),
-        meta: changeState || '請假處理中',
+        meta: formatTeacherHomeChangeState_(changeState, 'leave') || '請假處理中',
         targetView: 'myleaves'
       });
     } else if (isOwnSubstitute && changeState) {
@@ -10430,7 +10449,7 @@ function getTeacherHomeDashboard_(session) {
         date: date,
         time: formatMyTime(row[25]) || formatMyTime(row[3]),
         title: cleanText_(row[12]) || cleanText_(row[4]),
-        meta: changeState,
+        meta: formatTeacherHomeChangeState_(changeState, 'substitute'),
         targetView: 'mysubs'
       });
     }

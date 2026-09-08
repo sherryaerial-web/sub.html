@@ -2111,6 +2111,50 @@ test('teacher home dashboard returns only the acting teacher schedule in chronol
   assert.equal(JSON.stringify(fixture.spreadsheet.sheets.map((sheet) => sheet.values)), before);
 });
 
+test('teacher home dashboard hides courses cancelled by the nightly closure workflow', () => {
+  const fixture = createLeaveBackend({
+    courseRows: [
+      ['2026/09/08', '18:30', 'A－空環 Lv.0', '老師甲', 'calendar-open', 'class-a1', 'teacher-a', '否', ''],
+      ['2026/09/08', '20:00', 'B－舞綢 Lv.1', '老師甲', 'calendar-closed', 'class-b1', 'teacher-a', '否', ''],
+    ],
+    leaveRows: [
+      ['2026-09-01 12:00:00', '老師乙', '2026/09/08', '21:30', 'C－空瑜 Lv.1', '已領取', '老師甲', '', '', 'leave-closed-sub', 'calendar-closed-sub'],
+    ],
+  });
+  fixture.spreadsheet.sheets.push(createSheetFixture('關課紀錄', [
+    EXPECTED_COURSE_CLOSURE_LOG_HEADERS,
+    ['2026-09-07 23:40:10', '2026/09/08', '23:40', 'calendar-closed', 'B－舞綢 Lv.1', '老師甲', 1, '一般課至少 2 人', '否', '已取消', '', '系統自動關課'],
+    ['2026-09-07 23:40:11', '2026/09/08', '23:40', 'calendar-closed-sub', 'C－空瑜 Lv.1', '老師甲', 1, '一般課至少 2 人', '否', '已取消', '', '系統自動關課'],
+  ]));
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-07T12:00:00+08:00').getTime();
+
+  const result = fixture.backend.getTeacherHomeDashboard_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.scheduleByDate['2026/09/08'].map((item) => item.id))),
+    ['course:calendar-open']
+  );
+  assert.equal(result.weekSummary.regular, 1);
+});
+
+test('teacher home dashboard translates internal pending states into teacher-facing progress labels', () => {
+  const fixture = createLeaveBackend({
+    courseRows: [],
+    leaveRows: [
+      ['2026-09-07 12:00:00', '老師甲', '2026/09/09', '18:30', 'A－空環 Lv.0', '確認中', '', '', '', 'leave-own', 'calendar-own', '', '', '', '', '', '', '', '待處理'],
+      ['2026-09-07 12:05:00', '老師乙', '2026/09/10', '19:30', 'B－舞綢 Lv.1', '已領取', '老師甲', '', '', 'leave-sub', 'calendar-sub', '', 'B－舞綢 Lv.1', '', '', '', '', '', '待處理'],
+    ],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-07T12:00:00+08:00').getTime();
+
+  const result = fixture.backend.getTeacherHomeDashboard_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.upcoming.map((item) => item.meta))), [
+    '請假申請確認中',
+    '代課課程調整中',
+  ]);
+});
+
 test('teacher home dashboard mixes active and waitlisted practice into the schedule and drops stale records', () => {
   const fixture = createLeaveBackend({
     courseRows: [

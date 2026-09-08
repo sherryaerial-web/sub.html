@@ -50,9 +50,21 @@
     return payload;
   }
 
+  function buildBookingFormState(card) {
+    var shared = card && card.type === 'shared';
+    return {
+      title: shared ? '登記一起使用' : '登記自主練習',
+      startFieldHidden: false,
+      startDisabled: shared,
+      startOptions: shared ? [String(card.startTime || '')].filter(Boolean) : [],
+      durationFieldHidden: shared
+    };
+  }
+
   global.StudentPracticePage = {
     buildSlotCards: buildSlotCards,
-    buildSubmissionPayload: buildSubmissionPayload
+    buildSubmissionPayload: buildSubmissionPayload,
+    buildBookingFormState: buildBookingFormState
   };
 
   if (!global.document) return;
@@ -171,15 +183,24 @@
 
   function openBooking(card) {
     state.selected = card;
-    byId('dialog-title').textContent = card.type === 'shared' ? '登記一起使用' : '登記自主練習';
+    var formState = buildBookingFormState(card);
+    byId('dialog-title').textContent = formState.title;
     byId('dialog-summary').textContent = normalizeDateInput(card.date).replace(/-/g, '/') + ' · ' + card.room + ' 教室 · ' + card.time;
-    byId('duration-field').hidden = card.type === 'shared';
-    byId('start-field').hidden = card.type === 'shared';
+    byId('duration-field').hidden = formState.durationFieldHidden;
+    byId('start-field').hidden = formState.startFieldHidden;
+    byId('start-time').disabled = formState.startDisabled;
     byId('duration').innerHTML = card.durations.map(function(value) {
       return '<option value="' + value + '">' + value + ' 分鐘</option>';
     }).join('');
     byId('duration').value = String(card.durations[0] || 60);
-    syncStartOptions();
+    if (formState.startOptions.length) {
+      byId('start-time').innerHTML = formState.startOptions.map(function(value) {
+        return '<option value="' + value + '">' + value + '</option>';
+      }).join('');
+      byId('start-time').value = formState.startOptions[0];
+    } else {
+      syncStartOptions();
+    }
     var hasToken = !!localStorage.getItem(STORAGE_KEY);
     byId('identity-fields').hidden = hasToken;
     byId('app-name').required = !hasToken;

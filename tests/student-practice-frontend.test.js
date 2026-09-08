@@ -56,6 +56,21 @@ test('student page submission uses the selected duration or exact shared group i
   });
 });
 
+test('joining an existing student practice shows its fixed start time', () => {
+  const page = loadStudentPracticePage();
+  const form = page.buildBookingFormState({
+    type: 'shared', startTime: '14:00', endTime: '15:30', durations: [90], groupId: 'group-2',
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(form)), {
+    title: '登記一起使用',
+    startFieldHidden: false,
+    startDisabled: true,
+    startOptions: ['14:00'],
+    durationFieldHidden: true,
+  });
+});
+
 test('student page is a focused mobile booking surface with the confirmed deadline copy', () => {
   const htmlPath = path.join(__dirname, '..', 'student-practice.html');
   const html = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';

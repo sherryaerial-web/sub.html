@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -332,6 +333,33 @@ test('keeps API secrets out of the public frontend', () => {
   assert.doesNotMatch(html, /eyJ[a-zA-Z0-9_-]+\./);
   assert.doesNotMatch(html, /Authorization\s*:\s*['"]Bearer/i);
   assert.doesNotMatch(html, /OMCEAN_API_TOKEN/);
+});
+
+test('keeps credential values out of every tracked production and documentation file', () => {
+  const repositoryRoot = path.join(__dirname, '..');
+  const trackedFiles = childProcess.execFileSync('git', ['ls-files', '-z'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean).filter((file) => !file.startsWith('tests/'));
+  const credentialPatterns = [
+    { type: 'Bearer token', pattern: /Bearer\s+[^\s'"<>\[\]]{20,}/i },
+    { type: 'Google API key', pattern: /AIza[0-9A-Za-z_-]{20,}/ },
+    { type: 'private key', pattern: /-----BEGIN (?:RSA )?PRIVATE KEY-----/ },
+    { type: 'client secret', pattern: /client_secret\s*[:=]\s*['"][^'"]{12,}['"]/i },
+  ];
+  const findings = [];
+
+  trackedFiles.forEach((file) => {
+    const fullPath = path.join(repositoryRoot, file);
+    const contents = fs.readFileSync(fullPath);
+    if (contents.includes(0)) return;
+    const text = contents.toString('utf8');
+    credentialPatterns.forEach(({ type, pattern }) => {
+      if (pattern.test(text)) findings.push(`${file}: ${type}`);
+    });
+  });
+
+  assert.deepEqual(findings, []);
 });
 
 test('does not use no-cors blind success writes', () => {

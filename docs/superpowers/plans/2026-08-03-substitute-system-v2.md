@@ -63,7 +63,7 @@ Expected: FAIL，因 `Code.gs` 尚未提供對應函式。
 
 - [ ] **Step 3: 實作分頁與安全同步**
 
-`fetchCalendarPages_` 使用 `Authorization: Bearer ...`、`date_from`、`date_to`、`include_cancelled=false` 與 `start`。每頁 100 筆，回傳不足 100 筆時停止；非 2xx、JSON 非陣列或正規化後零筆時丟出錯誤。
+`fetchCalendarPages_` 使用 `Authorization: Bearer [REDACTED] 與 `start`。每頁 100 筆，回傳不足 100 筆時停止；非 2xx、JSON 非陣列或正規化後零筆時丟出錯誤。
 
 `syncCourseListFromApi` 必須：
 1. 先在記憶體完成所有抓取、正規化、去重及排序。

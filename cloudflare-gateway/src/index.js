@@ -7,6 +7,7 @@ import {
   validateOrigin,
 } from './security.js';
 import { verifyTurnstile } from './turnstile.js';
+import { callGas } from './upstream.js';
 
 function jsonResponse(payload, status = 200, headers = {}) {
   return new Response(JSON.stringify(payload), {
@@ -24,7 +25,7 @@ function isConfigured(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const requestedMethod = request.method === 'OPTIONS'
       ? request.headers.get('Access-Control-Request-Method') || ''
@@ -103,12 +104,52 @@ export default {
       } else {
         const limiter = env.PUBLIC_READ_LIMITER;
         if (limiter && typeof limiter.limit === 'function') {
-          const result = await limiter.limit({ key: `${route.path}:${request.headers.get('CF-Connecting-IP') || 'unknown'}` });
+          const rateKey = await buildRateLimitKey(
+            route,
+            body,
+            request.headers.get('CF-Connecting-IP') || '',
+          );
+          const result = await limiter.limit({ key: rateKey });
           if (!result || result.success !== true) {
             throw new GatewayError(429, 'rate_limited', '操作太頻繁，請稍後再試。');
           }
         }
       }
+
+      const payload = route.action === 'getStudentPracticeAvailability'
+        ? { date: url.searchParams.get('date') || '' }
+        : route.action === 'getVvipMembers'
+          ? {}
+          : route.action === 'submitStudentPractice'
+            ? { practice: body.practice }
+            : route.action === 'getVvipSelection'
+              ? { vvipId: body.vvipId }
+              : { vvipId: body.vvipId, calendarIds: body.calendarIds };
+
+      const fetchImpl = typeof env.fetch === 'function' ? env.fetch : fetch;
+      const cache = route.action === 'getStudentPracticeAvailability'
+        && globalThis.caches && globalThis.caches.default
+        ? globalThis.caches.default
+        : null;
+      const cacheKey = cache
+        ? new Request(`https://gateway-cache.invalid/student-practice?date=${encodeURIComponent(payload.date)}`)
+        : null;
+      if (cache && cacheKey) {
+        const cached = await cache.match(cacheKey);
+        if (cached) {
+          return jsonResponse(await cached.json(), 200, corsHeaders(origin, route.method));
+        }
+      }
+
+      const data = await callGas({ action: route.action, payload, env, fetchImpl });
+      const successPayload = { status: 'success', data };
+      if (cache && cacheKey) {
+        const cacheResponse = jsonResponse(successPayload, 200, { 'Cache-Control': 'public, max-age=30' });
+        const pending = cache.put(cacheKey, cacheResponse);
+        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(pending);
+        else await pending;
+      }
+      return jsonResponse(successPayload, 200, corsHeaders(origin, route.method));
     } catch (error) {
       if (error instanceof GatewayError) {
         return jsonResponse({

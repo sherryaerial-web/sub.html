@@ -2155,6 +2155,31 @@ test('teacher home dashboard translates internal pending states into teacher-fac
   ]);
 });
 
+test('teacher home dashboard shows the leave registration task only while the formal leave switch is open', () => {
+  const fixture = createLeaveBackend({ courseRows: [] });
+  const settingsSheet = fixture.spreadsheet.getSheetByName('系統設定');
+  settingsSheet.values.push(['暫停全部請假', '否', '', '']);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-08T15:00:00+08:00').getTime();
+  fixture.backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';
+
+  const openResult = fixture.backend.getTeacherHomeDashboard_({ teacherName: '老師甲', role: '老師' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(openResult.upcoming[0])), {
+    id: 'monthly:leave-open',
+    date: '2026/09/11',
+    time: '21:00',
+    title: '請假登記開放中',
+    meta: '請於 9/11 21:00 前完成下月請假',
+    targetView: 'leave',
+    priority: 0,
+  });
+
+  settingsSheet.values[1][1] = '是';
+  const closedResult = fixture.backend.getTeacherHomeDashboard_({ teacherName: '老師甲', role: '老師' });
+
+  assert.equal(closedResult.upcoming.some((item) => item.id === 'monthly:leave-open'), false);
+});
+
 test('teacher home dashboard mixes active and waitlisted practice into the schedule and drops stale records', () => {
   const fixture = createLeaveBackend({
     courseRows: [

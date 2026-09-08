@@ -385,6 +385,7 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
       ],
     },
     upcoming: [
+      { id: 'monthly:leave-open', date: '2026/09/11', time: '21:00', title: '請假登記開放中', meta: '請於 9/11 21:00 前完成下月請假', targetView: 'leave' },
       { id: 'practice:1', date: '2026/09/10', time: '14:00', title: '自主練習', meta: 'C 教室｜已成立', targetView: 'practice' },
       { id: 'leave:1', date: '2026/09/12', time: '18:30', title: 'A－空環 Lv.0', meta: '請假處理中', targetView: 'myleaves' },
     ],
@@ -399,6 +400,8 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
   assert.match(getElement('teacher-home-schedule').innerHTML, /代課/);
   assert.match(getElement('teacher-home-schedule').innerHTML, /teacher-status-pill practice[^>]*>練習</);
   assert.match(getElement('teacher-home-schedule').innerHTML, /teacher-status-pill waitlist[^>]*>候補</);
+  assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-leave"/);
+  assert.match(getElement('teacher-home-upcoming').innerHTML, /請假登記開放中/);
   assert.match(getElement('teacher-home-schedule').innerHTML, /data-view="view-practice"/);
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-practice"/);
   assert.match(getElement('teacher-home-upcoming').innerHTML, /data-view="view-myleaves"/);

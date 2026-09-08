@@ -10349,6 +10349,35 @@ function formatTeacherHomeChangeState_(stateValue, kind) {
   return kind === 'substitute' ? '代課課程調整中' : '請假申請確認中';
 }
 
+function getTeacherHomeLeaveRegistrationTask_(spreadsheet) {
+  var settingsSheet = requireSheet_(spreadsheet, SHEETS.SETTINGS);
+  assertHeaders_(settingsSheet, SHEET_HEADERS.SETTINGS);
+  var rows = settingsSheet.getDataRange().getValues();
+  var leaveSwitchFound = false;
+  var leavePaused = true;
+  for (var index = 1; index < rows.length; index++) {
+    if (cleanText_(rows[index][0]) !== CONFIG.LEAVES_PAUSED_SETTING) continue;
+    leaveSwitchFound = true;
+    leavePaused = isTruthySheetValue_(rows[index][1]);
+    break;
+  }
+  if (!leaveSwitchFound || leavePaused) return null;
+
+  var schedule = getMonthlyOperationsSchedule_(getCurrentMonthlyOperationsMonthKey_(), '');
+  var deadline = cleanText_(schedule.leaveSuggestedCloseAt);
+  var match = deadline.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2})$/);
+  if (!match) return null;
+  return {
+    id: 'monthly:leave-open',
+    date: [match[1], match[2], match[3]].join('/'),
+    time: match[4],
+    title: '請假登記開放中',
+    meta: '請於 ' + Number(match[2]) + '/' + Number(match[3]) + ' ' + match[4] + ' 前完成下月請假',
+    targetView: 'leave',
+    priority: 0
+  };
+}
+
 function getTeacherHomeDashboard_(session) {
   var teacher = getSessionTeacherName_(session);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -10498,6 +10527,9 @@ function getTeacherHomeDashboard_(session) {
     });
   }
 
+  var leaveRegistrationTask = getTeacherHomeLeaveRegistrationTask_(ss);
+  if (leaveRegistrationTask) upcoming.push(leaveRegistrationTask);
+
   schedule.sort(function(left, right) {
     return [left.date, left.startTime, left.title, left.id].join('|')
       .localeCompare([right.date, right.startTime, right.title, right.id].join('|'));
@@ -10509,6 +10541,9 @@ function getTeacherHomeDashboard_(session) {
   });
 
   upcoming.sort(function(left, right) {
+    var priorityDifference = Number(left.priority == null ? 1 : left.priority) -
+      Number(right.priority == null ? 1 : right.priority);
+    if (priorityDifference) return priorityDifference;
     return [left.date, left.time, left.id].join('|').localeCompare([right.date, right.time, right.id].join('|'));
   });
   upcoming = upcoming.slice(0, 12);

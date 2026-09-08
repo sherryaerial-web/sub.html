@@ -1,4 +1,10 @@
 import { hasRoutePath, matchRoute } from './routes.js';
+import {
+  GatewayError,
+  corsHeaders,
+  readJsonBody,
+  validateOrigin,
+} from './security.js';
 
 function jsonResponse(payload, status = 200, headers = {}) {
   return new Response(JSON.stringify(payload), {
@@ -18,7 +24,10 @@ function isConfigured(env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const route = matchRoute(request.method, url.pathname);
+    const requestedMethod = request.method === 'OPTIONS'
+      ? request.headers.get('Access-Control-Request-Method') || ''
+      : request.method;
+    const route = matchRoute(requestedMethod, url.pathname);
 
     if (!route) {
       if (hasRoutePath(url.pathname)) {
@@ -40,9 +49,34 @@ export default {
       }, isConfigured(env) ? 200 : 503);
     }
 
+    let origin;
+    try {
+      origin = validateOrigin(request, env.ALLOWED_ORIGINS);
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders(origin, route.method),
+        });
+      }
+      if (route.method === 'POST') {
+        await readJsonBody(request, route.maxBodyBytes);
+      }
+    } catch (error) {
+      if (error instanceof GatewayError) {
+        return jsonResponse({
+          status: 'error',
+          error: { code: error.code, message: error.message },
+        }, error.status, origin ? corsHeaders(origin, route.method) : {});
+      }
+      return jsonResponse({
+        status: 'error',
+        error: { code: 'invalid_request', message: '無法處理這次請求。' },
+      }, 400, origin ? corsHeaders(origin, route.method) : {});
+    }
+
     return jsonResponse({
       status: 'error',
       error: { code: 'not_implemented', message: '服務尚未完成設定。' },
-    }, 501);
+    }, 501, corsHeaders(origin, route.method));
   },
 };

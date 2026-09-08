@@ -352,6 +352,14 @@ function createAuthServices() {
         return Array.from(digest.createHash('sha256').update(value, 'utf8').digest())
           .map((byte) => byte > 127 ? byte - 256 : byte);
       },
+      computeHmacSha256Signature(value, key) {
+        return Array.from(digest.createHmac('sha256', key).update(value, 'utf8').digest())
+          .map((byte) => byte > 127 ? byte - 256 : byte);
+      },
+      base64EncodeWebSafe(bytes) {
+        return Buffer.from((bytes || []).map((byte) => byte < 0 ? byte + 256 : byte))
+          .toString('base64url');
+      },
       getUuid() { return `session-${cache.size + properties.size + 1}`; },
       formatDate(value, _timezone, pattern) {
         const date = new Date(value);
@@ -11032,6 +11040,156 @@ test('student practice public routes expose availability and submission without 
 
   assert.deepEqual(availability, { status: 'success', data: { date: '2026/09/10', rooms: [] } });
   assert.deepEqual(submission, { status: 'success', data: { status: '待確認資格', room: 'C' } });
+});
+
+function canonicalGatewayJsonForTest(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalGatewayJsonForTest).join(',')}]`;
+  }
+  return `{${Object.keys(value).sort().map((key) => (
+    `${JSON.stringify(key)}:${canonicalGatewayJsonForTest(value[key])}`
+  )).join(',')}}`;
+}
+
+function signedGatewayParametersForTest(action, payload, options = {}) {
+  const crypto = require('node:crypto');
+  const version = options.version || 'v1';
+  const timestamp = String(options.timestamp == null ? 1788883200 : options.timestamp);
+  const nonce = options.nonce || 'nonce-1234567890';
+  const canonicalPayload = canonicalGatewayJsonForTest(payload);
+  const payloadSha256 = options.payloadSha256 || crypto
+    .createHash('sha256')
+    .update(canonicalPayload, 'utf8')
+    .digest('base64url');
+  const signingInput = [version, action, timestamp, nonce, payloadSha256].join('\n');
+  const signature = options.signature || crypto
+    .createHmac('sha256', options.secret || 'g'.repeat(32))
+    .update(signingInput, 'utf8')
+    .digest('base64url');
+  return {
+    action,
+    gatewayVersion: version,
+    gatewayTimestamp: timestamp,
+    gatewayNonce: nonce,
+    gatewayPayloadSha256: payloadSha256,
+    gatewaySignature: signature,
+    gatewayPayload: canonicalPayload,
+  };
+}
+
+test('public gateway enforcement keeps legacy mode compatible and blocks unsigned writes when enabled', () => {
+  const services = createAuthServices();
+  const backend = loadBackend(services);
+  let calls = 0;
+  backend.submitStudentPractice_ = (practice) => {
+    calls += 1;
+    return { room: practice.room };
+  };
+
+  services.PropertiesService.getScriptProperties().setProperty('PUBLIC_GATEWAY_ENFORCED', 'false');
+  const legacy = JSON.parse(backend.doPost({ parameter: {
+    action: 'submitStudentPractice', practice: JSON.stringify({ room: 'A' }),
+  } }).text);
+  assert.deepEqual(legacy, { status: 'success', data: { room: 'A' } });
+
+  services.PropertiesService.getScriptProperties().setProperty('PUBLIC_GATEWAY_ENFORCED', 'true');
+  const unsigned = JSON.parse(backend.doPost({ parameter: {
+    action: 'submitStudentPractice', practice: JSON.stringify({ room: 'B' }),
+  } }).text);
+  assert.equal(unsigned.status, 'error');
+  assert.match(unsigned.message, /安全驗證/);
+  assert.equal(calls, 1);
+});
+
+test('public gateway enforcement rejects malformed expired future tampered and replayed signatures', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('PUBLIC_GATEWAY_ENFORCED', 'true');
+  services.PropertiesService.getScriptProperties().setProperty('CLOUDFLARE_GATEWAY_SECRET', 'g'.repeat(32));
+  const backend = loadBackend(services);
+  backend.currentTimeMs_ = () => 1788883200000;
+  let calls = 0;
+  backend.submitStudentPractice_ = () => { calls += 1; return { ok: true }; };
+  const payload = { practice: { appName: '學生甲', email: 'student@example.com', room: 'A' } };
+
+  const invalidCases = [
+    signedGatewayParametersForTest('submitStudentPractice', payload, { version: 'v2', nonce: 'nonce-version-1234' }),
+    signedGatewayParametersForTest('submitStudentPractice', payload, { timestamp: 1788882899, nonce: 'nonce-expired-1234' }),
+    signedGatewayParametersForTest('submitStudentPractice', payload, { timestamp: 1788883501, nonce: 'nonce-future-12345' }),
+    signedGatewayParametersForTest('submitStudentPractice', payload, { nonce: 'short' }),
+    signedGatewayParametersForTest('submitStudentPractice', payload, { payloadSha256: 'wrong-hash', nonce: 'nonce-hash-123456' }),
+    signedGatewayParametersForTest('submitStudentPractice', payload, { signature: 'wrong-signature', nonce: 'nonce-sign-123456' }),
+  ];
+
+  for (const parameters of invalidCases) {
+    const result = JSON.parse(backend.doPost({ parameter: parameters }).text);
+    assert.equal(result.status, 'error');
+    assert.match(result.message, /安全驗證/);
+  }
+  assert.equal(calls, 0);
+
+  const validParameters = signedGatewayParametersForTest('submitStudentPractice', payload);
+  const valid = JSON.parse(backend.doPost({ parameter: validParameters }).text);
+  assert.deepEqual(valid, { status: 'success', data: { ok: true } });
+  assert.equal(calls, 1);
+
+  const replay = JSON.parse(backend.doPost({ parameter: validParameters }).text);
+  assert.equal(replay.status, 'error');
+  assert.match(replay.message, /安全驗證/);
+  assert.equal(calls, 1);
+});
+
+test('verified gateway writes use the signed payload instead of forged duplicate form fields', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('PUBLIC_GATEWAY_ENFORCED', 'true');
+  services.PropertiesService.getScriptProperties().setProperty('CLOUDFLARE_GATEWAY_SECRET', 'g'.repeat(32));
+  const backend = loadBackend(services);
+  backend.currentTimeMs_ = () => 1788883200000;
+  const received = [];
+  backend.submitStudentPractice_ = (practice) => { received.push(practice); return practice; };
+  backend.submitVvipSelection_ = (vvipId, calendarIds) => {
+    received.push({ vvipId, calendarIds });
+    return { vvipId, calendarIds };
+  };
+
+  const studentPayload = { practice: { appName: '學生甲', email: 'student@example.com', room: 'A' } };
+  const studentParameters = signedGatewayParametersForTest('submitStudentPractice', studentPayload, {
+    nonce: 'nonce-student-1234',
+  });
+  studentParameters.practice = JSON.stringify({ appName: '攻擊者', room: 'D' });
+  const student = JSON.parse(backend.doPost({ parameter: studentParameters }).text);
+  assert.deepEqual(student.data, studentPayload.practice);
+
+  const vvipPayload = { calendarIds: ['calendar-1'], vvipId: 'member-1' };
+  const vvipParameters = signedGatewayParametersForTest('submitVvipSelection', vvipPayload, {
+    nonce: 'nonce-vvip-1234567',
+  });
+  vvipParameters.vvipId = 'forged-member';
+  vvipParameters.calendarIds = JSON.stringify(['forged-calendar']);
+  const vvip = JSON.parse(backend.doPost({ parameter: vvipParameters }).text);
+  assert.deepEqual(vvip.data, { vvipId: 'member-1', calendarIds: ['calendar-1'] });
+  assert.deepEqual(received, [
+    studentPayload.practice,
+    { vvipId: 'member-1', calendarIds: ['calendar-1'] },
+  ]);
+});
+
+test('gateway enforcement does not change public reads or teacher login routing', () => {
+  const services = createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('PUBLIC_GATEWAY_ENFORCED', 'true');
+  const backend = loadBackend(services);
+  backend.getPublicVvipMembers_ = () => [{ id: 'member-1', name: '會員一' }];
+  backend.authenticate_ = (teacherName) => ({ teacherName, sessionToken: 'session-token' });
+
+  const members = JSON.parse(backend.doPost({ parameter: { action: 'getVvipMembers' } }).text);
+  const login = JSON.parse(backend.doPost({ parameter: {
+    action: 'login', teacherName: '老師甲', pin: '1234',
+  } }).text);
+
+  assert.deepEqual(members.data, [{ id: 'member-1', name: '會員一' }]);
+  assert.deepEqual(login.data, { teacherName: '老師甲', sessionToken: 'session-token' });
 });
 
 function createStudentPracticeAdminFixture(rows = {}) {

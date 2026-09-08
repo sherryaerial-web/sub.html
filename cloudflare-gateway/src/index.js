@@ -1,10 +1,12 @@
 import { hasRoutePath, matchRoute } from './routes.js';
 import {
+  buildRateLimitKey,
   GatewayError,
   corsHeaders,
   readJsonBody,
   validateOrigin,
 } from './security.js';
+import { verifyTurnstile } from './turnstile.js';
 
 function jsonResponse(payload, status = 200, headers = {}) {
   return new Response(JSON.stringify(payload), {
@@ -58,8 +60,54 @@ export default {
           headers: corsHeaders(origin, route.method),
         });
       }
+      let body = {};
       if (route.method === 'POST') {
-        await readJsonBody(request, route.maxBodyBytes);
+        body = await readJsonBody(request, route.maxBodyBytes);
+      }
+
+      if (route.turnstileRequired) {
+        const turnstileToken = typeof body.turnstileToken === 'string'
+          ? body.turnstileToken.trim()
+          : '';
+        if (!turnstileToken) {
+          throw new GatewayError(400, 'turnstile_required', '請先完成人機驗證。');
+        }
+
+        const limiter = env.PUBLIC_WRITE_LIMITER;
+        if (!limiter || typeof limiter.limit !== 'function') {
+          throw new GatewayError(503, 'gateway_not_configured', '服務尚未完成設定。');
+        }
+        const rateKey = await buildRateLimitKey(
+          route,
+          body,
+          request.headers.get('CF-Connecting-IP') || '',
+        );
+        let limitResult;
+        try {
+          limitResult = await limiter.limit({ key: rateKey });
+        } catch (_error) {
+          throw new GatewayError(503, 'rate_limit_unavailable', '服務暫時忙碌，請稍後再試。');
+        }
+        if (!limitResult || limitResult.success !== true) {
+          throw new GatewayError(429, 'rate_limited', '操作太頻繁，請稍後再試。');
+        }
+
+        await verifyTurnstile({
+          token: turnstileToken,
+          expectedAction: route.turnstileAction,
+          remoteIp: request.headers.get('CF-Connecting-IP') || '',
+          secret: env.TURNSTILE_SECRET_KEY,
+          allowedHostnames: env.TURNSTILE_HOSTNAMES,
+          fetchImpl: typeof env.fetch === 'function' ? env.fetch : fetch,
+        });
+      } else {
+        const limiter = env.PUBLIC_READ_LIMITER;
+        if (limiter && typeof limiter.limit === 'function') {
+          const result = await limiter.limit({ key: `${route.path}:${request.headers.get('CF-Connecting-IP') || 'unknown'}` });
+          if (!result || result.success !== true) {
+            throw new GatewayError(429, 'rate_limited', '操作太頻繁，請稍後再試。');
+          }
+        }
       }
     } catch (error) {
       if (error instanceof GatewayError) {

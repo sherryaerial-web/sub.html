@@ -14,6 +14,38 @@ export function parseCsv(value) {
     .filter(Boolean);
 }
 
+function bytesToBase64Url(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+export async function sha256Base64Url(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
+  return bytesToBase64Url(new Uint8Array(digest));
+}
+
+export async function buildRateLimitKey(route, body, remoteIp) {
+  let identity = 'anonymous';
+  if (route.action === 'submitStudentPractice') {
+    const practice = body && body.practice && typeof body.practice === 'object'
+      ? body.practice
+      : {};
+    const studentToken = String(practice.studentToken || '').trim();
+    if (studentToken) {
+      identity = `student-token:${studentToken}`;
+    } else {
+      const email = String(practice.email || '').trim().toLowerCase();
+      identity = `student-email:${email}|network:${String(remoteIp || '').trim()}`;
+    }
+  } else if (route.action === 'getVvipSelection' || route.action === 'submitVvipSelection') {
+    identity = `vvip:${String(body && body.vvipId || '').trim()}`;
+  } else {
+    identity = `network:${String(remoteIp || '').trim()}`;
+  }
+  return `${route.path}:${await sha256Base64Url(identity)}`;
+}
+
 export function validateOrigin(request, allowedOrigins) {
   const origin = request.headers.get('Origin') || '';
   if (!origin || !parseCsv(allowedOrigins).includes(origin)) {

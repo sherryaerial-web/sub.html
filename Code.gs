@@ -2292,7 +2292,7 @@ function appendNotificationAuditSafely_(event) {
   }
 }
 
-function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode, teacherNames, heading, content, eventKeyValue) {
+function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode, teacherNames, heading, content, eventKeyValue, urlValue) {
   var copy = validateNotificationCopy_(heading, content);
   var recipients = resolveNotificationAudience_(audienceMode, teacherNames);
   var result = sendPushAfterMutationSafely_(recipients, {
@@ -2300,7 +2300,7 @@ function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode
     type: cleanText_(sourceLabel) || '系統通知',
     heading: copy.heading,
     content: copy.content,
-    url: buildAppViewUrl_('', ''),
+    url: cleanText_(urlValue) || buildAppViewUrl_('', ''),
     relatedId: cleanText_(sourceId),
     actor: cleanText_(actorName)
   });
@@ -2907,6 +2907,48 @@ function runStudentPracticeTransitionUnlocked_(sheets, callback) {
   }
 }
 
+function notifyStudentPracticeRegistrationSafely_(detailsValue) {
+  var details = detailsValue || {};
+  try {
+    var activeAdminNames = getActiveCourseAdminNames_();
+    var recipients = ['冠蓉', 'Tako'].filter(function(name) {
+      return activeAdminNames.indexOf(name) !== -1;
+    });
+    if (!recipients.length) {
+      return { attempted: false, accepted: false, recipientNames: [], error: '' };
+    }
+
+    var status = cleanText_(details.status);
+    var heading = status === STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION
+      ? '學生自主練習待確認資格'
+      : '學生自主練習新登記';
+    var contentParts = [
+      cleanText_(details.studentName),
+      cleanText_(details.date) + ' ' + cleanText_(details.room) + ' 教室 ' +
+        cleanText_(details.startTime) + '–' + cleanText_(details.endTime),
+      '狀態：' + status,
+      '方式：' + (details.joinedExisting ? '加入同學時段' : '新時段')
+    ];
+    var note = cleanText_(details.note);
+    if (note) contentParts.push('備註：' + note);
+
+    return sendManagedNotification_(
+      cleanText_(details.studentName) || '學生自主練習網站',
+      '學生自主練習',
+      cleanText_(details.participantId),
+      'selected',
+      recipients,
+      heading,
+      contentParts.filter(Boolean).join('｜'),
+      'student_practice_registration_' + cleanText_(details.participantId),
+      buildAppViewUrl_('admin', 'practice')
+    );
+  } catch (error) {
+    console.warn('學生自主練習已完成登記，但管理員通知失敗。', error);
+    return { attempted: true, accepted: false, recipientNames: [], error: getErrorMessage_(error) };
+  }
+}
+
 function submitStudentPractice_(inputValue) {
   var input = inputValue || {};
   var result = withScriptLock_(function() {
@@ -3030,6 +3072,9 @@ function submitStudentPractice_(inputValue) {
         participantId: participantId,
         groupId: groupId,
         studentToken: newToken,
+        studentName: appName,
+        note: cleanText_(input.note),
+        joinedExisting: Boolean(targetGroup),
         qualificationVenue: qualificationVenue,
         status: registrationStatus,
         date: interval.date,
@@ -3040,6 +3085,10 @@ function submitStudentPractice_(inputValue) {
     });
   });
   invalidatePracticeDayViewCache_(result.date);
+  notifyStudentPracticeRegistrationSafely_(result);
+  delete result.studentName;
+  delete result.note;
+  delete result.joinedExisting;
   return result;
 }
 

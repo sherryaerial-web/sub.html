@@ -1220,6 +1220,34 @@ test('course administrators can manually notify selected active teachers and the
   assert.equal(auditSheet.values[1][5], '已送出');
 });
 
+test('managed notifications can open the relevant admin tool', () => {
+  const { backend } = createNotificationBackend();
+  const deliveries = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    deliveries.push({ names: Array.from(names), message: { ...message } });
+    return { attempted: true, accepted: true, delivered: 2, messageId: 'student-practice-1', error: '' };
+  };
+
+  backend.sendManagedNotification_(
+    '學生甲',
+    '學生自主練習',
+    'participant-1',
+    'selected',
+    ['冠蓉', 'Tako'],
+    '學生自主練習新登記',
+    '學生甲｜2026/09/10 A 教室 10:00–11:00｜狀態：已成立',
+    'student_practice_registration_participant-1',
+    'https://sherryaerial-web.github.io/sub.html/?view=admin&tab=practice'
+  );
+
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual(deliveries[0].names, ['冠蓉', 'Tako']);
+  assert.equal(
+    deliveries[0].message.url,
+    'https://sherryaerial-web.github.io/sub.html/?view=admin&tab=practice'
+  );
+});
+
 test('fixed notification schedules send once in the five-minute window even when closure automation is manual', () => {
   const { backend, adminSession } = createNotificationBackend();
   const deliveries = [];
@@ -10775,7 +10803,7 @@ test('student practice identity migration removes only old student test records 
   assert.equal(courseSheet.values.length, 2);
 });
 
-test('student practice submission preserves pending request and confirmed student establishes immediately', () => {
+function createStudentPracticeSubmissionFixture(options = {}) {
   const spreadsheet = createSpreadsheetFixture([]);
   const crypto = require('node:crypto');
   let uuid = 0;
@@ -10806,6 +10834,16 @@ test('student practice submission preserves pending request and confirmed studen
   backend.currentTimeMs_ = () => new Date('2026-09-09T08:00:00+08:00').getTime();
   backend.getPracticeCurrentObRowsForDayView_ = () => [];
   backend.getPracticeRecordsUnlocked_ = () => ({ bookings: [], participants: [] });
+  if (!options.enableNotifications) {
+    backend.notifyStudentPracticeRegistrationSafely_ = () => ({
+      attempted: false, accepted: false, recipientNames: [], error: '',
+    });
+  }
+  return { backend, spreadsheet };
+}
+
+test('student practice submission preserves pending request and confirmed student establishes immediately', () => {
+  const { backend, spreadsheet } = createStudentPracticeSubmissionFixture();
 
   assert.throws(() => backend.submitStudentPractice_({
     appName: '學生甲', email: 'not-an-email', date: '2026/09/10', room: 'A',
@@ -10839,6 +10877,33 @@ test('student practice submission preserves pending request and confirmed studen
   assert.equal(otherVenue.qualificationVenue, '劍潭');
   assert.equal(otherVenue.status, '待確認資格');
   assert.equal(spreadsheet.getSheetByName('學生自主練習資格').values[1][13], '待確認資格');
+});
+
+test('student practice submission notifies Kuan Rong and Tako after the registration is saved', () => {
+  const { backend, spreadsheet } = createStudentPracticeSubmissionFixture({ enableNotifications: true });
+  const deliveries = [];
+  backend.getActiveCourseAdminNames_ = () => ['Tako', '其他管理員', '冠蓉'];
+  backend.sendManagedNotification_ = (...args) => {
+    deliveries.push(args);
+    return { accepted: true, recipientNames: ['冠蓉', 'Tako'] };
+  };
+
+  const result = backend.submitStudentPractice_({
+    appName: '學生甲', email: 'student@example.com', date: '2026/09/10', room: 'A',
+    startTime: '10:00', durationMinutes: 60, note: '需要鞦韆',
+  });
+
+  assert.equal(result.status, '待確認資格');
+  assert.equal(spreadsheet.getSheetByName('學生自主練習參與者').values[1][4], '待確認資格');
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual(Array.from(deliveries[0][4]), ['冠蓉', 'Tako']);
+  assert.equal(deliveries[0][5], '學生自主練習待確認資格');
+  assert.match(deliveries[0][6], /學生甲/);
+  assert.match(deliveries[0][6], /2026\/09\/10 A 教室 10:00–11:00/);
+  assert.match(deliveries[0][6], /狀態：待確認資格/);
+  assert.match(deliveries[0][6], /備註：需要鞦韆/);
+  assert.equal(deliveries[0][7], `student_practice_registration_${result.participantId}`);
+  assert.equal(deliveries[0][8], 'https://sherryaerial-web.github.io/sub.html/?view=admin&tab=practice');
 });
 
 test('student practice public routes expose availability and submission without teacher session data', () => {

@@ -9510,7 +9510,7 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
     return { teacherName: session.teacherName, occurrences: [] };
   };
   backend.createTeacherRental_ = (session, input) => {
-    calls.push(['create', session.teacherName, session.impersonatedBy || '', input.classId]);
+    calls.push(['create', session.teacherName, session.impersonatedBy || '', input.durationMinutes]);
     return { results: [] };
   };
   backend.getMyRentalRequests_ = (session, month) => {
@@ -9534,7 +9534,7 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
     action: 'createTeacherRental',
     sessionToken: teacherToken,
     teacherName: '偽造老師',
-    rental: JSON.stringify({ classId: 'rental-60', room: 'A' }),
+    rental: JSON.stringify({ durationMinutes: 60, room: 'A' }),
   } }).text);
   assert.equal(teacherResult.status, 'success');
 
@@ -9546,7 +9546,7 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
     action: 'previewTeacherRental',
     sessionToken: adminToken,
     actingTeacherName: '小琪',
-    rental: JSON.stringify({ classId: 'rental-90', room: 'C' }),
+    rental: JSON.stringify({ durationMinutes: 90, room: 'C' }),
   } }).text);
   const historyResult = JSON.parse(backend.doPost({ parameter: {
     action: 'getMyRentalRequests',
@@ -9558,7 +9558,7 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
   assert.equal(previewResult.status, 'success');
   assert.equal(historyResult.status, 'success');
   assert.deepEqual(calls, [
-    ['create', '小琪', '', 'rental-60'],
+    ['create', '小琪', '', 60],
     ['catalog', '小琪', '冠蓉', true],
     ['preview', '小琪', '冠蓉', 'C'],
     ['history', '小琪', '冠蓉', '2026-09'],
@@ -11843,19 +11843,171 @@ test('rental structure is isolated and preserves practice and CourseList rows', 
   assert.deepEqual(spreadsheet.getSheetByName('OB租借對照').values[0], EXPECTED_RENTAL_MAPPING_HEADERS);
 });
 
-test('rental recurrence derives every end time from the selected OB class duration', () => {
+test('rental recurrence accepts only the 60 and 90 minute choices', () => {
   const backend = loadBackend();
   const occurrences = backend.buildRentalRequestOccurrences_({
     date: '2026/09/10', room: 'C', startTime: '10:00', recurring: true,
-    recurringEndDate: '2026/09/24', classId: 'rental-150', className: '場租 150 分鐘',
-    durationMinutes: 150,
+    recurringEndDate: '2026/09/24', durationMinutes: 90,
   });
 
   assert.deepEqual(JSON.parse(JSON.stringify(occurrences)), [
-    { date: '2026/09/10', room: 'C', startTime: '10:00', endTime: '12:30' },
-    { date: '2026/09/17', room: 'C', startTime: '10:00', endTime: '12:30' },
-    { date: '2026/09/24', room: 'C', startTime: '10:00', endTime: '12:30' },
+    { date: '2026/09/10', room: 'C', startTime: '10:00', endTime: '11:30' },
+    { date: '2026/09/17', room: 'C', startTime: '10:00', endTime: '11:30' },
+    { date: '2026/09/24', room: 'C', startTime: '10:00', endTime: '11:30' },
   ]);
+  assert.throws(() => backend.buildRentalRequestOccurrences_({
+    date: '2026/09/10', room: 'C', startTime: '10:00', durationMinutes: 120,
+  }), /只能選擇 60 或 90 分鐘/);
+});
+
+test('rental auto-selection matches one standard OB class by room and duration', () => {
+  const backend = loadBackend();
+  const catalog = {
+    classes: [
+      { classId: 'a-all-day', name: 'A－全天場地租借', durationMinutes: 1435 },
+      { classId: 'a-fixed', name: 'A－場地租借（1230-1600)', durationMinutes: 210 },
+      { classId: 'a-60', name: 'A－場地租借', durationMinutes: 60 },
+      { classId: 'a-90', name: 'A－場地租借（90min）', durationMinutes: 90 },
+      { classId: 'a-bad-duration', name: 'A－場地租借（90min）', durationMinutes: 60 },
+      { classId: 'b-60', name: 'B－場地租借', durationMinutes: 60 },
+    ],
+  };
+
+  const sixty = backend.matchRentalClassForSelection_(catalog, 'A', 60);
+  const ninety = backend.matchRentalClassForSelection_(catalog, 'A', 90);
+  assert.equal(sixty.matchCount, 1);
+  assert.equal(sixty.rentalClass.classId, 'a-60');
+  assert.equal(ninety.matchCount, 1);
+  assert.equal(ninety.rentalClass.classId, 'a-90');
+  assert.throws(
+    () => backend.requireRentalClassForSelection_(catalog, 'D', 60),
+    /找不到 D 教室 60 分鐘/,
+  );
+  assert.throws(
+    () => backend.requireRentalClassForSelection_({
+      classes: [catalog.classes[2], { ...catalog.classes[2], classId: 'a-60-copy' }],
+    }, 'A', 60),
+    /有多堂 A 教室 60 分鐘/,
+  );
+});
+
+test('rental preview fails before any Sheet access when one forced refresh still cannot map the class', () => {
+  const backend = loadBackend({
+    PropertiesService: {
+      getScriptProperties: () => ({ getProperty: () => 'read-write-token' }),
+    },
+  });
+  const refreshes = [];
+  let sheetReads = 0;
+  backend.getRentalReferenceCatalog_ = (_token, forceRefresh) => {
+    refreshes.push(forceRefresh === true);
+    return {
+      rooms: [{ room: 'D', roomId: 'room-d' }], classes: [], instructors: [],
+    };
+  };
+  backend.SpreadsheetApp = {
+    getActiveSpreadsheet() { sheetReads += 1; return {}; },
+  };
+
+  assert.throws(() => backend.previewTeacherRental_({ teacherName: 'Tako' }, {
+    date: '2026/09/20', room: 'D', startTime: '14:00', durationMinutes: 60,
+  }), /找不到 D 教室 60 分鐘/);
+  assert.deepEqual(refreshes, [false, true]);
+  assert.equal(sheetReads, 0);
+
+  refreshes.length = 0;
+  backend.getRentalReferenceCatalog_ = (_token, forceRefresh) => {
+    refreshes.push(forceRefresh === true);
+    return {
+      rooms: [{ room: 'D', roomId: 'room-d' }], instructors: [],
+      classes: [
+        { classId: 'd-60-a', name: 'D－場地租借', durationMinutes: 60 },
+        { classId: 'd-60-b', name: 'D－場地租借', durationMinutes: 60 },
+      ],
+    };
+  };
+  assert.throws(() => backend.previewTeacherRental_({ teacherName: 'Tako' }, {
+    date: '2026/09/20', room: 'D', startTime: '14:00', durationMinutes: 60,
+  }), /有多堂 D 教室 60 分鐘/);
+  assert.deepEqual(refreshes, [false, true]);
+  assert.equal(sheetReads, 0);
+});
+
+test('rental preview refreshes the OB catalog once when automatic selection misses cached data', () => {
+  const backend = loadBackend({
+    PropertiesService: {
+      getScriptProperties: () => ({ getProperty: () => 'read-write-token' }),
+    },
+  });
+  const calls = [];
+  backend.getRentalReferenceCatalog_ = (_token, forceRefresh) => {
+    calls.push(forceRefresh === true);
+    return {
+      rooms: [{ room: 'A', roomId: 'room-a' }],
+      classes: forceRefresh
+        ? [{ classId: 'a-90', name: 'A－場地租借（90min）', durationMinutes: 90 }]
+        : [],
+      instructors: [{ id: 'teacher-1', name: 'Tako' }],
+    };
+  };
+  backend.buildRentalCatalogForSession_ = (_session, reference) => ({
+    teacherName: 'Tako', instructorId: 'teacher-1', instructorReady: true,
+    classes: reference.classes, rooms: reference.rooms,
+  });
+  backend.currentTimeMs_ = () => 0;
+  backend.SpreadsheetApp = { getActiveSpreadsheet: () => ({}) };
+  backend.getRentalPracticeRecordsForAnalysis_ = () => ({
+    teacher: { bookings: [], participants: [] },
+    student: { groups: [], participants: [], qualifications: [] },
+  });
+  backend.getPracticeCurrentObRowsForDayView_ = () => [];
+
+  const result = backend.previewTeacherRental_({ teacherName: 'Tako' }, {
+    date: '2026/09/20', room: 'A', startTime: '14:00', durationMinutes: 90,
+  });
+
+  assert.deepEqual(calls, [false, true]);
+  assert.equal(result.classId, 'a-90');
+  assert.equal(result.durationMinutes, 90);
+});
+
+test('same teacher may place adjacent rentals while the buffer still blocks other teachers', () => {
+  const backend = loadBackend();
+  const sameTeacherRequest = {
+    teacherName: 'Tako', instructorId: 'teacher-tako',
+    date: '2026/09/20', room: 'A', startTime: '14:00', endTime: '15:00',
+  };
+  const courseRows = [[
+    '2026/09/20', '15:00', 'A－場地租借', 'Tako 老師', 'rental-next', '', 'teacher-tako', '', '', 60,
+  ]];
+  const emptyTeacherRecords = { bookings: [], participants: [] };
+  const emptyStudentRecords = { groups: [], participants: [], qualifications: [] };
+
+  const sameTeacher = backend.analyzeRentalConflicts_(
+    sameTeacherRequest, courseRows, emptyTeacherRecords, emptyStudentRecords,
+  );
+  const otherTeacher = backend.analyzeRentalConflicts_(
+    { ...sameTeacherRequest, teacherName: 'Tako 老師', instructorId: 'teacher-vivi' },
+    courseRows, emptyTeacherRecords, emptyStudentRecords,
+  );
+  const ownFormalCourse = backend.analyzeRentalConflicts_(sameTeacherRequest, [[
+    '2026/09/20', '15:00', 'A－空環 Lv.1', 'Tako', 'course-next', '', '', '', '', 60,
+  ]], emptyTeacherRecords, emptyStudentRecords);
+  assert.equal(sameTeacher.upperConflicts.length, 0);
+  assert.equal(otherTeacher.upperConflicts.length, 1);
+  assert.equal(ownFormalCourse.upperConflicts.length, 1);
+  assert.equal(backend.rentalRequestsOverlap_(
+    sameTeacherRequest,
+    { teacherName: 'Tako 老師', instructorId: 'teacher-tako', date: '2026/09/20', room: 'A', startTime: '15:00', endTime: '16:00' },
+  ), false);
+  assert.equal(backend.rentalRequestsOverlap_(
+    sameTeacherRequest,
+    { teacherName: 'Tako', instructorId: 'teacher-vivi', date: '2026/09/20', room: 'A', startTime: '15:00', endTime: '16:00' },
+  ), true);
+  assert.equal(backend.rentalRequestsOverlap_(
+    sameTeacherRequest,
+    { teacherName: 'Tako', instructorId: 'teacher-tako', date: '2026/09/20', room: 'A', startTime: '14:30', endTime: '15:30' },
+  ), true);
 });
 
 test('rental preview blocks formal occupancy but reports lower-priority practice impacts', () => {

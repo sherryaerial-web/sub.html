@@ -12134,7 +12134,7 @@ function buildRentalRequestOccurrences_(requestValue) {
   var startMinutes = timeTextToMinutes_(request.startTime);
   var durationMinutes = Number(request.durationMinutes);
   if (startMinutes < 0 || startMinutes % 5 !== 0) throw new Error('租借開始時間必須以 5 分鐘為單位。');
-  if (!isFinite(durationMinutes) || durationMinutes <= 0) throw new Error('租借課程時長不正確。');
+  if ([60, 90].indexOf(durationMinutes) === -1) throw new Error('場租時長只能選擇 60 或 90 分鐘。');
   if (startMinutes + durationMinutes >= 24 * 60) throw new Error('租借不可跨日。');
   var startDate = parsePracticeDateTime_(date, '00:00');
   if (!request.recurring) {
@@ -12179,8 +12179,14 @@ function analyzeRentalConflicts_(requestValue, courseRowsValue, teacherRecordsVa
     ));
     var blocker = normalizePracticeInterval_(date, startTime, endTime);
     if (!practiceIntervalsConflict_(interval, blocker, 15)) return;
+    var isRental = /場地租借|場租/.test(label);
+    var sameTeacher = cleanText_(request.instructorId) &&
+      cleanText_(request.instructorId) === cleanText_(row && row[6]);
+    var isExactlyAdjacent = interval.endMs === blocker.startMs ||
+      blocker.endMs === interval.startMs;
+    if (isRental && sameTeacher && isExactlyAdjacent) return;
     upperConflicts.push({
-      type: /場地租借|場租/.test(label) ? 'rental' : 'course',
+      type: isRental ? 'rental' : 'course',
       calendarId: calendarId,
       label: label,
       startTime: startTime,
@@ -12362,11 +12368,14 @@ function rentalRequestsOverlap_(leftValue, rightValue) {
   if (cleanText_(left.date).replace(/-/g, '/') !== cleanText_(right.date).replace(/-/g, '/') ||
       cleanText_(left.room).toUpperCase() !== cleanText_(right.room).toUpperCase()) return false;
   try {
-    return practiceIntervalsConflict_(
-      normalizePracticeInterval_(left.date, left.startTime, left.endTime),
-      normalizePracticeInterval_(right.date, right.startTime, right.endTime),
-      15
-    );
+    var leftInterval = normalizePracticeInterval_(left.date, left.startTime, left.endTime);
+    var rightInterval = normalizePracticeInterval_(right.date, right.startTime, right.endTime);
+    var sameTeacher = cleanText_(left.instructorId) &&
+      cleanText_(left.instructorId) === cleanText_(right.instructorId);
+    var isExactlyAdjacent = leftInterval.endMs === rightInterval.startMs ||
+      rightInterval.endMs === leftInterval.startMs;
+    if (sameTeacher && isExactlyAdjacent) return false;
+    return practiceIntervalsConflict_(leftInterval, rightInterval, 15);
   } catch (error) {
     return false;
   }
@@ -12493,15 +12502,18 @@ function getRentalReferenceCatalog_(tokenValue, forceRefreshValue) {
   return reference;
 }
 
-function getRentalCatalog_(session, forceRefreshValue) {
-  var teacherName = getSessionTeacherName_(session);
+function getRentalApiToken_() {
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) throw new Error('尚未設定 Omcean API 權杖。');
-  var reference = getRentalReferenceCatalog_(token, forceRefreshValue === true);
-  var classes = reference.classes;
-  if (!classes.length) throw new Error('OB 目前沒有可用的場地租借課程。');
-  var rooms = reference.rooms;
-  var instructors = reference.instructors;
+  return token;
+}
+
+function buildRentalCatalogForSession_(session, referenceValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var reference = referenceValue || {};
+  var classes = reference.classes || [];
+  var rooms = reference.rooms || [];
+  var instructors = reference.instructors || [];
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var instructorId = '';
   var instructorMessage = '';
@@ -12519,6 +12531,12 @@ function getRentalCatalog_(session, forceRefreshValue) {
     instructorReady: !!instructorId,
     instructorMessage: instructorMessage
   };
+}
+
+function getRentalCatalog_(session, forceRefreshValue) {
+  var token = getRentalApiToken_();
+  var reference = getRentalReferenceCatalog_(token, forceRefreshValue === true);
+  return buildRentalCatalogForSession_(session, reference);
 }
 
 function getRentalRecordsUnlocked_(spreadsheet) {
@@ -12568,9 +12586,43 @@ function appendRentalAuditUnlocked_(sheet, eventValue) {
   ]);
 }
 
-function getRentalClassById_(catalog, classIdValue) {
-  var classId = cleanText_(classIdValue);
-  return (catalog.classes || []).filter(function(item) { return item.classId === classId; })[0] || null;
+function parseStandardRentalClassName_(classNameValue) {
+  var match = /^\s*([A-D])\s*[－—–-]\s*(?:場地租借|場租)\s*(?:[（(]\s*(60|90)\s*min\s*[）)])?\s*$/i
+    .exec(cleanText_(classNameValue));
+  return match ? {
+    room: match[1].toUpperCase(),
+    statedDurationMinutes: match[2] ? Number(match[2]) : 0
+  } : null;
+}
+
+function matchRentalClassForSelection_(catalogValue, roomValue, durationValue) {
+  var catalog = catalogValue || {};
+  var room = requirePracticeRoom_(roomValue);
+  var durationMinutes = Number(durationValue);
+  if ([60, 90].indexOf(durationMinutes) === -1) {
+    throw new Error('場租時長只能選擇 60 或 90 分鐘。');
+  }
+  var matches = (catalog.classes || []).filter(function(item) {
+    var parsedName = parseStandardRentalClassName_(item && item.name);
+    return parsedName && parsedName.room === room &&
+      Number(item && item.durationMinutes) === durationMinutes &&
+      (!parsedName.statedDurationMinutes || parsedName.statedDurationMinutes === durationMinutes);
+  });
+  return {
+    matchCount: matches.length,
+    rentalClass: matches.length === 1 ? matches[0] : null
+  };
+}
+
+function requireRentalClassForSelection_(catalogValue, roomValue, durationValue) {
+  var room = requirePracticeRoom_(roomValue);
+  var durationMinutes = Number(durationValue);
+  var matched = matchRentalClassForSelection_(catalogValue, room, durationMinutes);
+  if (matched.matchCount === 1) return matched.rentalClass;
+  if (matched.matchCount > 1) {
+    throw new Error('OB 有多堂 ' + room + ' 教室 ' + durationMinutes + ' 分鐘的標準場租課程，請管理員保留唯一一堂。');
+  }
+  throw new Error('找不到 ' + room + ' 教室 ' + durationMinutes + ' 分鐘的 OB 標準場租課程，請確認課程未封存，且名稱為「' + room + '－場地租借」或「' + room + '－場地租借（' + durationMinutes + 'min）」格式。');
 }
 
 function getRentalRoomByCode_(catalog, roomValue) {
@@ -12606,14 +12658,29 @@ function buildRentalPreviewOccurrence_(occurrence, courseRows, records) {
 
 function previewTeacherRental_(session, inputValue) {
   var input = inputValue || {};
-  var catalog = getRentalCatalog_(session);
-  var rentalClass = getRentalClassById_(catalog, input.classId);
-  if (!rentalClass) throw new Error('找不到選擇的 OB 租借課程，請重新整理。');
-  var roomRef = getRentalRoomByCode_(catalog, input.room);
+  var token = getRentalApiToken_();
+  var reference = getRentalReferenceCatalog_(token);
+  var matched = matchRentalClassForSelection_(reference, input.room, input.durationMinutes);
+  if (matched.matchCount !== 1) {
+    reference = getRentalReferenceCatalog_(token, true);
+    matched = matchRentalClassForSelection_(reference, input.room, input.durationMinutes);
+  }
+  var rentalClass = requireRentalClassForSelection_(reference, input.room, input.durationMinutes);
+  var roomRef = getRentalRoomByCode_(reference, input.room);
   if (!roomRef) throw new Error('找不到選擇教室的 OB 對照。');
+  var catalog = buildRentalCatalogForSession_(session, reference);
+  if (!catalog.instructorId) {
+    throw new Error(catalog.instructorMessage || '此帳號沒有對應的 OB 老師資料。');
+  }
   var occurrences = buildRentalRequestOccurrences_(Object.assign({}, input, {
     durationMinutes: rentalClass.durationMinutes
   }));
+  occurrences = occurrences.map(function(occurrence) {
+    return Object.assign({}, occurrence, {
+      teacherName: catalog.teacherName,
+      instructorId: catalog.instructorId
+    });
+  });
   occurrences.forEach(function(occurrence) {
     if (parsePracticeDateTime_(occurrence.date, occurrence.startTime).getTime() <= currentTimeMs_()) {
       throw new Error('租借開始時間必須晚於現在。');

@@ -3554,7 +3554,7 @@ test('teacher practice view uses a card calendar with custom booking and private
   assert.doesNotMatch(toolbar, /id="practice-my-bookings"/);
 });
 
-test('teacher rental dialog uses OB classes for duration and has no editable end time', () => {
+test('teacher rental dialog selects only room start time and a 60 or 90 minute duration', () => {
   const section = html.match(/<section id="view-practice"[\s\S]*?<\/section>/)?.[0] || '';
   const dialog = html.match(/<dialog id="rental-dialog"[\s\S]*?<\/dialog>/)?.[0] || '';
   assert.match(section, /<h2 class="section-heading">\s*教室使用登記\s*<\/h2>/);
@@ -3563,14 +3563,21 @@ test('teacher rental dialog uses OB classes for duration and has no editable end
   assert.match(section, /id="rental-new"[\s\S]*?>[\s\S]*?場租登記/);
   assert.match(dialog, /id="rental-dialog-title"[^>]*>\s*登記場地租借\s*<\/h3>/);
   assert.match(html, /\.practice-action-row\s*\{[^}]*gap:\s*8px/s);
-  assert.match(dialog, /id="rental-class"/);
+  assert.doesNotMatch(dialog, /id="rental-class"/);
   assert.match(dialog, /id="rental-date"[^>]*type="date"/);
   assert.match(dialog, /id="rental-room"/);
   assert.match(dialog, /id="rental-start"/);
   assert.match(dialog, /id="rental-recurring"[^>]*type="checkbox"/);
   assert.match(dialog, /id="rental-end-date"[^>]*type="date"/);
   assert.match(dialog, /id="rental-preview"/);
-  assert.doesNotMatch(dialog, /id="rental-duration"/);
+  assert.match(dialog, /id="rental-duration"/);
+  assert.match(dialog, /value="60"[^>]*>60 分鐘/);
+  assert.match(dialog, /value="90"[^>]*>90 分鐘/);
+  assert.doesNotMatch(dialog, /value="120"[^>]*>120 分鐘/);
+  assert.match(dialog, /需要 120 分鐘請連續登記兩次 60 分鐘/);
+  assert.match(dialog, /需要 150 分鐘請登記 90＋60 分鐘/);
+  assert.match(dialog, /同一位老師、同一間教室可連續租借/);
+  assert.match(dialog, /整段租借前後仍須各保留 15 分鐘/);
   assert.doesNotMatch(dialog, /id="rental-end-time"/);
   assert.match(html, /callPostApi\(\s*"getRentalCatalog"/);
   assert.match(html, /callPostApi\("previewTeacherRental"/);
@@ -3580,7 +3587,7 @@ test('teacher rental dialog uses OB classes for duration and has no editable end
   assert.match(html, /callPostApi\("cancelTeacherRental"/);
 });
 
-test('rental dialog still shows OB classes and the selected room when the account needs an instructor identity', () => {
+test('rental dialog still shows the selected room when the account needs an instructor identity', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__rentalCatalog = {
     classes: [{ classId: '60', name: '場地租借 60 分鐘', durationMinutes: 60 }],
@@ -3592,30 +3599,33 @@ test('rental dialog still shows OB classes and the selected room when the accoun
 
   vm.runInContext('practiceState.room = "C"; rentalState.catalog = __rentalCatalog; renderRentalCatalog();', context);
 
-  assert.match(getElement('rental-class').innerHTML, /場地租借 60 分鐘/);
   assert.equal(getElement('rental-room').value, 'C');
   assert.equal(getElement('rental-submit').disabled, true);
   assert.equal(getElement('rental-instructor-status').hidden, false);
   assert.match(getElement('rental-instructor-status').textContent, /請切換至有 OB 老師資料的老師身分/);
 });
 
-test('rental class selection automatically switches to its A B C or D room', () => {
+test('rental form sends room and duration without exposing an OB class id', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__rentalCatalog = {
-    classes: [
-      { classId: 'a-60', name: 'A－場地租借', durationMinutes: 60 },
-      { classId: 'd-120', name: 'D－場地租借（120min）', durationMinutes: 120 },
-    ],
+    classes: [],
     rooms: [{ room: 'A', roomId: '1' }, { room: 'D', roomId: '4' }],
     instructorId: 'teacher-1',
     instructorReady: true,
   };
 
   vm.runInContext('practiceState.room = "A"; rentalState.catalog = __rentalCatalog; renderRentalCatalog();', context);
-  getElement('rental-class').value = 'd-120';
-  vm.runInContext('syncRentalRoomFromSelectedClass();', context);
+  getElement('rental-date').value = '2026-09-10';
+  getElement('rental-room').value = 'D';
+  getElement('rental-start').value = '14:00';
+  getElement('rental-duration').value = '90';
+  const input = vm.runInContext('getRentalFormInput()', context);
 
-  assert.equal(getElement('rental-room').value, 'D');
+  assert.equal(input.room, 'D');
+  assert.equal(input.durationMinutes, 90);
+  assert.equal('classId' in input, false);
+  vm.runInContext('syncRentalFormSummary();', context);
+  assert.equal(getElement('rental-computed-end').textContent, '15:30');
 });
 
 test('course admin opening rental registration refreshes the OB rental catalog once per fresh page', async () => {

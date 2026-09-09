@@ -1333,6 +1333,16 @@
     .rental-preview-card strong { display: block; color: var(--ink); font-size: 13px; }
     .rental-preview-card.waitlisted { border-color: #d8ba85; background: #fbf5e9; }
     .rental-preview-warning { color: var(--danger); font-size: 12px; line-height: 1.5; }
+    .rental-rule-note {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--soft);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+    .rental-rule-note summary { padding: 11px 14px; color: var(--sea-800); cursor: pointer; font-weight: 750; }
+    .rental-rule-note p { margin: 0; padding: 0 14px 13px; }
     .claim-success-mark {
       display: grid;
       width: 44px;
@@ -2417,15 +2427,16 @@
   <dialog id="rental-dialog" aria-labelledby="rental-dialog-title">
     <form id="rental-form" class="dialog-body">
       <h3 id="rental-dialog-title" tabindex="-1" autofocus>登記場地租借</h3>
-      <p class="section-copy">請選擇 OB 的租借課程，系統會依課程時長自動計算結束時間。</p>
+      <p class="section-copy">選擇教室、開始時間與租借時長，系統會自動配對 OB 場租課程。</p>
       <div id="rental-summary" class="practice-editor-summary"></div>
       <div id="rental-instructor-status" class="practice-course-warning" role="status" aria-live="polite" hidden></div>
       <div class="practice-form-grid">
-        <div class="practice-form-field full"><label for="rental-class">租借課程</label><select id="rental-class" class="claim-control" required><option value="">載入中…</option></select></div>
         <div class="practice-form-field"><label for="rental-date">日期</label><input id="rental-date" class="text-input" type="date" required></div>
         <div class="practice-form-field"><label for="rental-room">教室</label><select id="rental-room" class="claim-control" required></select></div>
         <div class="practice-form-field"><label for="rental-start">開始時間</label><select id="rental-start" class="claim-control" required></select></div>
-        <div class="practice-form-field"><label>預計結束</label><div id="rental-computed-end" class="text-input" aria-live="polite">—</div></div>
+        <div class="practice-form-field"><label for="rental-duration">租借時長</label><select id="rental-duration" class="claim-control" required><option value="60">60 分鐘</option><option value="90">90 分鐘</option></select></div>
+        <div class="practice-form-field full"><label>預計結束</label><div id="rental-computed-end" class="text-input" aria-live="polite">—</div></div>
+        <details class="practice-form-field full rental-rule-note"><summary>時長與連續租借規則</summary><p>場租每次可選 60 或 90 分鐘。需要 120 分鐘請連續登記兩次 60 分鐘；需要 150 分鐘請登記 90＋60 分鐘。同一位老師、同一間教室可連續租借，中間不需保留 15 分鐘；整段租借前後仍須各保留 15 分鐘。</p></details>
         <label class="practice-form-field full"><span>循環租借</span><span><input id="rental-recurring" type="checkbox"> 每週同一時段</span></label>
         <div id="rental-end-date-field" class="practice-form-field full" hidden><label for="rental-end-date">循環結束日</label><input id="rental-end-date" class="text-input" type="date"></div>
         <div class="practice-form-field full"><label for="rental-note">備註（選填）</label><textarea id="rental-note" class="text-input" rows="2" maxlength="200"></textarea></div>
@@ -4632,22 +4643,6 @@
       syncPracticeEditorAvailability();
     }
 
-    function getRentalSelectedClass() {
-      const classId = String(byId("rental-class").value || "");
-      return (rentalState.catalog?.classes || []).find((item) => String(item.classId) === classId) || null;
-    }
-
-    function getRentalClassRoom(className) {
-      const match = /^\s*([A-D])\s*[－—–-]/i.exec(String(className || ""));
-      return match ? match[1].toUpperCase() : "";
-    }
-
-    function syncRentalRoomFromSelectedClass() {
-      const room = getRentalClassRoom(getRentalSelectedClass()?.name);
-      const rooms = rentalState.catalog?.rooms || [];
-      if (room && rooms.some((item) => item.room === room)) byId("rental-room").value = room;
-    }
-
     function setRentalSubmitLabel(previewReady = false) {
       const button = byId("rental-submit");
       button.innerHTML = previewReady
@@ -4665,9 +4660,8 @@
     }
 
     function syncRentalFormSummary() {
-      const selectedClass = getRentalSelectedClass();
       const start = practiceTimeToMinutes(byId("rental-start").value);
-      const duration = Number(selectedClass?.durationMinutes || 0);
+      const duration = Number(byId("rental-duration").value || 0);
       const computedEnd = start >= 0 && duration > 0 && start + duration < 24 * 60
         ? practiceMinutesToTime(start + duration)
         : "—";
@@ -4675,17 +4669,18 @@
       byId("rental-end-date-field").hidden = !byId("rental-recurring").checked;
       byId("rental-end-date").required = byId("rental-recurring").checked;
       byId("rental-end-date").min = byId("rental-date").value || getTaipeiToday().replace(/\//g, "-");
-      byId("rental-summary").textContent = selectedClass
-        ? `${selectedClass.name}｜${duration} 分鐘${computedEnd !== "—" ? `｜${byId("rental-start").value}–${computedEnd}` : ""}`
-        : "請先選擇租借課程。";
+      const room = byId("rental-room").value;
+      byId("rental-summary").textContent = room && duration
+        ? `${room} 教室｜${duration} 分鐘${computedEnd !== "—" ? `｜${byId("rental-start").value}–${computedEnd}` : ""}`
+        : "請選擇教室與租借時長。";
     }
 
     function getRentalFormInput() {
       return {
-        classId: byId("rental-class").value,
         date: byId("rental-date").value.replace(/-/g, "/"),
         room: byId("rental-room").value,
         startTime: byId("rental-start").value,
+        durationMinutes: Number(byId("rental-duration").value || 0),
         recurring: byId("rental-recurring").checked,
         recurringEndDate: byId("rental-recurring").checked
           ? byId("rental-end-date").value.replace(/-/g, "/")
@@ -4722,7 +4717,6 @@
     async function loadRentalCatalog(forceRefresh = false) {
       if (rentalState.loading) return rentalState.catalog;
       rentalState.loading = true;
-      byId("rental-class").innerHTML = '<option value="">載入中…</option>';
       try {
         rentalState.catalog = await callPostApi(
           "getRentalCatalog",
@@ -4752,6 +4746,7 @@
       populatePracticeTimeSelects();
       if (!byId("rental-start").innerHTML) byId("rental-start").innerHTML = byId("practice-editor-start").innerHTML;
       byId("rental-start").value = "14:00";
+      byId("rental-duration").value = "60";
       invalidateRentalPreview();
       const catalogIsFresh = rentalState.catalog && rentalState.catalogFetchedAt
         && Date.now() - rentalState.catalogFetchedAt < RENTAL_CATALOG_MAX_AGE_MS;
@@ -4762,7 +4757,6 @@
       try {
         await loadRentalCatalog(authState.managementCapabilities.includes("course_admin"));
       } catch (error) {
-        byId("rental-class").innerHTML = '<option value="">無法載入租借課程</option>';
         byId("rental-instructor-status").hidden = false;
         byId("rental-instructor-status").textContent = error.message;
         byId("rental-submit").disabled = true;
@@ -4771,11 +4765,7 @@
     }
 
     function renderRentalCatalog() {
-      const classes = rentalState.catalog?.classes || [];
       const rooms = rentalState.catalog?.rooms || [];
-      byId("rental-class").innerHTML = '<option value="">請選擇租借課程</option>' + classes.map((item) =>
-        `<option value="${escapeHtml(item.classId)}">${escapeHtml(item.name)}｜${escapeHtml(item.durationMinutes)} 分鐘</option>`
-      ).join("");
       byId("rental-room").innerHTML = rooms.map((item) =>
         `<option value="${escapeHtml(item.room)}">${escapeHtml(item.room)} 教室</option>`
       ).join("");
@@ -4812,8 +4802,8 @@
         button.disabled = true;
         return;
       }
-      if (!input.classId) {
-        setNotice("請先選擇租借課程。", "error");
+      if (![60, 90].includes(input.durationMinutes)) {
+        setNotice("場租時長只能選擇 60 或 90 分鐘。", "error");
         return;
       }
       if (input.recurring && !input.recurringEndDate) {
@@ -8779,8 +8769,7 @@ https://sherryaerial-web.github.io/sub.html/
     byId("rental-cancel-once").addEventListener("click", () => cancelOwnRental(false));
     byId("rental-cancel-future").addEventListener("click", () => cancelOwnRental(true));
     byId("practice-dialog-cancel").addEventListener("click", closePracticeEditor);
-    byId("rental-class").addEventListener("change", syncRentalRoomFromSelectedClass);
-    ["rental-class", "rental-date", "rental-room", "rental-start", "rental-recurring", "rental-end-date", "rental-note"].forEach((id) => {
+    ["rental-date", "rental-room", "rental-start", "rental-duration", "rental-recurring", "rental-end-date", "rental-note"].forEach((id) => {
       byId(id).addEventListener("input", invalidateRentalPreview);
       byId(id).addEventListener("change", invalidateRentalPreview);
     });

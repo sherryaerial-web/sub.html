@@ -731,8 +731,8 @@ try {
     await page.locator("#practice-dialog-cancel").click();
     await page.locator("#rental-new").click();
     await page.locator("#rental-dialog").waitFor({ state: "visible" });
-    await page.locator('#rental-class option[value="60"]').waitFor({ state: "attached" });
-    await page.locator("#rental-class").selectOption("60");
+    await page.locator('#rental-duration option[value="60"]').waitFor({ state: "attached" });
+    await page.locator("#rental-duration").selectOption("60");
     const rentalFields = await page.evaluate(() => {
       const dialog = document.querySelector("#rental-dialog").getBoundingClientRect();
       const grid = document.querySelector("#rental-dialog .practice-form-grid");

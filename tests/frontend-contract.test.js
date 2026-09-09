@@ -3554,6 +3554,28 @@ test('teacher practice view uses a card calendar with custom booking and private
   assert.doesNotMatch(toolbar, /id="practice-my-bookings"/);
 });
 
+test('teacher rental dialog uses OB classes for duration and has no editable end time', () => {
+  const section = html.match(/<section id="view-practice"[\s\S]*?<\/section>/)?.[0] || '';
+  const dialog = html.match(/<dialog id="rental-dialog"[\s\S]*?<\/dialog>/)?.[0] || '';
+  assert.match(section, /id="practice-new"[\s\S]*?>[\s\S]*?自主練習/);
+  assert.match(section, /id="rental-new"[\s\S]*?>[\s\S]*?租借教室/);
+  assert.match(dialog, /id="rental-class"/);
+  assert.match(dialog, /id="rental-date"[^>]*type="date"/);
+  assert.match(dialog, /id="rental-room"/);
+  assert.match(dialog, /id="rental-start"/);
+  assert.match(dialog, /id="rental-recurring"[^>]*type="checkbox"/);
+  assert.match(dialog, /id="rental-end-date"[^>]*type="date"/);
+  assert.match(dialog, /id="rental-preview"/);
+  assert.doesNotMatch(dialog, /id="rental-duration"/);
+  assert.doesNotMatch(dialog, /id="rental-end-time"/);
+  assert.match(html, /callPostApi\("getRentalCatalog"/);
+  assert.match(html, /callPostApi\("previewTeacherRental"/);
+  assert.match(html, /callPostApi\("createTeacherRental"/);
+  assert.match(html, /id="rental-cancel-once"/);
+  assert.match(html, /id="rental-cancel-future"/);
+  assert.match(html, /callPostApi\("cancelTeacherRental"/);
+});
+
 test('practice date strip starts today and navigation never selects an expired day', () => {
   const { context } = createFrontendRuntime();
   const dates = vm.runInContext(

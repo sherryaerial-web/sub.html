@@ -16,3 +16,9 @@ test('teacher home is one column on phones and two columns on wider screens', ()
   assert.match(html, /@media\s*\(min-width:\s*900px\)[\s\S]*?\[data-shell-mode="teacher"\][\s\S]*?\.teacher-home-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s+minmax\(0,\s*\.65fr\)/);
   assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*?\.teacher-home-grid\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
 });
+
+test('teacher rental dialog is a mobile bottom sheet and keeps native date fields inside the form', () => {
+  assert.match(html, /#rental-dialog\s+input\[type="date"\]\s*\{[\s\S]*?width:\s*100%[\s\S]*?min-width:\s*0[\s\S]*?max-width:\s*100%/);
+  assert.match(html, /@media\s*\(max-width:\s*760px\)[\s\S]*?#rental-dialog\s*\{[\s\S]*?width:\s*100%[\s\S]*?max-height:\s*88dvh[\s\S]*?margin:\s*auto\s+0\s+0/);
+  assert.match(html, /@media\s*\(max-width:\s*480px\)[\s\S]*?#rental-dialog\s+\.practice-form-grid\s*\{\s*grid-template-columns:\s*1fr/);
+});

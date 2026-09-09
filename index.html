@@ -1273,8 +1273,11 @@
     .practice-form-field.full { grid-column: 1 / -1; }
     .practice-form-field label { color: var(--ink); font-size: 12px; font-weight: 700; }
     #practice-dialog .text-input,
-    #practice-dialog .claim-control { width: 100%; min-width: 0; max-width: 100%; }
-    #practice-dialog input[type="date"] {
+    #practice-dialog .claim-control,
+    #rental-dialog .text-input,
+    #rental-dialog .claim-control { width: 100%; min-width: 0; max-width: 100%; }
+    #practice-dialog input[type="date"],
+    #rental-dialog input[type="date"] {
       display: block;
       width: 100%;
       min-width: 0;
@@ -1286,7 +1289,8 @@
       appearance: none;
       text-align: left;
     }
-    #practice-dialog input[type="date"]::-webkit-date-and-time-value { min-height: 1.2em; text-align: left; }
+    #practice-dialog input[type="date"]::-webkit-date-and-time-value,
+    #rental-dialog input[type="date"]::-webkit-date-and-time-value { min-height: 1.2em; text-align: left; }
     .practice-duration-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
     .practice-duration-button { min-height: 44px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; }
     .practice-duration-button.active { border-color: #cdaaa0; background: var(--aqua-100); }
@@ -1304,8 +1308,15 @@
       font-size: 12px;
       line-height: 1.45;
     }
-    #practice-dialog .dialog-actions { flex-wrap: wrap; }
-    #practice-dialog { width: min(92vw, 560px); max-height: min(88vh, 760px); padding: 0; }
+    #practice-dialog .dialog-actions,
+    #rental-dialog .dialog-actions { flex-wrap: wrap; }
+    #practice-dialog,
+    #rental-dialog { width: min(92vw, 560px); max-height: min(88vh, 760px); padding: 0; }
+    .rental-preview { display: grid; gap: 8px; margin-top: 12px; }
+    .rental-preview-card { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); font-size: 12px; line-height: 1.5; }
+    .rental-preview-card strong { display: block; color: var(--ink); font-size: 13px; }
+    .rental-preview-card.waitlisted { border-color: #d8ba85; background: #fbf5e9; }
+    .rental-preview-warning { color: var(--danger); font-size: 12px; line-height: 1.5; }
     .claim-success-mark {
       display: grid;
       width: 44px;
@@ -1379,21 +1390,27 @@
     }
 
     @media (max-width: 760px) {
-      #practice-dialog {
+      #practice-dialog,
+      #rental-dialog {
         width: 100%;
         max-width: none;
         max-height: 88dvh;
         margin: auto 0 0;
         border-radius: 18px 18px 0 0;
       }
-      #practice-dialog .dialog-body {
+      #practice-dialog { width: 100%; max-width: none; max-height: 88dvh; margin: auto 0 0; }
+      #rental-dialog { width: 100%; max-width: none; max-height: 88dvh; margin: auto 0 0; }
+      #practice-dialog .dialog-body,
+      #rental-dialog .dialog-body {
         max-height: 88dvh;
         overflow-y: auto;
         padding-bottom: calc(18px + env(safe-area-inset-bottom));
         overscroll-behavior: contain;
       }
-      #practice-dialog .practice-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      #practice-dialog .practice-form-field.full { grid-column: 1 / -1; }
+      #practice-dialog .practice-form-grid,
+      #rental-dialog .practice-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #practice-dialog .practice-form-field.full,
+      #rental-dialog .practice-form-field.full { grid-column: 1 / -1; }
       .practice-view-header { align-items: flex-start; flex-direction: row; gap: 10px; }
       .practice-view-header > div:first-child { min-width: 0; }
       .practice-header-actions { padding-top: 1px; }
@@ -1547,8 +1564,12 @@
     }
 
     @media (max-width: 480px) {
+      #practice-dialog .practice-form-grid,
+      #rental-dialog .practice-form-grid { grid-template-columns: 1fr; }
+      #practice-dialog .practice-form-field.full,
+      #rental-dialog .practice-form-field.full { grid-column: auto; }
       #practice-dialog .practice-form-grid { grid-template-columns: 1fr; }
-      #practice-dialog .practice-form-field.full { grid-column: auto; }
+      #rental-dialog .practice-form-grid { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 380px) {
@@ -2166,10 +2187,10 @@
           <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
           <div class="practice-toolbar">
             <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span><span class="mine">我的登記</span></div>
-            <div class="button-row"><button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="plus"></i>自訂時段</button></div>
+            <div class="button-row"><button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="sparkles"></i>自主練習</button><button id="rental-new" class="compact-button inline-button" type="button"><i data-lucide="building-2"></i>租借教室</button></div>
           </div>
           <div id="practice-history-panel" class="practice-history-panel" hidden>
-            <div class="practice-history-head"><strong>我的自主練習登記</strong><button id="practice-history-close" class="icon-button" type="button" aria-label="關閉查詢"><i data-lucide="x"></i></button></div>
+            <div class="practice-history-head"><strong>我的登記</strong><button id="practice-history-close" class="icon-button" type="button" aria-label="關閉查詢"><i data-lucide="x"></i></button></div>
             <div class="practice-history-controls"><input id="practice-history-month" class="text-input month-input" type="month"><button id="practice-history-search" class="compact-button" type="button"><i data-lucide="search"></i>查詢</button></div>
             <div id="practice-history-list" class="practice-history-list"></div>
           </div>
@@ -2360,8 +2381,33 @@
       <div class="dialog-actions">
         <button id="practice-leave" class="compact-button" type="button" hidden>退出練習</button>
         <button id="practice-leave-future" class="danger-button" type="button" hidden>停止整個循環</button>
+        <button id="rental-cancel-once" class="danger-button" type="button" hidden>取消這次租借</button>
+        <button id="rental-cancel-future" class="danger-button" type="button" hidden>停止這次與之後</button>
         <button id="practice-dialog-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
         <button id="practice-submit" class="primary-button" type="submit"><i data-lucide="check"></i>確認登記</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rental-dialog" aria-labelledby="rental-dialog-title">
+    <form id="rental-form" class="dialog-body">
+      <h3 id="rental-dialog-title" tabindex="-1" autofocus>租借教室</h3>
+      <p class="section-copy">請選擇 OB 的租借課程，系統會依課程時長自動計算結束時間。</p>
+      <div id="rental-summary" class="practice-editor-summary"></div>
+      <div class="practice-form-grid">
+        <div class="practice-form-field full"><label for="rental-class">租借課程</label><select id="rental-class" class="claim-control" required><option value="">載入中…</option></select></div>
+        <div class="practice-form-field"><label for="rental-date">日期</label><input id="rental-date" class="text-input" type="date" required></div>
+        <div class="practice-form-field"><label for="rental-room">教室</label><select id="rental-room" class="claim-control" required></select></div>
+        <div class="practice-form-field"><label for="rental-start">開始時間</label><select id="rental-start" class="claim-control" required></select></div>
+        <div class="practice-form-field"><label>預計結束</label><div id="rental-computed-end" class="text-input" aria-live="polite">—</div></div>
+        <label class="practice-form-field full"><span>循環租借</span><span><input id="rental-recurring" type="checkbox"> 每週同一時段</span></label>
+        <div id="rental-end-date-field" class="practice-form-field full" hidden><label for="rental-end-date">循環結束日</label><input id="rental-end-date" class="text-input" type="date"></div>
+        <div class="practice-form-field full"><label for="rental-note">備註（選填）</label><textarea id="rental-note" class="text-input" rows="2" maxlength="200"></textarea></div>
+      </div>
+      <div id="rental-preview" class="rental-preview" aria-live="polite"></div>
+      <div class="dialog-actions">
+        <button id="rental-dialog-cancel" class="compact-button" type="button"><i data-lucide="x"></i>返回</button>
+        <button id="rental-submit" class="primary-button" type="submit"><i data-lucide="search-check"></i>檢查並確認</button>
       </div>
     </form>
   </dialog>
@@ -2397,6 +2443,7 @@
     let practiceAdminDashboard = null;
     let studentPracticeAdminDashboard = null;
     let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, dayRequests: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+    let rentalState = { catalog: null, preview: null, previewSignature: "", loading: false };
     let activeViewId = "";
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
@@ -2501,7 +2548,8 @@
       "getMyCourses", "getMyLeaves", "submitLeave", "claimSubstitute",
       "claimSpecialCourse", "cancelLeave", "requestLeaveCancellation", "requestClaimWithdrawal",
       "getPracticeDay", "getMyPracticeBookings", "createPracticeBooking", "createPracticeWaitlist",
-      "joinPracticeBooking", "leavePracticeBooking"
+      "joinPracticeBooking", "leavePracticeBooking", "getRentalCatalog", "previewTeacherRental",
+      "createTeacherRental", "getMyRentalRequests", "cancelTeacherRental"
     ]);
 
     async function callApi(action, params = {}) {
@@ -3736,6 +3784,7 @@
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
       practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, dayRequests: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
+      rentalState = { catalog: null, preview: null, previewSignature: "", loading: false };
     }
 
     function updateActingMode() {
@@ -4555,6 +4604,180 @@
       syncPracticeEditorAvailability();
     }
 
+    function getRentalSelectedClass() {
+      const classId = String(byId("rental-class").value || "");
+      return (rentalState.catalog?.classes || []).find((item) => String(item.classId) === classId) || null;
+    }
+
+    function setRentalSubmitLabel(previewReady = false) {
+      const button = byId("rental-submit");
+      button.innerHTML = previewReady
+        ? '<i data-lucide="check"></i>確認租借'
+        : '<i data-lucide="search-check"></i>檢查並確認';
+      refreshIcons();
+    }
+
+    function invalidateRentalPreview() {
+      rentalState.preview = null;
+      rentalState.previewSignature = "";
+      byId("rental-preview").innerHTML = "";
+      setRentalSubmitLabel(false);
+      syncRentalFormSummary();
+    }
+
+    function syncRentalFormSummary() {
+      const selectedClass = getRentalSelectedClass();
+      const start = practiceTimeToMinutes(byId("rental-start").value);
+      const duration = Number(selectedClass?.durationMinutes || 0);
+      const computedEnd = start >= 0 && duration > 0 && start + duration < 24 * 60
+        ? practiceMinutesToTime(start + duration)
+        : "—";
+      byId("rental-computed-end").textContent = computedEnd;
+      byId("rental-end-date-field").hidden = !byId("rental-recurring").checked;
+      byId("rental-end-date").required = byId("rental-recurring").checked;
+      byId("rental-end-date").min = byId("rental-date").value || getTaipeiToday().replace(/\//g, "-");
+      byId("rental-summary").textContent = selectedClass
+        ? `${selectedClass.name}｜${duration} 分鐘${computedEnd !== "—" ? `｜${byId("rental-start").value}–${computedEnd}` : ""}`
+        : "請先選擇租借課程。";
+    }
+
+    function getRentalFormInput() {
+      return {
+        classId: byId("rental-class").value,
+        date: byId("rental-date").value.replace(/-/g, "/"),
+        room: byId("rental-room").value,
+        startTime: byId("rental-start").value,
+        recurring: byId("rental-recurring").checked,
+        recurringEndDate: byId("rental-recurring").checked
+          ? byId("rental-end-date").value.replace(/-/g, "/")
+          : "",
+        note: byId("rental-note").value.trim()
+      };
+    }
+
+    function getRentalInputSignature(input) {
+      return JSON.stringify(input || {});
+    }
+
+    function renderRentalPreview(data) {
+      const occurrences = Array.isArray(data?.occurrences) ? data.occurrences : [];
+      const cards = occurrences.map((item) => {
+        const waiting = item.disposition === "候補" || (item.upperConflicts || []).length > 0;
+        const upper = (item.upperConflicts || []).map((conflict) => conflict.label).filter(Boolean);
+        const teachers = (item.teacherPracticeImpacts || []).flatMap((impact) => impact.teacherNames || []).filter(Boolean);
+        const students = (item.studentPracticeImpacts || []).flatMap((impact) => impact.studentNames || []).filter(Boolean);
+        const notes = [];
+        if (upper.length) notes.push(`目前有 ${upper.join("、")}，會先加入候補`);
+        if (teachers.length) notes.push(`成立後會取消 ${teachers.join("、")} 的自主練習`);
+        if (students.length) notes.push(`成立後會通知管理員處理學生：${students.join("、")}`);
+        if (!notes.length) notes.push("時段可直接成立");
+        return `<div class="rental-preview-card${waiting ? " waitlisted" : ""}"><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong>${escapeHtml(notes.join("；"))}</div>`;
+      });
+      byId("rental-preview").innerHTML = cards.join("") + (
+        data?.requiresImpactConfirmation
+          ? '<div class="rental-preview-warning">租借成立後會讓位階較低的自主練習讓位，再按一次「確認租借」即代表同意。</div>'
+          : '<div class="rental-preview-warning" data-level="info">請確認上述日期與時間，再按一次「確認租借」。</div>'
+      );
+    }
+
+    async function openRentalDialog() {
+      const dialog = byId("rental-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+      byId("rental-dialog-title").focus({ preventScroll: true });
+      byId("rental-date").value = (practiceState.date || getTaipeiToday()).replace(/\//g, "-");
+      byId("rental-date").min = getTaipeiToday().replace(/\//g, "-");
+      byId("rental-recurring").checked = false;
+      byId("rental-end-date").value = "";
+      byId("rental-note").value = "";
+      populatePracticeTimeSelects();
+      if (!byId("rental-start").innerHTML) byId("rental-start").innerHTML = byId("practice-editor-start").innerHTML;
+      byId("rental-start").value = "14:00";
+      invalidateRentalPreview();
+      if (rentalState.catalog || rentalState.loading) {
+        if (rentalState.catalog) renderRentalCatalog();
+        return;
+      }
+      rentalState.loading = true;
+      byId("rental-class").innerHTML = '<option value="">載入中…</option>';
+      try {
+        rentalState.catalog = await callPostApi("getRentalCatalog");
+        renderRentalCatalog();
+      } catch (error) {
+        byId("rental-class").innerHTML = '<option value="">無法載入租借課程</option>';
+        setNotice(error.message, "error");
+      } finally {
+        rentalState.loading = false;
+      }
+    }
+
+    function renderRentalCatalog() {
+      const classes = rentalState.catalog?.classes || [];
+      const rooms = rentalState.catalog?.rooms || [];
+      byId("rental-class").innerHTML = '<option value="">請選擇租借課程</option>' + classes.map((item) =>
+        `<option value="${escapeHtml(item.classId)}">${escapeHtml(item.name)}｜${escapeHtml(item.durationMinutes)} 分鐘</option>`
+      ).join("");
+      byId("rental-room").innerHTML = rooms.map((item) =>
+        `<option value="${escapeHtml(item.room)}">${escapeHtml(item.room)} 教室</option>`
+      ).join("");
+      byId("rental-room").value = rooms.some((item) => item.room === practiceState.room)
+        ? practiceState.room
+        : (rooms[0]?.room || "");
+      syncRentalFormSummary();
+      refreshIcons();
+    }
+
+    function closeRentalDialog() {
+      const dialog = byId("rental-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+      rentalState.preview = null;
+      rentalState.previewSignature = "";
+    }
+
+    async function submitRentalForm(event) {
+      event.preventDefault();
+      const input = getRentalFormInput();
+      const signature = getRentalInputSignature(input);
+      const button = byId("rental-submit");
+      if (!input.classId) {
+        setNotice("請先選擇租借課程。", "error");
+        return;
+      }
+      if (input.recurring && !input.recurringEndDate) {
+        setNotice("每週循環租借請選擇結束日。", "error");
+        return;
+      }
+      setButtonBusy(button, true, rentalState.previewSignature === signature ? "建立中…" : "檢查中…");
+      try {
+        if (!rentalState.preview || rentalState.previewSignature !== signature) {
+          rentalState.preview = await callPostApi("previewTeacherRental", { rental: input });
+          rentalState.previewSignature = signature;
+          renderRentalPreview(rentalState.preview);
+          setRentalSubmitLabel(true);
+          return;
+        }
+        const result = await callPostApi("createTeacherRental", {
+          rental: { ...input, confirmImpacts: true }
+        });
+        const results = Array.isArray(result?.results) ? result.results : [];
+        results.forEach((item) => {
+          delete practiceState.dayCache[item.date];
+          delete practiceState.dayCacheFetchedAt[item.date];
+        });
+        const activeCount = results.filter((item) => item.status === "已成立").length;
+        const waitlistCount = results.filter((item) => item.status === "候補").length;
+        closeRentalDialog();
+        setNotice(`租借處理完成：${activeCount} 筆已成立${waitlistCount ? `，${waitlistCount} 筆候補` : ""}。`);
+        await loadPracticeDay(practiceState.date, { forceRefresh: true });
+      } catch (error) {
+        setNotice(error.message, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+        setRentalSubmitLabel(!!rentalState.preview && rentalState.previewSignature === signature);
+      }
+    }
+
     function findPracticeAlternatives(duration, excludeBookingId = "", roomName = practiceState.room) {
       const requestedStart = practiceTimeToMinutes(byId("practice-editor-start").value);
       const candidates = [];
@@ -4634,20 +4857,20 @@
       warningElement.textContent = warning;
       warningElement.dataset.level = warning ? level : "";
       warningElement.dataset.blocking = blocking ? "true" : "false";
-      byId("practice-submit").disabled = blocking || editor.mode === "rental" || editor.mode === "mine";
+      byId("practice-submit").disabled = blocking || editor.mode === "rental" || editor.mode === "rental-own" || editor.mode === "mine";
     }
 
     function openPracticeEditor(context = {}) {
       const block = context.block || null;
-      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? "rental" : block?.isMine ? "mine" : block ? "join" : "create");
+      const mode = context.mode || (block?.type === "course" ? "waitlist" : block?.type === "rental" ? (block?.isMine ? "rental-own" : "rental") : block?.isMine ? "mine" : block ? "join" : "create");
       const waitlistSelection = mode === "waitlist" && block
         ? practiceState.waitlistSelections?.[getPracticeWaitlistSelectionKey(block)]
         : null;
       const startTime = context.startTime || waitlistSelection?.startTime || block?.startTime || "14:00";
       const endTime = waitlistSelection?.endTime || block?.endTime || practiceMinutesToTime(practiceTimeToMinutes(startTime) + 60);
       practiceState.editor = { mode, block };
-      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "mine" ? "自主練習詳情" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
-      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "已帶入課程時間，可用 5 分鐘為單位調整；課程取消後會自動補入。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : mode === "mine" ? "要改時間請先取消，再重新登記。" : mode === "join" ? "每位老師可保留自己的開始與結束時間；仍需與這筆練習重疊。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
+      byId("practice-dialog-title").textContent = mode === "waitlist" ? "登記候補自主練習" : mode === "join" ? "加入一起練習" : mode === "mine" ? "自主練習詳情" : mode === "rental-own" ? "我的教室租借" : mode === "rental" ? "這個時段已場租" : "登記自主練習";
+      byId("practice-dialog-copy").textContent = mode === "waitlist" ? "已帶入課程時間，可用 5 分鐘為單位調整；課程取消後會自動補入。" : mode === "rental-own" ? "租借不能直接編輯；要改時間請先取消，再重新登記。" : mode === "rental" ? "場地租借優先於自主練習，請改選其他空檔。" : mode === "mine" ? "要改時間請先取消，再重新登記。" : mode === "join" ? "每位老師可保留自己的開始與結束時間；仍需與這筆練習重疊。" : "保留課前課後 15 分鐘，時間可以 5 分鐘為單位調整。";
       byId("practice-editor-summary").textContent = `${practiceState.date} ｜ ${practiceState.room} 教室${block ? ` ｜ ${block.startTime}–${block.endTime}` : ""}`;
       populatePracticeTimeSelects();
       byId("practice-editor-date").value = practiceState.date.replace(/\//g, "-");
@@ -4664,16 +4887,18 @@
       const editable = ["create", "join", "waitlist"].includes(mode);
       byId("practice-editor-fields").hidden = !editable;
       const seriesChoice = mode === "join" && !!block?.seriesId;
-      byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental" ||
+      byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental" || mode === "rental-own" ||
         mode === "mine" || (mode === "join" && !seriesChoice);
       byId("practice-recurrence-label").textContent = mode === "join" ? "加入這次與之後" : "每週同一時段，直到我停止";
       byId("practice-editor-weekly").checked = false;
-      byId("practice-submit").hidden = mode === "rental" || mode === "mine";
+      byId("practice-submit").hidden = mode === "rental" || mode === "rental-own" || mode === "mine";
       byId("practice-submit").textContent = mode === "waitlist" ? "加入候補清單" : mode === "join" ? "確認加入" : "確認登記";
       byId("practice-leave").hidden = mode !== "mine";
       byId("practice-leave").textContent = block?.isCreator ? "只取消這次" : "只退出這次";
       byId("practice-leave-future").hidden = mode !== "mine" || !block?.seriesId;
       byId("practice-leave-future").textContent = block?.isCreator ? "停止整個循環" : "退出這次與之後";
+      byId("rental-cancel-once").hidden = mode !== "rental-own";
+      byId("rental-cancel-future").hidden = mode !== "rental-own" || !block?.seriesId;
       const participants = block?.participants || [];
       byId("practice-participants").innerHTML = participants.map((item) => `<div class="practice-participant"><strong>${escapeHtml(item.teacherName)}${item.role === "建立者" ? "（建立者）" : ""}</strong><span>${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</span></div>`).join("");
       syncPracticeEditorAvailability();
@@ -4757,19 +4982,66 @@
       }
     }
 
+    async function cancelOwnRental(cancelFuture = false) {
+      const block = practiceState.editor?.block;
+      if (!block?.rentalRequestId || !block?.isMine) return;
+      const message = cancelFuture
+        ? "確定停止這次與之後的循環租借嗎？"
+        : "確定取消這次教室租借嗎？";
+      if (!window.confirm(message)) return;
+      const button = cancelFuture ? byId("rental-cancel-future") : byId("rental-cancel-once");
+      setButtonBusy(button, true, "取消中…");
+      try {
+        await callPostApi("cancelTeacherRental", {
+          rental: {
+            requestId: block.rentalRequestId,
+            cancelFuture: cancelFuture,
+            reason: "老師從系統取消"
+          }
+        });
+        delete practiceState.dayCache[practiceState.date];
+        delete practiceState.dayCacheFetchedAt[practiceState.date];
+        closePracticeEditor();
+        setNotice(cancelFuture ? "已停止這次與之後的租借。" : "已取消這次租借。");
+        await loadPracticeDay(practiceState.date, { forceRefresh: true });
+      } catch (error) {
+        setNotice(error.message, "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
     function getPracticeHistoryMonth() {
       return (practiceState.date || getTaipeiToday()).slice(0, 7).replace("/", "-");
     }
 
     function renderMyPracticeBookings(data) {
-      const items = Array.isArray(data?.items) ? data.items : [];
-      byId("practice-history-list").innerHTML = items.length ? items.map((item) => `
+      const practiceData = data?.practice || data;
+      const practiceItems = Array.isArray(practiceData?.items) ? practiceData.items : [];
+      const rentalItems = Array.isArray(data?.rentals?.items) ? data.rentals.items : [];
+      const practiceMarkup = practiceItems.map((item) => `
         <div class="practice-history-item">
           <strong>${escapeHtml(item.date)} ｜ ${escapeHtml(item.room)} 教室 ｜ ${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong>
           <span class="practice-history-status">${escapeHtml(item.status || "")}</span>
           <small>${escapeHtml(item.role || "")}${item.seriesId ? "｜每週循環" : "｜單次"}${item.creatorName && item.role !== "建立者" ? `｜由 ${escapeHtml(item.creatorName)} 建立` : ""}</small>
         </div>
-      `).join("") : '<div class="state">這個月份沒有你的自主練習登記</div>';
+      `).join("");
+      const cancellableStatuses = new Set(["已成立", "候補", "成立失敗待處理"]);
+      const rentalMarkup = rentalItems.map((item) => `
+        <div class="practice-history-item">
+          <strong>${escapeHtml(item.date)} ｜ ${escapeHtml(item.room)} 教室 ｜ ${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong>
+          <span class="practice-history-status">${escapeHtml(item.status || "")}</span>
+          <small>教室租借｜${escapeHtml(item.className || "")}${item.seriesId ? "｜每週循環" : "｜單次"}</small>
+          ${cancellableStatuses.has(item.status) ? `<span class="button-row"><button class="compact-button" type="button" data-rental-history-cancel="${escapeHtml(item.requestId)}" data-rental-date="${escapeHtml(item.date)}">取消這次</button>${item.seriesId ? `<button class="danger-button" type="button" data-rental-history-cancel-future="${escapeHtml(item.requestId)}" data-rental-date="${escapeHtml(item.date)}">停止之後租借</button>` : ""}</span>` : ""}
+        </div>
+      `).join("");
+      const sections = [];
+      if (rentalMarkup) sections.push(`<strong>教室租借</strong>${rentalMarkup}`);
+      if (practiceMarkup) sections.push(`<strong>自主練習</strong>${practiceMarkup}`);
+      byId("practice-history-list").innerHTML = sections.length
+        ? sections.join("")
+        : '<div class="state">這個月份沒有你的登記</div>';
+      refreshIcons();
     }
 
     async function fetchMyPracticeBookings() {
@@ -4779,9 +5051,30 @@
       const list = byId("practice-history-list");
       list.innerHTML = '<div class="state">載入登記紀錄中...</div>';
       try {
-        renderMyPracticeBookings(await callPostApi("getMyPracticeBookings", { month }));
+        const [practice, rentals] = await Promise.all([
+          callPostApi("getMyPracticeBookings", { month }),
+          callPostApi("getMyRentalRequests", { month })
+        ]);
+        renderMyPracticeBookings({ practice, rentals });
       } catch (error) {
         list.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function cancelRentalFromHistory(requestId, date, cancelFuture = false) {
+      if (!requestId) return;
+      if (!window.confirm(cancelFuture ? "確定停止這次與之後的循環租借嗎？" : "確定取消這次租借嗎？")) return;
+      try {
+        await callPostApi("cancelTeacherRental", {
+          rental: { requestId, cancelFuture, reason: "老師從我的登記取消" }
+        });
+        delete practiceState.dayCache[date];
+        delete practiceState.dayCacheFetchedAt[date];
+        setNotice(cancelFuture ? "已停止這次與之後的租借。" : "已取消這次租借。");
+        await fetchMyPracticeBookings();
+        if (date === practiceState.date) await loadPracticeDay(date, { forceRefresh: true });
+      } catch (error) {
+        setNotice(error.message, "error");
       }
     }
 
@@ -8351,6 +8644,7 @@ https://sherryaerial-web.github.io/sub.html/
     byId("practice-waitlist-clear").addEventListener("click", clearSelectedPracticeWaitlists);
     byId("practice-waitlist-submit").addEventListener("click", submitSelectedPracticeWaitlists);
     byId("practice-new").addEventListener("click", () => openPracticeEditor({ mode: "create", startTime: "14:00" }));
+    byId("rental-new").addEventListener("click", openRentalDialog);
     byId("practice-mobile-date-go").addEventListener("click", () => {
       const date = byId("practice-mobile-date").value;
       if (date) loadPracticeDay(date, { allowPast: true });
@@ -8379,6 +8673,17 @@ https://sherryaerial-web.github.io/sub.html/
     });
     byId("practice-history-search").addEventListener("click", fetchMyPracticeBookings);
     byId("practice-history-close").addEventListener("click", () => { byId("practice-history-panel").hidden = true; });
+    byId("practice-history-list").addEventListener("click", (event) => {
+      const once = event.target.closest ? event.target.closest("[data-rental-history-cancel]") : null;
+      const future = event.target.closest ? event.target.closest("[data-rental-history-cancel-future]") : null;
+      const button = future || once;
+      if (!button) return;
+      cancelRentalFromHistory(
+        future ? button.dataset.rentalHistoryCancelFuture : button.dataset.rentalHistoryCancel,
+        button.dataset.rentalDate,
+        !!future
+      );
+    });
     byId("practice-duration-options").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-practice-duration]") : null;
       if (!button || button.disabled) return;
@@ -8395,7 +8700,15 @@ https://sherryaerial-web.github.io/sub.html/
     byId("practice-form").addEventListener("submit", submitPracticeEditor);
     byId("practice-leave").addEventListener("click", () => leavePracticeEditor("once"));
     byId("practice-leave-future").addEventListener("click", () => leavePracticeEditor("future"));
+    byId("rental-cancel-once").addEventListener("click", () => cancelOwnRental(false));
+    byId("rental-cancel-future").addEventListener("click", () => cancelOwnRental(true));
     byId("practice-dialog-cancel").addEventListener("click", closePracticeEditor);
+    ["rental-class", "rental-date", "rental-room", "rental-start", "rental-recurring", "rental-end-date", "rental-note"].forEach((id) => {
+      byId(id).addEventListener("input", invalidateRentalPreview);
+      byId(id).addEventListener("change", invalidateRentalPreview);
+    });
+    byId("rental-form").addEventListener("submit", submitRentalForm);
+    byId("rental-dialog-cancel").addEventListener("click", closeRentalDialog);
     byId("inbox-mark-all").addEventListener("click", markAllInboxRead);
     byId("inbox-list").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-inbox-message]") : null;

@@ -12949,6 +12949,10 @@ function getRentalConflictCalendarIdsFromError_(errorValue) {
 
 function reconcileRentalWaitlist_(optionsValue) {
   var options = optionsValue || {};
+  if (typeof SpreadsheetApp === 'undefined' || !SpreadsheetApp ||
+      typeof SpreadsheetApp.getActiveSpreadsheet !== 'function') {
+    return { skipped: true, reason: 'no-spreadsheet-service', activated: 0, waiting: 0, failed: 0, expired: 0 };
+  }
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   if (!spreadsheet.getSheetByName(SHEETS.RENTAL_REQUESTS)) {
     return { skipped: true, reason: 'no-rental-sheet', activated: 0, waiting: 0, failed: 0, expired: 0 };

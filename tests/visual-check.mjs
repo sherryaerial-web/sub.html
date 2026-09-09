@@ -204,6 +204,18 @@ const fixtures = {
       { room: "D", blocks: [] }
     ]
   },
+  getRentalCatalog: {
+    teacherName: "Ariel Lu",
+    instructorId: "7",
+    classes: [
+      { classId: "60", name: "場地租借 60 分鐘", durationMinutes: 60 },
+      { classId: "150", name: "場地租借 150 分鐘", durationMinutes: 150 }
+    ],
+    rooms: [
+      { room: "A", roomId: "1" }, { room: "B", roomId: "2" },
+      { room: "C", roomId: "3" }, { room: "D", roomId: "4" }
+    ]
+  },
   getPracticeAdminDashboard: {
     filters: {},
     summary: { total: 2, active: 1, waitlisted: 1, cancelled: 0 },
@@ -717,6 +729,25 @@ try {
     await page.locator("#practice-leave").waitFor({ state: "visible" });
     results.push(await capture(page, viewport.name, "09-practice-details"));
     await page.locator("#practice-dialog-cancel").click();
+    await page.locator("#rental-new").click();
+    await page.locator("#rental-dialog").waitFor({ state: "visible" });
+    await page.locator('#rental-class option[value="60"]').waitFor({ state: "attached" });
+    await page.locator("#rental-class").selectOption("60");
+    if (viewport.width <= 480) {
+      const rentalFields = await page.evaluate(() => {
+        const date = document.querySelector("#rental-date").getBoundingClientRect();
+        const room = document.querySelector("#rental-room").getBoundingClientRect();
+        const body = document.querySelector("#rental-dialog .dialog-body").getBoundingClientRect();
+        return { date: date.toJSON(), room: room.toJSON(), body: body.toJSON() };
+      });
+      if (rentalFields.room.top <= rentalFields.date.bottom ||
+          rentalFields.date.left < rentalFields.body.left - 1 ||
+          rentalFields.date.right > rentalFields.body.right + 1) {
+        throw new Error(`${viewport.name}: rental date field overlaps or escapes ${JSON.stringify(rentalFields)}`);
+      }
+    }
+    results.push(await capture(page, viewport.name, "10-rental-create"));
+    await page.locator("#rental-dialog-cancel").click();
 
     await page.locator("#logout-button").click();
     await page.locator("#auth-shell").waitFor({ state: "visible" });

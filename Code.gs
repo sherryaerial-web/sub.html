@@ -3838,8 +3838,11 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
     if (courseDate !== date || !roomsByName[room] || !startTime || !calendarId) return;
     var startMinutes = timeTextToMinutes_(startTime);
     if (startMinutes < 0) return;
-    var endTime = minutesToTimeText_(startMinutes + getScheduledCourseDurationMinutes_(courseName));
-    var type = courseName.indexOf('場地租借') !== -1 ? 'rental' : 'course';
+    var liveDuration = Number(row && row[9]);
+    var endTime = minutesToTimeText_(startMinutes + (
+      isFinite(liveDuration) && liveDuration > 0 ? liveDuration : getScheduledCourseDurationMinutes_(courseName)
+    ));
+    var type = /場地租借|場租/.test(courseName) ? 'rental' : 'course';
     roomsByName[room].blocks.push({
       id: 'ob:' + calendarId,
       type: type,
@@ -4015,6 +4018,64 @@ function buildSharedPracticeDayView_(dateValue) {
   return view;
 }
 
+function getRentalRequestsIfAvailable_(spreadsheet) {
+  var sheet = spreadsheet.getSheetByName(SHEETS.RENTAL_REQUESTS);
+  if (!sheet) return [];
+  return getSheetValuesWithExpectedHeaders_(sheet, SHEET_HEADERS.RENTAL_REQUESTS).slice(1).map(function(row) {
+    return {
+      requestId: cleanText_(row[0]), seriesId: cleanText_(row[1]), teacherName: cleanText_(row[2]),
+      date: formatMyDate(row[4]), room: cleanText_(row[5]), className: cleanText_(row[8]),
+      startTime: formatMyTime(row[10]), endTime: formatMyTime(row[11]), status: cleanText_(row[12]),
+      obCalendarId: cleanText_(row[14])
+    };
+  }).filter(function(item) { return item.requestId; });
+}
+
+function annotateRentalPracticeDayView_(viewValue, teacherNameValue, requestsValue) {
+  var view = viewValue || { rooms: [] };
+  var teacherName = cleanText_(teacherNameValue);
+  var roomsByName = {};
+  (view.rooms || []).forEach(function(room) { roomsByName[cleanText_(room.room).toUpperCase()] = room; });
+  (requestsValue || []).forEach(function(request) {
+    if (cleanText_(request.status) !== RENTAL_STATUS.ACTIVE ||
+        cleanText_(request.date).replace(/-/g, '/') !== cleanText_(view.date).replace(/-/g, '/')) return;
+    var roomName = cleanText_(request.room).toUpperCase();
+    var room = roomsByName[roomName];
+    if (!room) return;
+    var calendarId = cleanText_(request.obCalendarId);
+    var block = (room.blocks || []).filter(function(item) {
+      return calendarId && cleanText_(item.calendarId) === calendarId;
+    })[0];
+    if (!block) {
+      block = {
+        id: 'ob:' + (calendarId || cleanText_(request.requestId)),
+        type: 'rental', calendarId: calendarId,
+        date: cleanText_(request.date).replace(/-/g, '/'), room: roomName,
+        startTime: cleanText_(request.startTime), endTime: cleanText_(request.endTime),
+        interval: normalizePracticeInterval_(request.date, request.startTime, request.endTime)
+      };
+      room.blocks.push(block);
+    }
+    block.type = 'rental';
+    block.date = cleanText_(request.date).replace(/-/g, '/');
+    block.room = roomName;
+    block.rentalRequestId = cleanText_(request.requestId);
+    block.seriesId = cleanText_(request.seriesId);
+    block.rentalOwner = cleanText_(request.teacherName);
+    block.isMine = block.rentalOwner === teacherName;
+    block.label = block.rentalOwner + '的場地租借';
+    block.className = cleanText_(request.className);
+    block.isPast = isPracticeIntervalPast_(block.date, block.endTime, currentTimeMs_());
+  });
+  (view.rooms || []).forEach(function(room) {
+    room.blocks.sort(function(left, right) {
+      return [left.startTime, left.endTime, left.type, left.id].join('|')
+        .localeCompare([right.startTime, right.endTime, right.type, right.id].join('|'));
+    });
+  });
+  return view;
+}
+
 function getPracticeDay_(session, dateValue) {
   var teacherName = getSessionTeacherName_(session);
   var date = cleanText_(dateValue).replace(/-/g, '/');
@@ -4029,6 +4090,11 @@ function getPracticeDay_(session, dateValue) {
   view.teacherName = teacherName;
   view.actingBy = cleanText_(session && session.impersonatedBy);
   view.quickDurations = [60, 90, 120];
+  annotateRentalPracticeDayView_(
+    view,
+    teacherName,
+    getRentalRequestsIfAvailable_(SpreadsheetApp.getActiveSpreadsheet())
+  );
   view.rooms.forEach(function(room) {
     room.blocks.forEach(function(block) {
       if (block.type !== 'practice' && block.type !== 'waitlist') return;
@@ -4059,6 +4125,18 @@ function refreshPracticeDay_(session, dateValue) {
   var date = cleanText_(dateValue).replace(/-/g, '/');
   parsePracticeDateTime_(date, '00:00');
   var currentObRows = getPracticeCurrentObRowsForDayView_(date, true);
+  var rentalRowsByDate = {};
+  rentalRowsByDate[date] = currentObRows;
+  var rentalResult = reconcileRentalWaitlist_({
+    today: date,
+    dates: [date],
+    currentObRowsByDate: rentalRowsByDate
+  });
+  (rentalResult.items || []).forEach(function(item) {
+    if (item.status === RENTAL_STATUS.ACTIVE && item.obCalendarId) {
+      currentObRows.push([item.date, item.startTime, item.className, item.teacherName, item.obCalendarId]);
+    }
+  });
   var result = reconcilePracticeBookings_({
     today: date,
     throughDate: date,
@@ -4067,6 +4145,7 @@ function refreshPracticeDay_(session, dateValue) {
   invalidatePracticeDayViewCache_(date);
   result.courseSource = 'live';
   result.courseWarning = '';
+  result.rentals = rentalResult;
   return result;
 }
 
@@ -4370,7 +4449,10 @@ function findPracticeConflictsUnlocked_(requestValue, recordsValue, courseRowsVa
         (excludeCalendarId && calendarId === excludeCalendarId)) return;
     var startMinutes = timeTextToMinutes_(startTime);
     if (startMinutes < 0) return;
-    var endTime = minutesToTimeText_(startMinutes + getScheduledCourseDurationMinutes_(courseName));
+    var liveDuration = Number(row && row[9]);
+    var endTime = minutesToTimeText_(startMinutes + (
+      isFinite(liveDuration) && liveDuration > 0 ? liveDuration : getScheduledCourseDurationMinutes_(courseName)
+    ));
     var blockerInterval = normalizePracticeInterval_(date, startTime, endTime);
     if (!practiceIntervalsConflict_(interval, blockerInterval, 15)) return;
     conflicts.push({
@@ -5910,7 +5992,8 @@ function getPracticeCurrentObRows_(dateFromValue, dateToValue) {
       item.classId,
       item.instructorId,
       item.isSubstitute,
-      getTimestamp_()
+      getTimestamp_(),
+      Number((rawItem['class'] || rawItem.course || {}).duration) || ''
     ]);
   });
   return rows;
@@ -6360,7 +6443,9 @@ function runHourlyPracticeReconciliationIfDue_() {
     return { skipped: true, reason: 'same-hour' };
   }
   if (properties) properties.setProperty(CONFIG.PRACTICE_RECONCILE_HOUR_PROPERTY, hourKey);
+  var rentalResult = reconcileRentalWaitlist_();
   var result = runScheduledPracticeReconciliation() || {};
+  result.rentals = rentalResult;
   result.skipped = false;
   return result;
 }
@@ -6897,6 +6982,30 @@ function doPost(e) {
       },
       getMyPracticeBookings: function() {
         return getMyPracticeBookings_(actingSession(), parameters.month);
+      },
+      getRentalCatalog: function() {
+        return getRentalCatalog_(actingSession());
+      },
+      previewTeacherRental: function() {
+        return previewTeacherRental_(
+          actingSession(),
+          parseJsonObject_(parameters.rental, '教室租借')
+        );
+      },
+      createTeacherRental: function() {
+        return createTeacherRental_(
+          actingSession(),
+          parseJsonObject_(parameters.rental, '教室租借')
+        );
+      },
+      getMyRentalRequests: function() {
+        return getMyRentalRequests_(actingSession(), parameters.month);
+      },
+      cancelTeacherRental: function() {
+        return cancelTeacherRental_(
+          actingSession(),
+          parseJsonObject_(parameters.rental, '取消教室租借')
+        );
       },
       createPracticeBooking: function() {
         return createPracticeBooking_(
@@ -8092,6 +8201,18 @@ function refreshPracticeAfterCourseClosure_(resultValue) {
   if (!date) return null;
   try {
     var currentObRows = getPracticeCurrentObRowsForDayView_(date, true);
+    var rentalRowsByDate = {};
+    rentalRowsByDate[date] = currentObRows;
+    result.rentalRefresh = reconcileRentalWaitlist_({
+      today: date,
+      dates: [date],
+      currentObRowsByDate: rentalRowsByDate
+    });
+    (result.rentalRefresh.items || []).forEach(function(item) {
+      if (item.status === RENTAL_STATUS.ACTIVE && item.obCalendarId) {
+        currentObRows.push([item.date, item.startTime, item.className, item.teacherName, item.obCalendarId]);
+      }
+    });
     result.practiceRefresh = reconcilePracticeBookings_({
       today: date,
       throughDate: date,
@@ -11999,6 +12120,942 @@ function normalizeRentalClassCatalog_(rawClasses) {
     return [left.name, left.durationMinutes, left.classId].join('|')
       .localeCompare([right.name, right.durationMinutes, right.classId].join('|'));
   });
+}
+
+function buildRentalRequestOccurrences_(requestValue) {
+  var request = requestValue || {};
+  var date = cleanText_(request.date).replace(/-/g, '/');
+  var room = requirePracticeRoom_(request.room);
+  var startMinutes = timeTextToMinutes_(request.startTime);
+  var durationMinutes = Number(request.durationMinutes);
+  if (startMinutes < 0 || startMinutes % 5 !== 0) throw new Error('租借開始時間必須以 5 分鐘為單位。');
+  if (!isFinite(durationMinutes) || durationMinutes <= 0) throw new Error('租借課程時長不正確。');
+  if (startMinutes + durationMinutes >= 24 * 60) throw new Error('租借不可跨日。');
+  var startDate = parsePracticeDateTime_(date, '00:00');
+  if (!request.recurring) {
+    return [{
+      date: date,
+      room: room,
+      startTime: minutesToTimeText_(startMinutes),
+      endTime: minutesToTimeText_(startMinutes + durationMinutes)
+    }];
+  }
+  var endDateText = cleanText_(request.recurringEndDate).replace(/-/g, '/');
+  if (!endDateText) throw new Error('每週循環租借請選擇結束日期。');
+  var endDate = parsePracticeDateTime_(endDateText, '00:00');
+  if (endDate.getTime() < startDate.getTime()) throw new Error('循環結束日期不可早於開始日期。');
+  var occurrences = [];
+  for (var cursor = startDate.getTime(); cursor <= endDate.getTime(); cursor += 7 * 24 * 60 * 60 * 1000) {
+    occurrences.push({
+      date: Utilities.formatDate(new Date(cursor), getTimeZone_(), 'yyyy/MM/dd'),
+      room: room,
+      startTime: minutesToTimeText_(startMinutes),
+      endTime: minutesToTimeText_(startMinutes + durationMinutes)
+    });
+  }
+  return occurrences;
+}
+
+function analyzeRentalConflicts_(requestValue, courseRowsValue, teacherRecordsValue, studentRecordsValue) {
+  var request = requestValue || {};
+  var interval = normalizePracticeInterval_(request.date, request.startTime, request.endTime);
+  var room = requirePracticeRoom_(request.room);
+  var upperConflicts = [];
+  (courseRowsValue || []).forEach(function(row) {
+    var date = formatMyDate(row && row[0]);
+    var startTime = formatMyTime(row && row[1]);
+    var label = cleanText_(row && row[2]);
+    var calendarId = cleanText_(row && row[4]);
+    if (date !== interval.date || getCourseRoom_(label) !== room || !startTime || !calendarId) return;
+    var startMinutes = timeTextToMinutes_(startTime);
+    var liveDuration = Number(row && row[9]);
+    var endTime = minutesToTimeText_(startMinutes + (
+      isFinite(liveDuration) && liveDuration > 0 ? liveDuration : getScheduledCourseDurationMinutes_(label)
+    ));
+    var blocker = normalizePracticeInterval_(date, startTime, endTime);
+    if (!practiceIntervalsConflict_(interval, blocker, 15)) return;
+    upperConflicts.push({
+      type: /場地租借|場租/.test(label) ? 'rental' : 'course',
+      calendarId: calendarId,
+      label: label,
+      startTime: startTime,
+      endTime: endTime
+    });
+  });
+
+  var teacherRecords = teacherRecordsValue || {};
+  var teacherPracticeImpacts = [];
+  (teacherRecords.bookings || []).forEach(function(booking) {
+    if (cleanText_(booking.status) !== PRACTICE_STATUS.ACTIVE ||
+        cleanText_(booking.date).replace(/-/g, '/') !== interval.date ||
+        cleanText_(booking.room).toUpperCase() !== room) return;
+    var blocker = normalizePracticeInterval_(booking.date, booking.startTime, booking.endTime);
+    if (!practiceIntervalsConflict_(interval, blocker, 15)) return;
+    var names = (teacherRecords.participants || []).filter(function(participant) {
+      return cleanText_(participant.bookingId) === cleanText_(booking.bookingId) &&
+        cleanText_(participant.status) === PRACTICE_PARTICIPANT_STATUS.ACTIVE;
+    }).map(function(participant) { return cleanText_(participant.teacherName); })
+      .filter(function(name, index, all) { return name && all.indexOf(name) === index; });
+    if (!names.length && cleanText_(booking.creatorName)) names = [cleanText_(booking.creatorName)];
+    teacherPracticeImpacts.push({
+      bookingId: cleanText_(booking.bookingId),
+      label: cleanText_(booking.creatorName) + '的自主練習',
+      teacherNames: names,
+      startTime: cleanText_(booking.startTime),
+      endTime: cleanText_(booking.endTime)
+    });
+  });
+
+  var studentRecords = studentRecordsValue || {};
+  var qualificationsById = {};
+  (studentRecords.qualifications || []).forEach(function(item) {
+    qualificationsById[cleanText_(item.studentId)] = item;
+  });
+  var studentPracticeImpacts = [];
+  (studentRecords.groups || []).forEach(function(group) {
+    if ([STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+      STUDENT_PRACTICE_STATUS.CHANGE_PENDING].indexOf(cleanText_(group.status)) === -1 ||
+        cleanText_(group.date).replace(/-/g, '/') !== interval.date ||
+        cleanText_(group.room).toUpperCase() !== room) return;
+    var blocker = normalizePracticeInterval_(group.date, group.startTime, group.endTime);
+    if (!practiceIntervalsConflict_(interval, blocker, 15)) return;
+    var participants = (studentRecords.participants || []).filter(function(participant) {
+      return cleanText_(participant.groupId) === cleanText_(group.groupId) &&
+        [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION,
+          STUDENT_PRACTICE_STATUS.CHANGE_PENDING].indexOf(cleanText_(participant.status)) !== -1;
+    });
+    var names = [];
+    var emails = [];
+    participants.forEach(function(participant) {
+      var qualification = qualificationsById[cleanText_(participant.studentId)] || {};
+      var name = cleanText_(qualification.appName);
+      var email = cleanText_(qualification.email);
+      if (name && names.indexOf(name) === -1) names.push(name);
+      if (email && emails.indexOf(email) === -1) emails.push(email);
+    });
+    studentPracticeImpacts.push({
+      groupId: cleanText_(group.groupId),
+      studentNames: names,
+      studentEmails: emails,
+      startTime: cleanText_(group.startTime),
+      endTime: cleanText_(group.endTime)
+    });
+  });
+
+  return {
+    upperConflicts: upperConflicts,
+    teacherPracticeImpacts: teacherPracticeImpacts,
+    studentPracticeImpacts: studentPracticeImpacts
+  };
+}
+
+function buildObRentalPayload_(requestValue) {
+  var request = requestValue || {};
+  var requestId = cleanText_(request.requestId);
+  var classId = Number(request.classId);
+  var roomId = Number(request.roomId);
+  var instructorId = Number(request.instructorId);
+  var date = cleanText_(request.date).replace(/\//g, '-');
+  var startTime = formatMyTime(request.startTime);
+  if (!requestId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !startTime ||
+      !isFinite(classId) || !isFinite(roomId) || !isFinite(instructorId)) {
+    throw new Error('OB 租借資料不完整。');
+  }
+  var notes = 'Sherry rental request: ' + requestId;
+  if (cleanText_(request.note)) notes += '｜' + cleanText_(request.note);
+  return {
+    classId: classId,
+    classTime: date + ' ' + startTime + ':00',
+    classRoomId: roomId,
+    instructorIds: [instructorId],
+    privateNotes: notes
+  };
+}
+
+function findRentalCalendarByRequestId_(itemsValue, requestIdValue, expectedValue) {
+  var requestId = cleanText_(requestIdValue);
+  var expected = expectedValue || {};
+  var marker = 'Sherry rental request: ' + requestId;
+  if (!requestId) return null;
+  var match = (itemsValue || []).filter(function(item) {
+    if (!item || item.cancelled === true || !cleanText_(item.id)) return false;
+    var notes = cleanText_(item.privateNotes);
+    if (notes !== marker && notes.indexOf(marker + '｜') !== 0) return false;
+    var classTime = item.classTime || item.startAt || item.startTime || '';
+    var parsedTime = new Date(classTime);
+    if (!classTime || isNaN(parsedTime.getTime())) return false;
+    var date = Utilities.formatDate(parsedTime, getTimeZone_(), 'yyyy/MM/dd');
+    var startTime = Utilities.formatDate(parsedTime, getTimeZone_(), 'HH:mm');
+    var classInfo = item['class'] || item.course || {};
+    var roomInfo = item.classRoom || {};
+    return (!cleanText_(expected.date) || date === cleanText_(expected.date).replace(/-/g, '/')) &&
+      (!cleanText_(expected.startTime) || startTime === formatMyTime(expected.startTime)) &&
+      (!cleanText_(expected.classId) || cleanText_(classInfo.id || classInfo.classId) === cleanText_(expected.classId)) &&
+      (!cleanText_(expected.roomId) || cleanText_(roomInfo.id || item.classRoomId) === cleanText_(expected.roomId));
+  })[0];
+  return match ? { calendarId: cleanText_(match.id), detail: match, recovered: true } : null;
+}
+
+function findExistingObRentalByRequestId_(tokenValue, requestValue) {
+  var request = requestValue || {};
+  var date = cleanText_(request.date).replace(/\//g, '-');
+  var dayStart = parsePracticeDateTime_(date.replace(/-/g, '/'), '00:00');
+  var exclusiveDateTo = Utilities.formatDate(
+    new Date(dayStart.getTime() + 24 * 60 * 60 * 1000), getTimeZone_(), 'yyyy-MM-dd'
+  );
+  return findRentalCalendarByRequestId_(
+    fetchCalendarPages_(tokenValue, date, exclusiveDateTo), request.requestId, request
+  );
+}
+
+function postObRentalCalendar_(tokenValue, requestValue) {
+  var token = cleanText_(tokenValue);
+  if (!token) throw new Error('尚未設定具讀寫權限的 Omcean API 權杖。');
+  var payload = buildObRentalPayload_(requestValue);
+  var response = UrlFetchApp.fetch(CONFIG.API_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  var responseCode = response.getResponseCode();
+  var bodyText = response.getContentText() || '';
+  var body = {};
+  try { body = bodyText ? JSON.parse(bodyText) : {}; } catch (ignore) {}
+  if (responseCode !== 201) {
+    var error = new Error(
+      responseCode === 409
+        ? 'OB 顯示這個時段已有課程或租借。'
+        : responseCode === 403
+          ? '目前的 Omcean API 權杖沒有寫入權限。'
+          : responseCode === 429
+            ? 'OB 同步次數已達上限，租借已保留待稍後重試。'
+            : '建立 OB 租借失敗（HTTP ' + responseCode + '）。'
+    );
+    error.statusCode = responseCode;
+    error.responseBody = body;
+    throw error;
+  }
+  var calendarId = cleanText_(body && body.id);
+  if (!calendarId) throw new Error('OB 已回應成功，但沒有提供 Calendar ID。');
+  return { calendarId: calendarId, detail: body };
+}
+
+function selectNextRentalCandidate_(requestsValue) {
+  return (requestsValue || []).filter(function(item) {
+    return [RENTAL_STATUS.WAITLISTED, RENTAL_STATUS.FAILED].indexOf(cleanText_(item && item.status)) !== -1;
+  }).slice().sort(function(left, right) {
+    return [cleanText_(left.createdAt), cleanText_(left.requestId)].join('|')
+      .localeCompare([cleanText_(right.createdAt), cleanText_(right.requestId)].join('|'));
+  })[0] || null;
+}
+
+function rentalRequestsOverlap_(leftValue, rightValue) {
+  var left = leftValue || {};
+  var right = rightValue || {};
+  if (cleanText_(left.date).replace(/-/g, '/') !== cleanText_(right.date).replace(/-/g, '/') ||
+      cleanText_(left.room).toUpperCase() !== cleanText_(right.room).toUpperCase()) return false;
+  try {
+    return practiceIntervalsConflict_(
+      normalizePracticeInterval_(left.date, left.startTime, left.endTime),
+      normalizePracticeInterval_(right.date, right.startTime, right.endTime),
+      15
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+function buildRentalReconciliationQueue_(requestsValue, todayValue, nowMsValue) {
+  var today = cleanText_(todayValue).replace(/-/g, '/');
+  var nowMs = Number(nowMsValue);
+  if (!isFinite(nowMs)) nowMs = currentTimeMs_();
+  var pending = (requestsValue || []).filter(function(item) {
+    return [RENTAL_STATUS.WAITLISTED, RENTAL_STATUS.FAILED].indexOf(cleanText_(item && item.status)) !== -1;
+  }).slice().sort(function(left, right) {
+    return [cleanText_(left.createdAt), cleanText_(left.requestId)].join('|')
+      .localeCompare([cleanText_(right.createdAt), cleanText_(right.requestId)].join('|'));
+  });
+  var expired = pending.filter(function(item) {
+    var date = cleanText_(item.date).replace(/-/g, '/');
+    return date < today || (date === today && isPracticeIntervalPast_(date, item.endTime, nowMs));
+  });
+  var current = pending.filter(function(item) { return expired.indexOf(item) === -1; });
+  var candidates = [];
+  var blocked = [];
+  current.forEach(function(item) {
+    if (candidates.some(function(first) { return rentalRequestsOverlap_(first, item); })) blocked.push(item);
+    else candidates.push(item);
+  });
+  return { expired: expired, candidates: candidates, blocked: blocked };
+}
+
+function fetchObListPages_(urlValue, tokenValue, labelValue) {
+  var token = cleanText_(tokenValue);
+  if (!token) throw new Error('尚未設定 Omcean API 權杖。');
+  var allItems = [];
+  var start = 0;
+  while (true) {
+    var separator = String(urlValue).indexOf('?') === -1 ? '?' : '&';
+    var response = UrlFetchApp.fetch(String(urlValue) + separator + 'start=' + start, {
+      method: 'get',
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    var code = response.getResponseCode();
+    if (code < 200 || code >= 300) {
+      throw new Error((labelValue || 'Omcean API') + '回傳 HTTP ' + code + '。');
+    }
+    var page;
+    try { page = JSON.parse(response.getContentText() || '[]'); } catch (error) {
+      throw new Error((labelValue || 'Omcean API') + '回傳格式錯誤。');
+    }
+    if (!Array.isArray(page)) throw new Error((labelValue || 'Omcean API') + '回傳格式錯誤。');
+    allItems = allItems.concat(page);
+    if (page.length < CONFIG.PAGE_SIZE) break;
+    start += CONFIG.PAGE_SIZE;
+  }
+  return allItems;
+}
+
+function getRentalRoomCode_(itemValue) {
+  var item = itemValue || {};
+  var name = cleanText_(item.nameZhHant || item.nameEn || item.name);
+  var match = /(?:^|\s|教室|room)\s*([A-D])(?:\s|教室|$)/i.exec(name) || /\b([A-D])\b/i.exec(name);
+  return match ? match[1].toUpperCase() : '';
+}
+
+function getRentalInstructorName_(itemValue) {
+  var item = itemValue || {};
+  return cleanText_(item.name || [item.firstName, item.lastName].filter(Boolean).join(' '));
+}
+
+function getRentalMappingsUnlocked_(spreadsheet) {
+  ensureRentalStructureUnlocked_(spreadsheet);
+  var sheet = requireSheet_(spreadsheet, SHEETS.RENTAL_MAPPINGS);
+  var values = getSheetValuesWithExpectedHeaders_(sheet, SHEET_HEADERS.RENTAL_MAPPINGS);
+  var result = {};
+  values.slice(1).forEach(function(row) {
+    if (cleanText_(row[4]) && cleanText_(row[4]) !== '啟用') return;
+    var key = cleanText_(row[0]) + '|' + cleanText_(row[1]);
+    if (key !== '|' && cleanText_(row[2])) result[key] = cleanText_(row[2]);
+  });
+  return result;
+}
+
+function resolveRentalInstructorId_(teacherNameValue, instructorsValue, spreadsheet) {
+  var teacherName = cleanText_(teacherNameValue);
+  var mappings = getRentalMappingsUnlocked_(spreadsheet);
+  if (mappings['老師|' + teacherName]) return mappings['老師|' + teacherName];
+  var exact = (instructorsValue || []).filter(function(item) {
+    return getRentalInstructorName_(item) === teacherName && cleanText_(item && item.id);
+  });
+  if (exact.length === 1) return cleanText_(exact[0].id);
+  var courseSheet = spreadsheet.getSheetByName(SHEETS.COURSE_LIST);
+  var ids = [];
+  if (courseSheet) {
+    getSheetValuesWithExpectedHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST).slice(1).forEach(function(row) {
+      var id = cleanText_(row[6]);
+      if (cleanText_(row[3]) === teacherName && id && ids.indexOf(id) === -1) ids.push(id);
+    });
+  }
+  if (ids.length === 1) return ids[0];
+  throw new Error('找不到「' + teacherName + '」唯一的 OB 老師資料，請管理員先補齊 OB 租借對照。');
+}
+
+function getRentalReferenceCatalog_(tokenValue) {
+  var cached = getCachedJsonValue_(CONFIG.OB_RENTAL_REFERENCE_CACHE_KEY);
+  if (cached && Array.isArray(cached.classes) && Array.isArray(cached.rooms) && Array.isArray(cached.instructors)) {
+    return cached;
+  }
+  var classes = normalizeRentalClassCatalog_(fetchObClassPages_(tokenValue));
+  var rooms = fetchObListPages_(CONFIG.CLASS_ROOMS_API_URL, tokenValue, 'Omcean 教室 API').map(function(item) {
+    var room = getRentalRoomCode_(item);
+    return room && cleanText_(item && item.id) ? { room: room, roomId: cleanText_(item.id) } : null;
+  }).filter(Boolean).filter(function(item, index, all) {
+    return all.findIndex(function(other) { return other.room === item.room; }) === index;
+  }).sort(function(left, right) { return left.room.localeCompare(right.room); });
+  var reference = {
+    classes: classes,
+    rooms: rooms,
+    instructors: fetchObListPages_(CONFIG.INSTRUCTORS_API_URL, tokenValue, 'Omcean 老師 API')
+  };
+  putCachedJsonValue_(CONFIG.OB_RENTAL_REFERENCE_CACHE_KEY, reference, CONFIG.OB_CLASS_CACHE_SECONDS);
+  return reference;
+}
+
+function getRentalCatalog_(session) {
+  var teacherName = getSessionTeacherName_(session);
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!cleanText_(token)) throw new Error('尚未設定 Omcean API 權杖。');
+  var reference = getRentalReferenceCatalog_(token);
+  var classes = reference.classes;
+  if (!classes.length) throw new Error('OB 目前沒有可用的場地租借課程。');
+  var rooms = reference.rooms;
+  var instructors = reference.instructors;
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var instructorId = resolveRentalInstructorId_(teacherName, instructors, spreadsheet);
+  return {
+    teacherName: teacherName,
+    classes: classes,
+    rooms: rooms,
+    instructorId: instructorId
+  };
+}
+
+function getRentalRecordsUnlocked_(spreadsheet) {
+  ensureRentalStructureUnlocked_(spreadsheet);
+  var seriesSheet = requireSheet_(spreadsheet, SHEETS.RENTAL_SERIES);
+  var requestSheet = requireSheet_(spreadsheet, SHEETS.RENTAL_REQUESTS);
+  var auditSheet = requireSheet_(spreadsheet, SHEETS.RENTAL_AUDIT);
+  var seriesValues = getSheetValuesWithExpectedHeaders_(seriesSheet, SHEET_HEADERS.RENTAL_SERIES);
+  var requestValues = getSheetValuesWithExpectedHeaders_(requestSheet, SHEET_HEADERS.RENTAL_REQUESTS);
+  getSheetValuesWithExpectedHeaders_(auditSheet, SHEET_HEADERS.RENTAL_AUDIT);
+  return {
+    sheets: { series: seriesSheet, requests: requestSheet, audit: auditSheet },
+    series: seriesValues.slice(1).map(function(row, index) {
+      return {
+        rowNumber: index + 2, seriesId: cleanText_(row[0]), teacherName: cleanText_(row[1]),
+        instructorId: cleanText_(row[2]), classId: cleanText_(row[3]), className: cleanText_(row[4]),
+        durationMinutes: Number(row[5]), room: cleanText_(row[6]), roomId: cleanText_(row[7]),
+        weekday: Number(row[8]), startTime: formatMyTime(row[9]), startDate: formatMyDate(row[10]),
+        endDate: formatMyDate(row[11]), status: cleanText_(row[12]), createdAt: cleanText_(row[13]),
+        updatedAt: cleanText_(row[14]), updatedBy: cleanText_(row[15])
+      };
+    }).filter(function(item) { return item.seriesId; }),
+    requests: requestValues.slice(1).map(function(row, index) {
+      return {
+        rowNumber: index + 2, requestId: cleanText_(row[0]), seriesId: cleanText_(row[1]),
+        teacherName: cleanText_(row[2]), instructorId: cleanText_(row[3]), date: formatMyDate(row[4]),
+        room: cleanText_(row[5]), roomId: cleanText_(row[6]), classId: cleanText_(row[7]),
+        className: cleanText_(row[8]), durationMinutes: Number(row[9]), startTime: formatMyTime(row[10]),
+        endTime: formatMyTime(row[11]), status: cleanText_(row[12]), waitlistCalendarIds: cleanText_(row[13]),
+        obCalendarId: cleanText_(row[14]), failureReason: cleanText_(row[15]), createdAt: cleanText_(row[16]),
+        updatedAt: cleanText_(row[17]), updatedBy: cleanText_(row[18])
+      };
+    }).filter(function(item) { return item.requestId; })
+  };
+}
+
+function appendRentalRowUnlocked_(sheet, headers, row) {
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length).setValues([row]);
+}
+
+function appendRentalAuditUnlocked_(sheet, eventValue) {
+  var event = eventValue || {};
+  appendRentalRowUnlocked_(sheet, SHEET_HEADERS.RENTAL_AUDIT, [
+    getTimestamp_(), cleanText_(event.actor), cleanText_(event.action), cleanText_(event.targetType),
+    cleanText_(event.targetId), event.before == null ? '' : JSON.stringify(event.before),
+    event.after == null ? '' : JSON.stringify(event.after), cleanText_(event.reason)
+  ]);
+}
+
+function getRentalClassById_(catalog, classIdValue) {
+  var classId = cleanText_(classIdValue);
+  return (catalog.classes || []).filter(function(item) { return item.classId === classId; })[0] || null;
+}
+
+function getRentalRoomByCode_(catalog, roomValue) {
+  var room = requirePracticeRoom_(roomValue);
+  return (catalog.rooms || []).filter(function(item) { return item.room === room; })[0] || null;
+}
+
+function getRentalPracticeRecordsForAnalysis_(spreadsheet) {
+  var teacherRecords = { bookings: [], participants: [] };
+  if (spreadsheet.getSheetByName(SHEETS.PRACTICE_BOOKINGS)) {
+    teacherRecords = getPracticeRecordsUnlocked_(spreadsheet);
+  }
+  var studentRecords = { groups: [], participants: [], qualifications: [] };
+  if (spreadsheet.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS)) {
+    studentRecords = getStudentPracticeRecordsUnlocked_(spreadsheet);
+  }
+  return { teacher: teacherRecords, student: studentRecords };
+}
+
+function buildRentalPreviewOccurrence_(occurrence, courseRows, records) {
+  var analysis = analyzeRentalConflicts_(occurrence, courseRows, records.teacher, records.student);
+  return {
+    date: occurrence.date,
+    room: occurrence.room,
+    startTime: occurrence.startTime,
+    endTime: occurrence.endTime,
+    disposition: analysis.upperConflicts.length ? RENTAL_STATUS.WAITLISTED : RENTAL_STATUS.PENDING_WRITE,
+    upperConflicts: analysis.upperConflicts,
+    teacherPracticeImpacts: analysis.teacherPracticeImpacts,
+    studentPracticeImpacts: analysis.studentPracticeImpacts
+  };
+}
+
+function previewTeacherRental_(session, inputValue) {
+  var input = inputValue || {};
+  var catalog = getRentalCatalog_(session);
+  var rentalClass = getRentalClassById_(catalog, input.classId);
+  if (!rentalClass) throw new Error('找不到選擇的 OB 租借課程，請重新整理。');
+  var roomRef = getRentalRoomByCode_(catalog, input.room);
+  if (!roomRef) throw new Error('找不到選擇教室的 OB 對照。');
+  var occurrences = buildRentalRequestOccurrences_(Object.assign({}, input, {
+    durationMinutes: rentalClass.durationMinutes
+  }));
+  occurrences.forEach(function(occurrence) {
+    if (parsePracticeDateTime_(occurrence.date, occurrence.startTime).getTime() <= currentTimeMs_()) {
+      throw new Error('租借開始時間必須晚於現在。');
+    }
+  });
+  if (occurrences.length > 40) throw new Error('一次最多建立 40 堂循環租借，請縮短結束日期。');
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var practiceRecords = getRentalPracticeRecordsForAnalysis_(spreadsheet);
+  var previews = occurrences.map(function(occurrence) {
+    var courseRows;
+    try { courseRows = getPracticeCurrentObRowsForDayView_(occurrence.date, true); } catch (error) {
+      throw new Error('目前無法即時確認 ' + occurrence.date + ' 的 OB 課表，請稍後再試。');
+    }
+    return buildRentalPreviewOccurrence_(occurrence, courseRows, practiceRecords);
+  });
+  return {
+    teacherName: catalog.teacherName,
+    instructorId: catalog.instructorId,
+    classId: rentalClass.classId,
+    className: rentalClass.name,
+    durationMinutes: rentalClass.durationMinutes,
+    room: roomRef.room,
+    roomId: roomRef.roomId,
+    recurring: input.recurring === true,
+    occurrences: previews,
+    requiresImpactConfirmation: previews.some(function(item) {
+      return !item.upperConflicts.length &&
+        (item.teacherPracticeImpacts.length || item.studentPracticeImpacts.length);
+    })
+  };
+}
+
+function updateRentalRequestStatusUnlocked_(sheet, rowNumber, status, waitlistIds, calendarId, failure, actor) {
+  sheet.getRange(rowNumber, 13, 1, 7).setValues([[
+    cleanText_(status), cleanText_(waitlistIds), cleanText_(calendarId), cleanText_(failure),
+    sheet.getRange(rowNumber, 17).getValue(), getTimestamp_(), cleanText_(actor)
+  ]]);
+}
+
+function markRentalPracticeImpactsUnlocked_(spreadsheet, analysis, actor, requestId) {
+  var affectedTeachers = [];
+  var affectedStudents = [];
+  var now = getTimestamp_();
+  if (analysis.teacherPracticeImpacts.length && spreadsheet.getSheetByName(SHEETS.PRACTICE_BOOKINGS)) {
+    var practiceRecords = getPracticeRecordsUnlocked_(spreadsheet);
+    analysis.teacherPracticeImpacts.forEach(function(impact) {
+      var booking = practiceRecords.bookings.filter(function(item) { return item.bookingId === impact.bookingId; })[0];
+      if (!booking || booking.status !== PRACTICE_STATUS.ACTIVE) return;
+      practiceRecords.sheets.bookings.getRange(booking.rowNumber, 7, 1, 7).setValues([[
+        PRACTICE_STATUS.CONFLICT_CANCELLED, booking.creatorName, booking.waitlistCalendarId,
+        '教室租借已成立', booking.createdAt, now, actor
+      ]]);
+      appendPracticeAuditUnlocked_(practiceRecords.sheets.audit, {
+        actor: actor, action: '教室租借取代自主練習', targetType: '場次', targetId: booking.bookingId,
+        before: { status: booking.status }, after: { status: PRACTICE_STATUS.CONFLICT_CANCELLED },
+        reason: '租借需求 ' + requestId
+      });
+      impact.teacherNames.forEach(function(name) {
+        if (name && affectedTeachers.indexOf(name) === -1) affectedTeachers.push(name);
+      });
+    });
+  }
+  if (analysis.studentPracticeImpacts.length && spreadsheet.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS)) {
+    var studentRecords = getStudentPracticeRecordsUnlocked_(spreadsheet);
+    analysis.studentPracticeImpacts.forEach(function(impact) {
+      var group = studentRecords.groups.filter(function(item) { return item.groupId === impact.groupId; })[0];
+      if (!group || group.status === STUDENT_PRACTICE_STATUS.CANCELLED) return;
+      studentRecords.sheets.groups.getRange(group.rowNumber, 6, 1, 5).setValues([[
+        group.status, STUDENT_PRACTICE_STATUS.CHANGE_PENDING, group.createdAt, now, actor
+      ]]);
+      appendStudentPracticeAuditUnlocked_(studentRecords.sheets.audit, {
+        actor: actor, action: '教室租借造成時段異動', targetType: '場次', targetId: group.groupId,
+        before: { changeStatus: group.changeStatus },
+        after: { changeStatus: STUDENT_PRACTICE_STATUS.CHANGE_PENDING }, reason: '租借需求 ' + requestId
+      });
+      affectedStudents.push(impact);
+    });
+  }
+  return { teacherNames: affectedTeachers, studentImpacts: affectedStudents };
+}
+
+function sendRentalNotificationSafely_(resultValue) {
+  var result = resultValue || {};
+  try {
+    var status = cleanText_(result.status);
+    sendManagedNotification_(
+      cleanText_(result.actor) || '教室租借系統', '教室租借', cleanText_(result.requestId), 'selected',
+      [cleanText_(result.teacherName)],
+      status === RENTAL_STATUS.ACTIVE ? '教室租借已成立' : status === RENTAL_STATUS.WAITLISTED ? '教室租借已候補' : '教室租借狀態更新',
+      cleanText_(result.date) + ' ' + cleanText_(result.room) + ' 教室 ' + cleanText_(result.startTime) + '–' + cleanText_(result.endTime) + '｜' + status,
+      'rental_status_' + cleanText_(result.requestId) + '_' + status,
+      buildAppViewUrl_('practice')
+    );
+    if ((result.affectedTeacherNames || []).length) {
+      sendManagedNotification_(
+        '教室租借系統', '自主練習', cleanText_(result.requestId), 'selected', result.affectedTeacherNames,
+        '自主練習時段已取消',
+        cleanText_(result.date) + ' ' + cleanText_(result.room) + ' 教室已有租借成立，原自主練習已取消。',
+        'rental_displaced_practice_' + cleanText_(result.requestId), buildAppViewUrl_('practice')
+      );
+    }
+    if ((result.studentImpacts || []).length) {
+      var activeAdmins = getActiveCourseAdminNames_();
+      var admins = ['冠蓉', 'Tako'].filter(function(name) { return activeAdmins.indexOf(name) !== -1; });
+      sendManagedNotification_(
+        '教室租借系統', '學生自主練習', cleanText_(result.requestId), 'selected', admins,
+        '學生自主練習時段待處理',
+        cleanText_(result.date) + ' ' + cleanText_(result.room) + ' 教室已有租借成立，請聯絡受影響學生。',
+        'rental_displaced_student_' + cleanText_(result.requestId), buildAppViewUrl_('admin', 'practice')
+      );
+    }
+  } catch (error) {
+    console.warn('租借已處理，但通知失敗。', error);
+  }
+}
+
+function createTeacherRental_(session, inputValue) {
+  var input = inputValue || {};
+  var preview = previewTeacherRental_(session, input);
+  if (preview.requiresImpactConfirmation && input.confirmImpacts !== true) {
+    throw new Error('請先確認租借成立後會受影響的自主練習。');
+  }
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  var actor = getSessionAuditActor_(session);
+  var results = withScriptLock_(function() {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getRentalRecordsUnlocked_(spreadsheet);
+    var seriesId = input.recurring === true ? Utilities.getUuid() : '';
+    var now = getTimestamp_();
+    if (seriesId) {
+      appendRentalRowUnlocked_(records.sheets.series, SHEET_HEADERS.RENTAL_SERIES, [
+        seriesId, preview.teacherName, preview.instructorId || '', preview.classId, preview.className,
+        preview.durationMinutes, preview.room, preview.roomId,
+        parsePracticeDateTime_(preview.occurrences[0].date, '00:00').getDay(), preview.occurrences[0].startTime,
+        preview.occurrences[0].date, preview.occurrences[preview.occurrences.length - 1].date,
+        '啟用中', now, now, actor
+      ]);
+    }
+    var stopAfterRateLimit = false;
+    return preview.occurrences.map(function(occurrence) {
+      var duplicate = records.requests.filter(function(item) {
+        return item.teacherName === preview.teacherName && item.date === occurrence.date &&
+          item.room === occurrence.room && item.startTime === occurrence.startTime &&
+          [RENTAL_STATUS.ACTIVE, RENTAL_STATUS.WAITLISTED, RENTAL_STATUS.WRITING, RENTAL_STATUS.FAILED].indexOf(item.status) !== -1;
+      })[0];
+      if (duplicate) throw new Error(occurrence.date + ' 已經有相同的租借或候補。');
+      var requestId = Utilities.getUuid();
+      if (stopAfterRateLimit) {
+        appendRentalRowUnlocked_(records.sheets.requests, SHEET_HEADERS.RENTAL_REQUESTS, [
+          requestId, seriesId, preview.teacherName, preview.instructorId || '', occurrence.date, occurrence.room,
+          preview.roomId, preview.classId, preview.className, preview.durationMinutes,
+          occurrence.startTime, occurrence.endTime, RENTAL_STATUS.FAILED, '', '',
+          'OB 同步次數已達上限，等待排程重試。', now, now, actor
+        ]);
+        appendRentalAuditUnlocked_(records.sheets.audit, {
+          actor: actor, action: '因 OB 限流延後租借', targetType: '需求', targetId: requestId,
+          after: { status: RENTAL_STATUS.FAILED }, reason: 'HTTP 429'
+        });
+        return {
+          requestId: requestId, seriesId: seriesId, teacherName: preview.teacherName, actor: actor,
+          date: occurrence.date, room: occurrence.room, startTime: occurrence.startTime,
+          endTime: occurrence.endTime, className: preview.className, status: RENTAL_STATUS.FAILED,
+          rateLimited: true, affectedTeacherNames: [], studentImpacts: []
+        };
+      }
+      var courseRows = getPracticeCurrentObRowsForDayView_(occurrence.date, true);
+      var practices = getRentalPracticeRecordsForAnalysis_(spreadsheet);
+      var analysis = analyzeRentalConflicts_(occurrence, courseRows, practices.teacher, practices.student);
+      var status = analysis.upperConflicts.length ? RENTAL_STATUS.WAITLISTED : RENTAL_STATUS.WRITING;
+      var waitlistIds = analysis.upperConflicts.map(function(item) { return item.calendarId; }).join('|');
+      appendRentalRowUnlocked_(records.sheets.requests, SHEET_HEADERS.RENTAL_REQUESTS, [
+        requestId, seriesId, preview.teacherName, preview.instructorId || '', occurrence.date, occurrence.room,
+        preview.roomId, preview.classId, preview.className, preview.durationMinutes,
+        occurrence.startTime, occurrence.endTime, status, waitlistIds, '', '', now, now, actor
+      ]);
+      var rowNumber = records.sheets.requests.getLastRow();
+      var result = {
+        requestId: requestId, seriesId: seriesId, teacherName: preview.teacherName, actor: actor,
+        date: occurrence.date, room: occurrence.room, startTime: occurrence.startTime,
+        endTime: occurrence.endTime, className: preview.className, status: status,
+        affectedTeacherNames: [], studentImpacts: []
+      };
+      if (status === RENTAL_STATUS.WAITLISTED) {
+        appendRentalAuditUnlocked_(records.sheets.audit, {
+          actor: actor, action: '建立候補租借', targetType: '需求', targetId: requestId,
+          after: { status: status, calendarIds: waitlistIds }
+        });
+        return result;
+      }
+      try {
+        var posted = postObRentalCalendar_(token, {
+          requestId: requestId, date: occurrence.date, startTime: occurrence.startTime,
+          classId: preview.classId, roomId: preview.roomId, instructorId: preview.instructorId,
+          note: cleanText_(input.note)
+        });
+        updateRentalRequestStatusUnlocked_(records.sheets.requests, rowNumber, RENTAL_STATUS.ACTIVE, '', posted.calendarId, '', actor);
+        var impacts = markRentalPracticeImpactsUnlocked_(spreadsheet, analysis, actor, requestId);
+        result.status = RENTAL_STATUS.ACTIVE;
+        result.obCalendarId = posted.calendarId;
+        result.affectedTeacherNames = impacts.teacherNames;
+        result.studentImpacts = impacts.studentImpacts;
+        appendRentalAuditUnlocked_(records.sheets.audit, {
+          actor: actor, action: '建立教室租借', targetType: '需求', targetId: requestId,
+          after: { status: RENTAL_STATUS.ACTIVE, obCalendarId: posted.calendarId }
+        });
+      } catch (error) {
+        var recovered = null;
+        if (!error || [403, 409, 429].indexOf(Number(error.statusCode)) === -1) {
+          try {
+            recovered = findExistingObRentalByRequestId_(token, {
+              requestId: requestId, date: occurrence.date, startTime: occurrence.startTime,
+              classId: preview.classId, roomId: preview.roomId, instructorId: preview.instructorId
+            });
+          } catch (recoveryError) {
+            console.warn('無法確認 OB 是否已建立租借，保留待重試狀態。', recoveryError);
+          }
+        }
+        if (recovered && recovered.calendarId) {
+          updateRentalRequestStatusUnlocked_(records.sheets.requests, rowNumber, RENTAL_STATUS.ACTIVE,
+            '', recovered.calendarId, '', actor);
+          var recoveredImpacts = markRentalPracticeImpactsUnlocked_(spreadsheet, analysis, actor, requestId);
+          result.status = RENTAL_STATUS.ACTIVE;
+          result.obCalendarId = recovered.calendarId;
+          result.recovered = true;
+          result.affectedTeacherNames = recoveredImpacts.teacherNames;
+          result.studentImpacts = recoveredImpacts.studentImpacts;
+          appendRentalAuditUnlocked_(records.sheets.audit, {
+            actor: actor, action: '確認既有 OB 教室租借', targetType: '需求', targetId: requestId,
+            after: { status: RENTAL_STATUS.ACTIVE, obCalendarId: recovered.calendarId }, reason: getErrorMessage_(error)
+          });
+          invalidatePracticeDayViewCache_(occurrence.date);
+          return result;
+        }
+        var nextStatus = error && error.statusCode === 409 ? RENTAL_STATUS.WAITLISTED : RENTAL_STATUS.FAILED;
+        var conflictIds = getRentalConflictCalendarIdsFromError_(error);
+        updateRentalRequestStatusUnlocked_(records.sheets.requests, rowNumber, nextStatus,
+          conflictIds.join('|') || waitlistIds, '', getErrorMessage_(error), actor);
+        result.status = nextStatus;
+        result.error = getErrorMessage_(error);
+        appendRentalAuditUnlocked_(records.sheets.audit, {
+          actor: actor, action: '建立租借失敗', targetType: '需求', targetId: requestId,
+          after: { status: nextStatus }, reason: result.error
+        });
+        if (error && error.statusCode === 429) {
+          result.rateLimited = true;
+          stopAfterRateLimit = true;
+        }
+      }
+      invalidatePracticeDayViewCache_(occurrence.date);
+      return result;
+    });
+  });
+  results.forEach(sendRentalNotificationSafely_);
+  return {
+    classId: preview.classId,
+    className: preview.className,
+    durationMinutes: preview.durationMinutes,
+    recurring: input.recurring === true,
+    results: results
+  };
+}
+
+function cancelTeacherRental_(session, inputValue) {
+  var input = inputValue || {};
+  var requestId = cleanText_(input.requestId);
+  if (!requestId) throw new Error('缺少租借需求編號。');
+  var teacherName = getSessionTeacherName_(session);
+  var actor = getSessionAuditActor_(session);
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  var result = withScriptLock_(function() {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getRentalRecordsUnlocked_(spreadsheet);
+    var target = records.requests.filter(function(item) { return item.requestId === requestId; })[0];
+    if (!target) throw new Error('找不到這筆租借。');
+    var isAdmin = getSessionManagementCapabilities_(session).indexOf('course_admin') !== -1;
+    if (target.teacherName !== teacherName && !isAdmin) throw new Error('只能取消自己的租借。');
+    var targets = input.cancelFuture === true && target.seriesId
+      ? records.requests.filter(function(item) {
+          return item.seriesId === target.seriesId && item.date >= target.date &&
+            [RENTAL_STATUS.CANCELLED, RENTAL_STATUS.EXPIRED].indexOf(item.status) === -1;
+        }) : [target];
+    var changed = [];
+    targets.forEach(function(item) {
+      if (item.status === RENTAL_STATUS.ACTIVE && item.obCalendarId) {
+        var detail = cancelObCalendarItem_(token, item.obCalendarId, cleanText_(input.reason) || '老師取消教室租借', false);
+        if (!detail || detail.cancelled !== true) throw new Error('OB 尚未確認取消租借。');
+      }
+      updateRentalRequestStatusUnlocked_(records.sheets.requests, item.rowNumber, RENTAL_STATUS.CANCELLED,
+        item.waitlistCalendarIds, item.obCalendarId, '', actor);
+      appendRentalAuditUnlocked_(records.sheets.audit, {
+        actor: actor, action: input.cancelFuture === true ? '停止本次以後租借' : '取消教室租借',
+        targetType: '需求', targetId: item.requestId,
+        before: { status: item.status }, after: { status: RENTAL_STATUS.CANCELLED }, reason: cleanText_(input.reason)
+      });
+      invalidatePracticeDayViewCache_(item.date);
+      changed.push(item.requestId);
+    });
+    if (input.cancelFuture === true && target.seriesId) {
+      var series = records.series.filter(function(item) { return item.seriesId === target.seriesId; })[0];
+      if (series) records.sheets.series.getRange(series.rowNumber, 13, 1, 4).setValues([[
+        '已停止', series.createdAt, getTimestamp_(), actor
+      ]]);
+    }
+    return {
+      requestId: requestId, teacherName: target.teacherName, actor: actor, date: target.date,
+      room: target.room, startTime: target.startTime, endTime: target.endTime,
+      status: RENTAL_STATUS.CANCELLED, affectedRequests: changed.length,
+      affectedDates: targets.map(function(item) { return item.date; }).filter(function(date, index, all) {
+        return date && all.indexOf(date) === index;
+      })
+    };
+  });
+  sendRentalNotificationSafely_(result);
+  try {
+    result.reconcile = reconcileRentalWaitlist_({ dates: result.affectedDates || [] });
+  } catch (error) {
+    console.warn('租借已取消，但候補遞補檢查失敗。', error);
+    result.reconcileWarning = getErrorMessage_(error);
+  }
+  return result;
+}
+
+function getMyRentalRequests_(session, monthValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var month = cleanText_(monthValue) || Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('租借月份格式應為 YYYY-MM。');
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var records = getRentalRecordsUnlocked_(spreadsheet);
+  return {
+    month: month,
+    teacherName: teacherName,
+    items: records.requests.filter(function(item) {
+      return item.teacherName === teacherName && item.date.indexOf(month.replace('-', '/') + '/') === 0;
+    }).sort(function(left, right) {
+      return [right.date, right.startTime, right.requestId].join('|')
+        .localeCompare([left.date, left.startTime, left.requestId].join('|'));
+    })
+  };
+}
+
+function getRentalConflictCalendarIdsFromError_(errorValue) {
+  var body = errorValue && errorValue.responseBody || {};
+  var source = [];
+  if (Array.isArray(body.conflictingCalendarIds)) source = source.concat(body.conflictingCalendarIds);
+  source.push(body.conflictingCalendarId, body.calendarId);
+  return source.map(cleanText_).filter(function(id, index, all) {
+    return id && all.indexOf(id) === index;
+  });
+}
+
+function reconcileRentalWaitlist_(optionsValue) {
+  var options = optionsValue || {};
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet.getSheetByName(SHEETS.RENTAL_REQUESTS)) {
+    return { skipped: true, reason: 'no-rental-sheet', activated: 0, waiting: 0, failed: 0, expired: 0 };
+  }
+  var today = cleanText_(options.today).replace(/-/g, '/') ||
+    Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'yyyy/MM/dd');
+  var wantedDates = {};
+  (options.dates || []).forEach(function(dateValue) {
+    wantedDates[cleanText_(dateValue).replace(/-/g, '/')] = true;
+  });
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  var notifications = [];
+  var result = withScriptLock_(function() {
+    var records = getRentalRecordsUnlocked_(spreadsheet);
+    var source = records.requests.filter(function(item) {
+      return !Object.keys(wantedDates).length || wantedDates[cleanText_(item.date).replace(/-/g, '/')];
+    });
+    var queue = buildRentalReconciliationQueue_(source, today, options.nowMs);
+    var summary = {
+      skipped: false, activated: 0, waiting: 0, failed: 0, expired: 0,
+      blockedByEarlier: queue.blocked.length, stoppedByRateLimit: false, items: []
+    };
+    queue.expired.forEach(function(item) {
+      updateRentalRequestStatusUnlocked_(records.sheets.requests, item.rowNumber, RENTAL_STATUS.EXPIRED,
+        item.waitlistCalendarIds, item.obCalendarId, '', '系統自動');
+      appendRentalAuditUnlocked_(records.sheets.audit, {
+        actor: '系統自動', action: '租借候補過期', targetType: '需求', targetId: item.requestId,
+        before: { status: item.status }, after: { status: RENTAL_STATUS.EXPIRED }
+      });
+      summary.expired += 1;
+      summary.items.push({ requestId: item.requestId, status: RENTAL_STATUS.EXPIRED });
+      invalidatePracticeDayViewCache_(item.date);
+    });
+    var courseRowsByDate = options.currentObRowsByDate || {};
+    for (var index = 0; index < queue.candidates.length; index++) {
+      var item = queue.candidates[index];
+      if (summary.stoppedByRateLimit) break;
+      var date = cleanText_(item.date).replace(/-/g, '/');
+      try {
+        if (!courseRowsByDate[date]) {
+          courseRowsByDate[date] = getPracticeCurrentObRowsForDayView_(date, true);
+        }
+      } catch (readError) {
+        summary.failed += 1;
+        summary.items.push({ requestId: item.requestId, status: item.status, error: getErrorMessage_(readError) });
+        continue;
+      }
+      var practices = getRentalPracticeRecordsForAnalysis_(spreadsheet);
+      var analysis = analyzeRentalConflicts_(item, courseRowsByDate[date], practices.teacher, practices.student);
+      if (analysis.upperConflicts.length) {
+        var blockerIds = analysis.upperConflicts.map(function(conflict) { return conflict.calendarId; }).filter(Boolean);
+        updateRentalRequestStatusUnlocked_(records.sheets.requests, item.rowNumber, RENTAL_STATUS.WAITLISTED,
+          blockerIds.join('|'), '', '', '系統自動');
+        summary.waiting += 1;
+        summary.items.push({ requestId: item.requestId, status: RENTAL_STATUS.WAITLISTED });
+        continue;
+      }
+      try {
+        var postRequest = {
+          requestId: item.requestId, date: item.date, startTime: item.startTime,
+          classId: item.classId, roomId: item.roomId, instructorId: item.instructorId
+        };
+        var posted = item.status === RENTAL_STATUS.FAILED
+          ? findExistingObRentalByRequestId_(token, postRequest)
+          : null;
+        if (!posted) posted = postObRentalCalendar_(token, postRequest);
+        updateRentalRequestStatusUnlocked_(records.sheets.requests, item.rowNumber, RENTAL_STATUS.ACTIVE,
+          '', posted.calendarId, '', '系統自動');
+        var impacts = markRentalPracticeImpactsUnlocked_(spreadsheet, analysis, '系統自動', item.requestId);
+        var activated = {
+          requestId: item.requestId, teacherName: item.teacherName, actor: '系統自動',
+          date: item.date, room: item.room, startTime: item.startTime, endTime: item.endTime,
+          status: RENTAL_STATUS.ACTIVE, obCalendarId: posted.calendarId,
+          affectedTeacherNames: impacts.teacherNames, studentImpacts: impacts.studentImpacts
+        };
+        notifications.push(activated);
+        appendRentalAuditUnlocked_(records.sheets.audit, {
+          actor: '系統自動', action: '候補租借轉正', targetType: '需求', targetId: item.requestId,
+          before: { status: item.status }, after: { status: RENTAL_STATUS.ACTIVE, obCalendarId: posted.calendarId }
+        });
+        summary.activated += 1;
+        summary.items.push({
+          requestId: item.requestId, status: RENTAL_STATUS.ACTIVE, obCalendarId: posted.calendarId,
+          date: item.date, room: item.room, startTime: item.startTime, endTime: item.endTime,
+          className: item.className, teacherName: item.teacherName
+        });
+        invalidatePracticeDayViewCache_(item.date);
+      } catch (writeError) {
+        var status = writeError && writeError.statusCode === 409 ? RENTAL_STATUS.WAITLISTED : RENTAL_STATUS.FAILED;
+        var conflictIds = getRentalConflictCalendarIdsFromError_(writeError);
+        updateRentalRequestStatusUnlocked_(records.sheets.requests, item.rowNumber, status,
+          conflictIds.join('|') || item.waitlistCalendarIds, '', getErrorMessage_(writeError), '系統自動');
+        appendRentalAuditUnlocked_(records.sheets.audit, {
+          actor: '系統自動', action: status === RENTAL_STATUS.WAITLISTED ? '租借繼續候補' : '租借轉正失敗',
+          targetType: '需求', targetId: item.requestId,
+          before: { status: item.status }, after: { status: status }, reason: getErrorMessage_(writeError)
+        });
+        if (status === RENTAL_STATUS.WAITLISTED) summary.waiting += 1;
+        else summary.failed += 1;
+        summary.items.push({ requestId: item.requestId, status: status, error: getErrorMessage_(writeError) });
+        if (writeError && writeError.statusCode === 429) summary.stoppedByRateLimit = true;
+      }
+    }
+    return summary;
+  });
+  notifications.forEach(sendRentalNotificationSafely_);
+  return result;
 }
 
 function buildClaimCourseOptions_(catalog, capabilities) {

@@ -9492,6 +9492,320 @@ test('practice API requires login, ignores forged teachers, and permits course-a
   ]);
 });
 
+test('teacher rental API requires login, ignores forged teachers, and permits course-admin acting mode', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const services = createAuthServices();
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, '冠蓉', '1234', { role: '管理員' }).concat('', 'course_admin'),
+    createAccount(bootstrap, '小琪', '2345').concat('空環', ''),
+  ], services);
+  backend.console = { error() {} };
+  const calls = [];
+  backend.getRentalCatalog_ = (session) => {
+    calls.push(['catalog', session.teacherName, session.impersonatedBy || '']);
+    return { teacherName: session.teacherName, classes: [], rooms: [] };
+  };
+  backend.previewTeacherRental_ = (session, input) => {
+    calls.push(['preview', session.teacherName, session.impersonatedBy || '', input.room]);
+    return { teacherName: session.teacherName, occurrences: [] };
+  };
+  backend.createTeacherRental_ = (session, input) => {
+    calls.push(['create', session.teacherName, session.impersonatedBy || '', input.classId]);
+    return { results: [] };
+  };
+  backend.getMyRentalRequests_ = (session, month) => {
+    calls.push(['history', session.teacherName, session.impersonatedBy || '', month]);
+    return { month, items: [] };
+  };
+
+  const missing = JSON.parse(backend.doPost({ parameter: {
+    action: 'getRentalCatalog', teacherName: '偽造老師',
+  } }).text);
+  assert.equal(missing.status, 'error');
+  assert.match(missing.message, /請先登入/);
+
+  const teacherToken = backend.authenticate_('小琪', '2345').sessionToken;
+  const teacherResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'createTeacherRental',
+    sessionToken: teacherToken,
+    teacherName: '偽造老師',
+    rental: JSON.stringify({ classId: 'rental-60', room: 'A' }),
+  } }).text);
+  assert.equal(teacherResult.status, 'success');
+
+  const adminToken = backend.authenticate_('冠蓉', '1234').sessionToken;
+  const catalogResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getRentalCatalog', sessionToken: adminToken, actingTeacherName: '小琪',
+  } }).text);
+  const previewResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'previewTeacherRental',
+    sessionToken: adminToken,
+    actingTeacherName: '小琪',
+    rental: JSON.stringify({ classId: 'rental-90', room: 'C' }),
+  } }).text);
+  const historyResult = JSON.parse(backend.doPost({ parameter: {
+    action: 'getMyRentalRequests',
+    sessionToken: adminToken,
+    actingTeacherName: '小琪',
+    month: '2026-09',
+  } }).text);
+  assert.equal(catalogResult.status, 'success');
+  assert.equal(previewResult.status, 'success');
+  assert.equal(historyResult.status, 'success');
+  assert.deepEqual(calls, [
+    ['create', '小琪', '', 'rental-60'],
+    ['catalog', '小琪', '冠蓉'],
+    ['preview', '小琪', '冠蓉', 'C'],
+    ['history', '小琪', '冠蓉', '2026-09'],
+  ]);
+});
+
+test('rental creation displaces teacher practice only after OB confirms success', () => {
+  const makeFixture = () => {
+    const authServices = createAuthServices();
+    const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+    fixture.backend.sendRentalNotificationSafely_ = () => {};
+    const booking = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
+      date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '16:00', recurrence: 'once',
+    });
+    fixture.backend.previewTeacherRental_ = () => ({
+      teacherName: 'Tako', instructorId: '7', classId: '60', className: 'A教室場地租借60分鐘',
+      durationMinutes: 60, room: 'A', roomId: '1', recurring: false,
+      requiresImpactConfirmation: true,
+      occurrences: [{
+        date: '2026/09/10', room: 'A', startTime: '14:30', endTime: '15:30',
+        upperConflicts: [], teacherPracticeImpacts: [], studentPracticeImpacts: [],
+      }],
+    });
+    fixture.backend.getPracticeCurrentObRowsForDayView_ = () => [];
+    fixture.backend.findExistingObRentalByRequestId_ = () => null;
+    return { fixture, booking };
+  };
+
+  const failed = makeFixture();
+  failed.fixture.backend.postObRentalCalendar_ = () => {
+    const error = new Error('OB write failed');
+    error.statusCode = 503;
+    throw error;
+  };
+  const failedResult = failed.fixture.backend.createTeacherRental_(failed.fixture.teacher('Tako'), {
+    classId: '60', room: 'A', confirmImpacts: true,
+  });
+  assert.equal(failedResult.results[0].status, '成立失敗待處理');
+  assert.equal(failed.fixture.bookingSheet.values[1][6], '已成立');
+
+  const succeeded = makeFixture();
+  succeeded.fixture.backend.postObRentalCalendar_ = () => ({ calendarId: 'ob-rental-1' });
+  const succeededResult = succeeded.fixture.backend.createTeacherRental_(succeeded.fixture.teacher('Tako'), {
+    classId: '60', room: 'A', confirmImpacts: true,
+  });
+  assert.equal(succeededResult.results[0].status, '已成立');
+  assert.equal(succeeded.fixture.bookingSheet.values[1][6], '衝突取消');
+  assert.equal(succeeded.fixture.bookingSheet.values[1][9], '教室租借已成立');
+  assert.ok(succeeded.fixture.practiceAuditSheet.values.some((row) => row[2] === '教室租借取代自主練習'));
+
+  const uncertain = makeFixture();
+  uncertain.fixture.backend.postObRentalCalendar_ = () => {
+    const error = new Error('network timeout');
+    error.statusCode = 503;
+    throw error;
+  };
+  uncertain.fixture.backend.findExistingObRentalByRequestId_ = () => ({ calendarId: 'ob-recovered-1', recovered: true });
+  const uncertainResult = uncertain.fixture.backend.createTeacherRental_(uncertain.fixture.teacher('Tako'), {
+    classId: '60', room: 'A', confirmImpacts: true,
+  });
+  assert.equal(uncertainResult.results[0].status, '已成立');
+  assert.equal(uncertainResult.results[0].obCalendarId, 'ob-recovered-1');
+  assert.equal(uncertain.fixture.bookingSheet.values[1][6], '衝突取消');
+});
+
+test('rental day annotation marks the owner and immediately restores a missing OB rental card', () => {
+  const backend = loadBackend();
+  const view = {
+    date: '2026/09/10',
+    rooms: [
+      { room: 'A', blocks: [{ id: 'ob:ob-rental-1', calendarId: 'ob-rental-1', type: 'rental', label: '場地租借', startTime: '14:00', endTime: '15:00' }] },
+      { room: 'B', blocks: [] },
+    ],
+  };
+  const requests = [
+    { requestId: 'rental-1', seriesId: '', teacherName: '小琪', date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', status: '已成立', obCalendarId: 'ob-rental-1', className: 'A場租60' },
+    { requestId: 'rental-2', seriesId: 'series-1', teacherName: 'Tako', date: '2026/09/10', room: 'B', startTime: '16:00', endTime: '18:30', status: '已成立', obCalendarId: 'ob-rental-2', className: 'B場租150' },
+  ];
+
+  backend.annotateRentalPracticeDayView_(view, '小琪', requests);
+
+  assert.equal(view.rooms[0].blocks[0].rentalRequestId, 'rental-1');
+  assert.equal(view.rooms[0].blocks[0].isMine, true);
+  assert.match(view.rooms[0].blocks[0].label, /小琪/);
+  assert.equal(view.rooms[1].blocks.length, 1);
+  assert.equal(view.rooms[1].blocks[0].calendarId, 'ob-rental-2');
+  assert.equal(view.rooms[1].blocks[0].isMine, false);
+  assert.equal(view.rooms[1].blocks[0].seriesId, 'series-1');
+});
+
+test('rental cancellation skips OB for waitlists and preserves active state when OB cancel fails', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  const reconcileDates = [];
+  fixture.backend.reconcileRentalWaitlist_ = (options) => {
+    reconcileDates.push(Array.from(options.dates));
+    return { activated: 0 };
+  };
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'wait-1', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', 'course-1', '', '', '2026-09-09 10:00:00', '2026-09-09 10:00:00', '小琪',
+  ]);
+  requestSheet.values.push([
+    'active-1', '', '小琪', '7', '2026/09/11', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '已成立', '', 'ob-rental-1', '', '2026-09-09 10:01:00', '2026-09-09 10:01:00', '小琪',
+  ]);
+  let cancellations = 0;
+  fixture.backend.cancelObCalendarItem_ = () => {
+    cancellations += 1;
+    throw new Error('OB cancel failed');
+  };
+
+  const waitResult = fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), { requestId: 'wait-1' });
+  assert.equal(waitResult.status, '已取消');
+  assert.equal(cancellations, 0);
+  assert.equal(requestSheet.values[1][12], '已取消');
+
+  assert.throws(
+    () => fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), { requestId: 'active-1' }),
+    /OB cancel failed/,
+  );
+  assert.equal(cancellations, 1);
+  assert.equal(requestSheet.values[2][12], '已成立');
+
+  fixture.backend.cancelObCalendarItem_ = () => ({ cancelled: true });
+  fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), { requestId: 'active-1' });
+  assert.equal(requestSheet.values[2][12], '已取消');
+  assert.deepEqual(reconcileDates, [['2026/09/10'], ['2026/09/11']]);
+});
+
+test('rental waitlist reconciliation queue expires old rows and keeps FIFO per overlapping slot', () => {
+  const backend = loadBackend();
+  const requests = [
+    { requestId: 'old', status: '候補', date: '2026/09/08', room: 'A', startTime: '10:00', endTime: '11:00', createdAt: '2026-09-01 10:00:00' },
+    { requestId: 'second', status: '候補', date: '2026/09/10', room: 'A', startTime: '10:30', endTime: '11:30', createdAt: '2026-09-01 09:00:00' },
+    { requestId: 'first-failed', status: '成立失敗待處理', date: '2026/09/10', room: 'A', startTime: '10:00', endTime: '11:00', createdAt: '2026-09-01 08:00:00' },
+    { requestId: 'independent', status: '候補', date: '2026/09/10', room: 'B', startTime: '10:00', endTime: '11:00', createdAt: '2026-09-01 10:00:00' },
+  ];
+
+  const queue = backend.buildRentalReconciliationQueue_(requests, '2026/09/09');
+
+  assert.deepEqual(Array.from(queue.expired, (item) => item.requestId), ['old']);
+  assert.deepEqual(Array.from(queue.candidates, (item) => item.requestId), ['first-failed', 'independent']);
+  assert.deepEqual(Array.from(queue.blocked, (item) => item.requestId), ['second']);
+});
+
+test('rental reconciliation expires a same-day waitlist after its end time', () => {
+  const backend = loadBackend();
+  const nowMs = new Date('2026-09-09T15:01:00+08:00').getTime();
+  const queue = backend.buildRentalReconciliationQueue_([
+    { requestId: 'past-today', status: '候補', date: '2026/09/09', room: 'A', startTime: '14:00', endTime: '15:00', createdAt: '2026-09-01 10:00:00' },
+    { requestId: 'future-today', status: '候補', date: '2026/09/09', room: 'B', startTime: '16:00', endTime: '17:00', createdAt: '2026-09-01 10:01:00' },
+  ], '2026/09/09', nowMs);
+
+  assert.deepEqual(Array.from(queue.expired, (item) => item.requestId), ['past-today']);
+  assert.deepEqual(Array.from(queue.candidates, (item) => item.requestId), ['future-today']);
+});
+
+test('rental waitlist reconciliation promotes the first available request and stores the OB id', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'wait-1', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', 'old-course', '', '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  const posted = [];
+  fixture.backend.postObRentalCalendar_ = (_token, request) => {
+    posted.push({ ...request });
+    return { calendarId: 'ob-rental-1' };
+  };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/09',
+    dates: ['2026/09/10'],
+    currentObRowsByDate: { '2026/09/10': [] },
+  });
+
+  assert.equal(result.activated, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-rental-1');
+  assert.deepEqual(posted, [{
+    requestId: 'wait-1', date: '2026/09/10', startTime: '14:00',
+    classId: '60', roomId: '1', instructorId: '7',
+  }]);
+});
+
+test('rental waitlist reconciliation stops the batch after OB rate limiting', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'first', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', '', '', '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  requestSheet.values.push([
+    'second', '', 'Tako', '8', '2026/09/10', 'B', '2', '90', 'B場租90', 90,
+    '16:00', '17:30', '候補', '', '', '', '2026-09-01 10:01:00', '2026-09-01 10:01:00', 'Tako',
+  ]);
+  let calls = 0;
+  fixture.backend.postObRentalCalendar_ = () => {
+    calls += 1;
+    const error = new Error('rate limited');
+    error.statusCode = 429;
+    throw error;
+  };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/09', dates: ['2026/09/10'],
+    currentObRowsByDate: { '2026/09/10': [] },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.stoppedByRateLimit, true);
+  assert.equal(requestSheet.values[1][12], '成立失敗待處理');
+  assert.equal(requestSheet.values[2][12], '候補');
+});
+
+test('failed rental reconciliation recovers an already-created OB calendar without posting twice', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'uncertain-1', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '成立失敗待處理', '', '', 'network timeout',
+    '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  fixture.backend.findExistingObRentalByRequestId_ = () => ({ calendarId: 'ob-existing-1', recovered: true });
+  fixture.backend.postObRentalCalendar_ = () => {
+    throw new Error('must not post twice');
+  };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/09', dates: ['2026/09/10'],
+    currentObRowsByDate: { '2026/09/10': [] },
+  });
+
+  assert.equal(result.activated, 1);
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-existing-1');
+});
+
 test('my practice history returns only the signed-in teacher records for the requested month', () => {
   const fixture = createPracticeBackend();
   const cancelled = fixture.backend.createPracticeBooking_(fixture.teacher('小琪'), {
@@ -11465,4 +11779,138 @@ test('rental structure is isolated and preserves practice and CourseList rows', 
   assert.deepEqual(spreadsheet.getSheetByName('教室租借需求').values[0], EXPECTED_RENTAL_REQUEST_HEADERS);
   assert.deepEqual(spreadsheet.getSheetByName('教室租借操作紀錄').values[0], EXPECTED_RENTAL_AUDIT_HEADERS);
   assert.deepEqual(spreadsheet.getSheetByName('OB租借對照').values[0], EXPECTED_RENTAL_MAPPING_HEADERS);
+});
+
+test('rental recurrence derives every end time from the selected OB class duration', () => {
+  const backend = loadBackend();
+  const occurrences = backend.buildRentalRequestOccurrences_({
+    date: '2026/09/10', room: 'C', startTime: '10:00', recurring: true,
+    recurringEndDate: '2026/09/24', classId: 'rental-150', className: '場租 150 分鐘',
+    durationMinutes: 150,
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(occurrences)), [
+    { date: '2026/09/10', room: 'C', startTime: '10:00', endTime: '12:30' },
+    { date: '2026/09/17', room: 'C', startTime: '10:00', endTime: '12:30' },
+    { date: '2026/09/24', room: 'C', startTime: '10:00', endTime: '12:30' },
+  ]);
+});
+
+test('rental preview blocks formal occupancy but reports lower-priority practice impacts', () => {
+  const backend = loadBackend();
+  const request = { date: '2026/09/20', room: 'A', startTime: '11:10', endTime: '12:10' };
+  const courseRows = [
+    ['2026/09/20', '10:00', 'A－空環', 'Tako', 'cal-class'],
+  ];
+  const teacherRecords = {
+    bookings: [{ bookingId: 'practice-1', date: '2026/09/20', room: 'A', startTime: '11:30', endTime: '12:30', status: '已成立', creatorName: 'Vivi' }],
+    participants: [{ bookingId: 'practice-1', teacherName: 'Vivi', status: '有效' }],
+  };
+  const studentRecords = {
+    groups: [{ groupId: 'student-1', date: '2026/09/20', room: 'A', startTime: '11:30', endTime: '12:30', status: '已成立' }],
+    participants: [{ groupId: 'student-1', studentId: 's1', status: '已成立' }],
+    qualifications: [{ studentId: 's1', appName: '學生甲', email: 'one@example.com' }],
+  };
+
+  const result = backend.analyzeRentalConflicts_(request, courseRows, teacherRecords, studentRecords);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.upperConflicts)), [{
+    type: 'course', calendarId: 'cal-class', label: 'A－空環', startTime: '10:00', endTime: '11:00',
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.teacherPracticeImpacts)), [{
+    bookingId: 'practice-1', label: 'Vivi的自主練習', teacherNames: ['Vivi'], startTime: '11:30', endTime: '12:30',
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.studentPracticeImpacts)), [{
+    groupId: 'student-1', studentNames: ['學生甲'], studentEmails: ['one@example.com'], startTime: '11:30', endTime: '12:30',
+  }]);
+});
+
+test('rental OB payload contains stable ids and no editable duration or course plan', () => {
+  const backend = loadBackend();
+  const payload = backend.buildObRentalPayload_({
+    requestId: 'rent-uuid', date: '2026/09/20', startTime: '14:30', classId: '42',
+    roomId: '3', instructorId: '7', note: '器材需求',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
+    classId: 42,
+    classTime: '2026-09-20 14:30:00',
+    classRoomId: 3,
+    instructorIds: [7],
+    privateNotes: 'Sherry rental request: rent-uuid｜器材需求',
+  });
+  assert.equal('courseId' in payload, false);
+  assert.equal('endTime' in payload, false);
+});
+
+test('uncertain rental write recovery finds the OB calendar by its private request id', () => {
+  const backend = loadBackend();
+  const result = backend.findRentalCalendarByRequestId_([
+    {
+      id: 991,
+      classTime: '2026-09-10T14:00:00+08:00',
+      cancelled: false,
+      privateNotes: 'Sherry rental request: rent-uuid｜器材需求',
+      class: { id: 60 },
+      classRoom: { id: 1 },
+    },
+    {
+      id: 992,
+      classTime: '2026-09-10T14:00:00+08:00',
+      cancelled: false,
+      privateNotes: 'Sherry rental request: another-request',
+      class: { id: 60 },
+      classRoom: { id: 1 },
+    },
+  ], 'rent-uuid', {
+    date: '2026/09/10', startTime: '14:00', classId: '60', roomId: '1',
+  });
+
+  assert.equal(result.calendarId, '991');
+});
+
+test('rental waitlist selection is FIFO and does not skip a failed first request', () => {
+  const backend = loadBackend();
+  const candidates = [
+    { requestId: 'b', createdAt: '2026-09-09 10:00:00', status: '候補' },
+    { requestId: 'a', createdAt: '2026-09-09 10:00:00', status: '候補' },
+    { requestId: 'failed', createdAt: '2026-09-09 09:00:00', status: '成立失敗待處理' },
+  ];
+  assert.equal(backend.selectNextRentalCandidate_(candidates).requestId, 'failed');
+  assert.equal(backend.selectNextRentalCandidate_(candidates.slice(0, 2)).requestId, 'a');
+});
+
+test('rental creation posts one guarded calendar payload and returns the OB id', () => {
+  const calls = [];
+  const backend = loadBackend({
+    UrlFetchApp: {
+      fetch(url, options) {
+        calls.push({ url, options });
+        return {
+          getResponseCode: () => 201,
+          getContentText: () => JSON.stringify({
+            id: 987,
+            classTime: '2026-09-20T06:30:00Z',
+            class: { id: 42, nameZhHant: '場地租借 60 分鐘' },
+            classRoom: { id: 3, nameZhHant: 'C 教室' },
+            instructors: [{ id: 7, firstName: 'Tako' }],
+          }),
+        };
+      },
+    },
+  });
+  const result = backend.postObRentalCalendar_('write-token', {
+    requestId: 'rent-uuid', date: '2026/09/20', startTime: '14:30',
+    classId: '42', roomId: '3', instructorId: '7', note: '',
+  });
+
+  assert.equal(result.calendarId, '987');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.omceanbooking.com/v1/calendar');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer write-token');
+  assert.deepEqual(JSON.parse(calls[0].options.payload), {
+    classId: 42,
+    classTime: '2026-09-20 14:30:00',
+    classRoomId: 3,
+    instructorIds: [7],
+    privateNotes: 'Sherry rental request: rent-uuid',
+  });
 });

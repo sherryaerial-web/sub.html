@@ -159,6 +159,23 @@ const EXPECTED_STUDENT_PRACTICE_PARTICIPANT_HEADERS = [
 const EXPECTED_STUDENT_PRACTICE_AUDIT_HEADERS = [
   '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON', '修改後 JSON', '原因',
 ];
+
+const EXPECTED_RENTAL_SERIES_HEADERS = [
+  '系列 ID', '老師', 'OB 老師 ID', '租借 Class ID', '租借課程', '分鐘數', '教室',
+  'OB 教室 ID', '星期', '開始時間', '生效日期', '結束日期', '狀態', '建立時間',
+  '更新時間', '更新者',
+];
+const EXPECTED_RENTAL_REQUEST_HEADERS = [
+  '需求 ID', '系列 ID', '老師', 'OB 老師 ID', '日期', '教室', 'OB 教室 ID',
+  '租借 Class ID', '租借課程', '分鐘數', '開始時間', '結束時間', '狀態',
+  '候補衝突 Calendar ID', 'OB Calendar ID', '失敗原因', '建立時間', '更新時間', '更新者',
+];
+const EXPECTED_RENTAL_AUDIT_HEADERS = [
+  '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON', '修改後 JSON', '原因',
+];
+const EXPECTED_RENTAL_MAPPING_HEADERS = [
+  '對照類型', '系統名稱', 'OB ID', 'OB 名稱', '狀態', '更新時間', '更新者',
+];
 const EXPECTED_PAYROLL_PAYMENT_HEADERS = ['老師', '轉帳群組/銀行', '備註', '是否啟用'];
 const EXPECTED_COURSE_CLOSURE_SETTING_HEADERS = [
   '設定鍵', '設定值', '更新時間', '操作者', '備註',
@@ -11414,4 +11431,38 @@ test('student practice admin can move one student atomically and preserves the o
   assert.deepEqual(fixture.groupSheet.values.at(-1).slice(1, 6), [
     '2026/09/10', 'C', '16:00', '17:30', '待確認資格',
   ]);
+});
+
+test('rental catalog uses OB rental classes and their fixed durations', () => {
+  const backend = loadBackend();
+  const result = backend.normalizeRentalClassCatalog_([
+    { id: 10, nameZhHant: '場地租借 60 分鐘', duration: 60, locationId: 1 },
+    { id: 11, nameZhHant: 'A－場租 150 分鐘', duration: 150, locationId: 1 },
+    { id: 12, nameZhHant: '空環 Lv.1', duration: 60, locationId: 1 },
+    { id: 13, nameZhHant: '場地租借錯誤', duration: 0, locationId: 1 },
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [
+    { classId: '11', name: 'A－場租 150 分鐘', durationMinutes: 150, locationId: '1' },
+    { classId: '10', name: '場地租借 60 分鐘', durationMinutes: 60, locationId: '1' },
+  ]);
+});
+
+test('rental structure is isolated and preserves practice and CourseList rows', () => {
+  const courseRows = [EXPECTED_COURSE_HEADERS, ['2026/09/20', '10:00', 'A－空環', 'Tako', 'cal-1']];
+  const practiceRows = [['場次 ID'], ['practice-1']];
+  const courseSheet = createSheetFixture('CourseList', courseRows);
+  const practiceSheet = createSheetFixture('自主練習場次', practiceRows);
+  const spreadsheet = createSpreadsheetFixture([courseSheet, practiceSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensureRentalStructureUnlocked_(spreadsheet);
+  backend.ensureRentalStructureUnlocked_(spreadsheet);
+
+  assert.deepEqual(courseSheet.values, courseRows);
+  assert.deepEqual(practiceSheet.values, practiceRows);
+  assert.deepEqual(spreadsheet.getSheetByName('教室租借系列').values[0], EXPECTED_RENTAL_SERIES_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('教室租借需求').values[0], EXPECTED_RENTAL_REQUEST_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('教室租借操作紀錄').values[0], EXPECTED_RENTAL_AUDIT_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('OB租借對照').values[0], EXPECTED_RENTAL_MAPPING_HEADERS);
 });

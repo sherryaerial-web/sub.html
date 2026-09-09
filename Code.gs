@@ -31,6 +31,10 @@ var SHEETS = {
   STUDENT_PRACTICE_GROUPS: '學生自主練習場次',
   STUDENT_PRACTICE_PARTICIPANTS: '學生自主練習參與者',
   STUDENT_PRACTICE_AUDIT: '學生自主練習操作紀錄',
+  RENTAL_SERIES: '教室租借系列',
+  RENTAL_REQUESTS: '教室租借需求',
+  RENTAL_AUDIT: '教室租借操作紀錄',
+  RENTAL_MAPPINGS: 'OB租借對照',
   NOTIFICATION_MESSAGES: '通知訊息',
   NOTIFICATION_RECIPIENTS: '通知收件人',
   DISCOUNT_OBSERVATIONS: '課程開課觀測',
@@ -144,6 +148,22 @@ var SHEET_HEADERS = {
   STUDENT_PRACTICE_AUDIT: [
     '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON', '修改後 JSON', '原因'
   ],
+  RENTAL_SERIES: [
+    '系列 ID', '老師', 'OB 老師 ID', '租借 Class ID', '租借課程', '分鐘數', '教室',
+    'OB 教室 ID', '星期', '開始時間', '生效日期', '結束日期', '狀態', '建立時間',
+    '更新時間', '更新者'
+  ],
+  RENTAL_REQUESTS: [
+    '需求 ID', '系列 ID', '老師', 'OB 老師 ID', '日期', '教室', 'OB 教室 ID',
+    '租借 Class ID', '租借課程', '分鐘數', '開始時間', '結束時間', '狀態',
+    '候補衝突 Calendar ID', 'OB Calendar ID', '失敗原因', '建立時間', '更新時間', '更新者'
+  ],
+  RENTAL_AUDIT: [
+    '時間', '操作者', '動作', '目標類型', '目標 ID', '修改前 JSON', '修改後 JSON', '原因'
+  ],
+  RENTAL_MAPPINGS: [
+    '對照類型', '系統名稱', 'OB ID', 'OB 名稱', '狀態', '更新時間', '更新者'
+  ],
   NOTIFICATION_MESSAGES: [
     '訊息 ID', '事件 ID', '類型', '標題', '內容', '連結', '關聯編號', '建立時間', '建立者'
   ],
@@ -196,12 +216,26 @@ var STUDENT_PRACTICE_QUALIFICATION_ROLE = {
   PENDING: '待確認資格'
 };
 
+var RENTAL_STATUS = {
+  PENDING_CONFIRMATION: '待確認影響',
+  PENDING_WRITE: '待寫入',
+  WAITLISTED: '候補',
+  WRITING: '寫入中',
+  ACTIVE: '已成立',
+  FAILED: '成立失敗待處理',
+  CANCELLING: '取消中',
+  CANCELLED: '已取消',
+  EXPIRED: '過期'
+};
+
 var CONFIG = {
   COURSE_SHEET: SHEETS.COURSE_LIST,
   LEAVE_SHEET: SHEETS.LEAVES,
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
   API_BASE_URL: 'https://api.omceanbooking.com',
   CLASSES_API_URL: 'https://api.omceanbooking.com/v1/classes',
+  CLASS_ROOMS_API_URL: 'https://api.omceanbooking.com/v1/class-rooms',
+  INSTRUCTORS_API_URL: 'https://api.omceanbooking.com/v1/instructors',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
   PUBLIC_GATEWAY_ENFORCED_PROPERTY: 'PUBLIC_GATEWAY_ENFORCED',
   PUBLIC_GATEWAY_SECRET_PROPERTY: 'CLOUDFLARE_GATEWAY_SECRET',
@@ -211,6 +245,8 @@ var CONFIG = {
   OB_CANCEL_CALENDAR_DEFAULT_PATH: '/v1/calendar/{id}/cancel',
   OB_CLASS_CACHE_KEY: 'OB_ACTIVE_CLASS_CATALOG_V1',
   OB_CLASS_CACHE_SECONDS: 21600,
+  OB_RENTAL_CATALOG_CACHE_KEY: 'OB_RENTAL_CATALOG_V1',
+  OB_RENTAL_REFERENCE_CACHE_KEY: 'OB_RENTAL_REFERENCE_V1',
   PAGE_SIZE: 100,
   LOCK_TIMEOUT_MS: 30000,
   AUTH_SESSION_DURATION_SECONDS: 30 * 24 * 60 * 60,
@@ -2729,6 +2765,23 @@ function ensureStudentPracticeStructureUnlocked_(spreadsheet) {
     ['groups', SHEETS.STUDENT_PRACTICE_GROUPS, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS],
     ['participants', SHEETS.STUDENT_PRACTICE_PARTICIPANTS, SHEET_HEADERS.STUDENT_PRACTICE_PARTICIPANTS],
     ['audit', SHEETS.STUDENT_PRACTICE_AUDIT, SHEET_HEADERS.STUDENT_PRACTICE_AUDIT]
+  ].forEach(function(definition) {
+    result[definition[0]] = ensureSupportingSheet_(
+      spreadsheet,
+      definition[1],
+      definition[2]
+    ).getName();
+  });
+  return result;
+}
+
+function ensureRentalStructureUnlocked_(spreadsheet) {
+  var result = {};
+  [
+    ['series', SHEETS.RENTAL_SERIES, SHEET_HEADERS.RENTAL_SERIES],
+    ['requests', SHEETS.RENTAL_REQUESTS, SHEET_HEADERS.RENTAL_REQUESTS],
+    ['audit', SHEETS.RENTAL_AUDIT, SHEET_HEADERS.RENTAL_AUDIT],
+    ['mappings', SHEETS.RENTAL_MAPPINGS, SHEET_HEADERS.RENTAL_MAPPINGS]
   ].forEach(function(definition) {
     result[definition[0]] = ensureSupportingSheet_(
       spreadsheet,
@@ -11921,6 +11974,30 @@ function normalizeObClassCatalog_(rawClasses) {
   }).filter(Boolean).sort(function(a, b) {
     return [a.category, a.courseName, a.room, a.classId].join('|')
       .localeCompare([b.category, b.courseName, b.room, b.classId].join('|'));
+  });
+}
+
+function normalizeRentalClassCatalog_(rawClasses) {
+  var seen = {};
+  return (rawClasses || []).map(function(item) {
+    var classId = cleanText_(item && (item.id || item.classId));
+    var name = cleanText_(item && (
+      item.nameZhHant || item.nameEn || item.name || item.courseName
+    ));
+    var durationMinutes = Number(item && (item.duration == null ? item.durationMinutes : item.duration));
+    var locationId = cleanText_(item && item.locationId);
+    if (!classId || !name || !/場地租借|場租/.test(name) ||
+        !isFinite(durationMinutes) || durationMinutes <= 0 || seen[classId]) return null;
+    seen[classId] = true;
+    return {
+      classId: classId,
+      name: name,
+      durationMinutes: Math.round(durationMinutes),
+      locationId: locationId
+    };
+  }).filter(Boolean).sort(function(left, right) {
+    return [left.name, left.durationMinutes, left.classId].join('|')
+      .localeCompare([right.name, right.durationMinutes, right.classId].join('|'));
   });
 }
 

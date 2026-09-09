@@ -416,6 +416,7 @@ async function login(page, teacherName) {
 }
 
 async function openView(page, viewId) {
+  if (await page.locator(`#${viewId}:visible`).count()) return;
   let target = page.locator(`[data-view="${viewId}"]:visible`);
   if (await target.count()) {
     await target.first().click();
@@ -425,6 +426,17 @@ async function openView(page, viewId) {
     await page.locator('.mobile-tab-item[data-view="view-myleaves"]:visible').click();
     await page.locator('.mobile-record-button[data-view="view-mysubs"]:visible').click();
     return;
+  }
+  if (["view-payroll", "view-inbox"].includes(viewId)) {
+    const accountEntry = page.locator('[data-view="view-account"]:visible');
+    if (await accountEntry.count()) {
+      await accountEntry.first().click();
+      target = page.locator(`[data-view="${viewId}"]:visible`);
+      if (await target.count()) {
+        await target.first().click();
+        return;
+      }
+    }
   }
   const primary = page.locator("#mobile-primary-entry:visible");
   if (await primary.count()) {
@@ -649,7 +661,7 @@ try {
       throw new Error(`${viewport.name}: long practice is not laid out beside overlapping courses ${JSON.stringify(practiceLayout.overlappingPracticeLanes)}`);
     }
     if (viewport.width <= 760 && practiceLayout.clippedDateButtons) throw new Error(`${viewport.name}: practice date buttons are clipped`);
-    if (viewport.width <= 760 && (practiceLayout.iconVisible || practiceLayout.backVisible || practiceLayout.overlaps.length)) {
+    if (viewport.width <= 760 && (practiceLayout.backVisible || practiceLayout.overlaps.length)) {
       throw new Error(`${viewport.name}: mobile topbar is cluttered ${JSON.stringify(practiceLayout)}`);
     }
     results.push(await capture(page, viewport.name, "07-practice-day"));

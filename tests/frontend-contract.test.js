@@ -365,6 +365,7 @@ test('keeps credential values out of every tracked production and documentation 
 test('public gateway source keeps secrets local and public pages away from direct GAS', () => {
   const repositoryRoot = path.join(__dirname, '..');
   const ignore = fs.readFileSync(path.join(repositoryRoot, '.gitignore'), 'utf8');
+  const studentHtml = fs.readFileSync(path.join(repositoryRoot, 'student-practice.html'), 'utf8');
   const studentScript = fs.readFileSync(path.join(repositoryRoot, 'student-practice.js'), 'utf8');
   const vvipHtml = fs.readFileSync(path.join(repositoryRoot, 'vvip.html'), 'utf8');
   const workerSource = fs.readdirSync(path.join(repositoryRoot, 'cloudflare-gateway', 'src'))
@@ -379,6 +380,10 @@ test('public gateway source keeps secrets local and public pages away from direc
   assert.match(ignore, /^cloudflare-gateway\/\.wrangler\/$/m);
   assert.doesNotMatch(studentScript, /script\.google\.com\/macros\/s\//);
   assert.doesNotMatch(vvipHtml, /script\.google\.com\/macros\/s\//);
+  assert.match(studentHtml, /name="sherry-public-gateway-url" content="https:\/\/sherry-classroom-gateway\.sherry-line-ai\.workers\.dev"/);
+  assert.match(vvipHtml, /name="sherry-public-gateway-url" content="https:\/\/sherry-classroom-gateway\.sherry-line-ai\.workers\.dev"/);
+  assert.match(studentHtml, /name="sherry-turnstile-site-key" content="0x4AAAAAAEt4XgXcZZjtHF9k"/);
+  assert.match(vvipHtml, /name="sherry-turnstile-site-key" content="0x4AAAAAAEt4XgXcZZjtHF9k"/);
   assert.match(html, /script\.google\.com\/macros\/s\//);
   assert.doesNotMatch(workerSource, /console\.(?:log|info|warn|error)\s*\(/);
   assert.match(wrangler, /ALLOWED_ORIGINS = "https:\/\/sherryaerial-web\.github\.io"/);

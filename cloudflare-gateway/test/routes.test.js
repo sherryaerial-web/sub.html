@@ -48,4 +48,3 @@ test('unknown paths return a JSON 404 response', async () => {
     error: { code: 'route_not_found', message: '找不到此服務。' },
   });
 });
-

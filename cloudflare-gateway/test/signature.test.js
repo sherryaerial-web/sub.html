@@ -38,4 +38,3 @@ test('canonical payload and HMAC match a hand-derived fixed vector', async () =>
     signature: '7BUysdYeSzVpia9W3eCWnoQtX_cZsthVA5Uh_Cb96v4',
   });
 });
-

@@ -127,4 +127,3 @@ test('rate-limit keys normalize identity and contain no raw personal data', asyn
   assert.doesNotMatch(first, /student@example\.com|203\.0\.113\.8/i);
   assert.doesNotMatch(returning, /opaque-student-token|203\.0\.113\.8/);
 });
-

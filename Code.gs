@@ -247,6 +247,7 @@ var CONFIG = {
   OB_CLASS_CACHE_SECONDS: 21600,
   OB_RENTAL_CATALOG_CACHE_KEY: 'OB_RENTAL_CATALOG_V1',
   OB_RENTAL_REFERENCE_CACHE_KEY: 'OB_RENTAL_REFERENCE_V1',
+  OB_RENTAL_REFERENCE_CACHE_SECONDS: 60 * 60,
   PAGE_SIZE: 100,
   LOCK_TIMEOUT_MS: 30000,
   AUTH_SESSION_DURATION_SECONDS: 30 * 24 * 60 * 60,
@@ -6984,7 +6985,11 @@ function doPost(e) {
         return getMyPracticeBookings_(actingSession(), parameters.month);
       },
       getRentalCatalog: function() {
-        return getRentalCatalog_(actingSession());
+        var forceRentalRefresh = parameters.forceRefresh == null || parameters.forceRefresh === ''
+          ? false
+          : parseBoolean_(parameters.forceRefresh, '場租課程更新設定');
+        if (forceRentalRefresh) assertCapabilitySession_(session, 'course_admin');
+        return getRentalCatalog_(actingSession(), forceRentalRefresh);
       },
       previewTeacherRental: function() {
         return previewTeacherRental_(
@@ -12464,9 +12469,12 @@ function resolveRentalInstructorId_(teacherNameValue, instructorsValue, spreadsh
   throw new Error('找不到「' + teacherName + '」唯一的 OB 老師資料，請管理員先補齊 OB 租借對照。');
 }
 
-function getRentalReferenceCatalog_(tokenValue) {
+function getRentalReferenceCatalog_(tokenValue, forceRefreshValue) {
+  if (forceRefreshValue === true) {
+    removeCachedValue_(CONFIG.OB_RENTAL_REFERENCE_CACHE_KEY);
+  }
   var cached = getCachedJsonValue_(CONFIG.OB_RENTAL_REFERENCE_CACHE_KEY);
-  if (cached && Array.isArray(cached.classes) && Array.isArray(cached.rooms) && Array.isArray(cached.instructors)) {
+  if (forceRefreshValue !== true && cached && Array.isArray(cached.classes) && Array.isArray(cached.rooms) && Array.isArray(cached.instructors)) {
     return cached;
   }
   var classes = normalizeRentalClassCatalog_(fetchObClassPages_(tokenValue));
@@ -12481,15 +12489,15 @@ function getRentalReferenceCatalog_(tokenValue) {
     rooms: rooms,
     instructors: fetchObListPages_(CONFIG.INSTRUCTORS_API_URL, tokenValue, 'Omcean 老師 API')
   };
-  putCachedJsonValue_(CONFIG.OB_RENTAL_REFERENCE_CACHE_KEY, reference, CONFIG.OB_CLASS_CACHE_SECONDS);
+  putCachedJsonValue_(CONFIG.OB_RENTAL_REFERENCE_CACHE_KEY, reference, CONFIG.OB_RENTAL_REFERENCE_CACHE_SECONDS);
   return reference;
 }
 
-function getRentalCatalog_(session) {
+function getRentalCatalog_(session, forceRefreshValue) {
   var teacherName = getSessionTeacherName_(session);
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) throw new Error('尚未設定 Omcean API 權杖。');
-  var reference = getRentalReferenceCatalog_(token);
+  var reference = getRentalReferenceCatalog_(token, forceRefreshValue === true);
   var classes = reference.classes;
   if (!classes.length) throw new Error('OB 目前沒有可用的場地租借課程。');
   var rooms = reference.rooms;

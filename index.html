@@ -1150,6 +1150,12 @@
       border-radius: 12px;
       background: var(--surface);
     }
+    .practice-action-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .practice-action-row > button { flex: 0 0 auto; white-space: nowrap; }
     .practice-legend { display: flex; flex-wrap: wrap; gap: 9px; color: var(--muted); font-size: 11px; }
     .practice-legend span::before {
       display: inline-block;
@@ -1426,6 +1432,7 @@
       .practice-header-actions { padding-top: 1px; }
       .practice-toolbar { align-items: stretch; flex-direction: column; }
       .practice-toolbar .primary-button { width: 100%; }
+      .practice-toolbar .practice-action-row > button { width: auto; min-width: 0; flex: 1 1 0; }
       .practice-date-strip {
         display: grid;
         grid-auto-columns: calc((100% - 16px) / 3);
@@ -2190,7 +2197,7 @@
 
         <section id="view-practice" class="view">
           <div class="view-header practice-view-header">
-            <div><span class="eyebrow">Practice</span><h2 class="section-heading">自主練習</h2><p class="section-copy">直接看 A、B、C、D 教室當天狀況</p></div>
+            <div><span class="eyebrow">Practice</span><h2 class="section-heading">教室使用登記</h2><p class="section-copy">直接看 A、B、C、D 教室當天狀況</p></div>
             <div class="practice-header-actions"><button id="practice-refresh" class="compact-button" type="button" hidden><i data-lucide="refresh-cw"></i>更新課表</button><button id="practice-my-bookings" class="compact-button" type="button"><i data-lucide="search"></i>我的登記</button></div>
           </div>
           <div class="practice-date-navigation">
@@ -2205,7 +2212,7 @@
           <div id="practice-room-tabs" class="practice-room-tabs" role="tablist" aria-label="選擇教室"></div>
           <div class="practice-toolbar">
             <div class="practice-legend" aria-label="行程類型"><span class="course">正式課程</span><span class="rental">場地租借</span><span class="shared">自主練習</span><span class="mine">我的登記</span></div>
-            <div class="button-row"><button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="sparkles"></i>自主練習</button><button id="rental-new" class="compact-button inline-button" type="button"><i data-lucide="building-2"></i>租借教室</button></div>
+            <div class="button-row practice-action-row"><button id="practice-new" class="primary-button inline-button" type="button"><i data-lucide="sparkles"></i>自主練習</button><button id="rental-new" class="compact-button inline-button" type="button"><i data-lucide="building-2"></i>場租登記</button></div>
           </div>
           <div id="practice-history-panel" class="practice-history-panel" hidden>
             <div class="practice-history-head"><strong>我的登記</strong><button id="practice-history-close" class="icon-button" type="button" aria-label="關閉查詢"><i data-lucide="x"></i></button></div>
@@ -2409,7 +2416,7 @@
 
   <dialog id="rental-dialog" aria-labelledby="rental-dialog-title">
     <form id="rental-form" class="dialog-body">
-      <h3 id="rental-dialog-title" tabindex="-1" autofocus>租借教室</h3>
+      <h3 id="rental-dialog-title" tabindex="-1" autofocus>登記場地租借</h3>
       <p class="section-copy">請選擇 OB 的租借課程，系統會依課程時長自動計算結束時間。</p>
       <div id="rental-summary" class="practice-editor-summary"></div>
       <div id="rental-instructor-status" class="practice-course-warning" role="status" aria-live="polite" hidden></div>
@@ -2462,7 +2469,8 @@
     let practiceAdminDashboard = null;
     let studentPracticeAdminDashboard = null;
     let practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, dayRequests: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
-    let rentalState = { catalog: null, preview: null, previewSignature: "", loading: false };
+    const RENTAL_CATALOG_MAX_AGE_MS = 5 * 60 * 1000;
+    let rentalState = { catalog: null, catalogFetchedAt: 0, preview: null, previewSignature: "", loading: false };
     let activeViewId = "";
     let hasCourseSnapshot = false;
     let hasClaimSnapshot = false;
@@ -3803,7 +3811,7 @@
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
       practiceState = { date: "", room: "A", data: null, editor: null, requestSerial: 0, dayCache: {}, dayCacheFetchedAt: {}, dayRequests: {}, allowPastDate: false, waitlistSelections: {}, waitlistErrors: {}, waitlistSubmitting: false };
-      rentalState = { catalog: null, preview: null, previewSignature: "", loading: false };
+      rentalState = { catalog: null, catalogFetchedAt: 0, preview: null, previewSignature: "", loading: false };
     }
 
     function updateActingMode() {
@@ -4140,7 +4148,7 @@
       myPayrollSnapshotHtml.clear();
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
-      rentalState = { catalog: null, preview: null, previewSignature: "", loading: false };
+      rentalState = { catalog: null, catalogFetchedAt: 0, preview: null, previewSignature: "", loading: false };
       adminDashboard = null;
       vvipDashboard = null;
       payrollDashboard = null;
@@ -4629,6 +4637,17 @@
       return (rentalState.catalog?.classes || []).find((item) => String(item.classId) === classId) || null;
     }
 
+    function getRentalClassRoom(className) {
+      const match = /^\s*([A-D])\s*[－—–-]/i.exec(String(className || ""));
+      return match ? match[1].toUpperCase() : "";
+    }
+
+    function syncRentalRoomFromSelectedClass() {
+      const room = getRentalClassRoom(getRentalSelectedClass()?.name);
+      const rooms = rentalState.catalog?.rooms || [];
+      if (room && rooms.some((item) => item.room === room)) byId("rental-room").value = room;
+    }
+
     function setRentalSubmitLabel(previewReady = false) {
       const button = byId("rental-submit");
       button.innerHTML = previewReady
@@ -4700,6 +4719,23 @@
       );
     }
 
+    async function loadRentalCatalog(forceRefresh = false) {
+      if (rentalState.loading) return rentalState.catalog;
+      rentalState.loading = true;
+      byId("rental-class").innerHTML = '<option value="">載入中…</option>';
+      try {
+        rentalState.catalog = await callPostApi(
+          "getRentalCatalog",
+          forceRefresh ? { forceRefresh: true } : {}
+        );
+        rentalState.catalogFetchedAt = Date.now();
+        renderRentalCatalog();
+        return rentalState.catalog;
+      } finally {
+        rentalState.loading = false;
+      }
+    }
+
     async function openRentalDialog() {
       const dialog = byId("rental-dialog");
       if (dialog.showModal) dialog.showModal();
@@ -4717,23 +4753,20 @@
       if (!byId("rental-start").innerHTML) byId("rental-start").innerHTML = byId("practice-editor-start").innerHTML;
       byId("rental-start").value = "14:00";
       invalidateRentalPreview();
-      if (rentalState.catalog || rentalState.loading) {
-        if (rentalState.catalog) renderRentalCatalog();
+      const catalogIsFresh = rentalState.catalog && rentalState.catalogFetchedAt
+        && Date.now() - rentalState.catalogFetchedAt < RENTAL_CATALOG_MAX_AGE_MS;
+      if (catalogIsFresh || rentalState.loading) {
+        if (catalogIsFresh) renderRentalCatalog();
         return;
       }
-      rentalState.loading = true;
-      byId("rental-class").innerHTML = '<option value="">載入中…</option>';
       try {
-        rentalState.catalog = await callPostApi("getRentalCatalog");
-        renderRentalCatalog();
+        await loadRentalCatalog(authState.managementCapabilities.includes("course_admin"));
       } catch (error) {
         byId("rental-class").innerHTML = '<option value="">無法載入租借課程</option>';
         byId("rental-instructor-status").hidden = false;
         byId("rental-instructor-status").textContent = error.message;
         byId("rental-submit").disabled = true;
         setNotice(error.message, "error");
-      } finally {
-        rentalState.loading = false;
       }
     }
 
@@ -8704,7 +8737,10 @@ https://sherryaerial-web.github.io/sub.html/
         practiceState.dayCache[date] = data;
         practiceState.dayCacheFetchedAt[date] = Date.now();
         renderPracticeView(data);
-        setNotice("已即時更新 OB 課表與自主練習狀態。");
+        rentalState.catalog = null;
+        rentalState.catalogFetchedAt = 0;
+        await loadRentalCatalog(true);
+        setNotice("已即時更新 OB 課表、場租課程與自主練習狀態。");
       } catch (error) {
         setNotice(`更新課表失敗：${error.message}`, "error");
       } finally {
@@ -8743,6 +8779,7 @@ https://sherryaerial-web.github.io/sub.html/
     byId("rental-cancel-once").addEventListener("click", () => cancelOwnRental(false));
     byId("rental-cancel-future").addEventListener("click", () => cancelOwnRental(true));
     byId("practice-dialog-cancel").addEventListener("click", closePracticeEditor);
+    byId("rental-class").addEventListener("change", syncRentalRoomFromSelectedClass);
     ["rental-class", "rental-date", "rental-room", "rental-start", "rental-recurring", "rental-end-date", "rental-note"].forEach((id) => {
       byId(id).addEventListener("input", invalidateRentalPreview);
       byId(id).addEventListener("change", invalidateRentalPreview);

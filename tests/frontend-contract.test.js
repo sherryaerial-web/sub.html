@@ -3557,8 +3557,12 @@ test('teacher practice view uses a card calendar with custom booking and private
 test('teacher rental dialog uses OB classes for duration and has no editable end time', () => {
   const section = html.match(/<section id="view-practice"[\s\S]*?<\/section>/)?.[0] || '';
   const dialog = html.match(/<dialog id="rental-dialog"[\s\S]*?<\/dialog>/)?.[0] || '';
+  assert.match(section, /<h2 class="section-heading">\s*教室使用登記\s*<\/h2>/);
   assert.match(section, /id="practice-new"[\s\S]*?>[\s\S]*?自主練習/);
-  assert.match(section, /id="rental-new"[\s\S]*?>[\s\S]*?租借教室/);
+  assert.match(section, /class="button-row practice-action-row"/);
+  assert.match(section, /id="rental-new"[\s\S]*?>[\s\S]*?場租登記/);
+  assert.match(dialog, /id="rental-dialog-title"[^>]*>\s*登記場地租借\s*<\/h3>/);
+  assert.match(html, /\.practice-action-row\s*\{[^}]*gap:\s*8px/s);
   assert.match(dialog, /id="rental-class"/);
   assert.match(dialog, /id="rental-date"[^>]*type="date"/);
   assert.match(dialog, /id="rental-room"/);
@@ -3568,7 +3572,7 @@ test('teacher rental dialog uses OB classes for duration and has no editable end
   assert.match(dialog, /id="rental-preview"/);
   assert.doesNotMatch(dialog, /id="rental-duration"/);
   assert.doesNotMatch(dialog, /id="rental-end-time"/);
-  assert.match(html, /callPostApi\("getRentalCatalog"/);
+  assert.match(html, /callPostApi\(\s*"getRentalCatalog"/);
   assert.match(html, /callPostApi\("previewTeacherRental"/);
   assert.match(html, /callPostApi\("createTeacherRental"/);
   assert.match(html, /id="rental-cancel-once"/);
@@ -3593,6 +3597,44 @@ test('rental dialog still shows OB classes and the selected room when the accoun
   assert.equal(getElement('rental-submit').disabled, true);
   assert.equal(getElement('rental-instructor-status').hidden, false);
   assert.match(getElement('rental-instructor-status').textContent, /請切換至有 OB 老師資料的老師身分/);
+});
+
+test('rental class selection automatically switches to its A B C or D room', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__rentalCatalog = {
+    classes: [
+      { classId: 'a-60', name: 'A－場地租借', durationMinutes: 60 },
+      { classId: 'd-120', name: 'D－場地租借（120min）', durationMinutes: 120 },
+    ],
+    rooms: [{ room: 'A', roomId: '1' }, { room: 'D', roomId: '4' }],
+    instructorId: 'teacher-1',
+    instructorReady: true,
+  };
+
+  vm.runInContext('practiceState.room = "A"; rentalState.catalog = __rentalCatalog; renderRentalCatalog();', context);
+  getElement('rental-class').value = 'd-120';
+  vm.runInContext('syncRentalRoomFromSelectedClass();', context);
+
+  assert.equal(getElement('rental-room').value, 'D');
+});
+
+test('course admin opening rental registration refreshes the OB rental catalog once per fresh page', async () => {
+  const { context, submittedForms } = createFrontendRuntime({
+    getRentalCatalog: {
+      classes: [{ classId: 'd-120', name: 'D－場地租借（120min）', durationMinutes: 120 }],
+      rooms: [{ room: 'D', roomId: '4' }],
+      instructorId: 'teacher-1',
+      instructorReady: true,
+    },
+  });
+  vm.runInContext('authState.managementCapabilities = ["course_admin"];', context);
+
+  await context.openRentalDialog();
+  await context.openRentalDialog();
+
+  const catalogRequests = submittedForms.filter((item) => item.fields.action === 'getRentalCatalog');
+  assert.equal(catalogRequests.length, 1);
+  assert.equal(catalogRequests[0].fields.forceRefresh, 'true');
 });
 
 test('practice date strip starts today and navigation never selects an expired day', () => {
@@ -3786,6 +3828,7 @@ test('course administrators get a manual practice OB refresh button', () => {
   assert.match(html, /id="practice-refresh"[^>]*hidden[^>]*>[^<]*(?:<[^>]+>)*更新課表/);
   assert.match(html, /practice-refresh[^\n]*managementCapabilities\.includes\("course_admin"\)/);
   assert.match(html, /callPostApi\("refreshPracticeDay",\s*\{\s*date/s);
+  assert.match(html, /practice-refresh[\s\S]*?await loadRentalCatalog\(true\)/);
 });
 
 test('practice alternatives are near the requested time and not five-minute duplicates', () => {

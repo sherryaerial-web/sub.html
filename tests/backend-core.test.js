@@ -9501,8 +9501,8 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
   ], services);
   backend.console = { error() {} };
   const calls = [];
-  backend.getRentalCatalog_ = (session) => {
-    calls.push(['catalog', session.teacherName, session.impersonatedBy || '']);
+  backend.getRentalCatalog_ = (session, forceRefresh) => {
+    calls.push(['catalog', session.teacherName, session.impersonatedBy || '', forceRefresh]);
     return { teacherName: session.teacherName, classes: [], rooms: [] };
   };
   backend.previewTeacherRental_ = (session, input) => {
@@ -9525,6 +9525,11 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
   assert.match(missing.message, /請先登入/);
 
   const teacherToken = backend.authenticate_('小琪', '2345').sessionToken;
+  const forbiddenRefresh = JSON.parse(backend.doPost({ parameter: {
+    action: 'getRentalCatalog', sessionToken: teacherToken, forceRefresh: 'true',
+  } }).text);
+  assert.equal(forbiddenRefresh.status, 'error');
+  assert.match(forbiddenRefresh.message, /權限/);
   const teacherResult = JSON.parse(backend.doPost({ parameter: {
     action: 'createTeacherRental',
     sessionToken: teacherToken,
@@ -9535,7 +9540,7 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
 
   const adminToken = backend.authenticate_('冠蓉', '1234').sessionToken;
   const catalogResult = JSON.parse(backend.doPost({ parameter: {
-    action: 'getRentalCatalog', sessionToken: adminToken, actingTeacherName: '小琪',
+    action: 'getRentalCatalog', sessionToken: adminToken, actingTeacherName: '小琪', forceRefresh: 'true',
   } }).text);
   const previewResult = JSON.parse(backend.doPost({ parameter: {
     action: 'previewTeacherRental',
@@ -9554,7 +9559,7 @@ test('teacher rental API requires login, ignores forged teachers, and permits co
   assert.equal(historyResult.status, 'success');
   assert.deepEqual(calls, [
     ['create', '小琪', '', 'rental-60'],
-    ['catalog', '小琪', '冠蓉'],
+    ['catalog', '小琪', '冠蓉', true],
     ['preview', '小琪', '冠蓉', 'C'],
     ['history', '小琪', '冠蓉', '2026-09'],
   ]);
@@ -11760,6 +11765,35 @@ test('rental catalog uses OB rental classes and their fixed durations', () => {
     { classId: '11', name: 'A－場租 150 分鐘', durationMinutes: 150, locationId: '1' },
     { classId: '10', name: '場地租借 60 分鐘', durationMinutes: 60, locationId: '1' },
   ]);
+});
+
+test('forced rental reference refresh ignores archived classes left in cache', () => {
+  const backend = loadBackend();
+  const cached = {
+    classes: [{ classId: 'archived', name: 'A－已封存場地租借', durationMinutes: 60 }],
+    rooms: [{ room: 'A', roomId: 'old-room' }],
+    instructors: [{ id: 'old-teacher', name: '舊老師' }],
+  };
+  let removed = false;
+  let cachedSeconds = 0;
+  backend.getCachedJsonValue_ = () => cached;
+  backend.removeCachedValue_ = () => { removed = true; };
+  backend.fetchObClassPages_ = () => [
+    { id: 'active', nameZhHant: 'D－場地租借（120min）', duration: 120, locationId: 'room-d' },
+  ];
+  backend.fetchObListPages_ = (url, token, label) => label === 'Omcean 教室 API'
+    ? [{ id: 'room-d', nameZhHant: 'D 教室' }]
+    : [{ id: 'teacher-1', name: '冠蓉' }];
+  backend.putCachedJsonValue_ = (key, value, seconds) => { cachedSeconds = seconds; };
+
+  const result = backend.getRentalReferenceCatalog_('read-write-token', true);
+
+  assert.equal(removed, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.classes)), [
+    { classId: 'active', name: 'D－場地租借（120min）', durationMinutes: 120, locationId: 'room-d' },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms)), [{ room: 'D', roomId: 'room-d' }]);
+  assert.equal(cachedSeconds, 60 * 60);
 });
 
 test('rental catalog keeps classes and rooms available when the signed-in account has no OB instructor match', () => {

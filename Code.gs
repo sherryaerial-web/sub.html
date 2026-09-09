@@ -203,6 +203,10 @@ var CONFIG = {
   API_BASE_URL: 'https://api.omceanbooking.com',
   CLASSES_API_URL: 'https://api.omceanbooking.com/v1/classes',
   API_TOKEN_PROPERTY: 'OMCEAN_API_TOKEN',
+  PUBLIC_GATEWAY_ENFORCED_PROPERTY: 'PUBLIC_GATEWAY_ENFORCED',
+  PUBLIC_GATEWAY_SECRET_PROPERTY: 'CLOUDFLARE_GATEWAY_SECRET',
+  PUBLIC_GATEWAY_MAX_AGE_SECONDS: 300,
+  PUBLIC_GATEWAY_NONCE_SECONDS: 600,
   OB_CANCEL_CALENDAR_PATH_PROPERTY: 'OMCEAN_CANCEL_CALENDAR_PATH',
   OB_CANCEL_CALENDAR_DEFAULT_PATH: '/v1/calendar/{id}/cancel',
   OB_CLASS_CACHE_KEY: 'OB_ACTIVE_CLASS_CATALOG_V1',
@@ -6578,6 +6582,128 @@ function appendAuditEventsUnlocked_(sheet, events) {
   ).setValues(rows);
 }
 
+function shouldEnforcePublicGateway_() {
+  var properties = getScriptProperties_();
+  return !!properties && cleanText_(
+    properties.getProperty(CONFIG.PUBLIC_GATEWAY_ENFORCED_PROPERTY)
+  ).toLowerCase() === 'true';
+}
+
+function throwPublicGatewaySecurityError_() {
+  throw new Error('公開操作安全驗證失敗，請重新整理後再試。');
+}
+
+function canonicalizeGatewayPayload_(value) {
+  if (value === null) return 'null';
+  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!isFinite(value)) throwPublicGatewaySecurityError_();
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(canonicalizeGatewayPayload_).join(',') + ']';
+  }
+  if (value && typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map(function(key) {
+      if (typeof value[key] === 'undefined') throwPublicGatewaySecurityError_();
+      return JSON.stringify(key) + ':' + canonicalizeGatewayPayload_(value[key]);
+    }).join(',') + '}';
+  }
+  throwPublicGatewaySecurityError_();
+}
+
+function bytesToBase64Url_(bytes) {
+  return Utilities.base64EncodeWebSafe(bytes || []).replace(/=+$/g, '');
+}
+
+function sha256Base64Url_(value) {
+  return bytesToBase64Url_(Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(value),
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function constantTimeEqual_(leftValue, rightValue) {
+  var left = String(leftValue == null ? '' : leftValue);
+  var right = String(rightValue == null ? '' : rightValue);
+  var difference = left.length ^ right.length;
+  var length = Math.max(left.length, right.length);
+  for (var index = 0; index < length; index += 1) {
+    difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+  return difference === 0;
+}
+
+function consumeGatewayNonce_(nonceValue) {
+  var nonce = cleanText_(nonceValue);
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) throwPublicGatewaySecurityError_();
+  var cache = getScriptCache_();
+  if (!cache) throwPublicGatewaySecurityError_();
+  var key = 'gateway_nonce_' + sha256Base64Url_(nonce);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    if (cache.get(key)) throwPublicGatewaySecurityError_();
+    cache.put(key, '1', CONFIG.PUBLIC_GATEWAY_NONCE_SECONDS);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function verifyPublicGatewayRequest_(actionValue, parametersValue) {
+  var action = cleanText_(actionValue);
+  var parameters = parametersValue || {};
+  var version = cleanText_(parameters.gatewayVersion);
+  var timestampText = cleanText_(parameters.gatewayTimestamp);
+  var nonce = cleanText_(parameters.gatewayNonce);
+  var providedHash = cleanText_(parameters.gatewayPayloadSha256);
+  var providedSignature = cleanText_(parameters.gatewaySignature);
+  var rawPayload = cleanText_(parameters.gatewayPayload);
+  var properties = getScriptProperties_();
+  var secret = properties
+    ? cleanText_(properties.getProperty(CONFIG.PUBLIC_GATEWAY_SECRET_PROPERTY))
+    : '';
+
+  if (version !== 'v1' || !/^\d{10}$/.test(timestampText) || secret.length < 32) {
+    throwPublicGatewaySecurityError_();
+  }
+  var timestamp = Number(timestampText);
+  var nowSeconds = Math.floor(currentTimeMs_() / 1000);
+  if (!isFinite(timestamp) || Math.abs(nowSeconds - timestamp) > CONFIG.PUBLIC_GATEWAY_MAX_AGE_SECONDS) {
+    throwPublicGatewaySecurityError_();
+  }
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce) || !providedHash || !providedSignature || !rawPayload) {
+    throwPublicGatewaySecurityError_();
+  }
+
+  var payload;
+  try {
+    payload = JSON.parse(rawPayload);
+  } catch (error) {
+    throwPublicGatewaySecurityError_();
+  }
+  if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
+    throwPublicGatewaySecurityError_();
+  }
+  var canonicalPayload = canonicalizeGatewayPayload_(payload);
+  if (!constantTimeEqual_(rawPayload, canonicalPayload)) throwPublicGatewaySecurityError_();
+  var expectedHash = sha256Base64Url_(canonicalPayload);
+  if (!constantTimeEqual_(providedHash, expectedHash)) throwPublicGatewaySecurityError_();
+
+  var signingInput = [version, action, timestampText, nonce, expectedHash].join('\n');
+  var expectedSignature = bytesToBase64Url_(Utilities.computeHmacSha256Signature(
+    signingInput,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
+  if (!constantTimeEqual_(providedSignature, expectedSignature)) {
+    throwPublicGatewaySecurityError_();
+  }
+  consumeGatewayNonce_(nonce);
+  return payload;
+}
+
 function doGet(e) {
   if (!e || !e.parameter || Object.keys(e.parameter).length === 0) {
     return ContentService
@@ -6630,20 +6756,30 @@ function doPost(e) {
     }
 
     if (action === 'submitVvipSelection') {
+      var verifiedVvipPayload = shouldEnforcePublicGateway_()
+        ? verifyPublicGatewayRequest_(action, parameters)
+        : null;
       return createPostResponse_(parameters, {
         status: 'success',
         data: submitVvipSelection_(
-          parameters.vvipId,
-          parseJsonArray_(parameters.calendarIds, 'VVIP 課程')
+          verifiedVvipPayload ? verifiedVvipPayload.vvipId : parameters.vvipId,
+          verifiedVvipPayload
+            ? verifiedVvipPayload.calendarIds
+            : parseJsonArray_(parameters.calendarIds, 'VVIP 課程')
         )
       });
     }
 
     if (action === 'submitStudentPractice') {
+      var verifiedStudentPracticePayload = shouldEnforcePublicGateway_()
+        ? verifyPublicGatewayRequest_(action, parameters)
+        : null;
       return createPostResponse_(parameters, {
         status: 'success',
         data: submitStudentPractice_(
-          parseJsonObject_(parameters.practice, '學生自主練習')
+          verifiedStudentPracticePayload
+            ? verifiedStudentPracticePayload.practice
+            : parseJsonObject_(parameters.practice, '學生自主練習')
         )
       });
     }

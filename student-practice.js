@@ -1,8 +1,57 @@
 (function(global) {
   'use strict';
 
-  var APP_URL = 'https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec';
   var STORAGE_KEY = 'sherry_student_practice_token_v2';
+  var PUBLIC_ROUTES = {
+    availability: { method: 'GET', path: '/api/student-practice/availability', protected: false },
+    submit: { method: 'POST', path: '/api/student-practice/submit', protected: true }
+  };
+
+  function readMetaContent(name) {
+    if (!global.document || !global.document.querySelector) return '';
+    var node = global.document.querySelector('meta[name="' + name + '"]');
+    return node ? String(node.content || '').trim() : '';
+  }
+
+  function getPublicConfig(options) {
+    options = options || {};
+    return {
+      gatewayUrl: String(options.gatewayUrl || global.SHERRY_PUBLIC_GATEWAY_URL || readMetaContent('sherry-public-gateway-url') || '').replace(/\/+$/, ''),
+      fetchImpl: options.fetchImpl || global.fetch
+    };
+  }
+
+  async function readGatewayPayload(response) {
+    var payload;
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      throw new Error('服務回覆格式錯誤，請稍後再試。');
+    }
+    if (!response.ok || !payload || payload.status !== 'success') {
+      throw new Error(payload && payload.error && payload.error.message || payload && payload.message || '服務暫時無法使用。');
+    }
+    return payload.data;
+  }
+
+  async function callPublicApi(routeName, params, turnstileToken, options) {
+    var route = PUBLIC_ROUTES[routeName];
+    if (!route) throw new Error('不支援的公開服務。');
+    var config = getPublicConfig(options);
+    if (!config.gatewayUrl || typeof config.fetchImpl !== 'function') throw new Error('服務尚未完成設定。');
+    var token = String(turnstileToken || '').trim();
+    if (route.protected && !token) throw new Error('請先完成人機驗證。');
+
+    var url = new URL(config.gatewayUrl + route.path);
+    var request = { method: route.method, cache: 'no-store', redirect: 'error', credentials: 'omit' };
+    if (route.method === 'GET') {
+      Object.keys(params || {}).forEach(function(key) { url.searchParams.set(key, params[key]); });
+    } else {
+      request.headers = { 'Content-Type': 'application/json;charset=UTF-8' };
+      request.body = JSON.stringify(Object.assign({}, params || {}, { turnstileToken: token }));
+    }
+    return readGatewayPayload(await config.fetchImpl(url.toString(), request));
+  }
 
   function buildSlotCards(data) {
     var date = String(data && data.date || '');
@@ -64,12 +113,14 @@
   global.StudentPracticePage = {
     buildSlotCards: buildSlotCards,
     buildSubmissionPayload: buildSubmissionPayload,
-    buildBookingFormState: buildBookingFormState
+    buildBookingFormState: buildBookingFormState,
+    callPublicApi: callPublicApi
   };
 
   if (!global.document) return;
   var document = global.document;
   var state = { date: '', room: 'A', data: null, cards: [], selected: null };
+  var studentTurnstileWidgetId = null;
   var byId = function(id) { return document.getElementById(id); };
 
   function escapeHtml(value) {
@@ -88,30 +139,28 @@
     notice.className = 'notice ' + (message ? 'visible ' + (type || '') : '');
   }
 
-  async function callApi(action, params, method) {
-    if (method === 'GET') {
-      var url = new URL(APP_URL);
-      url.searchParams.set('action', action);
-      Object.keys(params || {}).forEach(function(key) { url.searchParams.set(key, params[key]); });
-      var getResponse = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
-      if (!getResponse.ok) throw new Error('連線失敗（HTTP ' + getResponse.status + '）');
-      var getPayload = await getResponse.json();
-      if (!getPayload || getPayload.status !== 'success') throw new Error(getPayload && getPayload.message || '讀取失敗。');
-      return getPayload.data;
+  function ensureStudentTurnstile() {
+    if (studentTurnstileWidgetId !== null) return studentTurnstileWidgetId;
+    var siteKey = String(global.SHERRY_TURNSTILE_SITE_KEY || readMetaContent('sherry-turnstile-site-key') || '').trim();
+    if (!siteKey) throw new Error('服務尚未完成設定。');
+    if (!global.turnstile || typeof global.turnstile.render !== 'function') throw new Error('人機驗證尚未載入，請稍後再試。');
+    studentTurnstileWidgetId = global.turnstile.render('#student-turnstile', {
+      sitekey: siteKey,
+      action: 'student_practice_submit',
+      theme: 'auto'
+    });
+    return studentTurnstileWidgetId;
+  }
+
+  function getStudentTurnstileToken() {
+    var widgetId = ensureStudentTurnstile();
+    return String(global.turnstile.getResponse(widgetId) || '').trim();
+  }
+
+  function resetStudentTurnstile() {
+    if (studentTurnstileWidgetId !== null && global.turnstile && typeof global.turnstile.reset === 'function') {
+      global.turnstile.reset(studentTurnstileWidgetId);
     }
-    var body = new URLSearchParams({ action: action });
-    Object.keys(params || {}).forEach(function(key) {
-      body.set(key, typeof params[key] === 'string' ? params[key] : JSON.stringify(params[key]));
-    });
-    var response = await fetch(APP_URL, {
-      method: 'POST', redirect: 'follow', cache: 'no-store',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-      body: body.toString()
-    });
-    if (!response.ok) throw new Error('連線失敗（HTTP ' + response.status + '）');
-    var payload = await response.json();
-    if (!payload || payload.status !== 'success') throw new Error(payload && payload.message || '送出失敗。');
-    return payload.data;
   }
 
   function renderRooms() {
@@ -150,7 +199,7 @@
     showNotice('正在更新可登記時段…', 'loading');
     byId('slots').innerHTML = '<div class="loading-card"></div><div class="loading-card"></div>';
     try {
-      state.data = await callApi('getStudentPracticeAvailability', { date: state.date }, 'GET');
+      state.data = await callPublicApi('availability', { date: state.date });
       state.cards = buildSlotCards(state.data);
       showNotice('', '');
       render();
@@ -206,6 +255,11 @@
     byId('app-name').required = !hasToken;
     byId('app-email').required = !hasToken;
     byId('booking-dialog').showModal();
+    try {
+      ensureStudentTurnstile();
+    } catch (error) {
+      showNotice(error.message, 'error');
+    }
   }
 
   async function submitBooking(event) {
@@ -221,7 +275,8 @@
         appName: byId('app-name').value,
         email: byId('app-email').value
       }, byId('student-note').value);
-      var result = await callApi('submitStudentPractice', { practice: payload }, 'POST');
+      var turnstileToken = getStudentTurnstileToken();
+      var result = await callPublicApi('submit', { practice: payload }, turnstileToken);
       if (result.studentToken) localStorage.setItem(STORAGE_KEY, result.studentToken);
       byId('booking-dialog').close();
       byId('success-title').textContent = result.status === '已成立' ? '登記已成立' : '申請已收到';
@@ -233,6 +288,7 @@
     } catch (error) {
       showNotice(error.message || '送出失敗，請稍後再試。', 'error');
     } finally {
+      resetStudentTurnstile();
       button.disabled = false;
       button.textContent = '確認送出';
     }

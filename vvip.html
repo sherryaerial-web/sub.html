@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="sherry-public-gateway-url" content="https://sherry-classroom-gateway.sherry-line-ai.workers.dev">
+  <meta name="sherry-turnstile-site-key" content="0x4AAAAAAEt4XgXcZZjtHF9k">
   <title>VVIP 優先選課意願登記 | Sherry Aerial Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,6 +32,8 @@
     .notice.error { border-color:#d5aeb6; background:var(--coral-soft); color:var(--coral); }
     .notice.success { border-color:#c2d0d4; background:#e7edef; color:var(--success); }
     .member-form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
+    #vvip-lookup-turnstile { grid-column:1/-1; min-height:65px; }
+    #vvip-submit-turnstile { min-height:65px; margin-top:14px; }
     label { display:block; color:var(--muted); font-size:12px; font-weight:700; }
     input[type="text"],input[type="search"] { width:100%; min-height:44px; margin-top:5px; padding:9px 11px; border:1px solid #bfb4aa; border-radius:6px; background:#fffdf9; color:var(--ink); outline:none; }
     input:focus { border-color:#ad8175; box-shadow:0 0 0 3px rgba(173,129,117,.18); }
@@ -70,7 +74,7 @@
     .state.error { border-style:solid; border-color:#d5aeb6; background:var(--coral-soft); color:var(--coral); }
     .helper { margin:8px 0 0; color:var(--muted); font-size:12px; }
     [hidden] { display:none !important; }
-    @media (max-width:620px) { .page { padding:22px 14px 38px; } h2 { font-size:23px; } .member-form { grid-template-columns:1fr; } .member-form .button { width:100%; } .toolbar { align-items:stretch; } .toolbar input { width:100%; } .course-item { grid-template-columns:auto minmax(0,1fr); } .course-badge { grid-column:2; max-width:none; text-align:left; } }
+    @media (max-width:620px) { .page { padding:22px 14px 38px; } h2 { font-size:23px; } .member-form { grid-template-columns:1fr; } .member-form .button { width:100%; } #vvip-lookup-turnstile { overflow:hidden; } .toolbar { align-items:stretch; } .toolbar input { width:100%; } .course-item { grid-template-columns:auto minmax(0,1fr); } .course-badge { grid-column:2; max-width:none; text-align:left; } }
     :root { --ink:#403936; --muted:#786f69; --sea:#786c64; --sea-dark:#665851; --aqua:#eee0dc; --line:#d8d0c7; --soft:#f7f3ee; --coral:#8f5f68; --coral-soft:#f4e6e8; --success:#657780; --shadow:0 18px 48px rgba(64,57,54,.11); }
     body { background:#f3f0eb; font-family:"DM Sans","Noto Sans TC","PingFang TC",-apple-system,BlinkMacSystemFont,sans-serif; }
     .page { width:min(100%,1000px); }
@@ -103,6 +107,7 @@
       <form id="vvip-member-form" class="member-form">
         <label for="vvip-member">OB 名稱<input id="vvip-member" type="text" list="vvip-member-options" autocomplete="off" placeholder="搜尋或選擇您的 OB 名稱" required><datalist id="vvip-member-options"></datalist></label>
         <button id="vvip-lookup" class="button" type="submit">查看課程</button>
+        <div id="vvip-lookup-turnstile" aria-label="人機驗證"></div>
       </form>
       <p class="helper">選錯課程請直接聯絡教室，由管理員協助取消。</p>
     </section>
@@ -110,31 +115,67 @@
     <div id="vvip-notice" class="notice" role="status" aria-live="polite"></div>
     <section id="vvip-workspace" hidden>
       <div class="toolbar"><input id="vvip-course-search" type="search" placeholder="搜尋課程或老師" aria-label="搜尋課程或老師"><span id="vvip-counter" class="counter">已選 0／3 堂</span></div>
-      <section id="vvip-summary" class="panel summary" hidden><h3>送出確認</h3><p id="vvip-summary-copy" class="helper"></p><ul id="vvip-summary-list" class="summary-list"></ul><div class="summary-actions"><button id="vvip-submit" class="button" type="button">送出選課意願</button><button id="vvip-retry" class="button secondary" type="button" hidden>重新整理</button></div></section>
+      <section id="vvip-summary" class="panel summary" hidden><h3>送出確認</h3><p id="vvip-summary-copy" class="helper"></p><ul id="vvip-summary-list" class="summary-list"></ul><div id="vvip-submit-turnstile" aria-label="人機驗證"></div><div class="summary-actions"><button id="vvip-submit" class="button" type="button">送出選課意願</button><button id="vvip-retry" class="button secondary" type="button" hidden>重新整理</button></div></section>
       <div id="vvip-course-area" class="course-area"></div>
     </section>
   </main>
   <script>
-    const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
+    const VVIP_ROUTES = {
+      getVvipMembers: { method: "GET", path: "/api/vvip/members", protected: false },
+      getVvipSelection: { method: "POST", path: "/api/vvip/selection", protected: true },
+      submitVvipSelection: { method: "POST", path: "/api/vvip/submit", protected: true },
+    };
     const LIMIT = 3;
     const state = { members: [], memberId: "", data: null, selectedCalendarIds: new Set(), existingCalendarIds: new Set() };
     const expandedVvipDates = new Set();
     const byId = (id) => document.getElementById(id);
+    let lookupTurnstileWidgetId = null;
+    let submitTurnstileWidgetId = null;
 
     function escapeHtml(value) { return String(value == null ? "" : value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
     function showNotice(message, type = "") { const el = byId("vvip-notice"); el.textContent = message; el.className = `notice visible ${type}`; }
     function clearNotice() { const el = byId("vvip-notice"); el.textContent = ""; el.className = "notice"; }
     function setBusy(button, busy, text) { if (!button.dataset.label) button.dataset.label = button.textContent; button.disabled = busy; button.textContent = busy ? text : button.dataset.label; }
 
-    async function callVvipApi(action, params = {}) {
-      const body = new URLSearchParams({ action });
-      Object.entries(params).forEach(([key, value]) => body.set(key, typeof value === "string" ? value : JSON.stringify(value)));
-      const response = await fetch(APP_URL, { method: "POST", redirect: "follow", cache: "no-store", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: body.toString() });
-      if (!response.ok) throw new Error(`系統連線失敗（HTTP ${response.status}）`);
-      const payload = await response.json();
-      if (!payload || payload.status !== "success") throw new Error(payload && payload.message ? payload.message : "系統回覆格式錯誤。");
+    function readMetaContent(name) { const node = document.querySelector ? document.querySelector(`meta[name="${name}"]`) : null; return node ? String(node.content || "").trim() : ""; }
+    function getGatewayUrl() { return String(globalThis.SHERRY_PUBLIC_GATEWAY_URL || readMetaContent("sherry-public-gateway-url") || "").replace(/\/+$/, ""); }
+    function getTurnstileSiteKey() { return String(globalThis.SHERRY_TURNSTILE_SITE_KEY || readMetaContent("sherry-turnstile-site-key") || "").trim(); }
+
+    async function callVvipApi(action, params = {}, turnstileToken = "") {
+      const route = VVIP_ROUTES[action];
+      const gatewayUrl = getGatewayUrl();
+      if (!route) throw new Error("不支援的公開服務。");
+      if (!gatewayUrl) throw new Error("服務尚未完成設定。");
+      const token = String(turnstileToken || "").trim();
+      if (route.protected && !token) throw new Error("請先完成人機驗證。");
+      const url = new URL(gatewayUrl + route.path);
+      const request = { method: route.method, redirect: "error", cache: "no-store", credentials: "omit" };
+      if (route.method === "POST") {
+        request.headers = { "Content-Type": "application/json;charset=UTF-8" };
+        request.body = JSON.stringify({ ...params, turnstileToken: token });
+      }
+      const response = await fetch(url.toString(), request);
+      let payload;
+      try { payload = await response.json(); } catch (_error) { throw new Error("系統回覆格式錯誤。"); }
+      if (!response.ok || !payload || payload.status !== "success") throw new Error(payload && payload.error && payload.error.message || payload && payload.message || `系統連線失敗（HTTP ${response.status}）`);
       return payload.data;
     }
+
+    function ensureVvipTurnstile(kind) {
+      const siteKey = getTurnstileSiteKey();
+      if (!siteKey) throw new Error("服務尚未完成設定。");
+      if (!globalThis.turnstile || typeof globalThis.turnstile.render !== "function") throw new Error("人機驗證尚未載入，請稍後再試。");
+      if (kind === "lookup") {
+        if (lookupTurnstileWidgetId === null) lookupTurnstileWidgetId = globalThis.turnstile.render("#vvip-lookup-turnstile", { sitekey: siteKey, action: "vvip_selection_lookup", theme: "auto" });
+        return lookupTurnstileWidgetId;
+      }
+      if (submitTurnstileWidgetId === null) submitTurnstileWidgetId = globalThis.turnstile.render("#vvip-submit-turnstile", { sitekey: siteKey, action: "vvip_selection_submit", theme: "auto" });
+      return submitTurnstileWidgetId;
+    }
+    function getVvipTurnstileToken(kind) { const id = ensureVvipTurnstile(kind); return String(globalThis.turnstile.getResponse(id) || "").trim(); }
+    function resetVvipTurnstile(kind) { const id = kind === "lookup" ? lookupTurnstileWidgetId : submitTurnstileWidgetId; if (id !== null && globalThis.turnstile && typeof globalThis.turnstile.reset === "function") globalThis.turnstile.reset(id); }
+    function initVvipTurnstile() { try { ensureVvipTurnstile("lookup"); ensureVvipTurnstile("submit"); } catch (_error) {} }
+    globalThis.onSherryVvipTurnstileLoad = initVvipTurnstile;
 
     function getAllSelectedIds() { return new Set([...state.existingCalendarIds, ...state.selectedCalendarIds]); }
     function getSelectedCount() { return getAllSelectedIds().size; }
@@ -208,7 +249,8 @@
       if (!member) return showNotice("請從名單選擇您的 OB 名稱。", "error");
       const button = byId("vvip-lookup"); setBusy(button, true, "載入中..."); clearNotice();
       try {
-        const data = await callVvipApi("getVvipSelection", { vvipId: member.id });
+        const token = getVvipTurnstileToken("lookup");
+        const data = await callVvipApi("getVvipSelection", { vvipId: member.id }, token);
         state.memberId = member.id; state.data = data; state.selectedCalendarIds = new Set(); state.existingCalendarIds = new Set((data.selections || []).filter((item) => !isCancelledVvipCourse(item)).map((item) => item.calendarId));
         expandedVvipDates.clear();
         renderWorkspace();
@@ -219,7 +261,7 @@
           ? "本期選課尚未開放或已截止。"
           : (error.message || "暫時無法載入，請稍後重試。");
         showNotice(message, "error");
-      } finally { setBusy(button, false, ""); }
+      } finally { resetVvipTurnstile("lookup"); setBusy(button, false, ""); }
     }
 
     function changeSelection(event) {
@@ -234,8 +276,8 @@
       if (!ids.length) return;
       const button = byId("vvip-submit"); setBusy(button, true, "送出中..."); clearNotice();
       try {
-        await callVvipApi("submitVvipSelection", { vvipId: state.memberId, calendarIds: ids });
-        const data = await callVvipApi("getVvipSelection", { vvipId: state.memberId });
+        const token = getVvipTurnstileToken("submit");
+        const data = await callVvipApi("submitVvipSelection", { vvipId: state.memberId, calendarIds: ids }, token);
         const verifiedIds = new Set((data.selections || []).filter((item) => !isCancelledVvipCourse(item)).map((item) => item.calendarId));
         if (!ids.every((id) => verifiedIds.has(id))) {
           throw new Error("系統尚未確認全部課程，請保留畫面並再試一次。");
@@ -247,7 +289,7 @@
       } catch (error) {
         byId("vvip-retry").hidden = false;
         showNotice(`${error.message || "送出失敗。"} 已保留目前勾選，請重試或重新整理。`, "error");
-      } finally { setBusy(button, false, ""); }
+      } finally { resetVvipTurnstile("submit"); setBusy(button, false, ""); }
     }
 
     byId("vvip-member-form").addEventListener("submit", lookupVvip);
@@ -258,5 +300,6 @@
     byId("vvip-retry").addEventListener("click", () => byId("vvip-member-form").requestSubmit());
     loadVvipMembers();
   </script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onSherryVvipTurnstileLoad&amp;render=explicit" async defer></script>
 </body>
 </html>

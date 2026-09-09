@@ -7,10 +7,14 @@ const vm = require('node:vm');
 function loadStudentPracticePage() {
   const scriptPath = path.join(__dirname, '..', 'student-practice.js');
   const source = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
-  const context = { console, window: {}, document: undefined };
+  const context = { console, window: {}, document: undefined, URL };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'student-practice.js' });
   return context.window.StudentPracticePage;
+}
+
+function successResponse(data) {
+  return { ok: true, status: 200, json: async () => ({ status: 'success', data }) };
 }
 
 test('student page maps public empty and shared slots without exposing names', () => {
@@ -85,3 +89,64 @@ test('student page is a focused mobile booking surface with the confirmed deadli
   const scriptPath = path.join(__dirname, '..', 'student-practice.js');
   assert.match(fs.readFileSync(scriptPath, 'utf8'), /sherry_student_practice_token_v2/);
 });
+
+test('student public API reads availability from the gateway without Turnstile', async () => {
+  const page = loadStudentPracticePage();
+  const calls = [];
+
+  const result = await page.callPublicApi('availability', { date: '2026/09/10' }, '', {
+    gatewayUrl: 'https://gateway.example.test/',
+    fetchImpl: async (url, request) => {
+      calls.push({ url, request });
+      return successResponse({ rooms: [] });
+    },
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { rooms: [] });
+  assert.equal(calls[0].url, 'https://gateway.example.test/api/student-practice/availability?date=2026%2F09%2F10');
+  assert.equal(calls[0].request.method, 'GET');
+  assert.equal(calls[0].request.credentials, 'omit');
+  assert.equal(calls[0].request.redirect, 'error');
+  assert.equal(calls[0].request.cache, 'no-store');
+});
+
+test('student public API sends JSON and requires a Turnstile token before submit', async () => {
+  const page = loadStudentPracticePage();
+  let requestBody = null;
+  const practice = { studentToken: 'student-token', groupId: 'group-1', note: '' };
+
+  await assert.rejects(
+    page.callPublicApi('submit', { practice }, '', {
+      gatewayUrl: 'https://gateway.example.test',
+      fetchImpl: async () => { throw new Error('fetch should not run'); },
+    }),
+    /人機驗證/,
+  );
+
+  await page.callPublicApi('submit', { practice }, 'turnstile-token', {
+    gatewayUrl: 'https://gateway.example.test',
+    fetchImpl: async (url, request) => {
+      assert.equal(url, 'https://gateway.example.test/api/student-practice/submit');
+      assert.equal(request.headers['Content-Type'], 'application/json;charset=UTF-8');
+      assert.equal(request.credentials, 'omit');
+      requestBody = JSON.parse(request.body);
+      return successResponse({ status: '已成立' });
+    },
+  });
+
+  assert.deepEqual(requestBody, { practice, turnstileToken: 'turnstile-token' });
+});
+
+test('student page embeds Turnstile configuration and no longer exposes the GAS URL', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'student-practice.js'), 'utf8');
+  assert.doesNotMatch(script, /script\.google\.com\/macros\/s\//);
+  assert.match(htmlForStudentPage(), /name="sherry-public-gateway-url"/);
+  assert.match(htmlForStudentPage(), /name="sherry-turnstile-site-key"/);
+  assert.match(htmlForStudentPage(), /challenges\.cloudflare\.com\/turnstile/);
+  assert.match(htmlForStudentPage(), /id="student-turnstile"/);
+  assert.match(script, /turnstile\.reset/);
+});
+
+function htmlForStudentPage() {
+  return fs.readFileSync(path.join(__dirname, '..', 'student-practice.html'), 'utf8');
+}

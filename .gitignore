@@ -1,1 +1,5 @@
 .worktrees/
+.dev.vars
+.env
+cloudflare-gateway/node_modules/
+cloudflare-gateway/.wrangler/

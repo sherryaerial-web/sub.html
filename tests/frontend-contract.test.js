@@ -3576,6 +3576,25 @@ test('teacher rental dialog uses OB classes for duration and has no editable end
   assert.match(html, /callPostApi\("cancelTeacherRental"/);
 });
 
+test('rental dialog still shows OB classes and the selected room when the account needs an instructor identity', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__rentalCatalog = {
+    classes: [{ classId: '60', name: '場地租借 60 分鐘', durationMinutes: 60 }],
+    rooms: [{ room: 'A', roomId: '1' }, { room: 'C', roomId: '3' }],
+    instructorId: '',
+    instructorReady: false,
+    instructorMessage: '此帳號沒有對應的 OB 老師資料，請切換至有 OB 老師資料的老師身分。',
+  };
+
+  vm.runInContext('practiceState.room = "C"; rentalState.catalog = __rentalCatalog; renderRentalCatalog();', context);
+
+  assert.match(getElement('rental-class').innerHTML, /場地租借 60 分鐘/);
+  assert.equal(getElement('rental-room').value, 'C');
+  assert.equal(getElement('rental-submit').disabled, true);
+  assert.equal(getElement('rental-instructor-status').hidden, false);
+  assert.match(getElement('rental-instructor-status').textContent, /請切換至有 OB 老師資料的老師身分/);
+});
+
 test('practice date strip starts today and navigation never selects an expired day', () => {
   const { context } = createFrontendRuntime();
   const dates = vm.runInContext(

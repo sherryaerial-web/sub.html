@@ -12495,12 +12495,21 @@ function getRentalCatalog_(session) {
   var rooms = reference.rooms;
   var instructors = reference.instructors;
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  var instructorId = resolveRentalInstructorId_(teacherName, instructors, spreadsheet);
+  var instructorId = '';
+  var instructorMessage = '';
+  try {
+    instructorId = resolveRentalInstructorId_(teacherName, instructors, spreadsheet);
+  } catch (error) {
+    if (!/^找不到「/.test(cleanText_(error && error.message))) throw error;
+    instructorMessage = '「' + teacherName + '」沒有對應的 OB 老師資料，請切換至有 OB 老師資料的老師身分，或請管理員補齊 OB 租借對照。';
+  }
   return {
     teacherName: teacherName,
     classes: classes,
     rooms: rooms,
-    instructorId: instructorId
+    instructorId: instructorId,
+    instructorReady: !!instructorId,
+    instructorMessage: instructorMessage
   };
 }
 

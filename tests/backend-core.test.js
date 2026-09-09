@@ -11762,6 +11762,34 @@ test('rental catalog uses OB rental classes and their fixed durations', () => {
   ]);
 });
 
+test('rental catalog keeps classes and rooms available when the signed-in account has no OB instructor match', () => {
+  const mappingSheet = createSheetFixture('OB租借對照', [EXPECTED_RENTAL_MAPPING_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([mappingSheet]);
+  const backend = loadBackend({
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    PropertiesService: {
+      getScriptProperties: () => ({ getProperty: () => 'read-write-token' }),
+    },
+  });
+  backend.getRentalReferenceCatalog_ = () => ({
+    classes: [{ classId: '60', name: '場地租借 60 分鐘', durationMinutes: 60 }],
+    rooms: [{ room: 'A', roomId: '1' }, { room: 'B', roomId: '2' }],
+    instructors: [{ id: '7', firstName: 'Tako', lastName: '' }],
+  });
+
+  const result = backend.getRentalCatalog_({ teacherName: '冠蓉' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.classes)), [
+    { classId: '60', name: '場地租借 60 分鐘', durationMinutes: 60 },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rooms)), [
+    { room: 'A', roomId: '1' }, { room: 'B', roomId: '2' },
+  ]);
+  assert.equal(result.instructorReady, false);
+  assert.equal(result.instructorId, '');
+  assert.match(result.instructorMessage, /請切換至有 OB 老師資料的老師身分/);
+});
+
 test('rental structure is isolated and preserves practice and CourseList rows', () => {
   const courseRows = [EXPECTED_COURSE_HEADERS, ['2026/09/20', '10:00', 'A－空環', 'Tako', 'cal-1']];
   const practiceRows = [['場次 ID'], ['practice-1']];

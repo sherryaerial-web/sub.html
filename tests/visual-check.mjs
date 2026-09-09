@@ -733,17 +733,33 @@ try {
     await page.locator("#rental-dialog").waitFor({ state: "visible" });
     await page.locator('#rental-class option[value="60"]').waitFor({ state: "attached" });
     await page.locator("#rental-class").selectOption("60");
+    const rentalFields = await page.evaluate(() => {
+      const dialog = document.querySelector("#rental-dialog").getBoundingClientRect();
+      const grid = document.querySelector("#rental-dialog .practice-form-grid");
+      const date = document.querySelector("#rental-date").getBoundingClientRect();
+      const room = document.querySelector("#rental-room").getBoundingClientRect();
+      const body = document.querySelector("#rental-dialog .dialog-body").getBoundingClientRect();
+      const gridStyle = getComputedStyle(grid);
+      return {
+        dialog: dialog.toJSON(),
+        date: date.toJSON(),
+        room: room.toJSON(),
+        body: body.toJSON(),
+        columns: gridStyle.gridTemplateColumns.split(" ").filter(Boolean).length,
+        rowGap: parseFloat(gridStyle.rowGap),
+      };
+    });
+    if (viewport.width > 760 && rentalFields.dialog.width < 680) {
+      throw new Error(`${viewport.name}: rental dialog stays cramped on desktop ${JSON.stringify(rentalFields)}`);
+    }
     if (viewport.width <= 480) {
-      const rentalFields = await page.evaluate(() => {
-        const date = document.querySelector("#rental-date").getBoundingClientRect();
-        const room = document.querySelector("#rental-room").getBoundingClientRect();
-        const body = document.querySelector("#rental-dialog .dialog-body").getBoundingClientRect();
-        return { date: date.toJSON(), room: room.toJSON(), body: body.toJSON() };
-      });
       if (rentalFields.room.top <= rentalFields.date.bottom ||
           rentalFields.date.left < rentalFields.body.left - 1 ||
           rentalFields.date.right > rentalFields.body.right + 1) {
         throw new Error(`${viewport.name}: rental date field overlaps or escapes ${JSON.stringify(rentalFields)}`);
+      }
+      if (rentalFields.columns !== 1 || rentalFields.rowGap < 16) {
+        throw new Error(`${viewport.name}: rental form is still too dense ${JSON.stringify(rentalFields)}`);
       }
     }
     results.push(await capture(page, viewport.name, "10-rental-create"));

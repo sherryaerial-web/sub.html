@@ -1310,8 +1310,18 @@
     }
     #practice-dialog .dialog-actions,
     #rental-dialog .dialog-actions { flex-wrap: wrap; }
-    #practice-dialog,
-    #rental-dialog { width: min(92vw, 560px); max-height: min(88vh, 760px); padding: 0; }
+    #practice-dialog { width: min(92vw, 560px); max-height: min(88vh, 760px); padding: 0; }
+    #rental-dialog { width: min(94vw, 720px); max-height: min(90vh, 820px); padding: 0; }
+    #rental-dialog .dialog-body { padding: 26px; }
+    #rental-dialog .dialog-body h3 { font-size: 20px; }
+    #rental-dialog .practice-editor-summary { margin: 14px 0 18px; padding: 13px 14px; }
+    #rental-dialog .practice-form-grid { gap: 18px 16px; }
+    #rental-dialog .practice-form-field { gap: 8px; }
+    #rental-dialog .practice-form-field label,
+    #rental-dialog .practice-form-field > span:first-child { font-size: 13px; }
+    #rental-dialog .text-input,
+    #rental-dialog .claim-control { min-height: 46px; }
+    #rental-dialog .dialog-actions { margin-top: 22px; }
     .rental-preview { display: grid; gap: 8px; margin-top: 12px; }
     .rental-preview-card { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); font-size: 12px; line-height: 1.5; }
     .rental-preview-card strong { display: block; color: var(--ink); font-size: 13px; }
@@ -1404,7 +1414,7 @@
       #rental-dialog .dialog-body {
         max-height: 88dvh;
         overflow-y: auto;
-        padding-bottom: calc(18px + env(safe-area-inset-bottom));
+        padding-bottom: calc(22px + env(safe-area-inset-bottom));
         overscroll-behavior: contain;
       }
       #practice-dialog .practice-form-grid,
@@ -1570,6 +1580,14 @@
       #rental-dialog .practice-form-field.full { grid-column: auto; }
       #practice-dialog .practice-form-grid { grid-template-columns: 1fr; }
       #rental-dialog .practice-form-grid { grid-template-columns: 1fr; }
+      #rental-dialog .dialog-body {
+        padding-top: 24px;
+        padding-right: 20px;
+        padding-left: 20px;
+      }
+      #rental-dialog .practice-form-grid { gap: 16px; }
+      #rental-dialog .dialog-actions { gap: 10px; }
+      #rental-dialog .dialog-actions > button { flex: 1 1 140px; justify-content: center; }
     }
 
     @media (max-width: 380px) {
@@ -2394,6 +2412,7 @@
       <h3 id="rental-dialog-title" tabindex="-1" autofocus>租借教室</h3>
       <p class="section-copy">請選擇 OB 的租借課程，系統會依課程時長自動計算結束時間。</p>
       <div id="rental-summary" class="practice-editor-summary"></div>
+      <div id="rental-instructor-status" class="practice-course-warning" role="status" aria-live="polite" hidden></div>
       <div class="practice-form-grid">
         <div class="practice-form-field full"><label for="rental-class">租借課程</label><select id="rental-class" class="claim-control" required><option value="">載入中…</option></select></div>
         <div class="practice-form-field"><label for="rental-date">日期</label><input id="rental-date" class="text-input" type="date" required></div>
@@ -4121,6 +4140,7 @@
       myPayrollSnapshotHtml.clear();
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
+      rentalState = { catalog: null, preview: null, previewSignature: "", loading: false };
       adminDashboard = null;
       vvipDashboard = null;
       payrollDashboard = null;
@@ -4690,6 +4710,9 @@
       byId("rental-recurring").checked = false;
       byId("rental-end-date").value = "";
       byId("rental-note").value = "";
+      byId("rental-instructor-status").hidden = true;
+      byId("rental-instructor-status").textContent = "";
+      byId("rental-submit").disabled = true;
       populatePracticeTimeSelects();
       if (!byId("rental-start").innerHTML) byId("rental-start").innerHTML = byId("practice-editor-start").innerHTML;
       byId("rental-start").value = "14:00";
@@ -4705,6 +4728,9 @@
         renderRentalCatalog();
       } catch (error) {
         byId("rental-class").innerHTML = '<option value="">無法載入租借課程</option>';
+        byId("rental-instructor-status").hidden = false;
+        byId("rental-instructor-status").textContent = error.message;
+        byId("rental-submit").disabled = true;
         setNotice(error.message, "error");
       } finally {
         rentalState.loading = false;
@@ -4723,6 +4749,14 @@
       byId("rental-room").value = rooms.some((item) => item.room === practiceState.room)
         ? practiceState.room
         : (rooms[0]?.room || "");
+      const instructorReady = rentalState.catalog?.instructorReady !== false
+        && Boolean(rentalState.catalog?.instructorId);
+      const instructorStatus = byId("rental-instructor-status");
+      instructorStatus.hidden = instructorReady;
+      instructorStatus.textContent = instructorReady
+        ? ""
+        : (rentalState.catalog?.instructorMessage || "此帳號沒有對應的 OB 老師資料，請切換至可租借的老師身分。");
+      byId("rental-submit").disabled = !instructorReady;
       syncRentalFormSummary();
       refreshIcons();
     }
@@ -4740,6 +4774,11 @@
       const input = getRentalFormInput();
       const signature = getRentalInputSignature(input);
       const button = byId("rental-submit");
+      if (rentalState.catalog?.instructorReady === false || !rentalState.catalog?.instructorId) {
+        setNotice(rentalState.catalog?.instructorMessage || "請切換至可租借的老師身分。", "error");
+        button.disabled = true;
+        return;
+      }
       if (!input.classId) {
         setNotice("請先選擇租借課程。", "error");
         return;
@@ -4775,6 +4814,7 @@
       } finally {
         setButtonBusy(button, false, "");
         setRentalSubmitLabel(!!rentalState.preview && rentalState.previewSignature === signature);
+        button.disabled = rentalState.catalog?.instructorReady === false || !rentalState.catalog?.instructorId;
       }
     }
 

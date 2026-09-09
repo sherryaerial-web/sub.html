@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.js';
-import { callGas } from '../src/upstream.js';
+import { callGas, GAS_UPSTREAM_TIMEOUT_MS } from '../src/upstream.js';
 
 const GAS_URL = 'https://script.google.com/macros/s/test/exec';
+
+test('default upstream timeout allows slow GAS cold starts', () => {
+  assert.equal(GAS_UPSTREAM_TIMEOUT_MS, 20_000);
+});
 
 test('signed student write reaches GAS once without forwarding Turnstile token', async () => {
   const requests = [];
@@ -68,6 +72,34 @@ test('upstream failures never retry writes or claim success', async () => {
   }
 });
 
+test('upstream network failures log only safe diagnostics', async () => {
+  const diagnostics = [];
+  const networkError = new TypeError('fetch failed: https://secret-upstream.example');
+  networkError.cause = { code: 'UND_ERR_CONNECT_TIMEOUT' };
+
+  await assert.rejects(callGas({
+    action: 'getStudentPracticeAvailability',
+    payload: { date: '2026-09-09' },
+    env: { GAS_UPSTREAM_URL: GAS_URL, GAS_GATEWAY_SECRET: 'g'.repeat(32) },
+    fetchImpl: async () => { throw networkError; },
+    logger: { error: (...args) => diagnostics.push(args) },
+  }), (error) => {
+    assert.equal(error.code, 'upstream_unavailable');
+    return true;
+  });
+
+  assert.deepEqual(diagnostics, [[
+    'GAS upstream request failed',
+    {
+      action: 'getStudentPracticeAvailability',
+      errorName: 'TypeError',
+      causeCode: 'UND_ERR_CONNECT_TIMEOUT',
+      aborted: false,
+    },
+  ]]);
+  assert.equal(JSON.stringify(diagnostics).includes('secret-upstream.example'), false);
+});
+
 test('Worker validates Turnstile then proxies a student write', async () => {
   const urls = [];
   const env = {
@@ -113,4 +145,3 @@ test('Worker validates Turnstile then proxies a student write', async () => {
     GAS_URL,
   ]);
 });
-

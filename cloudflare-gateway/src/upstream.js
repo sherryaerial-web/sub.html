@@ -1,5 +1,7 @@
 import { GatewayError, signGatewayRequest } from './security.js';
 
+export const GAS_UPSTREAM_TIMEOUT_MS = 20_000;
+
 function appendLegacyFields(form, payload) {
   if (payload.practice) form.set('practice', JSON.stringify(payload.practice));
   if (payload.vvipId) form.set('vvipId', String(payload.vvipId));
@@ -36,7 +38,8 @@ export async function callGas({
   fetchImpl = fetch,
   now = Date.now,
   nonceFactory = () => crypto.randomUUID(),
-  timeoutMs = 8000,
+  timeoutMs = GAS_UPSTREAM_TIMEOUT_MS,
+  logger = console,
 }) {
   if (!env || typeof env.GAS_UPSTREAM_URL !== 'string' || !env.GAS_UPSTREAM_URL.trim()) {
     throw new GatewayError(503, 'gateway_not_configured', '服務尚未完成設定。');
@@ -86,7 +89,13 @@ export async function callGas({
   let response;
   try {
     response = await fetchImpl(new Request(request, { signal: controller.signal }));
-  } catch (_error) {
+  } catch (error) {
+    logger.error('GAS upstream request failed', {
+      action,
+      errorName: String(error && error.name || 'Error'),
+      causeCode: String(error && error.cause && error.cause.code || ''),
+      aborted: controller.signal.aborted,
+    });
     throw new GatewayError(503, 'upstream_unavailable', '系統暫時忙碌，請稍後再試。');
   } finally {
     clearTimeout(timer);

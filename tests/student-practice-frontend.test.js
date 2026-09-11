@@ -4,10 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadStudentPracticePage() {
+function loadStudentPracticePage(windowOverrides = {}) {
   const scriptPath = path.join(__dirname, '..', 'student-practice.js');
   const source = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : '';
-  const context = { console, window: {}, document: undefined, URL };
+  const context = { console, window: windowOverrides, document: undefined, URL };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: 'student-practice.js' });
   return context.window.StudentPracticePage;
@@ -108,6 +108,25 @@ test('student public API reads availability from the gateway without Turnstile',
   assert.equal(calls[0].request.credentials, 'omit');
   assert.equal(calls[0].request.redirect, 'error');
   assert.equal(calls[0].request.cache, 'no-store');
+});
+
+test('student public API keeps the browser fetch receiver for Safari', async () => {
+  const browserWindow = {
+    SHERRY_PUBLIC_GATEWAY_URL: 'https://gateway.example.test',
+  };
+  browserWindow.fetch = async function(url, request) {
+    if (this !== browserWindow) {
+      throw new TypeError('Can only call Window.fetch on instances of Window');
+    }
+    assert.equal(url, 'https://gateway.example.test/api/student-practice/availability?date=2026%2F09%2F11');
+    assert.equal(request.method, 'GET');
+    return successResponse({ rooms: [] });
+  };
+
+  const page = loadStudentPracticePage(browserWindow);
+  const result = await page.callPublicApi('availability', { date: '2026/09/11' }, '');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { rooms: [] });
 });
 
 test('student public API sends JSON and requires a Turnstile token before submit', async () => {

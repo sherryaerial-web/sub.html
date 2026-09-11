@@ -15,9 +15,13 @@
 
   function getPublicConfig(options) {
     options = options || {};
+    var fetchImpl = options.fetchImpl;
+    if (!fetchImpl && typeof global.fetch === 'function') {
+      fetchImpl = global.fetch.bind(global);
+    }
     return {
       gatewayUrl: String(options.gatewayUrl || global.SHERRY_PUBLIC_GATEWAY_URL || readMetaContent('sherry-public-gateway-url') || '').replace(/\/+$/, ''),
-      fetchImpl: options.fetchImpl || global.fetch
+      fetchImpl: fetchImpl
     };
   }
 

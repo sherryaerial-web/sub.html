@@ -5816,6 +5816,11 @@
       byId("claim-submit").disabled = getAvailableClaimItems().length === 0 || hasBlockedDelay;
     }
 
+    function syncSpecialClaimSubmitState() {
+      byId("claim-submit").disabled = getAvailableClaimItems().length === 0 ||
+        getSelectedClaimSlotKeys().length === 0;
+    }
+
     function updateOrdinaryClaimDelaySummary(card) {
       const summary = card?.querySelector(".claim-delay-summary");
       if (!summary) return;
@@ -6139,7 +6144,10 @@
       }
       const selectedSlotKeys = getSelectedClaimSlotKeys();
       syncSpecialCourseStartTimeOptions();
-      if (mode !== "merge" || !selectedSlotKeys.length) return;
+      if (mode !== "merge" || !selectedSlotKeys.length) {
+        syncSpecialClaimSubmitState();
+        return;
+      }
       if (selectedSlotKeys.length > 1) {
         checkboxes.forEach((checkbox) => { checkbox.checked = checkbox.dataset.slotKey === selectedSlotKeys[0]; });
       }
@@ -6166,6 +6174,7 @@
       } catch (error) {
         // 摘要會顯示具體阻擋原因；送出時會再次驗證。
       }
+      syncSpecialClaimSubmitState();
     }
 
     function updateClaimMode() {

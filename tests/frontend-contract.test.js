@@ -1516,6 +1516,82 @@ test('separates ordinary substitute handling from the special-course flow', () =
   assert.match(html, /claim-note/);
 });
 
+test('selecting the first merged special-course slot enables submission after fresh data loads', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getClaimPageData: {
+      state: 'active',
+      items: [{
+        '代課編號': 'leave-open-1', '原老師': '蜜莉 戴', '日期': '2026/10/25',
+        '時段': '12:10', '課程': 'C－空環 Lv.1~2', '課程大類': '空環', '可沿用原課程': true,
+      }],
+      options: {
+        capabilities: ['空環'], classes: [],
+        specialSlots: [
+          {
+            slotKey: 'leave:leave-open-1', sourceType: 'leave', substituteId: 'leave-open-1',
+            calendarId: 'cal-first', date: '2026/10/25', time: '12:10', room: 'C',
+            courseName: 'C－空環 Lv.1~2', originalTeacher: '蜜莉 戴',
+          },
+          {
+            slotKey: 'leave:leave-open-2', sourceType: 'leave', substituteId: 'leave-open-2',
+            calendarId: 'cal-second', date: '2026/10/25', time: '13:30', room: 'C',
+            courseName: 'C－空環 Lv.2~3', originalTeacher: '蜜莉 戴',
+          },
+        ],
+        specialAvailability: {
+          'leave:leave-open-1': {
+            room: 'C', date: '2026/10/25', startTime: '12:10', nextCourseTime: '13:30',
+            mergePartnerIds: ['leave:leave-open-2'], maxDurationMinutes: 65,
+          },
+          'leave:leave-open-2': {
+            room: 'C', date: '2026/10/25', startTime: '13:30', nextCourseTime: '15:00',
+            mergePartnerIds: [], maxDurationMinutes: 75,
+          },
+        },
+      },
+    },
+  });
+  const cards = [];
+  const checkboxes = ['leave:leave-open-1', 'leave:leave-open-2'].map((slotKey, index) => {
+    const warning = { hidden: true, textContent: '' };
+    const card = {
+      querySelector(selector) {
+        if (selector === '.special-slot-warning') return warning;
+        return null;
+      },
+      classList: { add() {}, remove() {} },
+    };
+    const checkbox = {
+      checked: index === 0,
+      disabled: false,
+      indeterminate: false,
+      title: '',
+      dataset: { slotKey, substituteId: `leave-open-${index + 1}` },
+      closest(selector) { return selector === '.claim-card' ? card : null; },
+      removeAttribute() {},
+    };
+    cards.push(card);
+    return checkbox;
+  });
+  context.document.querySelector = (selector) => {
+    if (selector === 'input[name="claim-mode"]:checked') return { value: 'special' };
+    if (selector === 'input[name="special-claim-mode"]:checked') return { value: 'merge' };
+    if (selector === 'input[name="special-duration"]:checked') return { value: '120' };
+    return null;
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '.claim-checkbox') return checkboxes;
+    if (selector === '.claim-checkbox:checked') return checkboxes.filter((item) => item.checked);
+    if (selector === '.claim-card') return cards;
+    return [];
+  };
+
+  await context.fetchAvailableSubstitutes();
+  context.updateSpecialSelectionConstraints(checkboxes[0]);
+
+  assert.equal(getElement('claim-submit').disabled, false);
+});
+
 test('custom special-course duration uses visible 15-minute controls on mobile', () => {
   const { context, getElement } = createFrontendRuntime();
   const input = getElement('special-custom-duration');

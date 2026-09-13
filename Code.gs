@@ -14201,8 +14201,8 @@ function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationM
 
   var normalizedActualStartTime = cleanText_(actualStartTime) || startSlot.time;
   var actualStartMinutes = timeTextToMinutes_(normalizedActualStartTime);
-  if (actualStartMinutes < 0 || actualStartMinutes % 15 !== 0) {
-    throw new Error('實際開始時間必須是有效的 15 分鐘刻度。');
+  if (actualStartMinutes < 0 || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
+    throw new Error('實際開始時間必須從所選時段起，以 15 分鐘為單位調整。');
   }
   if (actualStartMinutes < occupancyStartMinutes) {
     throw new Error('實際開始時間不可早於所選時段 ' + startSlot.time + '。');
@@ -14312,8 +14312,8 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
 
   var normalizedActualStartTime = cleanText_(actualStartTime) || occupancyStartTime;
   var actualStartMinutes = timeTextToMinutes_(normalizedActualStartTime);
-  if (actualStartMinutes < 0 || actualStartMinutes % 15 !== 0) {
-    throw new Error('實際開始時間必須是有效的 15 分鐘刻度。');
+  if (actualStartMinutes < 0 || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
+    throw new Error('實際開始時間必須從所選時段起，以 15 分鐘為單位調整。');
   }
   if (actualStartMinutes < occupancyStartMinutes) {
     throw new Error('實際開始時間不可早於所選時段 ' + occupancyStartTime + '。');

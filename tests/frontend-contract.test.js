@@ -1891,6 +1891,83 @@ test('ordinary delayed claim marks the next course as system occupied before sub
   assert.equal(dateCount.textContent, '2 堂待領');
 });
 
+test('special-course preview clearly marks each automatically included later slot', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getClaimPageData: {
+      state: 'active',
+      items: [],
+      options: {
+        capabilities: ['空環'],
+        classes: [],
+        specialSlots: [
+          {
+            slotKey: 'leave:source', sourceType: 'leave', substituteId: 'source',
+            date: '2026/09/24', time: '12:10', room: 'C', courseName: 'C－空環 Lv.1~2',
+            originalTeacher: '蜜莉 戴',
+          },
+          {
+            slotKey: 'leave:next', sourceType: 'leave', substituteId: 'next',
+            date: '2026/09/24', time: '13:30', room: 'C', courseName: 'C－空環 Lv.2~3',
+            originalTeacher: '蜜莉 戴',
+          },
+        ],
+        specialAvailability: {
+          'leave:source': {
+            date: '2026/09/24', room: 'C', startTime: '12:10', nextCourseTime: '13:30',
+            mergePartnerIds: ['leave:next'], maxDurationMinutes: 65,
+          },
+          'leave:next': {
+            date: '2026/09/24', room: 'C', startTime: '13:30', nextCourseTime: '',
+            mergePartnerIds: [], maxDurationMinutes: 615,
+          },
+        },
+      },
+    }
+  });
+  await context.fetchAvailableSubstitutes();
+
+  const source = createOrdinaryClaimConstraintCard({
+    substituteId: 'source', checked: true, handling: 'original', delay: 0,
+  });
+  const next = createOrdinaryClaimConstraintCard({
+    substituteId: 'next', checked: false, handling: 'original', delay: 0,
+  });
+  const cards = [source, next];
+  let specialMode = 'merge';
+  const originalQuerySelector = context.document.querySelector.bind(context.document);
+  const originalQuerySelectorAll = context.document.querySelectorAll.bind(context.document);
+  context.document.querySelector = (selector) => {
+    if (selector === 'input[name="claim-mode"]:checked') return { value: 'special' };
+    if (selector === 'input[name="special-claim-mode"]:checked') return { value: specialMode };
+    if (selector === 'input[name="special-duration"]:checked') return { value: '120' };
+    return originalQuerySelector(selector);
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '.claim-checkbox') return cards.map((item) => item.checkbox);
+    if (selector === '.claim-checkbox:checked') return cards.map((item) => item.checkbox).filter((item) => item.checked);
+    return originalQuerySelectorAll(selector);
+  };
+  getElement('special-actual-start').value = '12:10';
+
+  context.updateSpecialClaimSummary();
+  assert.match(getElement('special-claim-summary').textContent, /將占用 C 教室 12:10、13:30/);
+  context.updateSpecialSelectionConstraints(source.checkbox);
+
+  assert.equal(source.checkbox.checked, true);
+  assert.equal(next.checkbox.checked, false);
+  assert.equal(next.checkbox.disabled, true);
+  assert.equal(next.checkbox.indeterminate, true);
+  assert.equal(next.warning.hidden, false);
+  assert.equal(next.warning.textContent, '此堂已包含');
+  assert.equal(next.classes.has('special-auto-occupied'), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.getSelectedClaimSlotKeys())), ['leave:source']);
+
+  specialMode = 'vacancy';
+  context.updateSpecialSelectionConstraints();
+  assert.equal(next.checkbox.indeterminate, false);
+  assert.equal(next.classes.has('special-auto-occupied'), false);
+});
+
 test('time-only adjustment sends original handling with the selected delay', () => {
   const { context, claimCard, claimControls } = createFrontendRuntime();
   claimControls['input[type="radio"]:checked'].value = 'existing';

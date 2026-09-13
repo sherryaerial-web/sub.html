@@ -626,7 +626,11 @@
     .claim-date-heading[aria-expanded="true"] .claim-date-chevron { transform: rotate(180deg); }
     .claim-date-content { margin-top: 10px; }
     .claim-card { grid-template-columns: 24px minmax(0, 1fr); padding: 0; overflow: hidden; }
-    .claim-card.special-auto-occupied,
+    .claim-card.special-auto-occupied {
+      border-color: #b9d0d4;
+      background: var(--aqua-100);
+      box-shadow: inset 4px 0 0 var(--sea-600), var(--shadow-sm);
+    }
     .claim-card.ordinary-auto-occupied { background: var(--soft); opacity: 0.68; }
     .claim-card > .claim-checkbox { margin: 17px 0 0 15px; }
     .claim-summary { min-width: 0; padding: 14px 15px 13px 0; }
@@ -2176,7 +2180,7 @@
               <label class="handling-option"><input type="radio" name="special-claim-mode" value="vacancy" checked>單堂延長</label>
               <label class="handling-option"><input type="radio" name="special-claim-mode" value="merge">使用連續時段</label>
             </div>
-            <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。</p>
+            <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。後續堂會標示「此堂已包含」。</p>
             <div class="claim-fields">
               <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><p id="special-start-guidance" class="hint">開始時段預設為第一門課程開始時間，如需調整請從此調整。</p><select id="special-actual-start" class="claim-control" aria-describedby="special-start-guidance special-start-limit" disabled><option value="">請先勾選第一堂課程</option></select><p id="special-start-limit" class="hint">只能延後，並以 15 分鐘為單位；所選代課時段仍是教室占用起點。</p></div>
               <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"></div>
@@ -3105,8 +3109,8 @@
       if (!Number.isFinite(occupancyStartMinutes)) throw new Error("起始時段資料不完整，請通知管理員。");
       const normalizedActualStartTime = String(actualStartTime || first.startTime || "").trim();
       const actualStartMinutes = parseClaimTimeMinutes(normalizedActualStartTime);
-      if (!Number.isFinite(actualStartMinutes) || actualStartMinutes % 15 !== 0) {
-        throw new Error("實際開始時間必須是有效的 15 分鐘刻度。");
+      if (!Number.isFinite(actualStartMinutes) || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
+        throw new Error("實際開始時間必須從所選時段起，以 15 分鐘為單位調整。");
       }
       if (actualStartMinutes < occupancyStartMinutes) {
         throw new Error(`實際開始時間不可早於所選時段 ${first.startTime}。`);
@@ -5854,6 +5858,7 @@
       const checkboxes = [...document.querySelectorAll(".claim-checkbox")];
       checkboxes.forEach((checkbox) => {
         checkbox.disabled = false;
+        checkbox.indeterminate = false;
         checkbox.removeAttribute("title");
         const card = checkbox.closest(".claim-card");
         card?.classList.remove("ordinary-auto-occupied");
@@ -6101,6 +6106,7 @@
       const checkboxes = [...document.querySelectorAll(".claim-checkbox")];
       checkboxes.forEach((checkbox) => {
         checkbox.disabled = false;
+        checkbox.indeterminate = false;
         checkbox.removeAttribute("title");
         checkbox.closest(".claim-card")?.classList.remove("special-auto-occupied");
         const warning = checkbox.closest(".claim-card")?.querySelector(".special-slot-warning");
@@ -6146,11 +6152,15 @@
           const checkbox = checkboxes.find((item) => item.dataset.slotKey === id);
           const card = checkbox?.closest(".claim-card");
           const warning = card?.querySelector(".special-slot-warning");
-          if (checkbox) checkbox.disabled = true;
+          if (checkbox) {
+            checkbox.disabled = true;
+            checkbox.indeterminate = true;
+            checkbox.title = "此堂已包含";
+          }
           card?.classList.add("special-auto-occupied");
           if (warning) {
             warning.hidden = false;
-            warning.textContent = "系統自動占用";
+            warning.textContent = "此堂已包含";
           }
         });
       } catch (error) {

@@ -5079,6 +5079,28 @@ test('own course special slot planning accepts consecutive own courses without c
   assert.equal(plan.endTime, '11:00');
 });
 
+test('special slot planning accepts fifteen-minute steps relative to a non-quarter-hour source course', () => {
+  const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-09';
+  const pendingRows = [
+    ['stamp', '蜜莉 戴', '2026/09/24', '12:10', 'C－空環 Lv.1~2', '確認中', '', '', '', 'leave-offset-1', 'cal-offset-1'],
+    ['stamp', '蜜莉 戴', '2026/09/24', '13:30', 'C－空環 Lv.2~3', '確認中', '', '', '', 'leave-offset-2', 'cal-offset-2'],
+  ];
+  const courseRows = [
+    ['2026/09/24', '12:10', 'C－空環 Lv.1~2', '蜜莉 戴', 'cal-offset-1'],
+    ['2026/09/24', '13:30', 'C－空環 Lv.2~3', '蜜莉 戴', 'cal-offset-2'],
+  ];
+
+  const plan = backend.buildTeacherSpecialCourseSlotPlan_(
+    'Tako', 'leave:leave-offset-1', 120, '12:10', pendingRows, courseRows, 'merge'
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.occupiedTimes)), ['12:10', '13:30']);
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.orderedSubstituteIds)), ['leave-offset-1', 'leave-offset-2']);
+  assert.equal(plan.actualStartTime, '12:10');
+  assert.equal(plan.endTime, '14:10');
+});
+
 test('mixed special slot planning accepts an own course followed by an open substitute and rejects private slots', () => {
   const backend = loadBackend();
   backend.getNextMonthKey_ = () => '2026-08';

@@ -6046,6 +6046,127 @@ function recordPracticeNotificationFailure_(eventValue) {
   });
 }
 
+function reconcileStudentPracticeGroups_(optionsValue) {
+  var options = optionsValue || {};
+  var today = cleanText_(options.today).replace(/-/g, '/');
+  var throughDate = cleanText_(options.throughDate).replace(/-/g, '/');
+  var currentObRows = Array.isArray(options.currentObRows) ? options.currentObRows : [];
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS)) {
+    return { checked: 0, pending: 0, notificationFailures: 0 };
+  }
+
+  var mutationResult = withScriptLock_(function() {
+    var records = getStudentPracticeRecordsUnlocked_(spreadsheet);
+    var result = { checked: 0, pending: 0, notifications: [] };
+    return runStudentPracticeTransitionUnlocked_([
+      records.sheets.groups,
+      records.sheets.audit
+    ], function() {
+      var now = getTimestamp_();
+      records.groups.filter(function(group) {
+        return group.date >= today && group.date <= throughDate &&
+          [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION]
+            .indexOf(cleanText_(group.status)) !== -1 &&
+          cleanText_(group.changeStatus) !== STUDENT_PRACTICE_STATUS.CHANGE_PENDING &&
+          !isPracticeIntervalPast_(group.date, group.endTime, currentTimeMs_());
+      }).forEach(function(group) {
+        result.checked += 1;
+        var groupInterval = normalizePracticeInterval_(group.date, group.startTime, group.endTime);
+        var blocker = currentObRows.map(function(row) {
+          var date = formatMyDate(row && row[0]);
+          var startTime = formatMyTime(row && row[1]);
+          var label = cleanText_(row && row[2]);
+          var calendarId = cleanText_(row && row[4]);
+          if (date !== groupInterval.date || getCourseRoom_(label) !== cleanText_(group.room).toUpperCase() ||
+              !startTime || !calendarId) return null;
+          var startMinutes = timeTextToMinutes_(startTime);
+          var liveDuration = Number(row && row[9]);
+          var endTime = minutesToTimeText_(startMinutes + (
+            isFinite(liveDuration) && liveDuration > 0
+              ? liveDuration
+              : getScheduledCourseDurationMinutes_(label)
+          ));
+          var interval = normalizePracticeInterval_(date, startTime, endTime);
+          if (!practiceIntervalsConflict_(groupInterval, interval, 15)) return null;
+          return {
+            calendarId: calendarId,
+            label: label,
+            type: /\u5834\u5730\u79df\u501f|\u5834\u79df/.test(label) ? 'rental' : 'course'
+          };
+        }).filter(Boolean)[0];
+        if (!blocker) return;
+
+        records.sheets.groups.getRange(group.rowNumber, 7, 1, 4).setValues([[
+          STUDENT_PRACTICE_STATUS.CHANGE_PENDING,
+          group.createdAt,
+          now,
+          '\u7cfb\u7d71'
+        ]]);
+        var blockerLabel = blocker.type === 'rental' ? '\u5834\u5730\u79df\u501f' : 'OB \u8ab2\u7a0b';
+        appendStudentPracticeAuditUnlocked_(records.sheets.audit, {
+          actor: '\u7cfb\u7d71',
+          action: '\u5075\u6e2c\u5b78\u751f\u81ea\u4e3b\u7df4\u7fd2\u885d\u7a81',
+          targetType: '\u5834\u6b21',
+          targetId: group.groupId,
+          before: { changeStatus: group.changeStatus },
+          after: { changeStatus: STUDENT_PRACTICE_STATUS.CHANGE_PENDING },
+          reason: blockerLabel + '\u300c' + blocker.label + '\u300d\u5360\u7528\u6b64\u6642\u6bb5\u301c' + blocker.calendarId
+        });
+        result.pending += 1;
+        result.notifications.push({
+          groupId: group.groupId,
+          date: group.date,
+          room: group.room,
+          startTime: group.startTime,
+          endTime: group.endTime,
+          blocker: blocker,
+          blockerLabel: blockerLabel
+        });
+      });
+      return result;
+    });
+  });
+
+  var notificationFailures = 0;
+  mutationResult.notifications.forEach(function(notification) {
+    try {
+      var activeAdmins = getActiveCourseAdminNames_();
+      var admins = ['\u51a0\u84c9', 'Tako'].filter(function(name) {
+        return activeAdmins.indexOf(name) !== -1;
+      });
+      sendManagedNotification_(
+        '\u7cfb\u7d71\u81ea\u52d5\u540c\u6b65',
+        '\u5b78\u751f\u81ea\u4e3b\u7df4\u7fd2',
+        notification.groupId,
+        'selected',
+        admins,
+        '\u5b78\u751f\u81ea\u4e3b\u7df4\u7fd2\u6642\u6bb5\u5f85\u8655\u7406',
+        notification.date + ' ' + notification.room + ' \u6559\u5ba4 ' +
+          notification.startTime + '\u2013' + notification.endTime + '\uff1a' +
+          notification.blockerLabel + '\u300c' + notification.blocker.label + '\u300d\u5360\u7528\u6b64\u6642\u6bb5\uff0c\u8acb\u806f\u7d61\u53d7\u5f71\u97ff\u5b78\u751f\u3002',
+        'student_practice_conflict_' + notification.groupId + '_' + notification.blocker.calendarId,
+        buildAppViewUrl_('admin', 'practice')
+      );
+    } catch (error) {
+      notificationFailures += 1;
+      appendStudentPracticeAuditUnlocked_(
+        requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEETS.STUDENT_PRACTICE_AUDIT),
+        {
+          actor: '\u7cfb\u7d71',
+          action: '\u63a8\u64ad\u5931\u6557',
+          targetType: '\u5834\u6b21',
+          targetId: notification.groupId,
+          reason: getErrorMessage_(error)
+        }
+      );
+    }
+  });
+  delete mutationResult.notifications;
+  mutationResult.notificationFailures = notificationFailures;
+  return mutationResult;
+}
+
 function reconcilePracticeBookings_(optionsValue) {
   var options = optionsValue || {};
   var conservativeFallback = options.conservativeFallback === true;
@@ -6358,6 +6479,11 @@ function reconcilePracticeBookings_(optionsValue) {
   });
   delete mutationResult.notifications;
   mutationResult.notificationFailures = notificationFailures;
+  mutationResult.studentPractice = reconcileStudentPracticeGroups_({
+    today: today,
+    throughDate: throughDate,
+    currentObRows: currentObRows
+  });
   return mutationResult;
 }
 
@@ -6365,9 +6491,10 @@ function getScheduledPracticeReconciliationDates_(todayValue, throughDateValue) 
   var today = cleanText_(todayValue).replace(/-/g, '/');
   var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
   return withScriptLock_(function() {
-    var records = getPracticeRecordsUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(spreadsheet);
     var seen = {};
-    return records.bookings.filter(function(booking) {
+    var dates = records.bookings.filter(function(booking) {
       return booking.date >= today && booking.date <= throughDate &&
         ([PRACTICE_STATUS.ACTIVE, PRACTICE_STATUS.WAITLISTED].indexOf(booking.status) !== -1 ||
           (booking.status === PRACTICE_STATUS.CONFLICT_CANCELLED && booking.waitlistCalendarId));
@@ -6377,7 +6504,22 @@ function getScheduledPracticeReconciliationDates_(todayValue, throughDateValue) 
       if (seen[date]) return false;
       seen[date] = true;
       return true;
-    }).sort();
+    });
+    if (spreadsheet.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS)) {
+      getStudentPracticeRecordsUnlocked_(spreadsheet).groups.filter(function(group) {
+        return group.date >= today && group.date <= throughDate &&
+          [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION]
+            .indexOf(cleanText_(group.status)) !== -1 &&
+          cleanText_(group.changeStatus) !== STUDENT_PRACTICE_STATUS.CHANGE_PENDING &&
+          !isPracticeIntervalPast_(group.date, group.endTime, currentTimeMs_());
+      }).forEach(function(group) {
+        if (!seen[group.date]) {
+          seen[group.date] = true;
+          dates.push(group.date);
+        }
+      });
+    }
+    return dates.sort();
   });
 }
 

@@ -9171,6 +9171,79 @@ test('five-minute scheduler only runs background practice reconciliation once pe
   assert.equal(third.skipped, false);
 });
 
+test('hourly practice reconciliation alerts admins when an external OB rental displaces student practice', () => {
+  const fixture = createPracticeBackend();
+  fixture.backend.ensureStudentPracticeStructureUnlocked_(fixture.spreadsheet);
+  const qualificationSheet = fixture.spreadsheet.getSheetByName('學生自主練習資格');
+  const groupSheet = fixture.spreadsheet.getSheetByName('學生自主練習場次');
+  const participantSheet = fixture.spreadsheet.getSheetByName('學生自主練習參與者');
+  qualificationSheet.values.push([
+    'student-1', '學生甲', 'student@example.com', 'hash-1', '', '', '', '',
+    '2026-09-12 08:00:00', '2026-09-12 08:00:00', '已確認', '', 'Tako', '', '', '',
+  ]);
+  groupSheet.values.push([
+    'group-1', '2026/09/13', 'A', '10:00', '11:00', '已成立', '',
+    '2026-09-12 08:00:00', '2026-09-12 08:00:00', '學生甲',
+  ]);
+  participantSheet.values.push([
+    'participant-1', 'group-1', 'student-1', '已確認', '已成立',
+    '2026-09-12 08:00:00', '', '', '',
+  ]);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-13T09:00:00+08:00').getTime();
+  fixture.backend.getPracticeCurrentObRowsForDayView_ = (date) => {
+    assert.equal(date, '2026/09/13');
+    return [[
+      '2026/09/13', '10:00', 'A－場地租借', '芊芊♡',
+      'ob-rental-external-1', 'rental-class-1', 'teacher-qian', '否', '2026-09-13 08:30:00', 60,
+    ]];
+  };
+  fixture.backend.getActiveCourseAdminNames_ = () => ['冠蓉', 'Tako'];
+  const deliveries = [];
+  fixture.backend.sendManagedNotification_ = (...args) => {
+    deliveries.push(args);
+    return { accepted: true, recipientNames: ['冠蓉', 'Tako'], error: '' };
+  };
+
+  const first = fixture.backend.runScheduledPracticeReconciliation();
+  const second = fixture.backend.runScheduledPracticeReconciliation();
+
+  assert.equal(first.studentPractice.pending, 1);
+  assert.equal(second.studentPractice.pending, 0);
+  assert.equal(groupSheet.values[1][5], '已成立');
+  assert.equal(groupSheet.values[1][6], '時段異動待處理');
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual(Array.from(deliveries[0][4]), ['冠蓉', 'Tako']);
+  assert.equal(deliveries[0][5], '學生自主練習時段待處理');
+  assert.match(deliveries[0][6], /2026\/09\/13 A 教室 10:00–11:00/);
+  assert.match(deliveries[0][6], /場地租借/);
+  assert.equal(deliveries[0][7], 'student_practice_conflict_group-1_ob-rental-external-1');
+});
+
+test('student practice reconciliation does not send a late conflict alert after the practice has ended', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    groups: [[
+      'group-past', '2026/09/13', 'A', '08:00', '09:00', '已成立', '',
+      '2026-09-12 08:00:00', '2026-09-12 08:00:00', '學生甲',
+    ]],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-13T09:05:00+08:00').getTime();
+  let deliveries = 0;
+  fixture.backend.sendManagedNotification_ = () => { deliveries += 1; };
+
+  const result = fixture.backend.reconcileStudentPracticeGroups_({
+    today: '2026/09/13',
+    throughDate: '2026/09/13',
+    currentObRows: [[
+      '2026/09/13', '08:00', 'A－場地租借', '芊芊♡',
+      'ob-rental-past', 'rental-class-1', 'teacher-qian', '否', '2026-09-13 07:30:00', 60,
+    ]],
+  });
+
+  assert.equal(result.pending, 0);
+  assert.equal(fixture.groupSheet.values[1][6], '');
+  assert.equal(deliveries, 0);
+});
+
 test('course administrator can force refresh one practice date through the authenticated API', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
 

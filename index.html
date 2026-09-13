@@ -3064,7 +3064,7 @@
         blocked = true;
         blockedReason = "提早時間與上一堂課衝突，請聯絡管理員。";
       }
-      if (Number.isFinite(nextMinutes) && endMinutes + 15 > nextMinutes) {
+      if (delay !== 0 && Number.isFinite(nextMinutes) && endMinutes + 15 > nextMinutes) {
         occupiedSubstituteId = String((availability.mergePartnerIds || [])[0] || "")
           .replace(/^leave:/, "");
         blocked = blocked || !occupiedSubstituteId || !(pendingItems || []).some((item) =>

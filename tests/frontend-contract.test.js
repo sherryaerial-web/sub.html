@@ -1815,6 +1815,33 @@ test('ordinary delay preview distinguishes sixty-minute and 綢吊 claims', () =
   ).blocked, true);
 });
 
+test('ordinary original-time preview preserves an existing OB slot with a legacy short turnover gap', () => {
+  const { context } = createFrontendRuntime();
+  const target = {
+    '代課編號': 'leave-chair-yoga',
+    '時段': '12:00',
+    '課程': 'B－椅子瑜伽',
+  };
+  const availability = {
+    'leave-chair-yoga': {
+      startTime: '12:00',
+      nextCourseTime: '13:10',
+      mergePartnerIds: [],
+    },
+  };
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildOrdinaryDelayPreview(target, 0, availability, []))),
+    {
+      actualStartTime: '12:00',
+      endTime: '13:00',
+      nextCourseTime: '13:10',
+      occupiedSubstituteId: '',
+      blocked: false,
+    }
+  );
+});
+
 test('ordinary delayed claim marks the next course as system occupied before submit', async () => {
   const { context } = createFrontendRuntime({
     getClaimOptions: {

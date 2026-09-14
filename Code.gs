@@ -9234,7 +9234,13 @@ function getVvipSettings_(sheet) {
     var key = cleanText_(row[0]);
     if (!key || settings[key] != null) return;
     var value = row[1];
-    settings[key] = key === 'activeMonth' ? normalizeVvipMonthKey_(value) : cleanText_(value);
+    if (key === 'activeMonth') {
+      settings[key] = normalizeVvipMonthKey_(value);
+    } else if (key === 'closeAt' && value && typeof value.getTime === 'function' && !isNaN(value.getTime())) {
+      settings[key] = Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    } else {
+      settings[key] = cleanText_(value);
+    }
   });
   return settings;
 }

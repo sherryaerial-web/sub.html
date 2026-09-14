@@ -7140,6 +7140,20 @@ test('VVIP reads an auto-formatted active month date as the intended month', () 
   assert.equal(backend.isVvipSelectionOpen_(settings), true);
 });
 
+test('VVIP reads an auto-formatted close deadline as a Taipei datetime', () => {
+  const { backend, settingsSheet } = createVvipBackend();
+  backend.Utilities.formatDate = formatTaipeiDate;
+  settingsSheet.values.push([
+    'closeAt', new Date('2099-08-23T12:00:00.000Z'), '', '',
+  ]);
+
+  const settings = backend.getVvipSettings_(settingsSheet);
+
+  assert.equal(settings.closeAt, '2099-08-23 20:00:00');
+  assert.equal(backend.isVvipSelectionOpen_(settings, new Date('2099-08-23T11:59:59.000Z')), true);
+  assert.equal(backend.isVvipSelectionOpen_(settings, new Date('2099-08-23T12:00:00.000Z')), false);
+});
+
 test('VVIP admin includes selections whose month cell was auto-formatted as a date', () => {
   const { backend, adminSession } = createVvipBackend({
     selectionRows: [[

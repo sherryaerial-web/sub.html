@@ -5527,6 +5527,132 @@ test('special claim may start later than the occupied slot and still reserves ev
   assert.equal(adminRecord.specialActualStartTime, '14:00');
 });
 
+test('admin advances an existing special course fifteen minutes without rebuilding its group', () => {
+  const {
+    backend, courseSheet, leaveSheet, specialRequestSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/12', '18:30', 'B－空環 Lv.2', '老師乙', 'cal-advance-1', 'class-ring-2', 'teacher-b', '否', ''],
+      ['2026/09/12', '20:15', 'B－空環 Lv.1', '老師丙', 'cal-later', 'class-ring-1', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/12', '18:30', 'B－空環 Lv.2',
+      '確認中', '', '', '', 'leave-advance-1', 'cal-advance-1',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const claimed = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', substituteIds: ['leave-advance-1'],
+    courseName: '空環主題特別課', durationMinutes: 90, difficulty: 'Lv.2', note: '',
+  });
+
+  const result = backend.advanceSpecialCourseTime_(adminSession, claimed.specialGroupId);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    specialGroupId: claimed.specialGroupId,
+    actualStartTime: '18:15',
+    endTime: '19:45',
+  });
+  assert.equal(specialRequestSheet.values[1][1], claimed.specialGroupId);
+  assert.equal(specialRequestSheet.values[1][7], '18:15');
+  assert.equal(specialRequestSheet.values[1][11], '19:45');
+  assert.deepEqual(specialRequestSheet.values[1].slice(14, 18), ['待處理', '待核對', '', '']);
+  assert.deepEqual(JSON.parse(specialRequestSheet.values[1][6]), ['leave-advance-1']);
+  assert.match(leaveSheet.values[1][7], /實際開始：18:15/);
+  assert.equal(leaveSheet.values[1][24], '19:45');
+  assert.deepEqual(leaveSheet.values[1].slice(8, 18), [
+    '待處理', 'leave-advance-1', 'cal-advance-1', '', '空環主題特別課', 'Lv.2',
+    '需要新增課程', '待核對', '', '',
+  ]);
+  const audit = auditSheet.values.find((row) =>
+    row[2] === '特別課提前 15 分鐘' && row[3] === claimed.specialGroupId
+  );
+  assert.ok(audit);
+  assert.equal(audit[4], '18:30–20:00');
+  assert.equal(audit[5], '18:15–19:45');
+
+  courseSheet.values = [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/09/12', '18:30', 'B－空環主題特別課 Lv.2 (90min)', '老師甲', 'cal-advance-1', 'class-special', 'teacher-a', '否', ''],
+  ];
+  const staleTime = backend.reconcileObChanges_(adminSession);
+  assert.equal(staleTime.exceptions, 1);
+  assert.match(leaveSheet.values[1][17], /時間不一致：預期 18:15，OB 為 18:30/);
+
+  courseSheet.values[1][1] = '18:15';
+  const correctedTime = backend.reconcileObChanges_(adminSession);
+  assert.equal(correctedTime.matched, 1);
+  assert.deepEqual(leaveSheet.values[1].slice(8, 16), [
+    '已完成', 'leave-advance-1', 'cal-advance-1', '', '空環主題特別課', 'Lv.2',
+    '需要新增課程', '已核對',
+  ]);
+});
+
+test('admin cannot advance an existing special course into the previous course turnover', () => {
+  const {
+    backend, leaveSheet, specialRequestSheet, auditSheet, adminSession, teacherASession,
+  } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/12', '17:15', 'B－舞綢 Lv.1', '老師丙', 'cal-previous', 'class-silk-1', 'teacher-c', '否', ''],
+      ['2026/09/12', '18:30', 'B－空環 Lv.2', '老師乙', 'cal-blocked-1', 'class-ring-2', 'teacher-b', '否', ''],
+      ['2026/09/12', '20:15', 'B－空環 Lv.1', '老師丙', 'cal-later', 'class-ring-1', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/09/12', '18:30', 'B－空環 Lv.2',
+      '確認中', '', '', '', 'leave-blocked-1', 'cal-blocked-1',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const claimed = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', substituteIds: ['leave-blocked-1'],
+    courseName: '空環主題特別課', durationMinutes: 90, difficulty: '', note: '',
+  });
+  const beforeLeaves = JSON.stringify(leaveSheet.values);
+  const beforeRequests = JSON.stringify(specialRequestSheet.values);
+  const beforeAudits = JSON.stringify(auditSheet.values);
+
+  assert.throws(
+    () => backend.advanceSpecialCourseTime_(adminSession, claimed.specialGroupId),
+    /上一堂課的 15 分鐘換場衝突/,
+  );
+  assert.equal(JSON.stringify(leaveSheet.values), beforeLeaves);
+  assert.equal(JSON.stringify(specialRequestSheet.values), beforeRequests);
+  assert.equal(JSON.stringify(auditSheet.values), beforeAudits);
+});
+
+test('advancing a special course restores its former delayed continuation to the original time', () => {
+  const { backend, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2', 'class-b', 'teacher-a', '否', ''],
+      ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師甲', 'cal-own-3', 'class-c', 'teacher-a', '否', ''],
+      ['2026/08/10', '13:30', 'A－舞綢 Lv.1', '老師乙', 'cal-next', 'class-d', 'teacher-b', '否', ''],
+    ],
+    leaveRows: [],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const claimed = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', startSlotKey: 'own:cal-own-1', actualStartTime: '09:00',
+    courseName: '雙堂特別課', durationMinutes: 180, difficulty: '', note: '',
+  });
+
+  const result = backend.advanceSpecialCourseTime_(adminSession, claimed.specialGroupId);
+  const continuation = backend.getSpecialRequestContinuation_(specialRequestSheet.values[1]);
+
+  assert.equal(result.actualStartTime, '08:45');
+  assert.equal(result.endTime, '11:45');
+  assert.equal(continuation.originalTime, '12:00');
+  assert.equal(continuation.actualStartTime, '12:00');
+  assert.equal(continuation.delayMinutes, 0);
+  const staleContinuation = backend.getSpecialCourseRequestObOutcome_(specialRequestSheet.values[1], {
+    'cal-own-1': ['2026/08/10', '08:45', 'A－雙堂特別課 (180min)', '老師甲', 'cal-own-1'],
+    'cal-own-3': ['2026/08/10', '12:15', 'A－空環 Lv.3', '老師甲', 'cal-own-3'],
+  });
+  assert.match(staleContinuation.differences.join('；'), /接續常態課：時間不一致.*12:00.*12:15/);
+});
+
 test('special claim rejects more than thirty minutes early, non-quarter-hour, or too-late actual start without writes', () => {
   ['12:45', '13:40', '14:50'].forEach((actualStartTime) => {
     const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({

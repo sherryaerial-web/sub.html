@@ -705,7 +705,8 @@
     .special-claim-summary { margin: 10px 0 12px; padding: 11px 12px; border: 1px solid #d9c5a6; border-radius: var(--radius); background: var(--amber-100); color: var(--ink); font-size: 13px; font-weight: 750; line-height: 1.55; }
     .special-record-group { display: grid; gap: 8px; padding: 12px; border: 1px solid #d3c1ba; border-radius: var(--radius); background: var(--aqua-50); }
     .special-record-group + .special-record-group { margin-top: 10px; }
-    .special-record-heading { color: var(--sea-800); font-size: 12px; font-weight: 750; line-height: 1.55; }
+    .special-record-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--sea-800); font-size: 12px; font-weight: 750; line-height: 1.55; }
+    .special-record-group-action { flex: 0 0 auto; }
     .special-source-list { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 
     .confirmation {
@@ -7861,7 +7862,7 @@
       const identifiers = item.recordType === "specialRequest"
         ? (item.sourceSlots || []).map((slot) => `${slot.sourceType === "own" ? "自己的正課" : "開放代課"} ${slot.time}｜OB Calendar ID ${slot.calendarId || "未提供"}`).join("；")
         : rows.map((row) => `代課編號 ${row.substituteId || "未提供"}｜OB Calendar ID ${row.originalCalendarId || "未提供"}`).join("；");
-      return `<section class="special-record-group"><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item.specialMode || "特別課")}｜${escapeHtml(item.specialDurationMinutes || "待確認")} 分鐘｜${escapeHtml(item.specialActualStartTime || "待確認")}–${escapeHtml(item.specialEndTime || "待確認")}</div><div class="item-meta">${escapeHtml(identifiers)}</div>${rows.map((row) => renderRow(row)).join("")}</section>`;
+      return `<section class="special-record-group"><div class="special-record-heading"><span><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item.specialMode || "特別課")}｜${escapeHtml(item.specialDurationMinutes || "待確認")} 分鐘｜${escapeHtml(item.specialActualStartTime || "待確認")}–${escapeHtml(item.specialEndTime || "待確認")}</span><button class="compact-button special-record-group-action" type="button" data-admin-action="advance-special-time" data-special-group-id="${escapeHtml(group.specialGroupId)}"><i data-lucide="clock-arrow-up"></i>提前 15 分鐘</button></div><div class="item-meta">${escapeHtml(identifiers)}</div>${rows.map((row) => renderRow(row)).join("")}</section>`;
     }
 
     function renderAdminObSections(items, options) {
@@ -7900,7 +7901,8 @@
     }
 
     function renderAdminItem(item, extraHtml = "") {
-      const timeChange = Number(item.startDelayMinutes) !== 0
+      const startDelayMinutes = Number(item.startDelayMinutes);
+      const timeChange = Number.isFinite(startDelayMinutes) && startDelayMinutes !== 0
         ? `<div class="item-meta">調整開始時間：${escapeHtml(item.time)} → ${escapeHtml(item.actualStartTime)}</div>`
         : "";
       const delayOccupancy = item.status === "延後占用"
@@ -7916,7 +7918,9 @@
       const sameDateOptions = (options || []).filter((option) => option.date === item.date);
       if (item.recordType === "specialRequest") {
         const continuationDetail = item.continuation
-          ? `<div class="item-meta"><strong>接續本人常態課</strong>｜請在 OB 將「${escapeHtml(item.continuation.courseName || "本人常態課")}」由 ${escapeHtml(item.continuation.originalTime)} 延後至 ${escapeHtml(item.continuation.actualStartTime)}，並保留原 Calendar ID ${escapeHtml(item.continuation.calendarId || "未提供")}。</div>`
+          ? Number(item.continuation.delayMinutes) > 0
+            ? `<div class="item-meta"><strong>接續本人常態課</strong>｜請在 OB 將「${escapeHtml(item.continuation.courseName || "本人常態課")}」由 ${escapeHtml(item.continuation.originalTime)} 延後至 ${escapeHtml(item.continuation.actualStartTime)}，並保留原 Calendar ID ${escapeHtml(item.continuation.calendarId || "未提供")}。</div>`
+            : `<div class="item-meta"><strong>接續本人常態課</strong>｜請在 OB 讓「${escapeHtml(item.continuation.courseName || "本人常態課")}」維持原時間 ${escapeHtml(item.continuation.originalTime)}，並保留原 Calendar ID ${escapeHtml(item.continuation.calendarId || "未提供")}。</div>`
           : "";
         const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${continuationDetail}${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-special-replacement-select="${escapeHtml(item.specialGroupId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-special-replacement" data-special-group-id="${escapeHtml(item.specialGroupId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
         return renderAdminItem(item, detail);
@@ -8142,6 +8146,16 @@
       await callPostApi("linkSpecialCourseRequestCalendarItem", { specialGroupId, replacementCalendarId });
       setNotice("特別課替代 OB 課程已連結，請重新核對。");
       await fetchAdminDashboard();
+    }
+
+    async function advanceAdminSpecialCourseTime(specialGroupId) {
+      const result = await callPostApi("advanceSpecialCourseTime", { specialGroupId });
+      const continuationNote = result.continuation && Number(result.continuation.delayMinutes) === 0
+        ? `；接續常態課請在 OB 維持或恢復為 ${result.continuation.originalTime}`
+        : "";
+      setNotice(`特別課已調整為 ${result.actualStartTime}–${result.endTime}${continuationNote}；完成 OB 調整後，再同步並重新核對。`);
+      await fetchAdminDashboard();
+      return result;
     }
 
     async function correctClaimDetails(substituteId, difficulty, note) {
@@ -8742,6 +8756,10 @@ https://sherryaerial-web.github.io/sub.html/
           const select = document.querySelector(`[data-special-replacement-select="${CSS.escape(groupId)}"]`);
           if (!select || !select.value) throw new Error("請先選擇替代 OB 課程。");
           await linkAdminSpecialReplacement(groupId, select.value);
+        }
+        if (action === "advance-special-time") {
+          if (!window.confirm("確定將這堂特別課提前 15 分鐘？系統會重新檢查上一堂課的換場時間。")) return;
+          await advanceAdminSpecialCourseTime(button.dataset.specialGroupId);
         }
         if (action === "correct-claim") {
           openRequestDialog({

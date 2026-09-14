@@ -1775,8 +1775,54 @@ test('renders own-course special requests as one teacher record and one admin wo
   assert.match(adminMarkup, /data-admin-action="link-special-replacement"/);
   assert.match(adminMarkup, /接續本人常態課/);
   assert.match(adminMarkup, /請在 OB 將.*A－空環 Lv\.3.*11:00.*11:15/);
+  assert.doesNotMatch(adminMarkup, /調整開始時間：09:00 →\s*</);
   assert.doesNotMatch(adminMarkup, /data-substitute-id=""/);
   assert.match(html, /linkAdminSpecialReplacement\(groupId, select\.value\)/);
+
+  const groupedMarkup = context.renderAdminGroup({
+    specialGroupId: 'special-1',
+    items: [{
+      recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/08/10', time: '09:00',
+      originalCourse: 'A－空環 Lv.1＋A－空環 Lv.2', originalTeacher: '老師甲',
+      substituteTeacher: '老師甲', actualCourse: '舞綢中軸特別課', difficulty: '',
+      status: '待處理', changeStatus: '', sourceSlots, continuation, auditHistory: [],
+      specialMode: '使用連續時段', specialDurationMinutes: 120,
+      specialActualStartTime: '09:00', specialEndTime: '11:00',
+    }],
+  }, (item) => context.renderAdminObItem(item, []));
+  assert.match(groupedMarkup, /class="[^"]*special-record-group-action[^"]*"[^>]*data-admin-action="advance-special-time"/);
+  assert.match(groupedMarkup, /提前 15 分鐘/);
+
+  const restoredContinuationMarkup = context.renderAdminObItem({
+    recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/08/10', time: '08:45',
+    originalCourse: 'A－空環 Lv.1＋A－空環 Lv.2', originalTeacher: '老師甲',
+    substituteTeacher: '老師甲', actualCourse: '舞綢中軸特別課', difficulty: '',
+    status: '待處理', changeStatus: '', sourceSlots,
+    continuation: { ...continuation, actualStartTime: '11:00', delayMinutes: 0 }, auditHistory: [],
+  }, []);
+  assert.match(restoredContinuationMarkup, /接續本人常態課.*維持原時間 11:00/);
+  assert.doesNotMatch(restoredContinuationMarkup, /11:00 延後至 11:00/);
+});
+
+test('admin special-course advance action calls the backend and refreshes the work list', async () => {
+  const { context, getElement, requestActions } = createFrontendRuntime({
+    advanceSpecialCourseTime: {
+      specialGroupId: 'special-advance-1', actualStartTime: '18:15', endTime: '19:45',
+    },
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [],
+      exceptions: [], completed: [], teachers: [], replacementOptions: [],
+    },
+  });
+
+  await context.advanceAdminSpecialCourseTime('special-advance-1');
+
+  assert.deepEqual(
+    requestActions.filter((action) => action === 'advanceSpecialCourseTime' || action === 'getAdminDashboard'),
+    ['advanceSpecialCourseTime', 'getAdminDashboard'],
+  );
+  assert.match(getElement('notice').textContent, /18:15–19:45/);
+  assert.match(getElement('notice').textContent, /OB/);
 });
 
 test('renders delayed claim timing in teacher and admin records without replacement controls on occupancy', () => {

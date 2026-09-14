@@ -7244,8 +7244,16 @@
       const content = byId("admin-tab-content");
       const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
       const operations = (monthly && monthly.operations) || [];
+      const currentDate = monthlyOperationDate(monthly && monthly.now);
       const notificationRetry = operations.find((item) => item.status === "completed" && item.notificationPending && item.canExecute);
-      const nextOperation = notificationRetry || operations.find((item) => item.status !== "completed" && item.canExecute) || null;
+      const nextOperation = notificationRetry || operations
+        .map((item, index) => ({ item, index, date: monthlyOperationDate(item.recommendedAt) }))
+        .filter(({ item, date }) => item.status !== "completed" && item.canExecute && (!currentDate || !date || date >= currentDate))
+        .sort((a, b) => {
+          if (a.date && b.date && a.date !== b.date) return a.date.localeCompare(b.date);
+          if (a.date !== b.date) return a.date ? -1 : 1;
+          return a.index - b.index;
+        })[0]?.item || null;
       const nextRetry = Boolean(nextOperation && nextOperation.status === "completed" && nextOperation.notificationPending);
       const nextAction = nextOperation ? `<article class="monthly-next-card">
         <div>

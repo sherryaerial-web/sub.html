@@ -7866,8 +7866,25 @@
 
     function renderAdminObSections(items, options) {
       const groups = groupSpecialCourseItems(items);
-      const ordinaryGroups = groups.filter((group) => !group.specialGroupId);
-      const specialGroups = groups.filter((group) => group.specialGroupId);
+      const compareGroupsByEffectiveTime = (left, right) => {
+        const leftItem = (left.items || [])[0] || {};
+        const rightItem = (right.items || [])[0] || {};
+        const leftKey = [
+          leftItem.date || "",
+          leftItem.specialActualStartTime || leftItem.actualStartTime || leftItem.time || "",
+          left.specialGroupId || leftItem.substituteId || "",
+        ].join("|");
+        const rightKey = [
+          rightItem.date || "",
+          rightItem.specialActualStartTime || rightItem.actualStartTime || rightItem.time || "",
+          right.specialGroupId || rightItem.substituteId || "",
+        ].join("|");
+        return leftKey.localeCompare(rightKey);
+      };
+      const ordinaryGroups = groups.filter((group) => !group.specialGroupId)
+        .sort(compareGroupsByEffectiveTime);
+      const specialGroups = groups.filter((group) => group.specialGroupId)
+        .sort(compareGroupsByEffectiveTime);
       const renderGroups = (source) => source.map((group) =>
         renderAdminGroup(group, (item) => renderAdminObItem(item, options || []))
       ).join("");

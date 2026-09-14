@@ -2798,6 +2798,39 @@ test('admin OB work renders ordinary courses separately from special-course grou
   assert.ok(markup.indexOf('ordinary-1') < markup.indexOf('special-1'));
 });
 
+test('admin OB work sorts ordinary courses and special-course groups by effective date and time', () => {
+  const { context } = createFrontendRuntime();
+  const markup = context.renderAdminObSections([
+    {
+      substituteId: 'ordinary-late', date: '2026/10/30', time: '12:30', actualStartTime: '12:30',
+      originalCourse: 'B－空環 Lv.1', originalTeacher: '老師甲', substituteTeacher: '老師乙',
+      actualCourse: 'B－空環 Lv.1', status: '已領取', changeStatus: '', auditHistory: [],
+    },
+    {
+      recordType: 'specialRequest', specialGroupId: 'special-late', date: '2026/10/25', time: '12:10',
+      originalCourse: 'C－空環＋C－舞綢', originalTeacher: '老師丙', substituteTeacher: '老師丙',
+      actualCourse: '迷你環舞碼特別課', specialMode: '使用連續時段', specialDurationMinutes: 120,
+      specialActualStartTime: '12:25', specialEndTime: '14:25', status: '待處理', changeStatus: '',
+      sourceSlots: [], auditHistory: [],
+    },
+    {
+      substituteId: 'ordinary-early', date: '2026/10/03', time: '17:00', actualStartTime: '17:00',
+      originalCourse: 'C－舞綢 Lv.1~2', originalTeacher: '老師丁', substituteTeacher: '老師戊',
+      actualCourse: 'C－舞綢 Lv.1~2', status: '已領取', changeStatus: '', auditHistory: [],
+    },
+    {
+      recordType: 'specialRequest', specialGroupId: 'special-early', date: '2026/10/17', time: '11:00',
+      originalCourse: 'C－空環＋C－舞綢', originalTeacher: '老師己', substituteTeacher: '老師己',
+      actualCourse: '雙堂特別課', specialMode: '使用連續時段', specialDurationMinutes: 120,
+      specialActualStartTime: '11:00', specialEndTime: '13:00', status: '待處理', changeStatus: '',
+      sourceSlots: [], auditHistory: [],
+    },
+  ], []);
+
+  assert.ok(markup.indexOf('ordinary-early') < markup.indexOf('ordinary-late'));
+  assert.ok(markup.indexOf('special-early') < markup.indexOf('special-late'));
+});
+
 test('replacement selector only renders OB courses from the same date', () => {
   const { context } = createFrontendRuntime();
   const markup = context.renderAdminObItem({

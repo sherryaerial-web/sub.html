@@ -5101,6 +5101,42 @@ test('special slot planning accepts fifteen-minute steps relative to a non-quart
   assert.equal(plan.endTime, '14:10');
 });
 
+test('special slot planning allows up to thirty minutes early and preserves the previous-course turnover', () => {
+  const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-09';
+  const pendingRows = [
+    ['stamp', '蜜莉 戴', '2026/09/24', '12:10', 'C－空環 Lv.1~2', '確認中', '', '', '', 'leave-offset-1', 'cal-offset-1'],
+    ['stamp', '蜜莉 戴', '2026/09/24', '13:30', 'C－空環 Lv.2~3', '確認中', '', '', '', 'leave-offset-2', 'cal-offset-2'],
+  ];
+  const safeRows = [
+    ['2026/09/24', '10:30', 'C－空環 Lv.1', '老師乙', 'cal-before'],
+    ['2026/09/24', '12:10', 'C－空環 Lv.1~2', '蜜莉 戴', 'cal-offset-1'],
+    ['2026/09/24', '13:30', 'C－空環 Lv.2~3', '蜜莉 戴', 'cal-offset-2'],
+  ];
+
+  const earlyPlan = backend.buildTeacherSpecialCourseSlotPlan_(
+    'Tako', 'leave:leave-offset-1', 120, '11:55', pendingRows, safeRows, 'merge'
+  );
+  assert.equal(earlyPlan.actualStartTime, '11:55');
+  assert.equal(earlyPlan.endTime, '13:55');
+  assert.deepEqual(JSON.parse(JSON.stringify(earlyPlan.orderedSubstituteIds)), [
+    'leave-offset-1', 'leave-offset-2',
+  ]);
+
+  assert.throws(() => backend.buildTeacherSpecialCourseSlotPlan_(
+    'Tako', 'leave:leave-offset-1', 120, '11:25', pendingRows, safeRows, 'merge'
+  ), /最多只能提早 30 分鐘/);
+
+  const turnoverConflictRows = [
+    ['2026/09/24', '10:50', 'C－空環 Lv.1', '老師乙', 'cal-before'],
+    ['2026/09/24', '12:10', 'C－空環 Lv.1~2', '蜜莉 戴', 'cal-offset-1'],
+    ['2026/09/24', '13:30', 'C－空環 Lv.2~3', '蜜莉 戴', 'cal-offset-2'],
+  ];
+  assert.throws(() => backend.buildTeacherSpecialCourseSlotPlan_(
+    'Tako', 'leave:leave-offset-1', 120, '11:55', pendingRows, turnoverConflictRows, 'merge'
+  ), /上一堂課.*15 分鐘換場/);
+});
+
 test('mixed special slot planning accepts an own course followed by an open substitute and rejects private slots', () => {
   const backend = loadBackend();
   backend.getNextMonthKey_ = () => '2026-08';
@@ -5387,8 +5423,8 @@ test('special claim may start later than the occupied slot and still reserves ev
   assert.equal(adminRecord.specialActualStartTime, '14:00');
 });
 
-test('special claim rejects an earlier, non-quarter-hour, or too-late actual start without writes', () => {
-  ['13:15', '13:40', '14:50'].forEach((actualStartTime) => {
+test('special claim rejects more than thirty minutes early, non-quarter-hour, or too-late actual start without writes', () => {
+  ['12:45', '13:40', '14:50'].forEach((actualStartTime) => {
     const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
       nextMonth: '2026-09',
       courseRows: [

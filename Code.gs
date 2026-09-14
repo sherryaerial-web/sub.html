@@ -14178,19 +14178,22 @@ function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationM
   if (!startSlot) throw new Error('找不到指定的特別課時段，請重新整理。');
 
   var occupancyStartMinutes = timeTextToMinutes_(startSlot.time);
-  var schedule = (courseRows || []).map(function(row) {
+  var fullSchedule = (courseRows || []).map(function(row) {
     var time = formatMyTime(row && row[1]);
     return {
       date: formatMyDate(row && row[0]),
       room: getCourseRoom_(row && row[2]),
       time: time,
       minutes: timeTextToMinutes_(time),
-      calendarId: cleanText_(row && row[4])
+      calendarId: cleanText_(row && row[4]),
+      durationMinutes: getScheduledCourseDurationMinutes_(row && row[2])
     };
   }).filter(function(course) {
-    return course.date === startSlot.date && course.room === startSlot.room &&
-      course.minutes >= occupancyStartMinutes;
+    return course.date === startSlot.date && course.room === startSlot.room && course.minutes >= 0;
   }).sort(function(a, b) { return a.minutes - b.minutes; });
+  var schedule = fullSchedule.filter(function(course) {
+    return course.minutes >= occupancyStartMinutes;
+  });
 
   if (!schedule.some(function(course) { return course.calendarId === startSlot.calendarId; })) {
     throw new Error(
@@ -14204,8 +14207,14 @@ function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationM
   if (actualStartMinutes < 0 || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
     throw new Error('實際開始時間必須從所選時段起，以 15 分鐘為單位調整。');
   }
-  if (actualStartMinutes < occupancyStartMinutes) {
-    throw new Error('實際開始時間不可早於所選時段 ' + startSlot.time + '。');
+  if (actualStartMinutes < occupancyStartMinutes - 30) {
+    throw new Error('實際開始時間最多只能提早 30 分鐘。');
+  }
+  var previousCourse = fullSchedule.filter(function(course) {
+    return course.minutes < occupancyStartMinutes;
+  }).slice(-1)[0] || null;
+  if (previousCourse && actualStartMinutes < previousCourse.minutes + previousCourse.durationMinutes + 15) {
+    throw new Error('實際開始時間與上一堂課的 15 分鐘換場衝突。');
   }
   var firstFollowingCourse = schedule.filter(function(course) {
     return course.minutes > occupancyStartMinutes;
@@ -14293,18 +14302,22 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
     throw new Error('特別課的日期、時間、教室或 OB Calendar ID 資料不完整。');
   }
 
-  var schedule = (courseRows || []).map(function(row) {
+  var fullSchedule = (courseRows || []).map(function(row) {
     var time = formatMyTime(row && row[1]);
     return {
       date: formatMyDate(row && row[0]),
       room: getCourseRoom_(row && row[2]),
       time: time,
       minutes: timeTextToMinutes_(time),
-      calendarId: cleanText_(row && row[4])
+      calendarId: cleanText_(row && row[4]),
+      durationMinutes: getScheduledCourseDurationMinutes_(row && row[2])
     };
   }).filter(function(course) {
-    return course.date === date && course.room === room && course.minutes >= occupancyStartMinutes;
+    return course.date === date && course.room === room && course.minutes >= 0;
   }).sort(function(a, b) { return a.minutes - b.minutes; });
+  var schedule = fullSchedule.filter(function(course) {
+    return course.minutes >= occupancyStartMinutes;
+  });
 
   if (!schedule.some(function(course) { return course.calendarId === startCalendarId; })) {
     throw new Error(date + ' ' + room + ' 教室 ' + occupancyStartTime + ' 尚未出現在 OB 課表，請通知管理員重新同步。');
@@ -14315,8 +14328,14 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
   if (actualStartMinutes < 0 || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
     throw new Error('實際開始時間必須從所選時段起，以 15 分鐘為單位調整。');
   }
-  if (actualStartMinutes < occupancyStartMinutes) {
-    throw new Error('實際開始時間不可早於所選時段 ' + occupancyStartTime + '。');
+  if (actualStartMinutes < occupancyStartMinutes - 30) {
+    throw new Error('實際開始時間最多只能提早 30 分鐘。');
+  }
+  var previousCourse = fullSchedule.filter(function(course) {
+    return course.minutes < occupancyStartMinutes;
+  }).slice(-1)[0] || null;
+  if (previousCourse && actualStartMinutes < previousCourse.minutes + previousCourse.durationMinutes + 15) {
+    throw new Error('實際開始時間與上一堂課的 15 分鐘換場衝突。');
   }
   var firstFollowingCourse = schedule.filter(function(course) {
     return course.minutes > occupancyStartMinutes;

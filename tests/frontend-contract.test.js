@@ -1501,7 +1501,7 @@ test('separates ordinary substitute handling from the special-course flow', () =
   const specialStartSelect = html.match(/<select id="special-actual-start"[\s\S]*?<\/select>/)?.[0] || '';
   assert.doesNotMatch(specialStartSelect, /開始時段預設為第一門課程開始時間/);
   assert.equal((html.match(/請先勾選第一堂課程/g) || []).length, 2);
-  assert.match(html, /只能延後，並以 15 分鐘為單位/);
+  assert.match(html, /可提早 15 或 30 分鐘，也可延後；所有時間都須保留前後 15 分鐘換場/);
   assert.match(html, /難度／等級（如有）/);
   assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
   assert.match(html, /自訂分鐘數（90–240）/);
@@ -1729,6 +1729,7 @@ test('special-course draft delays the actual start while reserving every occupie
   const availability = {
     'leave-a': {
       room: 'B', date: '2026/09/12', startTime: '13:30', nextCourseTime: '15:00',
+      previousCourseTime: '11:30', earliestStartTime: '12:45',
       mergePartnerIds: ['leave-b'], maxDurationMinutes: 75,
     },
     'leave-b': {
@@ -1753,10 +1754,10 @@ test('special-course draft delays the actual start while reserving every occupie
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.getSpecialCourseStartTimeOptions('leave-a', 90, availability))),
-    ['13:30', '13:45', '14:00', '14:15', '14:30', '14:45'],
+    ['13:00', '13:15', '13:30', '13:45', '14:00', '14:15', '14:30', '14:45'],
   );
 
-  ['13:15', '13:40', '14:50'].forEach((actualStartTime) => {
+  ['12:45', '13:40', '14:50'].forEach((actualStartTime) => {
     assert.throws(() => context.validateSpecialCourseDraft({
       mode: 'merge', substituteIds: ['leave-a'], actualStartTime,
       courseName: '主題課', durationMinutes: 90, note: '',
@@ -1786,12 +1787,34 @@ test('special-course draft delays the actual start while reserving every occupie
       endTime: '15:30',
     },
   });
+
+  const turnoverBlockedAvailability = {
+    ...availability,
+    'leave-a': {
+      ...availability['leave-a'],
+      previousCourseTime: '12:00',
+      earliestStartTime: '13:15',
+    },
+  };
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getSpecialCourseStartTimeOptions(
+      'leave-a', 90, turnoverBlockedAvailability
+    ))),
+    ['13:15', '13:30', '13:45', '14:00', '14:15', '14:30', '14:45'],
+  );
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'merge', startSlotKey: 'leave-a', actualStartTime: '13:00',
+    courseName: '主題課', durationMinutes: 90, note: '',
+  }, turnoverBlockedAvailability), /上一堂課.*15 分鐘換場/);
 });
 
 test('single-slot special course blocks a gap shorter than 90 minutes after turnover', () => {
   const { context } = createFrontendRuntime();
   const availability = {
-    'leave-tight': { mergePartnerIds: ['leave-next'], maxDurationMinutes: 75 },
+    'leave-tight': {
+      startTime: '13:30', earliestStartTime: '13:30', nextCourseTime: '15:00',
+      mergePartnerIds: ['leave-next'], maxDurationMinutes: 75,
+    },
   };
 
   assert.equal(
@@ -1802,6 +1825,29 @@ test('single-slot special course blocks a gap shorter than 90 minutes after turn
   assert.throws(() => context.validateSpecialCourseDraft({
     mode: 'vacancy', substituteIds: ['leave-tight'], courseName: '主題課', durationMinutes: 90, note: '',
   }, availability), /不足 90 分鐘.*使用連續時段/);
+
+  const earlyEligible = {
+    'leave-tight': {
+      room: 'B', date: '2026/09/12', startTime: '13:30', earliestStartTime: '13:00',
+      nextCourseTime: '15:00', mergePartnerIds: ['leave-next'], maxDurationMinutes: 75,
+    },
+    'leave-next': {
+      room: 'B', date: '2026/09/12', startTime: '15:00', nextCourseTime: '',
+      mergePartnerIds: [], maxDurationMinutes: 240,
+    },
+  };
+  assert.equal(context.getSingleSlotSpecialCourseBlockReason(earlyEligible['leave-tight']), '');
+  assert.match(context.getSingleSlotSpecialCourseBlockReason({
+    startTime: '13:30', earliestStartTime: '13:05', maxDurationMinutes: 65,
+  }), /不足 90 分鐘/);
+  assert.doesNotThrow(() => context.validateSpecialCourseDraft({
+    mode: 'vacancy', substituteIds: ['leave-tight'], actualStartTime: '13:15',
+    courseName: '主題課', durationMinutes: 90, note: '',
+  }, earlyEligible));
+  assert.throws(() => context.validateSpecialCourseDraft({
+    mode: 'vacancy', substituteIds: ['leave-tight'], actualStartTime: '13:30',
+    courseName: '主題課', durationMinutes: 90, note: '',
+  }, earlyEligible), /最多只能安排 75 分鐘/);
 });
 
 test('ordinary start delay appears only inside the adjustment panel', () => {
@@ -2054,9 +2100,11 @@ test('special-course preview clearly marks each automatically included later slo
 
   context.updateSpecialClaimSummary();
   assert.match(getElement('special-claim-summary').textContent, /將占用 C 教室 12:10、13:30/);
+  getElement('special-actual-start').value = '';
   context.updateSpecialSelectionConstraints(source.checkbox);
 
   assert.equal(source.checkbox.checked, true);
+  assert.equal(getElement('special-actual-start').value, '12:10');
   assert.equal(next.checkbox.checked, false);
   assert.equal(next.checkbox.disabled, true);
   assert.equal(next.checkbox.indeterminate, true);
@@ -3043,12 +3091,12 @@ test('renders admin pending dates collapsed with weekday and course count', () =
 test('admin invitation rounds keep the fixed teaching roster and invited positions', () => {
   const { context } = createFrontendRuntime();
   const roster = [
-    '卡拉 卡拉', '芊芊♡', 'Tako', '@N.a🧘🏻♀️', '蜜莉 戴',
-    'Liz 🌰', 'Jina', 'Ariel Lu', '珍珍', '小mo(子涵）',
-    'Vicky Lee', '萱', 'Vivi', '小琪', 'Chloe Lee',
-    '芮錤 77', '巧', 'Carrie🐟', '嗨底 Heidi', '壹壹',
-    'wen', 'Chin', 'Melody Wang', 'Lily Yellow', '姝姝',
-    '妙妙 簡', '寧寧', 'Sherry❤雪莉', 'Josty Lin', 'XUAN',
+    '卡拉 卡拉', 'Sherry❤雪莉', '芊芊♡', 'Tako', '@N.a🧘🏻♀️',
+    '蜜莉 戴', 'Liz 🌰', 'Jina', 'Ariel Lu', '珍珍',
+    '小mo(子涵）', 'Vicky Lee', '萱', 'Vivi', '小琪',
+    'Chloe Lee', '芮錤 77', '巧', 'Carrie🐟', '嗨底 Heidi',
+    '壹壹', 'wen', 'Chin', 'Melody Wang', 'Lily Yellow',
+    '姝姝', '妙妙 簡', '寧寧', 'Josty Lin', 'XUAN',
     '番茄🍅', 'Sue',
   ];
   const rounds = JSON.parse(JSON.stringify(context.buildAdminInvitationRounds(
@@ -3063,7 +3111,7 @@ test('admin invitation rounds keep the fixed teaching roster and invited positio
   assert.deepEqual(rounds[7].teachers.map((teacher) => teacher.name), ['狗狗 陳', '新老師']);
   assert.equal(rounds[7].label, '其他老師');
   assert.equal(rounds[0].teachers[0].invited, true);
-  assert.equal(rounds[0].teachers[2].invited, true);
+  assert.equal(rounds[0].teachers[3].invited, true);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '冠蓉'), false);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '狗狗 陳'), true);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === 'Angela Chuang'), false);

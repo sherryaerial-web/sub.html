@@ -9684,7 +9684,7 @@ function setVvipSettingRowsUnlocked_(sheet, updates, actor) {
 
 function setVvipSelectionOpen_(session, open, closeAtValue) {
   var actor = assertCapabilitySession_(session, 'vvip_admin');
-  var shouldOpen = open === true;
+  var shouldOpen = parseBoolean_(open, 'VVIP 開放狀態');
   var closeAt = shouldOpen ? normalizeVvipCloseAt_(closeAtValue) : '';
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();

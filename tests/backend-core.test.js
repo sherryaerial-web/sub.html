@@ -7581,6 +7581,18 @@ test('VVIP public POST rejects closed periods, inactive members, missing IDs, an
   assert.equal(selectionSheet.values.length, 1);
 });
 
+test('VVIP admin open accepts the form-encoded true value sent by the frontend', () => {
+  const { backend, adminSession, settingsSheet } = createVvipBackend({ open: false });
+
+  const result = backend.setVvipSelectionOpen_(adminSession, 'true', '2099-08-23 20:00');
+  const settings = backend.getVvipSettings_(settingsSheet);
+
+  assert.equal(result.isOpen, true);
+  assert.equal(settings.isOpen, '是');
+  assert.equal(settings.closeAt, '2099-08-23 20:00:00');
+  assert.equal(backend.isVvipSelectionOpen_(settings), true);
+});
+
 test('VVIP public routes use POST without a session and never accept Email in GET', () => {
   const { backend } = createVvipBackend();
   backend.console.error = () => {};

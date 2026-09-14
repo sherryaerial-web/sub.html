@@ -8025,8 +8025,11 @@
 
     async function resolveAdminChangeRequest(substituteId, decision, reason) {
       const result = await callPostApi("resolveChangeRequest", { substituteId, decision, reason });
-      const needsObRestore = decision === "approve" && ["cancellation", "withdrawal"].includes(result.requestType);
-      setNotice(needsObRestore
+      const withdrawalReopened = decision === "approve" && result.requestType === "withdrawal";
+      const needsObRestore = decision === "approve" && result.requestType === "cancellation";
+      setNotice(withdrawalReopened
+        ? "退出申請已核准，課程已重新開放領取。"
+        : needsObRestore
         ? "申請已核准。請先在 OB 恢復原課程，再依序按「同步 OB 課表」與「重新核對 OB」；核對完成後才會重新開放。"
         : (decision === "approve" ? "申請已核准。" : "申請已駁回。"));
       await fetchAdminDashboard();

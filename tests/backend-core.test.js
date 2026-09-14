@@ -5948,7 +5948,7 @@ test('withdraw request requires the current substitute and a reason', () => {
   assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-claimed')[18], '申請退出中');
 });
 
-test('admin-approved withdraw stays in OB restore work until reconciliation then reopens', () => {
+test('admin-approved withdrawal immediately reopens the course without OB reconciliation', () => {
   const {
     backend,
     leaveSheet,
@@ -5965,6 +5965,11 @@ test('admin-approved withdraw stays in OB restore work until reconciliation then
   });
   backend.openInvitations_(adminSession, ['老師甲']);
   backend.requestClaimWithdrawal_(teacherBSession, 'leave-withdraw', '手腕受傷');
+  const pushes = [];
+  backend.sendPushNotificationSafely_ = (names, message) => {
+    pushes.push({ names: names.slice(), message });
+    return { attempted: true, delivered: 1, error: '' };
+  };
 
   const result = backend.resolveChangeRequest_(adminSession, 'leave-withdraw', 'approve', '同意重新開放');
 
@@ -5975,26 +5980,20 @@ test('admin-approved withdraw stays in OB restore work until reconciliation then
   assert.equal(row[5], '確認中');
   assert.equal(row[6], '');
   assert.equal(row[7], '');
-  assert.equal(row[8], '待回復');
-  assert.deepEqual(row.slice(11, 18), ['', '', '', '', '待回復 OB', '', '']);
-  assert.equal(row[15], '待回復 OB');
-  assert.equal(row[18], '退出後待回復 OB');
-  assert.equal(row[19], '');
-  assert.match(auditSheet.values.at(-1)[6], /原代課老師：老師乙/);
-
-  const beforeRestore = backend.getAdminDashboard_(adminSession);
-  assert.ok(beforeRestore.obWork.some((item) => item.substituteId === 'leave-withdraw'));
-  assert.ok(!beforeRestore.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
-  assert.ok(!backend.getAvailableSubstitutes_(teacherASession)
-    .some((item) => item['代課編號'] === 'leave-withdraw'));
-  const reconciliation = backend.reconcileObChanges_(adminSession);
-  assert.equal(reconciliation.matched, 1);
   assert.equal(row[8], '');
+  assert.deepEqual(row.slice(11, 18), ['', '', '', '', '', '', '']);
   assert.equal(row[15], '');
   assert.equal(row[18], '');
-  const afterRestore = backend.getAdminDashboard_(adminSession);
-  assert.ok(!afterRestore.obWork.some((item) => item.substituteId === 'leave-withdraw'));
-  assert.ok(afterRestore.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
+  assert.equal(row[19], '');
+  assert.match(auditSheet.values.at(-1)[6], /原代課老師：老師乙/);
+  assert.equal(auditSheet.values.at(-1)[5], '已重新開放');
+  assert.deepEqual(JSON.parse(JSON.stringify(pushes[0].names)), ['老師乙']);
+  assert.match(pushes[0].message.content, /已重新開放/);
+  assert.doesNotMatch(pushes[0].message.content, /OB 回復後/);
+
+  const dashboard = backend.getAdminDashboard_(adminSession);
+  assert.ok(!dashboard.obWork.some((item) => item.substituteId === 'leave-withdraw'));
+  assert.ok(dashboard.pendingInvitations.some((item) => item.substituteId === 'leave-withdraw'));
   assert.ok(backend.getAvailableSubstitutes_(teacherASession)
     .some((item) => item['代課編號'] === 'leave-withdraw'));
 });
@@ -6024,24 +6023,21 @@ test('withdraw approval or rejection notifies the requesting substitute without 
   assert.match(pushes[0].message.url, /view=mysubs/);
 });
 
-test('stale claim cannot consume withdrawal restore work or clear its restore state', () => {
+test('stale claim cannot consume legacy withdrawal restore work or clear its restore state', () => {
   const {
     backend,
     leaveSheet,
     auditSheet,
     adminSession,
     teacherASession,
-    teacherBSession,
   } = createInvitationBackend({
     leaveRows: [[
-      '時間', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '已領取', '老師乙',
-      '沿用原課程', '待處理', 'leave-withdraw-stale', 'calendar-c', 'class-ring-1',
-      '空環 Lv.1', '', '沿用原課程', '待核對', '', '', '', '空環',
+      '時間', '老師丙', '2026/08/12', '12:00', '空環 Lv.1', '確認中', '',
+      '', '待回復', 'leave-withdraw-stale', 'calendar-c', '', '', '', '',
+      '待回復 OB', '', '', '退出後待回復 OB', '', '',
     ]],
   });
   backend.openInvitations_(adminSession, ['老師甲']);
-  backend.requestClaimWithdrawal_(teacherBSession, 'leave-withdraw-stale', '臨時受傷');
-  backend.resolveChangeRequest_(adminSession, 'leave-withdraw-stale', 'approve', '等待 OB 回復');
   const leaveBefore = JSON.stringify(leaveSheet.getDataRange().getValues());
   const auditBefore = JSON.stringify(auditSheet.getDataRange().getValues());
 

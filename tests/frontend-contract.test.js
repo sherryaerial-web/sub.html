@@ -2701,7 +2701,7 @@ test('admin cancellation history does not expose resolution actions after the re
   assert.match(getElement('admin-tab-content').innerHTML, />駁回</);
 });
 
-test('approved withdrawal tells the administrator how to reopen the course', async () => {
+test('approved withdrawal tells the administrator the course is immediately reopened', async () => {
   const { context, getElement } = createFrontendRuntime({
     resolveChangeRequest: {
       substituteId: 'withdrawal-1', requestType: 'withdrawal', decision: 'approve', status: '確認中',
@@ -2714,9 +2714,8 @@ test('approved withdrawal tells the administrator how to reopen the course', asy
 
   await context.resolveAdminChangeRequest('withdrawal-1', 'approve', '');
 
-  assert.match(getElement('notice').textContent, /同步 OB 課表/);
-  assert.match(getElement('notice').textContent, /重新核對 OB/);
-  assert.match(getElement('notice').textContent, /重新開放/);
+  assert.match(getElement('notice').textContent, /已重新開放領取/);
+  assert.doesNotMatch(getElement('notice').textContent, /同步 OB 課表|重新核對 OB/);
 });
 
 test('linked replacement course reports immediate reconciliation result', async () => {

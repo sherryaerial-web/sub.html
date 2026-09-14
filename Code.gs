@@ -15689,12 +15689,12 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
         row[5] = '確認中';
         row[6] = '';
         row[7] = '';
-        row[8] = '待回復';
+        row[8] = '';
         for (var index = 11; index <= 17; index++) row[index] = '';
-        row[15] = '待回復 OB';
-        row[18] = '退出後待回復 OB';
+        row[18] = '';
         row[19] = '';
         row[20] = '';
+        auditAfter = '已重新開放';
         action = '核准退出代課';
       } else {
         row[18] = '退出申請已駁回';
@@ -15713,7 +15713,7 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
       pushMessage = {
         heading: normalizedDecision === 'approve' ? '退出代課已核准' : '退出代課未核准',
         content: normalizedDecision === 'approve'
-          ? '管理員已核准退出申請，該課將在 OB 回復後重新開放。'
+          ? '管理員已核准退出申請，該課已重新開放領取。'
           : '管理員已駁回退出申請' + (resolutionReason ? '：' + resolutionReason : '。'),
         url: buildAppViewUrl_('mysubs')
       };

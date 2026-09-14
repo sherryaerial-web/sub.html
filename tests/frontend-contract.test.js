@@ -765,6 +765,74 @@ test('admin home does not keep an expired optional reminder after later monthly 
   assert.doesNotMatch(rendered, /發送請假截止提醒/);
 });
 
+test('admin home surfaces the VVIP phase while substitute claims may still overlap', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'],
+      monthlyOperations: {
+        month: '2026-09', now: '2026-09-14 14:56',
+        schedule: {
+          bookingDate: '2026-09-18',
+          vvipPrepareAt: '2026-09-13 21:00',
+          vvipOpenAt: '2026-09-14 21:00',
+          vvipCloseAt: '2026-09-17 21:00',
+          generalBookingAt: '2026-09-18 21:00',
+        },
+        systemState: { leavePaused: true, claimsPaused: false, openInvitationCount: 33 },
+        automaticReminders: [],
+        operations: [
+          { id: 'open_leave', label: '開放請假並通知', recommendedAt: '2026-09-07 21:00', canExecute: true, status: 'completed', notificationPending: false },
+          { id: 'close_leave', label: '結束請假', recommendedAt: '2026-09-11 21:00', canExecute: true, status: 'completed', notificationPending: false },
+          { id: 'open_substitute', label: '開放代課／特別課並通知', recommendedAt: '2026-09-11 21:00', canExecute: true, status: 'completed', notificationPending: false },
+          { id: 'close_substitute', label: '結束代課／特別課並通知', recommendedAt: '2026-09-16 21:00', canExecute: true, status: 'pending', notificationPending: false },
+        ],
+        templates: {},
+      },
+      closureWindows: [], schedules: [], history: [],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin', 'vvip_admin'];", context);
+
+  await context.fetchNotificationAdminDashboard();
+  vm.runInContext('renderAdminHome();', context);
+
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /處理 VVIP 選課/);
+  assert.match(rendered, /09\/14 21:00.*09\/17 21:00/);
+  assert.match(rendered, /data-admin-action="open-monthly-vvip"/);
+  assert.doesNotMatch(rendered, /本月下一步[\s\S]*結束代課／特別課並通知/);
+});
+
+test('admin home continues from VVIP to the general booking phase', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉', 'Tako'], administrators: ['冠蓉', 'Tako'],
+      monthlyOperations: {
+        month: '2026-09', now: '2026-09-18 10:00',
+        schedule: {
+          bookingDate: '2026-09-18',
+          vvipPrepareAt: '2026-09-13 21:00',
+          vvipOpenAt: '2026-09-14 21:00',
+          vvipCloseAt: '2026-09-17 21:00',
+          generalBookingAt: '2026-09-18 21:00',
+        },
+        systemState: { leavePaused: true, claimsPaused: true, openInvitationCount: 0 },
+        automaticReminders: [], operations: [], templates: {},
+      },
+      closureWindows: [], schedules: [], history: [],
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin', 'vvip_admin'];", context);
+
+  await context.fetchNotificationAdminDashboard();
+  vm.runInContext('renderAdminHome();', context);
+
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /準備開放一般預約/);
+  assert.match(rendered, /建議時間：09\/18 21:00/);
+  assert.doesNotMatch(rendered, /目前沒有待處理流程/);
+});
+
 test('notification center reveals compact forms only in their selected workspace', async () => {
   const dashboard = {
     teachers: ['冠蓉', 'Tako', 'Jina'], administrators: ['冠蓉', 'Tako'], closureWindows: [], history: [],

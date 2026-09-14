@@ -7291,20 +7291,53 @@
         ${discountHistory ? `<details class="admin-control"><summary><strong>過去優惠課紀錄</strong></summary><div style="margin-top:10px">${discountHistory}</div></details>` : ""}`;
     }
 
+    function getMonthlyHomeNextStep(monthly) {
+      if (!monthly) return null;
+      const operations = monthly.operations || [];
+      const currentDate = monthlyOperationDate(monthly.now);
+      const notificationRetry = operations.find((item) => item.status === "completed" && item.notificationPending && item.canExecute);
+      if (notificationRetry) return { kind: "operation", item: notificationRetry, sortDate: currentDate, sortOrder: -1 };
+
+      const candidates = operations
+        .map((item, index) => ({ kind: "operation", item, index, sortDate: monthlyOperationDate(item.recommendedAt) }))
+        .filter(({ item, sortDate }) => item.status !== "completed" && item.canExecute && (!currentDate || !sortDate || sortDate >= currentDate));
+      const schedule = monthly.schedule || {};
+      const vvipPrepareDate = monthlyOperationDate(schedule.vvipPrepareAt);
+      const vvipOpenDate = monthlyOperationDate(schedule.vvipOpenAt);
+      const vvipCloseDate = monthlyOperationDate(schedule.vvipCloseAt);
+      const generalBookingDate = monthlyOperationDate(schedule.generalBookingAt);
+
+      if (currentDate && vvipPrepareDate && vvipCloseDate && currentDate <= vvipCloseDate) {
+        candidates.push({
+          kind: "vvip",
+          sortDate: currentDate >= vvipPrepareDate ? currentDate : vvipPrepareDate,
+          sortOrder: operations.length,
+          label: "處理 VVIP 選課",
+          recommendedAt: schedule.vvipOpenAt,
+          periodEndAt: schedule.vvipCloseAt
+        });
+      } else if (currentDate && generalBookingDate && currentDate <= generalBookingDate) {
+        candidates.push({
+          kind: "generalBooking",
+          sortDate: generalBookingDate,
+          sortOrder: operations.length + 1,
+          label: "準備開放一般預約",
+          recommendedAt: schedule.generalBookingAt
+        });
+      }
+
+      return candidates.sort((a, b) => {
+        if (a.sortDate && b.sortDate && a.sortDate !== b.sortDate) return a.sortDate.localeCompare(b.sortDate);
+        if (a.sortDate !== b.sortDate) return a.sortDate ? -1 : 1;
+        return Number(a.sortOrder ?? a.index ?? 0) - Number(b.sortOrder ?? b.index ?? 0);
+      })[0] || null;
+    }
+
     function renderAdminHome() {
       const content = byId("admin-tab-content");
       const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
-      const operations = (monthly && monthly.operations) || [];
-      const currentDate = monthlyOperationDate(monthly && monthly.now);
-      const notificationRetry = operations.find((item) => item.status === "completed" && item.notificationPending && item.canExecute);
-      const nextOperation = notificationRetry || operations
-        .map((item, index) => ({ item, index, date: monthlyOperationDate(item.recommendedAt) }))
-        .filter(({ item, date }) => item.status !== "completed" && item.canExecute && (!currentDate || !date || date >= currentDate))
-        .sort((a, b) => {
-          if (a.date && b.date && a.date !== b.date) return a.date.localeCompare(b.date);
-          if (a.date !== b.date) return a.date ? -1 : 1;
-          return a.index - b.index;
-        })[0]?.item || null;
+      const nextStep = getMonthlyHomeNextStep(monthly);
+      const nextOperation = nextStep && nextStep.kind === "operation" ? nextStep.item : null;
       const nextRetry = Boolean(nextOperation && nextOperation.status === "completed" && nextOperation.notificationPending);
       const nextAction = nextOperation ? `<article class="monthly-next-card">
         <div>
@@ -7314,6 +7347,21 @@
           <div class="monthly-operation-status"><span class="status-pill">${escapeHtml(monthlyOperationStatusLabel(nextOperation))}</span></div>
         </div>
         <button class="${nextRetry ? "danger-button" : "primary-button"} inline-button" type="button" data-admin-action="execute-monthly-operation" data-operation-id="${escapeHtml(nextOperation.id)}"><i data-lucide="${nextRetry ? "refresh-cw" : "play"}"></i>${escapeHtml(nextRetry ? "重試通知" : nextOperation.label)}</button>
+      </article>` : nextStep && nextStep.kind === "vvip" ? `<article class="monthly-next-card">
+        <div>
+          <div class="monthly-next-label">本月下一階段</div>
+          <h3 class="monthly-next-title">${escapeHtml(nextStep.label)}</h3>
+          <div class="item-meta">建議期間：${escapeHtml(formatMonthlyOperationsAt(nextStep.recommendedAt))}–${escapeHtml(formatMonthlyOperationsAt(nextStep.periodEndAt))}</div>
+          <div class="monthly-operation-status"><span class="status-pill">代課與 VVIP 可同時進行</span></div>
+        </div>
+        <button class="primary-button inline-button" type="button" data-admin-action="open-monthly-vvip"><i data-lucide="crown"></i>前往 VVIP 管理</button>
+      </article>` : nextStep && nextStep.kind === "generalBooking" ? `<article class="monthly-next-card">
+        <div>
+          <div class="monthly-next-label">本月下一階段</div>
+          <h3 class="monthly-next-title">${escapeHtml(nextStep.label)}</h3>
+          <div class="item-meta">建議時間：${escapeHtml(formatMonthlyOperationsAt(nextStep.recommendedAt))}</div>
+          <div class="monthly-operation-status"><span class="status-pill">請確認 OB 後正式開放</span></div>
+        </div>
       </article>` : `<article class="monthly-next-card"><div><div class="monthly-next-label">本月進度</div><h3 class="monthly-next-title">目前沒有待處理流程</h3></div></article>`;
       content.innerHTML = `<div class="admin-home-grid">
         <section class="admin-home-card">

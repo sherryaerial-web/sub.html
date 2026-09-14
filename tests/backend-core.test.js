@@ -5045,12 +5045,18 @@ test('special availability uses generic slot keys for own and open substitute co
   );
 
   assert.deepEqual(JSON.parse(JSON.stringify(availability['own:cal-own-1'])), {
+    slotKey: 'own:cal-own-1', sourceType: 'own', substituteId: '',
+    calendarId: 'cal-own-1', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲',
+    durationMinutes: 60,
     room: 'A', date: '2026/08/10', startTime: '09:00', nextCourseTime: '10:30',
     previousCourseTime: '', earliestStartTime: '',
     maxDurationMinutes: 75, mergePartnerIds: ['leave:leave-open-1'],
     requiresClosingTimeConfirmation: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(availability['leave:leave-open-1'])), {
+    slotKey: 'leave:leave-open-1', sourceType: 'leave', substituteId: 'leave-open-1',
+    calendarId: 'cal-leave-1', courseName: 'A－舞綢 Lv.1', originalTeacher: '老師乙',
+    durationMinutes: 60,
     room: 'A', date: '2026/08/10', startTime: '10:30', nextCourseTime: '12:00',
     previousCourseTime: '09:00', earliestStartTime: '10:15',
     maxDurationMinutes: 75, mergePartnerIds: [], requiresClosingTimeConfirmation: false,
@@ -5077,6 +5083,56 @@ test('own course special slot planning accepts consecutive own courses without c
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(plan.orderedSubstituteIds)), []);
   assert.equal(plan.endTime, '11:00');
+});
+
+test('special slot planning keeps an immediately following own class separate and delays it fifteen minutes', () => {
+  const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-08';
+  const courseRows = [
+    ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
+    ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2'],
+    ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師甲', 'cal-own-3'],
+    ['2026/08/10', '13:30', 'A－舞綢 Lv.1', '老師乙', 'cal-next'],
+  ];
+
+  const plan = backend.buildTeacherSpecialCourseSlotPlan_(
+    '老師甲', 'own:cal-own-1', 180, '09:00', [], courseRows, 'merge'
+  );
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(plan.orderedSlots.map((slot) => slot.slotKey))),
+    ['own:cal-own-1', 'own:cal-own-2']
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.continuation)), {
+    slotKey: 'own:cal-own-3',
+    sourceType: 'own-continuation',
+    calendarId: 'cal-own-3',
+    date: '2026/08/10',
+    room: 'A',
+    courseName: 'A－空環 Lv.3',
+    originalTeacher: '老師甲',
+    originalTime: '12:00',
+    actualStartTime: '12:15',
+    delayMinutes: 15,
+    durationMinutes: 60,
+    endTime: '13:15',
+  });
+  assert.equal(plan.nextCourse.time, '13:30');
+});
+
+test('special slot planning rejects a continuation shift without fifteen-minute turnover before the fourth class', () => {
+  const backend = loadBackend();
+  backend.getNextMonthKey_ = () => '2026-08';
+  const courseRows = [
+    ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1'],
+    ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2'],
+    ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師甲', 'cal-own-3'],
+    ['2026/08/10', '13:15', 'A－舞綢 Lv.1', '老師乙', 'cal-next'],
+  ];
+
+  assert.throws(() => backend.buildTeacherSpecialCourseSlotPlan_(
+    '老師甲', 'own:cal-own-1', 180, '09:00', [], courseRows, 'merge'
+  ), /接續常態課.*15 分鐘換場/);
 });
 
 test('special slot planning accepts fifteen-minute steps relative to a non-quarter-hour source course', () => {
@@ -5229,6 +5285,54 @@ test('own-only special claim appends one arrangement and never creates or change
   assert.deepEqual(specialRequestSheet.values[1].slice(14, 16), ['已完成', '已核對']);
   assert.match(specialRequestSheet.values[1][16], /^2026-08-15 /);
   assert.equal(specialRequestSheet.values[1][17], '');
+});
+
+test('special claim stores and reconciles an immediately following own class as a fifteen-minute continuation', () => {
+  const { backend, courseSheet, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '09:00', 'A－空環 Lv.1', '老師甲', 'cal-own-1', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '10:30', 'A－空環 Lv.2', '老師甲', 'cal-own-2', 'class-b', 'teacher-a', '否', ''],
+      ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師甲', 'cal-own-3', 'class-c', 'teacher-a', '否', ''],
+      ['2026/08/10', '13:30', 'A－舞綢 Lv.1', '老師乙', 'cal-next', 'class-d', 'teacher-b', '否', ''],
+    ],
+    leaveRows: [],
+  });
+  backend.getTimestamp_ = () => '2026-08-15 12:00:00';
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', startSlotKey: 'own:cal-own-1', actualStartTime: '09:00',
+    courseName: '雙堂特別課', durationMinutes: 180, difficulty: '', note: '',
+  });
+
+  assert.equal(result.count, 2);
+  assert.equal(result.continuation.originalTime, '12:00');
+  assert.equal(result.continuation.actualStartTime, '12:15');
+  assert.equal(leaveSheet.values.length, 1);
+  const storedSlots = JSON.parse(specialRequestSheet.values[1][5]);
+  assert.deepEqual(storedSlots.map((slot) => slot.sourceType), [
+    'own', 'own', 'own-continuation',
+  ]);
+  assert.deepEqual(storedSlots.map((slot) => slot.calendarId), [
+    'cal-own-1', 'cal-own-2', 'cal-own-3',
+  ]);
+
+  const wrongOutcome = backend.getSpecialCourseRequestObOutcome_(specialRequestSheet.values[1], {
+    'cal-own-1': ['2026/08/10', '09:00', 'A－雙堂特別課 (180min)', '老師甲', 'cal-own-1'],
+    'cal-own-3': ['2026/08/10', '12:00', 'A－空環 Lv.3', '老師甲', 'cal-own-3'],
+  });
+  assert.match(wrongOutcome.differences.join('；'), /接續常態課：時間不一致.*12:15.*12:00/);
+
+  courseSheet.values = [
+    EXPECTED_COURSE_HEADERS,
+    ['2026/08/10', '09:00', 'A－雙堂特別課 (180min)', '老師甲', 'cal-own-1', 'class-special', 'teacher-a', '否', ''],
+    ['2026/08/10', '12:15', 'A－空環 Lv.3', '老師甲', 'cal-own-3', 'class-c', 'teacher-a', '否', ''],
+    ['2026/08/10', '13:30', 'A－舞綢 Lv.1', '老師乙', 'cal-next', 'class-d', 'teacher-b', '否', ''],
+  ];
+  const reconciliation = backend.reconcileObChanges_(adminSession);
+  assert.equal(reconciliation.matched, 1);
+  assert.equal(reconciliation.exceptions, 0);
+  assert.deepEqual(specialRequestSheet.values[1].slice(14, 16), ['已完成', '已核對']);
 });
 
 test('mixed own-and-leave special claim updates only the real leave and stores one group request', () => {

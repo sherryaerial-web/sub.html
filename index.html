@@ -3141,6 +3141,7 @@
       const times = [first.startTime];
       const visited = new Set(ids);
       let current = first;
+      let continuation = null;
 
       while (current.nextCourseTime) {
         const nextMinutes = parseClaimTimeMinutes(current.nextCourseTime);
@@ -3154,13 +3155,34 @@
         if (!partnerId || visited.has(partnerId)) {
           throw new Error(`${first.date} ${first.room} 教室 ${current.nextCourseTime} 尚未開放代課，無法安排這堂特別課。`);
         }
+        const partner = availability[partnerId];
+        if (nextMinutes === endMinutes && partner.sourceType === "own") {
+          const duration = Number(partner.durationMinutes);
+          if (!Number.isFinite(duration) || duration <= 0) {
+            throw new Error("接續常態課長度資料不完整，請通知管理員。");
+          }
+          const continuationStartMinutes = nextMinutes + 15;
+          const continuationEndMinutes = continuationStartMinutes + duration;
+          const followingMinutes = parseClaimTimeMinutes(partner.nextCourseTime);
+          if (Number.isFinite(followingMinutes) && continuationEndMinutes + 15 > followingMinutes) {
+            throw new Error(`接續常態課延後 15 分鐘後，與下一堂 ${partner.nextCourseTime} 的 15 分鐘換場衝突，請調整特別課長度。`);
+          }
+          continuation = {
+            slotKey: partnerId,
+            courseName: partner.courseName || "本人常態課",
+            originalTime: partner.startTime,
+            actualStartTime: formatClaimTimeMinutes(continuationStartMinutes),
+            endTime: formatClaimTimeMinutes(continuationEndMinutes)
+          };
+          break;
+        }
         visited.add(partnerId);
         ids.push(partnerId);
-        current = availability[partnerId];
+        current = partner;
         times.push(current.startTime);
       }
 
-      return {
+      const result = {
         ids,
         room: first.room,
         date: first.date,
@@ -3169,6 +3191,8 @@
         actualStartTime: formatClaimTimeMinutes(actualStartMinutes),
         endTime: formatClaimTimeMinutes(endMinutes)
       };
+      if (continuation) result.continuation = continuation;
+      return result;
     }
 
     function validateSpecialCourseDraft(draft, availabilityMap) {
@@ -6140,7 +6164,10 @@
           const preview = buildSpecialCourseSlotPreview(
             slotKeys[0], draft.durationMinutes, draft.actualStartTime, claimOptions.specialAvailability || {}
           );
-          summary.textContent = `實際 ${preview.actualStartTime} 開始，將占用 ${preview.room} 教室 ${preview.times.join("、")}；預計 ${preview.endTime} 結束。`;
+          const continuationText = preview.continuation
+            ? ` 接續本人常態課「${preview.continuation.courseName}」將由 ${preview.continuation.originalTime} 延後至 ${preview.continuation.actualStartTime}。`
+            : "";
+          summary.textContent = `實際 ${preview.actualStartTime} 開始，將占用 ${preview.room} 教室 ${preview.times.join("、")}；預計 ${preview.endTime} 結束。${continuationText}`;
         } catch (error) {
           summary.textContent = error.message;
         }
@@ -6214,6 +6241,21 @@
             warning.textContent = "此堂已包含";
           }
         });
+        if (preview.continuation) {
+          const checkbox = checkboxes.find((item) => item.dataset.slotKey === preview.continuation.slotKey);
+          const card = checkbox?.closest(".claim-card");
+          const warning = card?.querySelector(".special-slot-warning");
+          if (checkbox) {
+            checkbox.disabled = true;
+            checkbox.indeterminate = true;
+            checkbox.title = "接續本人常態課，將延後 15 分鐘";
+          }
+          card?.classList.add("special-auto-occupied");
+          if (warning) {
+            warning.hidden = false;
+            warning.textContent = "接續本人常態課｜將延後 15 分鐘";
+          }
+        }
       } catch (error) {
         // 摘要會顯示具體阻擋原因；送出時會再次驗證。
       }
@@ -6273,12 +6315,15 @@
         pendingLeaves = pendingLeaves.filter((item) => !claimedIds.has(item["代課編號"]));
         renderAvailableSubstitutes();
         await fetchAvailableSubstitutes();
+        const continuationMessage = result.continuation
+          ? ` 接續的本人常態課「${result.continuation.courseName}」需由 ${result.continuation.originalTime} 延後至 ${result.continuation.actualStartTime}。`
+          : "";
         openClaimSuccessDialog({
           special: true,
           count: returnedIds.length,
           message: result.requiresClosingTimeConfirmation
             ? "特別課已成功領取；後面沒有課，管理員會再確認閉館時間。"
-            : "特別課已成功領取，系統已保留 15 分鐘換場。"
+            : `特別課已成功領取，系統已保留 15 分鐘換場。${continuationMessage}`
         });
       } catch (error) {
         setNotice(error.message, "error");
@@ -6380,6 +6425,12 @@
       const sourceSlots = isOwnCourseRequest && Array.isArray(item["來源時段"])
         ? item["來源時段"]
         : [];
+      const continuation = isOwnCourseRequest && item["接續常態課"]
+        ? item["接續常態課"]
+        : null;
+      const continuationRow = continuation
+        ? `<div class="item-meta"><strong>接續本人常態課</strong>｜${escapeHtml(continuation.courseName || "本人常態課")}｜${escapeHtml(continuation.originalTime)} → ${escapeHtml(continuation.actualStartTime)}</div>`
+        : "";
       const sourceRows = isOwnCourseRequest
         ? sourceSlots.map((slot) => `<div class="item-meta">${escapeHtml(slot.time)}｜${escapeHtml(slot.courseName)}<br>${escapeHtml(slot.sourceType === "own" ? "自己的正課" : "開放代課")}｜OB Calendar ID：${escapeHtml(slot.calendarId || "未提供")}</div>`).join("")
         : rows.map((row) => `<div class="item-meta">${escapeHtml(formatDateWithWeekday(row["日期"]))} ${escapeHtml(row["時段"])}｜${escapeHtml(row["課程"])}<br>代課編號：${escapeHtml(row["代課編號"])}｜OB Calendar ID：${escapeHtml(row["OB Calendar ID"] || "未提供")}</div>`).join("");
@@ -6388,7 +6439,7 @@
       const exitHint = isOwnCourseRequest
         ? '<div class="hint">包含自己的正課，如需調整請聯絡管理員。</div>'
         : '<div class="hint">若要退出，請依原始時段分別提出申請。</div>';
-      return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${sourceCount} 堂</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${sourceCount}）</summary>${sourceRows}</details>${exitHint}<div class="record-actions">${actions}</div></div></article>`;
+      return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${sourceCount} 堂</div>${continuationRow}${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${sourceCount}）</summary>${sourceRows}</details>${exitHint}<div class="record-actions">${actions}</div></div></article>`;
     }
 
     async function fetchMySubs(recordMonth = "") {
@@ -7799,7 +7850,10 @@
     function renderAdminObItem(item, options) {
       const sameDateOptions = (options || []).filter((option) => option.date === item.date);
       if (item.recordType === "specialRequest") {
-        const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-special-replacement-select="${escapeHtml(item.specialGroupId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-special-replacement" data-special-group-id="${escapeHtml(item.specialGroupId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
+        const continuationDetail = item.continuation
+          ? `<div class="item-meta"><strong>接續本人常態課</strong>｜請在 OB 將「${escapeHtml(item.continuation.courseName || "本人常態課")}」由 ${escapeHtml(item.continuation.originalTime)} 延後至 ${escapeHtml(item.continuation.actualStartTime)}，並保留原 Calendar ID ${escapeHtml(item.continuation.calendarId || "未提供")}。</div>`
+          : "";
+        const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${continuationDetail}${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-special-replacement-select="${escapeHtml(item.specialGroupId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-special-replacement" data-special-group-id="${escapeHtml(item.specialGroupId)}"><i data-lucide="link"></i>連結替代課程</button></div></div>`;
         return renderAdminItem(item, detail);
       }
       if (item.status === "延後占用") {

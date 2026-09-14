@@ -1676,28 +1676,37 @@ test('renders own-course special requests as one teacher record and one admin wo
     { slotKey: 'own:cal-1', sourceType: 'own', time: '09:00', courseName: 'A－空環 Lv.1', calendarId: 'cal-1', originalTeacher: '老師甲' },
     { slotKey: 'own:cal-2', sourceType: 'own', time: '10:30', courseName: 'A－空環 Lv.2', calendarId: 'cal-2', originalTeacher: '老師甲' },
   ];
+  const continuation = {
+    slotKey: 'own:cal-3', sourceType: 'own-continuation', calendarId: 'cal-3',
+    courseName: 'A－空環 Lv.3', originalTeacher: '老師甲', originalTime: '11:00',
+    actualStartTime: '11:15', endTime: '12:15', delayMinutes: 15,
+  };
   const teacherMarkup = context.renderMySubGroup({
     specialGroupId: 'special-1',
     items: [{
       '紀錄類型': '特別課安排', '特別課群組 ID': 'special-1', '日期': '2026/08/10',
       '時段': '09:00', '實際課程名稱': '舞綢中軸特別課', '特別課模式': '使用連續時段',
       '特別課分鐘數': 120, '特別課實際開始時間': '09:00', '特別課結束時間': '11:00',
-      '來源時段': sourceSlots, '可申請退出': false, '異動紀錄': [],
+      '來源時段': sourceSlots, '接續常態課': continuation, '可申請退出': false, '異動紀錄': [],
     }],
   });
   assert.match(teacherMarkup, /舞綢中軸特別課/);
   assert.match(teacherMarkup, /09:00.*A－空環 Lv\.1/);
   assert.match(teacherMarkup, /10:30.*A－空環 Lv\.2/);
+  assert.match(teacherMarkup, /接續本人常態課/);
+  assert.match(teacherMarkup, /A－空環 Lv\.3.*11:00 → 11:15/);
   assert.doesNotMatch(teacherMarkup, /申請退出/);
 
   const adminMarkup = context.renderAdminObItem({
     recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/08/10', time: '09:00',
     originalCourse: 'A－空環 Lv.1＋A－空環 Lv.2', originalTeacher: '老師甲',
     substituteTeacher: '老師甲', actualCourse: '舞綢中軸特別課', difficulty: '',
-    status: '待處理', changeStatus: '', sourceSlots, auditHistory: [],
+    status: '待處理', changeStatus: '', sourceSlots, continuation, auditHistory: [],
   }, [{ calendarId: 'cal-special', date: '2026/08/10', time: '09:00', courseName: 'A－舞綢中軸特別課', teacherName: '老師甲' }]);
   assert.match(adminMarkup, /data-special-replacement-select="special-1"/);
   assert.match(adminMarkup, /data-admin-action="link-special-replacement"/);
+  assert.match(adminMarkup, /接續本人常態課/);
+  assert.match(adminMarkup, /請在 OB 將.*A－空環 Lv\.3.*11:00.*11:15/);
   assert.doesNotMatch(adminMarkup, /data-substitute-id=""/);
   assert.match(html, /linkAdminSpecialReplacement\(groupId, select\.value\)/);
 });
@@ -2094,6 +2103,11 @@ test('special-course preview clearly marks each automatically included later slo
             date: '2026/09/24', time: '13:30', room: 'C', courseName: 'C－空環 Lv.2~3',
             originalTeacher: '蜜莉 戴',
           },
+          {
+            slotKey: 'own:continuation', sourceType: 'own', substituteId: '',
+            date: '2026/09/24', time: '14:10', room: 'C', courseName: 'C－空環 Lv.1',
+            originalTeacher: 'Tako',
+          },
         ],
         specialAvailability: {
           'leave:source': {
@@ -2101,8 +2115,14 @@ test('special-course preview clearly marks each automatically included later slo
             mergePartnerIds: ['leave:next'], maxDurationMinutes: 65,
           },
           'leave:next': {
-            date: '2026/09/24', room: 'C', startTime: '13:30', nextCourseTime: '',
-            mergePartnerIds: [], maxDurationMinutes: 615,
+            date: '2026/09/24', room: 'C', startTime: '13:30', nextCourseTime: '14:10',
+            mergePartnerIds: ['own:continuation'], maxDurationMinutes: 25,
+          },
+          'own:continuation': {
+            slotKey: 'own:continuation', sourceType: 'own', calendarId: 'cal-continuation',
+            courseName: 'C－空環 Lv.1', originalTeacher: 'Tako', durationMinutes: 60,
+            date: '2026/09/24', room: 'C', startTime: '14:10', nextCourseTime: '15:45',
+            mergePartnerIds: [], maxDurationMinutes: 65,
           },
         },
       },
@@ -2116,7 +2136,12 @@ test('special-course preview clearly marks each automatically included later slo
   const next = createOrdinaryClaimConstraintCard({
     substituteId: 'next', checked: false, handling: 'original', delay: 0,
   });
-  const cards = [source, next];
+  next.checkbox.dataset.slotKey = 'leave:next';
+  const continuation = createOrdinaryClaimConstraintCard({
+    substituteId: '', checked: false, handling: 'original', delay: 0,
+  });
+  continuation.checkbox.dataset.slotKey = 'own:continuation';
+  const cards = [source, next, continuation];
   let specialMode = 'merge';
   const originalQuerySelector = context.document.querySelector.bind(context.document);
   const originalQuerySelectorAll = context.document.querySelectorAll.bind(context.document);
@@ -2135,6 +2160,7 @@ test('special-course preview clearly marks each automatically included later slo
 
   context.updateSpecialClaimSummary();
   assert.match(getElement('special-claim-summary').textContent, /將占用 C 教室 12:10、13:30/);
+  assert.match(getElement('special-claim-summary').textContent, /接續本人常態課.*14:10.*14:25/);
   getElement('special-actual-start').value = '';
   context.updateSpecialSelectionConstraints(source.checkbox);
 
@@ -2146,12 +2172,52 @@ test('special-course preview clearly marks each automatically included later slo
   assert.equal(next.warning.hidden, false);
   assert.equal(next.warning.textContent, '此堂已包含');
   assert.equal(next.classes.has('special-auto-occupied'), true);
+  assert.equal(continuation.checkbox.disabled, true);
+  assert.equal(continuation.checkbox.indeterminate, true);
+  assert.equal(continuation.warning.textContent, '接續本人常態課｜將延後 15 分鐘');
   assert.deepEqual(JSON.parse(JSON.stringify(context.getSelectedClaimSlotKeys())), ['leave:source']);
 
   specialMode = 'vacancy';
   context.updateSpecialSelectionConstraints();
   assert.equal(next.checkbox.indeterminate, false);
   assert.equal(next.classes.has('special-auto-occupied'), false);
+});
+
+test('special-course preview separates the immediately following own class as a fifteen-minute continuation', () => {
+  const { context } = createFrontendRuntime();
+  const availability = {
+    'own:cal-1': {
+      slotKey: 'own:cal-1', sourceType: 'own', calendarId: 'cal-1',
+      date: '2026/08/10', room: 'A', startTime: '09:00', courseName: 'A－空環 Lv.1',
+      durationMinutes: 60, nextCourseTime: '10:30', mergePartnerIds: ['own:cal-2'],
+      earliestStartTime: '',
+    },
+    'own:cal-2': {
+      slotKey: 'own:cal-2', sourceType: 'own', calendarId: 'cal-2',
+      date: '2026/08/10', room: 'A', startTime: '10:30', courseName: 'A－空環 Lv.2',
+      durationMinutes: 60, nextCourseTime: '12:00', mergePartnerIds: ['own:cal-3'],
+      earliestStartTime: '10:15',
+    },
+    'own:cal-3': {
+      slotKey: 'own:cal-3', sourceType: 'own', calendarId: 'cal-3',
+      date: '2026/08/10', room: 'A', startTime: '12:00', courseName: 'A－空環 Lv.3',
+      originalTeacher: '老師甲', durationMinutes: 60,
+      nextCourseTime: '13:30', mergePartnerIds: [], earliestStartTime: '11:45',
+    },
+  };
+
+  const preview = context.buildSpecialCourseSlotPreview(
+    'own:cal-1', 180, '09:00', availability
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(preview.ids)), ['own:cal-1', 'own:cal-2']);
+  assert.deepEqual(JSON.parse(JSON.stringify(preview.continuation)), {
+    slotKey: 'own:cal-3',
+    courseName: 'A－空環 Lv.3',
+    originalTime: '12:00',
+    actualStartTime: '12:15',
+    endTime: '13:15',
+  });
 });
 
 test('time-only adjustment sends original handling with the selected delay', () => {

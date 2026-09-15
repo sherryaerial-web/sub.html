@@ -6684,6 +6684,34 @@ test('special-course group reconciliation accepts OB display formatting around t
   });
 });
 
+test('special-course group reconciliation accepts aerial dance alias with a level attached to the OB title', () => {
+  const leaveRows = createSpecialGroupReconciliationRows('special-aerial-dance-glued-level').slice(0, 2);
+  leaveRows.forEach((row) => {
+    row[2] = '2026/10/04';
+    row[4] = 'C－空環 Lv.2~3';
+    row[12] = '空中環舞碼';
+    row[13] = 'Lv.2-3';
+    row[23] = 90;
+    row[25] = '14:00';
+  });
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    courseRows: [[
+      '2026/10/04', '14:00', 'C－空環舞碼特別課Lv.2-3(90min)', '老師甲',
+      'group-calendar-1', 'class-aerial-dance', 'teacher-a', '是', '',
+    ]],
+    leaveRows,
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 2, matched: 2, exceptions: 0 }, leaveSheet.values[1][17]);
+  leaveSheet.values.slice(1).forEach((row) => {
+    assert.equal(row[15], '已核對');
+    assert.equal(row[17], '');
+  });
+});
+
 test('special-course request reconciliation ignores OB level suffixes and yoga character variants', () => {
   const ownSource = (date, time, courseName, calendarId) => JSON.stringify([{
     sourceType: 'own', date, time, courseName,
@@ -6795,6 +6823,34 @@ test('special-course request reconciliation accepts configured OB title aliases'
   assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 2, matched: 2, exceptions: 0 });
   specialRequestSheet.values.slice(1).forEach((row) => {
     assert.equal(row[14], '已完成');
+    assert.equal(row[15], '已核對');
+    assert.equal(row[17], '');
+  });
+});
+
+test('special-course group reconciliation treats Lv2 and Lv.2 as the same level', () => {
+  const leaveRows = createSpecialGroupReconciliationRows('special-mini-dance-level').slice(0, 2);
+  leaveRows.forEach((row) => {
+    row[2] = '2026/10/17';
+    row[4] = 'C－空環 Lv.0';
+    row[12] = '迷你環舞碼特別課';
+    row[13] = 'Lv2';
+    row[23] = 120;
+    row[25] = '11:00';
+  });
+  const { backend, leaveSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    courseRows: [[
+      '2026/10/17', '11:00', 'C－迷你環舞碼特別課 Lv.2', '老師甲',
+      'group-calendar-1', 'class-mini-dance', 'teacher-a', '是', '',
+    ]],
+    leaveRows,
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 2, matched: 2, exceptions: 0 }, leaveSheet.values[1][17]);
+  leaveSheet.values.slice(1).forEach((row) => {
     assert.equal(row[15], '已核對');
     assert.equal(row[17], '');
   });

@@ -16389,6 +16389,7 @@ function normalizeSpecialCourseReconciliationName_(value) {
 function getSpecialCourseReconciliationParts_(value) {
   var displayName = stripCourseRoom_(value)
     .replace(/[（(]\s*\d+\s*(?:min|分鐘)\s*[)）]\s*$/i, '')
+    .replace(/(特別課)(Lv\.?\s*\d+(?:\s*[~\-–—]\s*\d+)?)(?=[（(〈]|$)/i, '$1 $2')
     .replace(/[＆﹠]/g, '&')
     .replace(/瑜珈/g, '瑜伽');
   var courseParts = parseClaimCourseOption_(displayName);
@@ -16396,13 +16397,15 @@ function getSpecialCourseReconciliationParts_(value) {
     .replace(/摺疊環/g, '折疊環')
     .replace(/迷你環綢舞碼/g, '迷你環綢');
   return {
-    name: normalizedName,
+    name: normalizedName === '空中環舞碼' ? '空環舞碼' : normalizedName,
     difficulty: cleanText_(courseParts.difficulty)
   };
 }
 
 function normalizeCourseReconciliationDifficulty_(value) {
-  return normalizeClaimDifficulty_(value).replace(/(lv\.?\d+)[~\-–—](\d+)/g, '$1~$2');
+  return normalizeClaimDifficulty_(value)
+    .replace(/^lv\.?(?=\d)/, 'lv.')
+    .replace(/(lv\.?\d+)[~\-–—](\d+)/g, '$1~$2');
 }
 
 function getSpecialCourseGroupObOutcome_(groupRecords, courseByCalendarId) {

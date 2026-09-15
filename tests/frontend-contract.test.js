@@ -7,6 +7,17 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
+test('completed special course keeps its nonblocking turnover reminder visible', () => {
+  const runtime = createFrontendRuntime();
+  const card = runtime.context.renderAdminItem({
+    date: '2026/10/11', time: '17:30', originalCourse: 'A－空環Flare專攻特別課Lv2',
+    originalTeacher: 'Liz 🌰', substituteTeacher: 'Liz 🌰', status: '已完成',
+    verificationStatus: '已核對', differenceReason: '提醒：兩堂特別課之間未留足 15 分鐘',
+    auditHistory: [],
+  });
+  assert.match(card, /提醒：兩堂特別課之間未留足 15 分鐘/);
+});
+
 function createFrontendRuntime(fixtures = {}, options = {}) {
   const elements = new Map();
   const requestActions = [];
@@ -4221,7 +4232,9 @@ test('mobile date picker can explicitly load a past practice day', async () => {
 });
 
 test('practice day ignores an older response after the teacher has selected a newer date', async () => {
-  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, {
+    autoRelay: false, now: '2026-09-08T10:00:00+08:00',
+  });
   const first = vm.runInContext('loadPracticeDay("2026/09/09")', context);
   const second = vm.runInContext('loadPracticeDay("2026/09/16")', context);
   await Promise.resolve();

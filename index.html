@@ -7911,7 +7911,10 @@
       const correctionAction = item.status === "已領取" && item.substituteId
         ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="correct-claim" data-substitute-id="${escapeHtml(item.substituteId)}" data-difficulty="${escapeHtml(item.difficulty || "")}" data-note="${escapeHtml(item.note || "")}"><i data-lucide="pencil-line"></i>修正難度／備註</button></div>`
         : "";
-      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div>${timeChange}${delayOccupancy}<div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${renderAuditHistory(item.auditHistory)}${extraHtml}${correctionAction}</div></article>`;
+      const completedReminder = item.verificationStatus === "已核對" &&
+        (item.differenceReason || "").startsWith("提醒：")
+        ? `<div class="item-meta">${escapeHtml(item.differenceReason)}</div>` : "";
+      return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(item.date)} ${escapeHtml(item.time)}</div><div class="item-course">${escapeHtml(item.originalCourse)}</div><div class="item-meta">原老師：${escapeHtml(item.originalTeacher)}｜代課老師：${escapeHtml(item.substituteTeacher || "尚未領取")}</div>${timeChange}${delayOccupancy}<div class="item-meta">狀態：${escapeHtml(item.status)}｜異動：${escapeHtml(item.changeStatus || "無")}</div>${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}${completedReminder}${renderAuditHistory(item.auditHistory)}${extraHtml}${correctionAction}</div></article>`;
     }
 
     function renderAdminObItem(item, options) {

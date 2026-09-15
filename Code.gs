@@ -16056,6 +16056,17 @@ function reconcileObChanges_(session) {
         };
       }
     }
+    // Only these two already-saved Liz requests represent two separate historical OB courses.
+    var lizOctoberPairIds = [
+      'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3',
+      '483ecf21-566a-475e-b3a7-b205f5b67323'
+    ];
+    var lizOctoberPair = lizOctoberPairIds.every(function(groupId) {
+      var record = ownSpecialRequestByGroup[groupId];
+      var row = record && record.row;
+      return row && cleanText_(row[2]) === 'Liz 🌰' &&
+        formatMyDate(row[3]) === '2026/10/11' && cleanText_(row[4]) === 'A';
+    });
     var specialGroupRows = {};
     for (var groupRowIndex = 1; groupRowIndex < leaveRows.length; groupRowIndex++) {
       var groupRow = leaveRows[groupRowIndex];
@@ -16180,12 +16191,62 @@ function reconcileObChanges_(session) {
       var requestRecord = ownSpecialRequestByGroup[groupId];
       var requestRow = requestRecord.row;
       if (!isSpecialRequestRowInMonth_(requestRow, targetMonth)) return;
-      if (['已核對', '已完成'].indexOf(cleanText_(requestRow[15])) !== -1 ||
-          cleanText_(requestRow[14]) === '已完成') {
+      var isLizOctoberPairRow = lizOctoberPair && lizOctoberPairIds.indexOf(groupId) !== -1;
+      if (!isLizOctoberPairRow &&
+          (['已核對', '已完成'].indexOf(cleanText_(requestRow[15])) !== -1 ||
+          cleanText_(requestRow[14]) === '已完成')) {
         return;
       }
-      var outcome = getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId);
+      var isLizOctoberSecond = isLizOctoberPairRow && groupId === lizOctoberPairIds[1];
+      var firstEnd = isLizOctoberPairRow
+        ? timeTextToMinutes_(formatMyTime(ownSpecialRequestByGroup[lizOctoberPairIds[0]].row[11]))
+        : -1;
+      var outcome = getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId,
+        isLizOctoberSecond ? {
+          excludedCalendarIds: ['52961'],
+          allowedStartTimes: firstEnd >= 0
+            ? [minutesToTimeText_(firstEnd), minutesToTimeText_(firstEnd + 15)]
+            : []
+        } : null);
       var differences = outcome.differences;
+      var warning = '';
+      if (isLizOctoberSecond) {
+        var firstOb = courseByCalendarId['52961'];
+        var secondOb = courseByCalendarId[outcome.effectiveCalendarId];
+        if (!firstOb || !secondOb || cleanText_(outcome.effectiveCalendarId) === '52961') {
+          differences.push('預期兩堂獨立的 OB 特別課，目前只找到一堂');
+        } else if (!differences.length && firstEnd >= 0) {
+          var secondStart = timeTextToMinutes_(formatMyTime(secondOb[1]));
+          if (secondStart < firstEnd) {
+            differences.push('兩堂特別課時間重疊，請修正 OB 課表');
+          } else if (secondStart < firstEnd + 15) {
+            warning = '提醒：兩堂特別課之間未留足 15 分鐘；OB 第二堂 ' +
+              formatMyTime(secondOb[1]) + '（歷史安排，不阻擋核對）';
+          }
+          var secondDuration = Number(requestRow[10]) || 0;
+          if (secondStart >= 0 && secondDuration > 0) {
+            var secondEnd = secondStart + secondDuration;
+            var nextSameRoomCourse = null;
+            courseRows.forEach(function(courseRow) {
+              var calendarId = cleanText_(courseRow[4]);
+              var start = timeTextToMinutes_(formatMyTime(courseRow[1]));
+              if (!calendarId || calendarId === '52961' ||
+                  calendarId === cleanText_(outcome.effectiveCalendarId) ||
+                  formatMyDate(courseRow[0]) !== '2026/10/11' ||
+                  getCourseRoom_(courseRow[2]) !== 'A' ||
+                  start < secondStart || start >= secondEnd + 15) return;
+              if (!nextSameRoomCourse || start < nextSameRoomCourse.start) {
+                nextSameRoomCourse = { row: courseRow, start: start };
+              }
+            });
+            if (nextSameRoomCourse) {
+              differences.push('接續其他課程 ' + cleanText_(nextSameRoomCourse.row[2]) + ' ' +
+                formatMyTime(nextSameRoomCourse.row[1]) + ' 未留足 15 分鐘：依安排第二堂 ' +
+                secondDuration + ' 分鐘，預計結束 ' + minutesToTimeText_(secondEnd));
+            }
+          }
+        }
+      }
       var now = getTimestamp_();
       var nextRequestRow = requestRow.slice();
       while (nextRequestRow.length < SHEET_HEADERS.SPECIAL_COURSE_REQUESTS.length) nextRequestRow.push('');
@@ -16194,15 +16255,19 @@ function reconcileObChanges_(session) {
         nextRequestRow[14] = '已完成';
         nextRequestRow[15] = '已核對';
         nextRequestRow[16] = now;
-        nextRequestRow[17] = '';
+        nextRequestRow[17] = warning;
         result.matched += 1;
       } else {
         nextRequestRow[14] = '待處理';
         nextRequestRow[15] = '核對異常';
         nextRequestRow[16] = now;
-        nextRequestRow[17] = differences.join('；');
+        nextRequestRow[17] = (warning ? warning + '；' : '') + differences.join('；');
         result.exceptions += 1;
       }
+      if (isLizOctoberPairRow &&
+          cleanText_(requestRow[14]) === cleanText_(nextRequestRow[14]) &&
+          cleanText_(requestRow[15]) === cleanText_(nextRequestRow[15]) &&
+          cleanText_(requestRow[17]) === cleanText_(nextRequestRow[17])) return;
       specialRequestUpdates.push({
         rowNumber: requestRecord.rowIndex + 1,
         values: nextRequestRow.slice(14, 18)
@@ -16251,7 +16316,8 @@ function isSpecialRequestRowInMonth_(row, month) {
   return Boolean(match) && match[1] + '-' + match[2] === cleanText_(month);
 }
 
-function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
+function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId, options) {
+  options = options || {};
   var continuation = getSpecialRequestContinuation_(requestRow);
   if (!continuation) {
     var expectedEnd = formatMyTime(requestRow && requestRow[11]);
@@ -16286,7 +16352,8 @@ function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
   });
   var existingIds = [];
   candidateIds.forEach(function(calendarId) {
-    if (!courseByCalendarId[calendarId] || existingIds.indexOf(calendarId) !== -1) return;
+    if (!courseByCalendarId[calendarId] || existingIds.indexOf(calendarId) !== -1 ||
+        (options.excludedCalendarIds || []).indexOf(calendarId) !== -1) return;
     existingIds.push(calendarId);
   });
   var effectiveCalendarId = existingIds.length === 1 ? existingIds[0] : '';
@@ -16296,6 +16363,13 @@ function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
   } else if (existingIds.length > 1) {
     differences.push('同一特別課安排找到多堂 OB 課程，請確認只保留一堂實際特別課');
   } else {
+    var expectedStart = formatMyTime(requestRow[7]);
+    var allowedStartTimes = options.allowedStartTimes || [];
+    if (allowedStartTimes.length) {
+      var obStart = formatMyTime(courseByCalendarId[effectiveCalendarId][1]);
+      expectedStart = allowedStartTimes.indexOf(obStart) !== -1
+        ? obStart : allowedStartTimes[0];
+    }
     differences = differences.concat(getObCourseDifferences_(
       effectiveCalendarId,
       courseByCalendarId[effectiveCalendarId],
@@ -16303,7 +16377,7 @@ function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
         teacher: cleanText_(requestRow[2]),
         course: cleanText_(requestRow[8]),
         difficulty: cleanText_(requestRow[9]),
-        expectedTime: formatMyTime(requestRow[7]),
+        expectedTime: expectedStart,
         classId: '',
         restoreType: ''
       },

@@ -16252,12 +16252,37 @@ function isSpecialRequestRowInMonth_(row, month) {
 }
 
 function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
+  var continuation = getSpecialRequestContinuation_(requestRow);
+  if (!continuation) {
+    var expectedEnd = formatMyTime(requestRow && requestRow[11]);
+    var expectedEndMinutes = timeTextToMinutes_(expectedEnd);
+    if (expectedEndMinutes >= 0) {
+      getSpecialRequestCourseSlots_(requestRow).some(function(slot) {
+        if (cleanText_(slot && slot.sourceType) !== 'own' ||
+            formatMyTime(slot && slot.time) !== expectedEnd ||
+            formatMyDate(slot && slot.date) !== formatMyDate(requestRow[3])) return false;
+        var calendarId = cleanText_(slot && slot.calendarId);
+        var obRow = courseByCalendarId[calendarId];
+        if (!obRow || cleanText_(obRow[3]) !== cleanText_(slot.originalTeacher) ||
+            !ordinaryCourseReconciliationNamesMatch_(slot.courseName, obRow[2])) return false;
+        continuation = {
+          calendarId: calendarId,
+          originalTeacher: cleanText_(slot.originalTeacher),
+          courseName: cleanText_(slot.courseName),
+          actualStartTime: minutesToTimeText_(expectedEndMinutes + 15)
+        };
+        return true;
+      });
+    }
+  }
   var candidateIds = [];
   var replacementId = cleanText_(requestRow && requestRow[18]);
   if (replacementId) candidateIds.push(replacementId);
   getSpecialRequestCourseSlots_(requestRow).forEach(function(slot) {
     var calendarId = cleanText_(slot && slot.calendarId);
-    if (calendarId) candidateIds.push(calendarId);
+    if (calendarId && (!continuation || calendarId !== cleanText_(continuation.calendarId))) {
+      candidateIds.push(calendarId);
+    }
   });
   var existingIds = [];
   candidateIds.forEach(function(calendarId) {
@@ -16285,7 +16310,6 @@ function getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId) {
       normalizeSpecialCourseReconciliationName_
     ));
   }
-  var continuation = getSpecialRequestContinuation_(requestRow);
   if (continuation) {
     var continuationCalendarId = cleanText_(continuation.calendarId);
     var continuationDifferences = getObCourseDifferences_(
@@ -16402,7 +16426,8 @@ function getSpecialCourseReconciliationParts_(value) {
   var courseParts = parseClaimCourseOption_(displayName);
   var normalizedName = normalizeCourseName_(courseParts.courseTypeName.replace(/\s*特別課\s*$/, ''))
     .replace(/摺疊環/g, '折疊環')
-    .replace(/迷你環綢舞碼/g, '迷你環綢');
+    .replace(/迷你環綢舞碼/g, '迷你環綢')
+    .replace(/^空環中軸專攻班$/, '空環中軸專攻');
   return {
     name: normalizedName === '空中環舞碼' ? '空環舞碼' : normalizedName,
     difficulty: cleanText_(courseParts.difficulty)

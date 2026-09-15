@@ -6894,6 +6894,110 @@ test('special-course request reconciliation accepts configured OB title aliases'
   });
 });
 
+test('special-course reconciliation treats the agreed aerial core workshop and special-course title as equivalent', () => {
+  const sourceSlots = JSON.stringify([{
+    sourceType: 'own', date: '2026/10/18', time: '16:00', room: 'A',
+    courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲', calendarId: 'calendar-core',
+  }]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    courseRows: [[
+      '2026/10/18', '16:00', 'A－空環中軸專攻特別課', '老師甲',
+      'calendar-core', 'class-core', 'teacher-a', '否', '',
+    ]],
+    specialRequestRows: [[
+      'stamp', 'special-core', '老師甲', '2026/10/18', 'A', sourceSlots,
+      '[]', '16:00', '空環中軸專攻班', '', 90, '17:30',
+      '使用連續時段', '', '待處理', '待核對', '', '', '',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  assert.equal(specialRequestSheet.values[1][15], '已核對');
+  assert.equal(specialRequestSheet.values[1][17], '');
+});
+
+test('legacy own-slot special request reconciles one special course and its fifteen-minute delayed ordinary continuation', () => {
+  const sourceSlots = JSON.stringify([
+    {
+      sourceType: 'own', date: '2026/10/18', time: '16:00', room: 'A',
+      courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲', calendarId: 'calendar-special',
+    },
+    {
+      sourceType: 'own', date: '2026/10/18', time: '17:30', room: 'A',
+      courseName: 'A－空環 Lv.2~3', originalTeacher: '老師甲', calendarId: 'calendar-continuation',
+    },
+  ]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    courseRows: [
+      ['2026/10/18', '16:00', 'A－空環中軸專攻特別課', '老師甲', 'calendar-special', 'class-special', 'teacher-a', '否', ''],
+      ['2026/10/18', '17:45', 'A－空環 Lv.2~3', '老師甲', 'calendar-continuation', 'class-ordinary', 'teacher-a', '否', ''],
+    ],
+    specialRequestRows: [[
+      'stamp', 'legacy-core', '老師甲', '2026/10/18', 'A', sourceSlots,
+      '[]', '16:00', '空環中軸專攻班', '', 90, '17:30',
+      '使用連續時段', '', '待處理', '核對異常', '', '舊差異', '',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 1, exceptions: 0 });
+  assert.equal(specialRequestSheet.values[1][15], '已核對');
+  assert.equal(specialRequestSheet.values[1][17], '');
+});
+
+test('legacy ordinary continuation without its fifteen-minute turnover remains an OB exception', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/10/18', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲', calendarId: 'calendar-special' },
+    { sourceType: 'own', date: '2026/10/18', time: '17:30', room: 'A', courseName: 'A－空環 Lv.2~3', originalTeacher: '老師甲', calendarId: 'calendar-continuation' },
+  ]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    courseRows: [
+      ['2026/10/18', '16:00', 'A－空環中軸專攻特別課', '老師甲', 'calendar-special', 'class-special', 'teacher-a', '否', ''],
+      ['2026/10/18', '17:30', 'A－空環 Lv.2~3', '老師甲', 'calendar-continuation', 'class-ordinary', 'teacher-a', '否', ''],
+    ],
+    specialRequestRows: [[
+      'stamp', 'legacy-no-turnover', '老師甲', '2026/10/18', 'A', sourceSlots,
+      '[]', '16:00', '空環中軸專攻班', '', 90, '17:30',
+      '使用連續時段', '', '待處理', '待核對', '', '', '',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 0, exceptions: 1 });
+  assert.match(specialRequestSheet.values[1][17], /接續常態課：時間不一致：預期 17:45，OB 為 17:30/);
+});
+
+test('legacy own-slot request still rejects two actual special courses', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/10/18', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲', calendarId: 'calendar-special' },
+    { sourceType: 'own', date: '2026/10/18', time: '17:30', room: 'A', courseName: 'A－空環 Lv.2~3', originalTeacher: '老師甲', calendarId: 'calendar-second-special' },
+  ]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    courseRows: [
+      ['2026/10/18', '16:00', 'A－空環中軸專攻特別課', '老師甲', 'calendar-special', 'class-special', 'teacher-a', '否', ''],
+      ['2026/10/18', '17:30', 'A－另一堂特別課', '老師甲', 'calendar-second-special', 'class-other', 'teacher-a', '否', ''],
+    ],
+    specialRequestRows: [[
+      'stamp', 'legacy-double', '老師甲', '2026/10/18', 'A', sourceSlots,
+      '[]', '16:00', '空環中軸專攻班', '', 90, '17:30',
+      '使用連續時段', '', '待處理', '待核對', '', '', '',
+    ]],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 0, exceptions: 1 });
+  assert.match(specialRequestSheet.values[1][17], /同一特別課安排找到多堂 OB 課程/);
+});
+
 test('special-course group reconciliation treats Lv2 and Lv.2 as the same level', () => {
   const leaveRows = createSpecialGroupReconciliationRows('special-mini-dance-level').slice(0, 2);
   leaveRows.forEach((row) => {

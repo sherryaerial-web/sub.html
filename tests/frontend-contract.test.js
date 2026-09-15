@@ -3811,6 +3811,38 @@ test('admin can correct claimed difficulty and note without asking the teacher t
   assert.match(html, /重新列入 OB 待核對/);
 });
 
+test('OB exception shows a course correction only for its currently linked calendar item', () => {
+  const { context } = createFrontendRuntime();
+  const item = {
+    substituteId: 'leave-class-change', date: '2026/10/03', time: '17:00',
+    originalCourse: 'C－舞綢 Lv.1~2', originalTeacher: '萱',
+    substituteTeacher: 'Carrie🐟', actualCourse: 'C－空環 Lv.1~2',
+    actualClassId: '213', difficulty: 'Lv.0', status: '已領取',
+    originalCalendarId: 'calendar-current', differenceReason: '課程不一致：預期 Class ID 213，OB 為 222',
+    auditHistory: [],
+  };
+  const options = [
+    { calendarId: 'calendar-current', classId: '222', date: '2026/10/03', time: '17:00', courseName: 'C－空環 Lv.0', teacherName: 'Carrie🐟' },
+    { calendarId: 'calendar-other', classId: '300', date: '2026/10/03', time: '18:30', courseName: 'C－舞綢 Lv.0', teacherName: 'Carrie🐟' },
+  ];
+
+  const markup = context.renderAdminObItem(item, options);
+  assert.match(markup, /目前 OB 課程：C－空環 Lv\.0.*Class ID 222/);
+  assert.match(markup, /data-admin-action="correct-claim-course"/);
+  assert.match(markup, /data-calendar-id="calendar-current"/);
+  assert.doesNotMatch(markup, /data-calendar-id="calendar-other"/);
+  assert.doesNotMatch(context.renderAdminObItem(item, options.slice(1)), /data-admin-action="correct-claim-course"/);
+});
+
+test('admin course correction requests the current OB class and reports its review result', async () => {
+  const { context, requestActions, getElement } = createFrontendRuntime();
+
+  await context.correctAdminClaimCourse('leave-class-change', 'calendar-current');
+
+  assert.ok(requestActions.includes('correctClaimCourse'));
+  assert.match(getElement('notice').textContent, /課程.*核對/);
+});
+
 test('provides self-only payroll review and protected sync publish dispute controls', () => {
   assert.match(html, /data-view=["']view-payroll["']/);
   assert.match(html, /getMyPayroll/);

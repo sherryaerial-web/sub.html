@@ -6445,6 +6445,72 @@ test('course admin can correct difficulty and note on one claimed row and sends 
   );
 });
 
+test('course admin can adopt the current OB class for a claimed substitute without changing its teacher or difficulty', () => {
+  const fixture = createInvitationBackend({
+    courseRows: [[
+      '2026/10/03', '17:00', 'C－空環 Lv.0', '老師乙',
+      'calendar-claim', '222', 'teacher-b', '是', '',
+    ]],
+    leaveRows: [[
+      'stamp', '老師甲', '2026/10/03', '17:00', 'C－舞綢 Lv.1~2',
+      '已領取', '老師乙', '改用既有 OB 課程：C－空環 Lv.1~2；難度：Lv.0', '待處理',
+      'leave-class-change', 'calendar-claim', '213', 'C－空環 Lv.1~2', 'Lv.0',
+      '改用既有 OB 課程', '核對異常', '', '課程不一致：預期 Class ID 213，OB 為 222',
+    ]],
+  });
+  const row = fixture.leaveSheet.values[1];
+  const auditBefore = fixture.auditSheet.values.length;
+
+  assert.throws(
+    () => fixture.backend.correctClaimCourse_(fixture.teacherASession, 'leave-class-change', 'calendar-claim'),
+    /課程管理權限/,
+  );
+  const result = fixture.backend.correctClaimCourse_(
+    fixture.adminSession, 'leave-class-change', 'calendar-claim',
+  );
+
+  assert.equal(row[1], '老師甲');
+  assert.equal(row[6], '老師乙');
+  assert.equal(row[10], 'calendar-claim');
+  assert.equal(row[11], '222');
+  assert.equal(row[12], 'C－空環 Lv.0');
+  assert.equal(row[13], 'Lv.0');
+  assert.equal(row[15], '已核對');
+  assert.equal(row[17], '');
+  assert.match(row[7], /改用既有 OB 課程：C－空環 Lv\.0/);
+  assert.equal(fixture.auditSheet.values.length, auditBefore + 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    substituteId: 'leave-class-change',
+    classId: '222',
+    courseName: 'C－空環 Lv.0',
+    verificationStatus: '已核對',
+    differences: [],
+  });
+});
+
+test('claim class correction rejects a different calendar item and leaves the record untouched', () => {
+  const fixture = createInvitationBackend({
+    courseRows: [
+      ['2026/10/03', '17:00', 'C－空環 Lv.0', '老師乙', 'calendar-current', '222', 'teacher-b', '是', ''],
+      ['2026/10/03', '18:30', 'C－空環 Lv.0', '老師丙', 'calendar-other', '222', 'teacher-c', '是', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師甲', '2026/10/03', '17:00', 'C－舞綢 Lv.1~2', '已領取', '老師乙', '',
+      '待處理', 'leave-current', 'calendar-current', '213', 'C－空環 Lv.1~2', 'Lv.0',
+      '改用既有 OB 課程', '核對異常', '', '課程不一致',
+    ]],
+  });
+  const before = JSON.stringify(fixture.leaveSheet.values);
+  const auditBefore = JSON.stringify(fixture.auditSheet.values);
+
+  assert.throws(
+    () => fixture.backend.correctClaimCourse_(fixture.adminSession, 'leave-current', 'calendar-other'),
+    /目前連結的 OB 課程/,
+  );
+  assert.equal(JSON.stringify(fixture.leaveSheet.values), before);
+  assert.equal(JSON.stringify(fixture.auditSheet.values), auditBefore);
+});
+
 test('reconcile marks exact OB teacher and class matches and reports mismatches', () => {
   const { backend, leaveSheet, adminSession } = createInvitationBackend({
     courseRows: [
@@ -7001,6 +7067,7 @@ test('admin replacement choices only include the target month', () => {
 
   assert.deepEqual(JSON.parse(JSON.stringify(backend.getAdminDashboard_(adminSession).replacementOptions)), [{
     calendarId: 'calendar-sep',
+    classId: 'class-ring',
     courseName: 'B－空環 Lv.1~2',
     teacherName: '老師乙',
     date: '2026/09/18',

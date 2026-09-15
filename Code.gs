@@ -7412,6 +7412,13 @@ function doPost(e) {
           parameters.note
         );
       },
+      correctClaimCourse: function() {
+        return correctClaimCourse_(
+          session,
+          parameters.substituteId,
+          parameters.calendarId
+        );
+      },
       linkSpecialCourseRequestCalendarItem: function() {
         return linkSpecialCourseRequestCalendarItem_(
           session,
@@ -16739,6 +16746,80 @@ function correctClaimDetails_(session, substituteId, difficultyValue, noteValue)
   });
 }
 
+function correctClaimCourse_(session, substituteId, calendarId) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var id = requireSubstituteId_(substituteId);
+  var selectedCalendarId = cleanText_(calendarId);
+  if (!selectedCalendarId) throw new Error('請先選擇目前連結的 OB 課程。');
+
+  return withScriptLock_(function() {
+    var record = getLeaveRecordByIdUnlocked_(id);
+    var row = record.row;
+    if (cleanText_(row[5]) !== '已領取' || cleanText_(row[21])) {
+      throw new Error('只有一般已領取代課可以更換預計 OB 課程。');
+    }
+    var effectiveCalendarId = cleanText_(row[20]) || cleanText_(row[10]);
+    if (selectedCalendarId !== effectiveCalendarId) {
+      throw new Error('只能選擇這筆代課目前連結的 OB 課程；若 Calendar ID 已更換，請先連結替代課程。');
+    }
+    var obCourse = findObCourseByCalendarId_(selectedCalendarId);
+    if (!obCourse) throw new Error('找不到目前連結的 OB 課程，請先同步 OB 課表。');
+    if (!obCourse.classId || !obCourse.courseName) {
+      throw new Error('OB 課程缺少 Class ID 或名稱，不能更換預計課程。');
+    }
+    if (formatMyDate(row[2]) !== obCourse.date || cleanText_(row[6]) !== obCourse.teacherName) {
+      throw new Error('OB 課程的日期或老師與這筆代課不一致，不能更換預計課程。');
+    }
+
+    var nextRow = row.slice();
+    var previousCourse = cleanText_(row[12]);
+    var previousClassId = cleanText_(row[11]);
+    nextRow[7] = ['改用既有 OB 課程：' + obCourse.courseName].concat(
+      cleanText_(row[7]).split('；').filter(function(part) {
+        var value = cleanText_(part);
+        return value && !/^改用既有 OB 課程：/.test(value) &&
+          !/^需要新增課程：/.test(value) && value !== '沿用原課程';
+      })
+    ).join('；');
+    nextRow[11] = obCourse.classId;
+    nextRow[12] = obCourse.courseName;
+    nextRow[14] = '改用既有 OB 課程';
+    nextRow[19] = obCourse.category;
+    var courseSheet = requireSheet_(SpreadsheetApp.getActiveSpreadsheet(), CONFIG.COURSE_SHEET);
+    assertHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST);
+    var courseRows = courseSheet.getDataRange().getValues().slice(1);
+    var differences = getObCourseDifferences_(
+      selectedCalendarId, obCourse.sourceRow, getObExpectation_(nextRow, courseRows)
+    );
+    nextRow[8] = differences.length ? '待處理' : '已完成';
+    nextRow[15] = differences.length ? '核對異常' : '已核對';
+    nextRow[16] = getTimestamp_();
+    nextRow[17] = differences.join('；');
+
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 8, 1, 2).setValues([nextRow.slice(7, 9)]);
+      record.sheet.getRange(record.rowNumber, 12, 1, 4).setValues([nextRow.slice(11, 15)]);
+      record.sheet.getRange(record.rowNumber, 16, 1, 3).setValues([nextRow.slice(15, 18)]);
+      record.sheet.getRange(record.rowNumber, 20).setValue(nextRow[19]);
+      appendAudits([{
+        actor: actor,
+        action: '管理員更換領課預計課程',
+        targetId: id,
+        before: previousCourse + '｜Class ID ' + previousClassId,
+        after: obCourse.courseName + '｜Class ID ' + obCourse.classId,
+        reason: selectedCalendarId + (differences.length ? '；' + differences.join('；') : '')
+      }]);
+      return {
+        substituteId: id,
+        classId: obCourse.classId,
+        courseName: obCourse.courseName,
+        verificationStatus: nextRow[15],
+        differences: differences
+      };
+    });
+  });
+}
+
 function getCourseClosureDashboard_(session) {
   assertCapabilitySession_(session, 'course_admin');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -16855,6 +16936,7 @@ function getAdminDashboard_(session) {
     var replacementOptions = courseRows.map(function(row) {
       return {
         calendarId: cleanText_(row[4]),
+        classId: cleanText_(row[5]),
         courseName: cleanText_(row[2]),
         teacherName: cleanText_(row[3]),
         date: formatMyDate(row[0]),

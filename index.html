@@ -7916,6 +7916,15 @@
 
     function renderAdminObItem(item, options) {
       const sameDateOptions = (options || []).filter((option) => option.date === item.date);
+      const effectiveCalendarId = item.replacementCalendarId || item.originalCalendarId || "";
+      const currentObOption = sameDateOptions.find((option) =>
+        option.calendarId === effectiveCalendarId && option.teacherName === item.substituteTeacher &&
+        option.classId && option.courseName
+      );
+      const courseCorrection = item.status === "已領取" && !item.specialGroupId &&
+        (item.differenceReason || "").includes("課程不一致") && currentObOption
+        ? `<div class="item-meta">目前 OB 課程：${escapeHtml(currentObOption.courseName)}｜Class ID ${escapeHtml(currentObOption.classId)}</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="correct-claim-course" data-substitute-id="${escapeHtml(item.substituteId)}" data-calendar-id="${escapeHtml(effectiveCalendarId)}" data-course-name="${escapeHtml(currentObOption.courseName)}" data-class-id="${escapeHtml(currentObOption.classId)}" data-expected-course="${escapeHtml(item.actualCourse || "")}" data-expected-class-id="${escapeHtml(item.actualClassId || "")}"><i data-lucide="replace"></i>改用目前 OB 課程並核對</button></div>`
+        : "";
       if (item.recordType === "specialRequest") {
         const continuationDetail = item.continuation
           ? Number(item.continuation.delayMinutes) > 0
@@ -7936,7 +7945,7 @@
         const detail = `<div class="ob-details"><div class="item-meta">請先確認 OB 已恢復為「${escapeHtml(item.originalTeacher)}｜${escapeHtml(item.originalCourse)}」，再依序按「同步 OB 課表」與「重新核對 OB」。${completionText}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">若 OB 課程 ID 已更換，請選擇新課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
         return renderAdminItem(item, detail);
       }
-      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
+      const detail = `<div class="ob-details"><div class="item-meta">預計課程：${escapeHtml(item.actualCourse)}${item.difficulty ? `｜${escapeHtml(item.difficulty)}` : ""}</div>${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}${courseCorrection}<select class="admin-select" data-replacement-select="${escapeHtml(item.substituteId)}"><option value="">選擇替代 OB 課程</option>${sameDateOptions.map((option) => `<option value="${escapeHtml(option.calendarId)}">${escapeHtml(`${option.date} ${option.time}｜${option.courseName}｜${option.teacherName}`)}</option>`).join("")}</select><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="link-replacement" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="link"></i>連結並重新核對</button></div></div>`;
       return renderAdminItem(item, detail);
     }
 
@@ -8162,6 +8171,17 @@
       await callPostApi("correctClaimDetails", { substituteId, difficulty, note });
       setNotice("領課資料已修正，並重新列入 OB 待核對。已領取老師不變。");
       await fetchAdminDashboard();
+    }
+
+    async function correctAdminClaimCourse(substituteId, calendarId) {
+      const result = await callPostApi("correctClaimCourse", { substituteId, calendarId });
+      if ((result.differences || []).length) {
+        setNotice(`預計課程已更換，但仍有核對異常：${result.differences.join("；")}`, "error");
+      } else {
+        setNotice("預計課程已更換並重新核對，原領課老師不變。");
+      }
+      await fetchAdminDashboard();
+      return result;
     }
 
     async function resolveAdminChangeRequest(substituteId, decision, reason) {
@@ -8750,6 +8770,12 @@ https://sherryaerial-web.github.io/sub.html/
           const select = document.querySelector(`[data-replacement-select="${CSS.escape(button.dataset.substituteId)}"]`);
           if (!select || !select.value) throw new Error("請先選擇替代 OB 課程。");
           await linkAdminReplacement(button.dataset.substituteId, select.value);
+        }
+        if (action === "correct-claim-course") {
+          const before = `${button.dataset.expectedCourse || "目前預計課程"}（Class ID ${button.dataset.expectedClassId || "未提供"}）`;
+          const after = `${button.dataset.courseName || "目前 OB 課程"}（Class ID ${button.dataset.classId || "未提供"}）`;
+          if (!window.confirm(`確認將這筆代課的預計課程由「${before}」改為「${after}」並重新核對？原領課老師不變。`)) return;
+          await correctAdminClaimCourse(button.dataset.substituteId, button.dataset.calendarId);
         }
         if (action === "link-special-replacement") {
           const groupId = button.dataset.specialGroupId;

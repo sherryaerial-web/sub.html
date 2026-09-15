@@ -272,6 +272,13 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
       },
     },
   };
+  if (options.now) {
+    const fixedNow = new Date(options.now).getTime();
+    context.Date = class TestDate extends Date {
+      constructor(...args) { super(...(args.length ? args : [fixedNow])); }
+      static now() { return fixedNow; }
+    };
+  }
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   vm.createContext(context);
   vm.runInContext(script, context, { filename: 'index.html' });
@@ -4143,7 +4150,9 @@ test('practice date strip starts today and navigation never selects an expired d
 });
 
 test('practice date arrows move by one week instead of one day', async () => {
-  const { context, getElement, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
+  const { context, getElement, submittedForms, emitWindowEvent } = createFrontendRuntime({}, {
+    autoRelay: false, now: '2026-09-09T12:00:00+08:00',
+  });
   vm.runInContext('practiceState.date = "2026/09/09"; renderPracticeDateStrip();', context);
 
   getElement('practice-date-next').click();
@@ -4377,7 +4386,9 @@ test('practice creator can only cancel an existing booking and cannot edit it', 
 });
 
 test('course waitlists stay selected across dates until one batch confirmation', async () => {
-  const { context, getElement, submittedForms } = createFrontendRuntime();
+  const { context, getElement, submittedForms } = createFrontendRuntime({}, {
+    now: '2026-09-09T12:00:00+08:00',
+  });
   context.__firstPracticeDay = {
     date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
     rooms: [

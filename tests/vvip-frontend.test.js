@@ -204,6 +204,25 @@ test('VVIP course card shows leave and substitute status without creating anothe
   assert.equal((rendered.match(/type="checkbox"/g) || []).length, 1);
 });
 
+test('VVIP special course card shows its teacher without the source-course leave detail', () => {
+  const rendered = renderCourseFromPage({
+    calendarId: 'special-claimed',
+    date: '2026/10/03',
+    time: '18:15',
+    courseName: 'A－折疊環特別課(90min)',
+    teacherName: 'Sherry❤雪莉',
+    leaveStatus: 'claimed',
+    originalTeacherName: 'Lily Yellow',
+    substituteTeacherName: 'Sherry❤雪莉',
+    leaveLabel: '原老師請假：Lily Yellow｜代課老師：Sherry❤雪莉',
+  });
+
+  assert.match(rendered, /A－折疊環特別課\(90min\)/);
+  assert.match(rendered, /class="course-teacher">Sherry❤雪莉/);
+  assert.doesNotMatch(rendered, /原老師請假|代課老師|course-leave-status/);
+  assert.equal((rendered.match(/type="checkbox"/g) || []).length, 1);
+});
+
 test('VVIP selected summary keeps a cancelled course visible without consuming the three-course quota', () => {
   const { context, elements } = createVvipPageHarness();
   context.__state.data = {

@@ -1858,6 +1858,49 @@ test('admin pending special cancellation asks for original OB restoration withou
   assert.doesNotMatch(markup, /data-admin-action="link-special-replacement"/);
 });
 
+test('admin Liz October 11 first special cancellation asks to keep the first slot empty', () => {
+  const { context } = createFrontendRuntime();
+  const markup = context.renderAdminObItem({
+    recordType: 'specialRequest', specialGroupId: 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3',
+    cancellationMode: '保留空堂', date: '2026/10/11', time: '16:00',
+    originalCourse: 'A－空環 Lv.1~2＋A－空環 Lv.2~3', actualCourse: '空環中軸專攻班',
+    originalTeacher: 'Liz 🌰', substituteTeacher: 'Liz 🌰', status: '取消後待回復 OB',
+    verificationStatus: '核對異常', auditHistory: [], sourceSlots: [],
+  }, []);
+  assert.match(markup, /16:00.*空堂/);
+  assert.match(markup, /17:30.*54591/);
+  assert.doesNotMatch(markup, /回復來源課程/);
+  assert.doesNotMatch(markup, /data-admin-action="link-special-replacement"/);
+});
+
+test('Liz October 11 first special cancellation confirmation does not instruct restoring classes', async () => {
+  const { context, getElement } = createFrontendRuntime({
+    getAdminDashboard: {
+      pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [],
+      exceptions: [], completed: [], teachers: [], replacementOptions: [],
+    },
+  });
+  await context.resolveAdminSpecialCourseCancellation('aca7ee0f-6c5d-43d9-95ee-d85af9695ef3', 'approve', 'test');
+  assert.match(getElement('notice').textContent, /16:00.*空堂/);
+  assert.doesNotMatch(getElement('notice').textContent, /回復來源課程/);
+});
+
+test('Liz October 11 first special teacher record explains the empty-slot cancellation', () => {
+  const { context } = createFrontendRuntime();
+  const markup = context.renderMySubGroup({
+    specialGroupId: 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3',
+    items: [{
+      '紀錄類型': '特別課安排', '日期': '2026/10/11', '時段': '16:00',
+      '實際課程名稱': '空環中軸專攻班', '特別課模式': '使用連續時段',
+      '特別課分鐘數': 90, '特別課實際開始時間': '16:00', '特別課結束時間': '17:30',
+      '來源時段': [], '可申請取消特別課': false, '異動狀態': '取消後待回復 OB',
+      '取消方式': '保留空堂', '異動紀錄': [],
+    }],
+  });
+  assert.match(markup, /16:00.*空堂/);
+  assert.doesNotMatch(markup, /原課程回復核對/);
+});
+
 test('admin special-course advance action calls the backend and refreshes the work list', async () => {
   const { context, getElement, requestActions } = createFrontendRuntime({
     advanceSpecialCourseTime: {

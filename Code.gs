@@ -15088,6 +15088,9 @@ function getMySubs_(teacherName, recordMonth) {
       '異動狀態': cleanText_(row[14]),
       '可申請退出': false,
       '可申請取消特別課': ['已取消', '申請取消中', '取消後待回復 OB'].indexOf(cleanText_(row[14])) === -1,
+      '取消方式': groupId === 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3' &&
+        name === 'Liz 🌰' && formatMyDate(row[3]) === '2026/10/11' &&
+        cleanText_(row[4]) === 'A' ? '保留空堂' : '',
       '異動紀錄': auditByTarget[groupId] || []
     };
   });
@@ -15351,6 +15354,9 @@ function toAdminSpecialCourseRequestItem_(row, auditHistory) {
     }).filter(Boolean).join('、'),
     replacementCalendarId: cleanText_(row[18]),
     specialGroupId: cleanText_(row[1]),
+    cancellationMode: cleanText_(row[1]) === 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3' &&
+      cleanText_(row[2]) === 'Liz 🌰' && formatMyDate(row[3]) === '2026/10/11' &&
+      cleanText_(row[4]) === 'A' ? '保留空堂' : '',
     specialMode: cleanText_(row[12]),
     specialDurationMinutes: Number(row[10]) || 0,
     specialActualStartTime: formatMyTime(row[7]),
@@ -16430,7 +16436,8 @@ function reconcileObChanges_(session) {
       var record = ownSpecialRequestByGroup[groupId];
       var row = record && record.row;
       return row && cleanText_(row[2]) === 'Liz 🌰' &&
-        formatMyDate(row[3]) === '2026/10/11' && cleanText_(row[4]) === 'A';
+        formatMyDate(row[3]) === '2026/10/11' && cleanText_(row[4]) === 'A' &&
+        ['申請取消中', '取消後待回復 OB', '已取消'].indexOf(cleanText_(row[14])) === -1;
     });
     var specialGroupRows = {};
     for (var groupRowIndex = 1; groupRowIndex < leaveRows.length; groupRowIndex++) {
@@ -16559,22 +16566,31 @@ function reconcileObChanges_(session) {
       var requestStatus = cleanText_(requestRow[14]);
       if (requestStatus === '已取消' || requestStatus === '申請取消中') return;
       if (requestStatus === '取消後待回復 OB') {
-        var restoreDifferences = getOwnSpecialCourseCancellationRestoreDifferences_(
-          requestRow, courseByCalendarId, courseRows, leaveRows
-        );
+        var keepEmpty = groupId === lizOctoberPairIds[0];
+        var restoreDifferences = keepEmpty
+          ? getLizOctoberFirstSpecialKeepEmptyDifferences_(
+            requestRow,
+            ownSpecialRequestByGroup[lizOctoberPairIds[1]] &&
+              ownSpecialRequestByGroup[lizOctoberPairIds[1]].row,
+            courseByCalendarId, courseRows, leaveRows
+          )
+          : getOwnSpecialCourseCancellationRestoreDifferences_(
+            requestRow, courseByCalendarId, courseRows, leaveRows
+          );
         var restoreTime = getTimestamp_();
         var restoredRequestRow = requestRow.slice();
         while (restoredRequestRow.length < SHEET_HEADERS.SPECIAL_COURSE_REQUESTS.length) {
           restoredRequestRow.push('');
         }
         result.checked += 1;
-        restoredRequestRow[15] = restoreDifferences.length ? '核對異常' : '已回復核對';
+        restoredRequestRow[15] = restoreDifferences.length
+          ? '核對異常' : (keepEmpty ? '已取消核對' : '已回復核對');
         restoredRequestRow[16] = restoreTime;
         restoredRequestRow[17] = restoreDifferences.join('；');
         if (!restoreDifferences.length) {
           restoredRequestRow[14] = '已取消';
           result.matched += 1;
-          for (var restoredLeaveIndex = 1; restoredLeaveIndex < leaveRows.length; restoredLeaveIndex++) {
+          for (var restoredLeaveIndex = 1; !keepEmpty && restoredLeaveIndex < leaveRows.length; restoredLeaveIndex++) {
             var restoredLeaveRow = leaveRows[restoredLeaveIndex];
             if (cleanText_(restoredLeaveRow[21]) !== groupId) continue;
             var reopenedLeaveRow = restoredLeaveRow.slice();
@@ -16608,7 +16624,9 @@ function reconcileObChanges_(session) {
         });
         audits.push({
           actor: actor,
-          action: restoreDifferences.length ? '特別課取消 OB 回復異常' : '特別課取消 OB 回復完成',
+          action: restoreDifferences.length
+            ? (keepEmpty ? '特別課取消空堂核對異常' : '特別課取消 OB 回復異常')
+            : (keepEmpty ? '特別課取消空堂核對完成' : '特別課取消 OB 回復完成'),
           targetId: groupId,
           before: cleanText_(requestRow[15]),
           after: cleanText_(restoredRequestRow[15]),
@@ -16617,12 +16635,22 @@ function reconcileObChanges_(session) {
         return;
       }
       var isLizOctoberPairRow = lizOctoberPair && lizOctoberPairIds.indexOf(groupId) !== -1;
-      if (!isLizOctoberPairRow &&
+      var firstLizOctoberRow = ownSpecialRequestByGroup[lizOctoberPairIds[0]] &&
+        ownSpecialRequestByGroup[lizOctoberPairIds[0]].row;
+      var isLizOctoberSurvivorRow = groupId === lizOctoberPairIds[1] &&
+        cleanText_(requestRow[2]) === 'Liz 🌰' &&
+        formatMyDate(requestRow[3]) === '2026/10/11' && cleanText_(requestRow[4]) === 'A' &&
+        firstLizOctoberRow && cleanText_(firstLizOctoberRow[2]) === 'Liz 🌰' &&
+        formatMyDate(firstLizOctoberRow[3]) === '2026/10/11' &&
+        cleanText_(firstLizOctoberRow[4]) === 'A' &&
+        ['取消後待回復 OB', '已取消'].indexOf(cleanText_(firstLizOctoberRow[14])) !== -1;
+      if (!isLizOctoberPairRow && !isLizOctoberSurvivorRow &&
           (['已核對', '已完成'].indexOf(cleanText_(requestRow[15])) !== -1 ||
           cleanText_(requestRow[14]) === '已完成')) {
         return;
       }
-      var isLizOctoberSecond = isLizOctoberPairRow && groupId === lizOctoberPairIds[1];
+      var isLizOctoberSecond = groupId === lizOctoberPairIds[1] &&
+        (isLizOctoberPairRow || isLizOctoberSurvivorRow);
       var firstEnd = isLizOctoberPairRow
         ? timeTextToMinutes_(formatMyTime(ownSpecialRequestByGroup[lizOctoberPairIds[0]].row[11]))
         : -1;
@@ -16631,20 +16659,21 @@ function reconcileObChanges_(session) {
           excludedCalendarIds: ['52961'],
           allowedStartTimes: firstEnd >= 0
             ? [minutesToTimeText_(firstEnd), minutesToTimeText_(firstEnd + 15)]
-            : []
+            : ['17:30']
         } : null);
       var differences = outcome.differences;
       var warning = '';
       if (isLizOctoberSecond) {
         var firstOb = courseByCalendarId['52961'];
         var secondOb = courseByCalendarId[outcome.effectiveCalendarId];
-        if (!firstOb || !secondOb || cleanText_(outcome.effectiveCalendarId) === '52961') {
+        if (lizOctoberPair && (!firstOb || !secondOb ||
+            cleanText_(outcome.effectiveCalendarId) === '52961')) {
           differences.push('預期兩堂獨立的 OB 特別課，目前只找到一堂');
-        } else if (!differences.length && firstEnd >= 0) {
+        } else if (!differences.length && (firstEnd >= 0 || isLizOctoberSurvivorRow)) {
           var secondStart = timeTextToMinutes_(formatMyTime(secondOb[1]));
-          if (secondStart < firstEnd) {
+          if (firstEnd >= 0 && secondStart < firstEnd) {
             differences.push('兩堂特別課時間重疊，請修正 OB 課表');
-          } else if (secondStart < firstEnd + 15) {
+          } else if (firstEnd >= 0 && secondStart < firstEnd + 15) {
             warning = '提醒：兩堂特別課之間未留足 15 分鐘；OB 第二堂 ' +
               formatMyTime(secondOb[1]) + '（歷史安排，不阻擋核對）';
           }
@@ -16689,7 +16718,7 @@ function reconcileObChanges_(session) {
         nextRequestRow[17] = (warning ? warning + '；' : '') + differences.join('；');
         result.exceptions += 1;
       }
-      if (isLizOctoberPairRow &&
+      if ((isLizOctoberPairRow || isLizOctoberSurvivorRow) &&
           cleanText_(requestRow[14]) === cleanText_(nextRequestRow[14]) &&
           cleanText_(requestRow[15]) === cleanText_(nextRequestRow[15]) &&
           cleanText_(requestRow[17]) === cleanText_(nextRequestRow[17])) return;
@@ -16736,6 +16765,68 @@ function reconcileObChanges_(session) {
       return result;
     });
   });
+}
+
+function getLizOctoberFirstSpecialKeepEmptyDifferences_(requestRow, survivingRow, courseByCalendarId, courseRows, leaveRows) {
+  var firstGroupId = 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3';
+  var secondGroupId = '483ecf21-566a-475e-b3a7-b205f5b67323';
+  var differences = [];
+  if (cleanText_(requestRow && requestRow[1]) !== firstGroupId ||
+      cleanText_(requestRow && requestRow[2]) !== 'Liz 🌰' ||
+      formatMyDate(requestRow && requestRow[3]) !== '2026/10/11' ||
+      cleanText_(requestRow && requestRow[4]) !== 'A' ||
+      (cleanText_(requestRow && requestRow[18]) && cleanText_(requestRow[18]) !== '52961')) {
+    return ['Liz 10/11 第一堂特別課的來源資料不一致，暫不取消'];
+  }
+  var firstSources = getSpecialRequestSourceSlots_(requestRow);
+  var sourceIds = firstSources.map(function(slot) {
+    return cleanText_(slot && slot.sourceType) + '|' + cleanText_(slot && slot.calendarId) + '|' +
+      formatMyTime(slot && slot.time);
+  }).sort();
+  if (sourceIds.length !== 2 || sourceIds.join(',') !== 'own|52954|17:30,own|52961|16:00') {
+    differences.push('歷史來源時段與預期不一致，暫不取消');
+  }
+  if (!survivingRow || cleanText_(survivingRow[1]) !== secondGroupId ||
+      cleanText_(survivingRow[2]) !== 'Liz 🌰' ||
+      formatMyDate(survivingRow[3]) !== '2026/10/11' ||
+      cleanText_(survivingRow[4]) !== 'A' ||
+      ['申請取消中', '取消後待回復 OB', '已取消'].indexOf(cleanText_(survivingRow[14])) !== -1 ||
+      cleanText_(survivingRow[18]) !== '54591') {
+    differences.push('17:30 另一堂特別課紀錄不完整或也在取消中，暫不釋放');
+  }
+  if ((leaveRows || []).slice(1).some(function(row) {
+    return cleanText_(row[21]) === firstGroupId;
+  })) {
+    differences.push('第一堂仍連結代課紀錄，暫不釋放');
+  }
+  if (courseByCalendarId['52961']) {
+    differences.push('16:00 待取消特別課的原 Calendar ID 52961 仍在 OB');
+  }
+  if (courseByCalendarId['52954']) {
+    differences.push('17:30 原正課 Calendar ID 52954 仍在 OB，不能視為只保留特別課');
+  }
+  if (survivingRow) {
+    var survivingOutcome = getSpecialCourseRequestObOutcome_(survivingRow, courseByCalendarId, {
+      excludedCalendarIds: ['52961', '52954'],
+      allowedStartTimes: ['17:30']
+    });
+    if (survivingOutcome.effectiveCalendarId !== '54591') {
+      differences.push('17:30 特別課須保留原 Calendar ID 54591');
+    }
+    survivingOutcome.differences.forEach(function(message) {
+      differences.push('保留的 17:30 特別課：' + message);
+    });
+  }
+  if ((courseRows || []).some(function(row) {
+    if (formatMyDate(row[0]) !== '2026/10/11' || getCourseRoom_(row[2]) !== 'A' ||
+        cleanText_(row[4]) === '54591') return false;
+    var start = timeTextToMinutes_(formatMyTime(row[1]));
+    var duration = getScheduledCourseDurationMinutes_(row[2]);
+    return start >= 0 && start < 17 * 60 + 30 && start + duration > 16 * 60;
+  })) {
+    differences.push('A 教室 16:00–17:30 仍有其他 OB 課程，不能視為空堂');
+  }
+  return differences;
 }
 
 function getOwnSpecialCourseCancellationRestoreDifferences_(requestRow, courseByCalendarId, courseRows, leaveRows) {

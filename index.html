@@ -6167,7 +6167,8 @@
         const earlyMinutes = Number.isFinite(originalStartMinutes) && Number.isFinite(optionMinutes)
           ? originalStartMinutes - optionMinutes
           : 0;
-        const label = earlyMinutes > 0 ? `${time}（提早 ${earlyMinutes} 分鐘）` : time;
+        const label = earlyMinutes > 0 ? `${time}（提早 ${earlyMinutes} 分鐘）`
+          : earlyMinutes < 0 ? `${time}（延後 ${-earlyMinutes} 分鐘）` : time;
         return `<option value="${time}">${label}</option>`;
       }).join("");
       select.value = options.includes(previousValue)

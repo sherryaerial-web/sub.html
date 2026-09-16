@@ -2020,6 +2020,25 @@ test('special-course draft delays the actual start while reserving every occupie
   }, turnoverBlockedAvailability), /上一堂課.*15 分鐘換場/);
 });
 
+test('special-course start options label delays relative to the original slot without changing their values', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.document.querySelectorAll = (selector) => selector === '.claim-checkbox:checked'
+    ? [{ dataset: { slotKey: 'leave-first' } }]
+    : [];
+  vm.runInContext(`claimOptions = { specialAvailability: {
+    'leave-first': { startTime: '17:30', earliestStartTime: '17:00', nextCourseTime: '18:45' }
+  } };`, context);
+
+  context.syncSpecialCourseStartTimeOptions();
+
+  const select = getElement('special-actual-start');
+  assert.match(select.innerHTML, /<option value="17:00">17:00（提早 30 分鐘）<\/option>/);
+  assert.match(select.innerHTML, /<option value="17:30">17:30<\/option>/);
+  assert.match(select.innerHTML, /<option value="17:45">17:45（延後 15 分鐘）<\/option>/);
+  assert.match(select.innerHTML, /<option value="18:30">18:30（延後 60 分鐘）<\/option>/);
+  assert.equal(select.value, '17:30');
+});
+
 test('single-slot special course blocks a gap shorter than 90 minutes after turnover', () => {
   const { context } = createFrontendRuntime();
   const availability = {

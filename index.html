@@ -6436,11 +6436,14 @@
         ? sourceSlots.map((slot) => `<div class="item-meta">${escapeHtml(slot.time)}｜${escapeHtml(slot.courseName)}<br>${escapeHtml(slot.sourceType === "own" ? "自己的正課" : "開放代課")}｜OB Calendar ID：${escapeHtml(slot.calendarId || "未提供")}</div>`).join("")
         : rows.map((row) => `<div class="item-meta">${escapeHtml(formatDateWithWeekday(row["日期"]))} ${escapeHtml(row["時段"])}｜${escapeHtml(row["課程"])}<br>代課編號：${escapeHtml(row["代課編號"])}｜OB Calendar ID：${escapeHtml(row["OB Calendar ID"] || "未提供")}</div>`).join("");
       const actions = rows.filter((row) => row["可申請退出"]).map((row) => `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(row["代課編號"])}"><i data-lucide="log-out"></i>申請退出 ${escapeHtml(row["時段"])}</button>`).join("");
+      const specialCancellationAction = isOwnCourseRequest && item["可申請取消特別課"]
+        ? `<button class="danger-button" type="button" data-sub-action="cancel-special" data-special-group-id="${escapeHtml(group.specialGroupId)}"><i data-lucide="calendar-x"></i>申請取消特別課</button>`
+        : "";
       const sourceCount = isOwnCourseRequest ? sourceSlots.length : rows.length;
       const exitHint = isOwnCourseRequest
-        ? '<div class="hint">包含自己的正課，如需調整請聯絡管理員。</div>'
+        ? '<div class="hint">取消需由管理員審核；OB 原課程回復核對前不會釋放時段。</div>'
         : '<div class="hint">若要退出，請依原始時段分別提出申請。</div>';
-      return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${sourceCount} 堂</div>${continuationRow}${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${sourceCount}）</summary>${sourceRows}</details>${exitHint}<div class="record-actions">${actions}</div></div></article>`;
+      return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${sourceCount} 堂</div>${continuationRow}${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}${isOwnCourseRequest ? `<div class="item-meta">狀態：${escapeHtml(item["異動狀態"] || "待處理")}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${sourceCount}）</summary>${sourceRows}</details>${exitHint}<div class="record-actions">${specialCancellationAction}${actions}</div></div></article>`;
     }
 
     async function fetchMySubs(recordMonth = "") {
@@ -6500,6 +6503,12 @@
       await fetchMySubs(mySubsRecordMonth);
     }
 
+    async function requestOwnSpecialCourseCancellation(specialGroupId, reason) {
+      await callPostApi("requestSpecialCourseCancellation", { specialGroupId, reason });
+      setNotice("特別課取消申請已送出，請等待管理員審核。");
+      await fetchMySubs(mySubsRecordMonth);
+    }
+
     function openRequestDialog(options) {
       requestDialogState = options;
       byId("request-dialog-title").textContent = options.title;
@@ -6548,8 +6557,12 @@
           await requestOwnLeaveCancellation(state.substituteId, reason);
         } else if (state.action === "withdraw") {
           await requestOwnClaimWithdrawal(state.substituteId, reason);
+        } else if (state.action === "cancel-special") {
+          await requestOwnSpecialCourseCancellation(state.specialGroupId, reason);
         } else if (state.action === "resolve") {
           await resolveAdminChangeRequest(state.substituteId, state.decision, reason);
+        } else if (state.action === "resolve-special-cancel") {
+          await resolveAdminSpecialCourseCancellation(state.specialGroupId, state.decision, reason);
         } else if (state.action === "cancel-vvip") {
           await cancelVvipSelection(state.email, state.calendarId, state.recordKey, reason);
         } else if (state.action === "payroll-dispute") {
@@ -7544,8 +7557,13 @@
       } else if (activeAdminTab === "changeRequests") {
         content.innerHTML = (data.changeRequests || []).map((item) => {
           const canResolve = ["申請取消中", "申請退出中"].includes(item.changeStatus);
+          const isSpecialCancellation = item.recordType === "specialRequest" && item.specialGroupId;
+          const actionName = isSpecialCancellation ? "resolve-special-cancel" : "resolve";
+          const targetAttribute = isSpecialCancellation
+            ? `data-special-group-id="${escapeHtml(item.specialGroupId)}"`
+            : `data-substitute-id="${escapeHtml(item.substituteId)}"`;
           const actions = canResolve
-            ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve" data-decision="approve" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="check"></i>核准</button><button class="danger-button" type="button" data-admin-action="resolve" data-decision="reject" data-substitute-id="${escapeHtml(item.substituteId)}"><i data-lucide="x"></i>駁回</button></div>`
+            ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="${actionName}" data-decision="approve" ${targetAttribute}><i data-lucide="check"></i>核准</button><button class="danger-button" type="button" data-admin-action="${actionName}" data-decision="reject" ${targetAttribute}><i data-lucide="x"></i>駁回</button></div>`
             : "";
           return renderAdminItem(item, actions);
         }).join("") || '<div class="state">目前沒有取消或退出申請</div>';
@@ -7929,6 +7947,13 @@
         ? `<div class="item-meta">目前 OB 課程：${escapeHtml(currentObOption.courseName)}｜Class ID ${escapeHtml(currentObOption.classId)}</div><div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="correct-claim-course" data-substitute-id="${escapeHtml(item.substituteId)}" data-calendar-id="${escapeHtml(effectiveCalendarId)}" data-course-name="${escapeHtml(currentObOption.courseName)}" data-class-id="${escapeHtml(currentObOption.classId)}" data-expected-course="${escapeHtml(item.actualCourse || "")}" data-expected-class-id="${escapeHtml(item.actualClassId || "")}"><i data-lucide="replace"></i>改用目前 OB 課程並核對</button></div>`
         : "";
       if (item.recordType === "specialRequest") {
+        if (item.status === "取消後待回復 OB") {
+          const originalSources = (Array.isArray(item.sourceSlots) ? item.sourceSlots : [])
+            .concat(item.continuation ? [item.continuation] : []);
+          const sourceRows = originalSources.map((slot) => `<div class="item-meta">${escapeHtml(slot.originalTime || slot.time || "—")}｜${escapeHtml(slot.courseName || "原課程")}｜原 Calendar ID ${escapeHtml(slot.calendarId || "未提供")}</div>`).join("");
+          const detail = `<div class="ob-details"><div class="item-meta">請先在 OB 回復來源課程並保留原 Calendar ID，再依序按「同步 OB 課表」與「重新核對 OB」；核對成功後才會取消特別課並釋放時段。</div>${sourceRows}${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}</div>`;
+          return renderAdminItem(item, detail);
+        }
         const continuationDetail = item.continuation
           ? Number(item.continuation.delayMinutes) > 0
             ? `<div class="item-meta"><strong>接續本人常態課</strong>｜請在 OB 將「${escapeHtml(item.continuation.courseName || "本人常態課")}」由 ${escapeHtml(item.continuation.originalTime)} 延後至 ${escapeHtml(item.continuation.actualStartTime)}，並保留原 Calendar ID ${escapeHtml(item.continuation.calendarId || "未提供")}。</div>`
@@ -8199,6 +8224,14 @@
       await fetchAdminDashboard();
     }
 
+    async function resolveAdminSpecialCourseCancellation(specialGroupId, decision, reason) {
+      await callPostApi("resolveSpecialCourseCancellation", { specialGroupId, decision, reason });
+      setNotice(decision === "approve"
+        ? "特別課取消申請已核准。請先在 OB 回復來源課程，再按「同步 OB 課表」與「重新核對 OB」；核對完成前原時段不會釋放。"
+        : "特別課取消申請已駁回。");
+      await fetchAdminDashboard();
+    }
+
     function selectAllMissingObCancellations() {
       const checkboxes = Array.from(document.querySelectorAll(".ob-cancellation-checkbox"));
       const shouldSelect = checkboxes.some((checkbox) => !checkbox.checked);
@@ -8453,8 +8486,18 @@ https://sherryaerial-web.github.io/sub.html/
       } catch (error) { setNotice(error.message, "error"); }
     });
     byId("my-subs-list").addEventListener("click", (event) => {
-      const button = event.target.closest ? event.target.closest("[data-sub-action='withdraw']") : null;
+      const button = event.target.closest ? event.target.closest("[data-sub-action]") : null;
       if (!button) return;
+      if (button.dataset.subAction === "cancel-special") {
+        openRequestDialog({
+          action: "cancel-special",
+          specialGroupId: button.dataset.specialGroupId,
+          title: "申請取消特別課",
+          copy: "請填寫取消原因。管理員審核並確認 OB 原課程已回復後，才會釋放原時段。"
+        });
+        return;
+      }
+      if (button.dataset.subAction !== "withdraw") return;
       openRequestDialog({
         action: "withdraw",
         substituteId: button.dataset.substituteId,
@@ -8811,6 +8854,18 @@ https://sherryaerial-web.github.io/sub.html/
             decision: button.dataset.decision,
             title: button.dataset.decision === "approve" ? "核准申請" : "駁回申請",
             copy: button.dataset.decision === "approve" ? "備註可以留空。" : "請填寫駁回原因。",
+            reasonRequired: button.dataset.decision !== "approve"
+          });
+        }
+        if (action === "resolve-special-cancel") {
+          openRequestDialog({
+            action: "resolve-special-cancel",
+            specialGroupId: button.dataset.specialGroupId,
+            decision: button.dataset.decision,
+            title: button.dataset.decision === "approve" ? "核准取消特別課" : "駁回取消特別課",
+            copy: button.dataset.decision === "approve"
+              ? "核准後仍須在 OB 回復來源課程並重新核對，時段才會釋放。"
+              : "請填寫駁回原因。",
             reasonRequired: button.dataset.decision !== "approve"
           });
         }

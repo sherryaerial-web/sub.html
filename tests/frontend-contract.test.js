@@ -1822,6 +1822,42 @@ test('renders own-course special requests as one teacher record and one admin wo
   assert.doesNotMatch(restoredContinuationMarkup, /11:00 延後至 11:00/);
 });
 
+test('own special course record offers one cancellation request button until submitted', () => {
+  const { context } = createFrontendRuntime();
+  const baseItem = {
+    '紀錄類型': '特別課安排', '特別課群組 ID': 'own-special-1', '日期': '2026/08/10',
+    '時段': '16:00', '實際課程名稱': 'A－空環特別課', '特別課模式': '使用連續時段',
+    '特別課分鐘數': 90, '特別課實際開始時間': '16:00', '特別課結束時間': '17:30',
+    '來源時段': [{ sourceType: 'own', time: '16:00', courseName: 'A－空環 Lv.1', calendarId: 'own-1' }],
+    '可申請退出': false, '異動紀錄': [],
+  };
+  const before = context.renderMySubGroup({ specialGroupId: 'own-special-1', items: [{
+    ...baseItem, '可申請取消特別課': true,
+  }] });
+  assert.match(before, /data-sub-action="cancel-special"[^>]*data-special-group-id="own-special-1"/);
+  assert.match(before, /申請取消特別課/);
+  const after = context.renderMySubGroup({ specialGroupId: 'own-special-1', items: [{
+    ...baseItem, '可申請取消特別課': false, '異動狀態': '申請取消中',
+  }] });
+  assert.doesNotMatch(after, /data-sub-action="cancel-special"/);
+  assert.match(after, /申請取消中/);
+});
+
+test('admin pending special cancellation asks for original OB restoration without replacement linking', () => {
+  const { context } = createFrontendRuntime();
+  const markup = context.renderAdminObItem({
+    recordType: 'specialRequest', specialGroupId: 'own-special-1', date: '2026/08/10',
+    time: '16:00', originalCourse: 'A－空環 Lv.1＋A－空環 Lv.2', actualCourse: 'A－空環特別課',
+    originalTeacher: '老師甲', substituteTeacher: '老師甲', status: '取消後待回復 OB',
+    verificationStatus: '待回復 OB', auditHistory: [], sourceSlots: [{
+      sourceType: 'own', time: '16:00', courseName: 'A－空環 Lv.1', calendarId: 'own-1',
+    }],
+  }, []);
+  assert.match(markup, /回復來源課程/);
+  assert.match(markup, /A－空環 Lv\.1.*own-1/);
+  assert.doesNotMatch(markup, /data-admin-action="link-special-replacement"/);
+});
+
 test('admin special-course advance action calls the backend and refreshes the work list', async () => {
   const { context, getElement, requestActions } = createFrontendRuntime({
     advanceSpecialCourseTime: {
@@ -2965,6 +3001,23 @@ test('admin cancellation history does not expose resolution actions after the re
   assert.match(getElement('admin-tab-content').innerHTML, /data-admin-action="resolve"/);
   assert.match(getElement('admin-tab-content').innerHTML, />核准</);
   assert.match(getElement('admin-tab-content').innerHTML, />駁回</);
+});
+
+test('admin change requests identify and resolve own special course cancellation by group id', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__dashboard = {
+    changeRequests: [{
+      recordType: 'specialRequest', specialGroupId: 'own-special-1', substituteId: '',
+      date: '2026/08/10', time: '16:00', originalCourse: 'A－空環 Lv.1',
+      originalTeacher: '老師甲', substituteTeacher: '老師甲', actualCourse: 'A－空環特別課',
+      status: '申請取消中', changeStatus: '申請取消中', auditHistory: [],
+    }],
+  };
+  vm.runInContext('activeAdminTab = "changeRequests"; adminDashboard = __dashboard; renderAdminTab();', context);
+  const markup = getElement('admin-tab-content').innerHTML;
+  assert.match(markup, /data-admin-action="resolve-special-cancel"[^>]*data-special-group-id="own-special-1"/);
+  assert.match(markup, /申請取消中/);
+  assert.doesNotMatch(markup, /data-substitute-id=""/);
 });
 
 test('approved withdrawal tells the administrator the course is immediately reopened', async () => {

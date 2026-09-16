@@ -7372,12 +7372,22 @@ function doPost(e) {
       requestClaimWithdrawal: function() {
         return requestClaimWithdrawal_(actingSession(), parameters.substituteId, parameters.reason);
       },
+      requestSpecialCourseCancellation: function() {
+        return requestSpecialCourseCancellation_(
+          actingSession(), parameters.specialGroupId, parameters.reason
+        );
+      },
       resolveChangeRequest: function() {
         return resolveChangeRequest_(
           session,
           parameters.substituteId,
           parameters.decision,
           parameters.reason
+        );
+      },
+      resolveSpecialCourseCancellation: function() {
+        return resolveSpecialCourseCancellation_(
+          session, parameters.specialGroupId, parameters.decision, parameters.reason
         );
       },
       reconcileObChanges: function() {
@@ -11176,8 +11186,8 @@ function getMyLeaves_(session, recordMonth) {
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
     };
   }).sort(function(a, b) {
-    return [b['日期'], b['時段'], b['登記時間']].join('|')
-      .localeCompare([a['日期'], a['時段'], a['登記時間']].join('|'));
+    return [a['日期'], a['時段'], a['登記時間']].join('|')
+      .localeCompare([b['日期'], b['時段'], b['登記時間']].join('|'));
   });
 }
 
@@ -14807,6 +14817,7 @@ function getMySubs_(teacherName, recordMonth) {
       '接續常態課': continuation,
       '異動狀態': cleanText_(row[14]),
       '可申請退出': false,
+      '可申請取消特別課': ['已取消', '申請取消中', '取消後待回復 OB'].indexOf(cleanText_(row[14])) === -1,
       '異動紀錄': auditByTarget[groupId] || []
     };
   });
@@ -15061,7 +15072,7 @@ function toAdminSpecialCourseRequestItem_(row, auditHistory) {
     handlingType: '安排特別課',
     note: cleanText_(row[13]),
     status: cleanText_(row[14]),
-    changeStatus: '',
+    changeStatus: cleanText_(row[14]) === '申請取消中' ? '申請取消中' : '',
     verificationStatus: cleanText_(row[15]),
     verificationTime: cleanText_(row[16]),
     differenceReason: cleanText_(row[17]),
@@ -15923,6 +15934,90 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
   });
 }
 
+function getOwnSpecialRequestByGroupIdUnlocked_(specialGroupId) {
+  var groupId = cleanText_(specialGroupId);
+  if (!groupId) throw new Error('找不到特別課安排，請重新整理。');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = requireSheet_(ss, SHEETS.SPECIAL_COURSE_REQUESTS);
+  assertHeaders_(sheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+  var values = sheet.getDataRange().getValues();
+  for (var index = 1; index < values.length; index++) {
+    if (cleanText_(values[index][1]) === groupId && specialRequestHasOwnSlot_(values[index])) {
+      return { sheet: sheet, rowNumber: index + 1, row: values[index] };
+    }
+  }
+  throw new Error('找不到這筆自己的特別課安排，請重新整理。');
+}
+
+function requestSpecialCourseCancellation_(session, specialGroupId, reason) {
+  var teacher = getSessionTeacherName_(session);
+  var auditActor = getSessionAuditActor_(session);
+  var requestReason = requireChangeReason_(reason);
+  return withScriptLock_(function() {
+    var record = getOwnSpecialRequestByGroupIdUnlocked_(specialGroupId);
+    if (cleanText_(record.row[2]) !== teacher) {
+      throw new Error('只能申請取消自己的特別課。');
+    }
+    var status = cleanText_(record.row[14]);
+    if (status === '申請取消中') throw new Error('取消申請已送出，請等待處理。');
+    if (status === '已取消' || status === '取消後待回復 OB') {
+      throw new Error('這筆特別課已進入取消處理，無法重複申請。');
+    }
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 15).setValue('申請取消中');
+      appendAudits([{
+        actor: auditActor,
+        action: '申請取消特別課',
+        targetId: cleanText_(specialGroupId),
+        before: status,
+        after: '申請取消中',
+        reason: requestReason
+      }]);
+      return { specialGroupId: cleanText_(specialGroupId), status: '申請取消中' };
+    });
+  });
+}
+
+function resolveSpecialCourseCancellation_(session, specialGroupId, decision, reason) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  var normalizedDecision = normalizeResolutionDecision_(decision);
+  var resolutionReason = cleanText_(reason);
+  if (normalizedDecision === 'reject' && !resolutionReason) {
+    throw new Error('駁回時請填寫原因。');
+  }
+  return withScriptLock_(function() {
+    var record = getOwnSpecialRequestByGroupIdUnlocked_(specialGroupId);
+    if (cleanText_(record.row[14]) !== '申請取消中') {
+      throw new Error('這筆特別課目前沒有待審核的取消申請。');
+    }
+    var nextStatus = normalizedDecision === 'approve'
+      ? '取消後待回復 OB'
+      : (cleanText_(record.row[15]) === '已核對' ? '已完成' : '待處理');
+    var nextVerification = normalizedDecision === 'approve'
+      ? '待回復 OB'
+      : cleanText_(record.row[15]);
+    return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
+      record.sheet.getRange(record.rowNumber, 15, 1, 2).setValues([[
+        nextStatus, nextVerification
+      ]]);
+      appendAudits([{
+        actor: actor,
+        action: normalizedDecision === 'approve' ? '核准取消特別課' : '駁回取消特別課',
+        targetId: cleanText_(specialGroupId),
+        before: '申請取消中',
+        after: nextStatus,
+        reason: resolutionReason
+      }]);
+      return {
+        specialGroupId: cleanText_(specialGroupId),
+        requestType: 'specialCancellation',
+        decision: normalizedDecision,
+        status: nextStatus
+      };
+    });
+  });
+}
+
 function resolveChangeRequest_(session, substituteId, decision, reason) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var id = requireSubstituteId_(substituteId);
@@ -16191,6 +16286,66 @@ function reconcileObChanges_(session) {
       var requestRecord = ownSpecialRequestByGroup[groupId];
       var requestRow = requestRecord.row;
       if (!isSpecialRequestRowInMonth_(requestRow, targetMonth)) return;
+      var requestStatus = cleanText_(requestRow[14]);
+      if (requestStatus === '已取消' || requestStatus === '申請取消中') return;
+      if (requestStatus === '取消後待回復 OB') {
+        var restoreDifferences = getOwnSpecialCourseCancellationRestoreDifferences_(
+          requestRow, courseByCalendarId, courseRows, leaveRows
+        );
+        var restoreTime = getTimestamp_();
+        var restoredRequestRow = requestRow.slice();
+        while (restoredRequestRow.length < SHEET_HEADERS.SPECIAL_COURSE_REQUESTS.length) {
+          restoredRequestRow.push('');
+        }
+        result.checked += 1;
+        restoredRequestRow[15] = restoreDifferences.length ? '核對異常' : '已回復核對';
+        restoredRequestRow[16] = restoreTime;
+        restoredRequestRow[17] = restoreDifferences.join('；');
+        if (!restoreDifferences.length) {
+          restoredRequestRow[14] = '已取消';
+          result.matched += 1;
+          for (var restoredLeaveIndex = 1; restoredLeaveIndex < leaveRows.length; restoredLeaveIndex++) {
+            var restoredLeaveRow = leaveRows[restoredLeaveIndex];
+            if (cleanText_(restoredLeaveRow[21]) !== groupId) continue;
+            var reopenedLeaveRow = restoredLeaveRow.slice();
+            while (reopenedLeaveRow.length < SHEET_HEADERS.LEAVES.length) reopenedLeaveRow.push('');
+            reopenedLeaveRow[5] = '確認中';
+            reopenedLeaveRow[6] = '';
+            reopenedLeaveRow[7] = '';
+            reopenedLeaveRow[8] = '';
+            for (var resetIndex = 11; resetIndex <= 19; resetIndex++) reopenedLeaveRow[resetIndex] = '';
+            for (var specialIndex = 21; specialIndex <= 26; specialIndex++) reopenedLeaveRow[specialIndex] = '';
+            updates.push({
+              rowNumber: restoredLeaveIndex + 1,
+              values: reopenedLeaveRow.slice(5, 21),
+              specialValues: reopenedLeaveRow.slice(21, 27)
+            });
+            audits.push({
+              actor: actor,
+              action: '取消特別課後重新開放代課',
+              targetId: cleanText_(restoredLeaveRow[9]),
+              before: '已領取',
+              after: '確認中',
+              reason: groupId
+            });
+          }
+        } else {
+          result.exceptions += 1;
+        }
+        specialRequestUpdates.push({
+          rowNumber: requestRecord.rowIndex + 1,
+          values: restoredRequestRow.slice(14, 18)
+        });
+        audits.push({
+          actor: actor,
+          action: restoreDifferences.length ? '特別課取消 OB 回復異常' : '特別課取消 OB 回復完成',
+          targetId: groupId,
+          before: cleanText_(requestRow[15]),
+          after: cleanText_(restoredRequestRow[15]),
+          reason: restoreDifferences.join('；')
+        });
+        return;
+      }
       var isLizOctoberPairRow = lizOctoberPair && lizOctoberPairIds.indexOf(groupId) !== -1;
       if (!isLizOctoberPairRow &&
           (['已核對', '已完成'].indexOf(cleanText_(requestRow[15])) !== -1 ||
@@ -16300,6 +16455,9 @@ function reconcileObChanges_(session) {
     return runStateTransitionUnlocked_(transitionSheets, function(appendAudits) {
       updates.forEach(function(update) {
         leaveSheet.getRange(update.rowNumber, 6, 1, 16).setValues([update.values]);
+        if (update.specialValues) {
+          leaveSheet.getRange(update.rowNumber, 22, 1, 6).setValues([update.specialValues]);
+        }
       });
       specialRequestUpdates.forEach(function(update) {
         specialRequestSheet.getRange(update.rowNumber, 15, 1, 4).setValues([update.values]);
@@ -16308,6 +16466,69 @@ function reconcileObChanges_(session) {
       return result;
     });
   });
+}
+
+function getOwnSpecialCourseCancellationRestoreDifferences_(requestRow, courseByCalendarId, courseRows, leaveRows) {
+  var groupId = cleanText_(requestRow && requestRow[1]);
+  var sources = getSpecialRequestSourceSlots_(requestRow).filter(function(slot) {
+    return ['own', 'leave', 'own-continuation'].indexOf(cleanText_(slot && slot.sourceType)) !== -1;
+  });
+  var differences = [];
+  if (!sources.length) return ['特別課來源時段資料不完整，無法確認 OB 回復'];
+  sources.forEach(function(slot) {
+    var calendarId = cleanText_(slot.calendarId);
+    var obRow = courseByCalendarId[calendarId];
+    var expectedTime = cleanText_(slot.originalTime || slot.time);
+    var matches = obRow &&
+      formatMyDate(obRow[0]) === formatMyDate(slot.date) &&
+      formatMyTime(obRow[1]) === formatMyTime(expectedTime) &&
+      normalizeOrdinaryCourseReconciliationName_(obRow[2]) ===
+        normalizeOrdinaryCourseReconciliationName_(slot.courseName) &&
+      cleanText_(obRow[3]) === cleanText_(slot.originalTeacher) &&
+      getCourseRoom_(obRow[2]) === cleanText_(slot.room);
+    if (!calendarId || !matches) {
+      differences.push('原課程 ' + cleanText_(slot.courseName) + ' ' +
+        formatMyTime(expectedTime) + ' 尚未回復 OB');
+    }
+  });
+  var leaveSources = getSpecialRequestSourceSlots_(requestRow).filter(function(slot) {
+    return cleanText_(slot && slot.sourceType) === 'leave';
+  });
+  var expectedLeaveIds = leaveSources.map(function(slot) { return cleanText_(slot.substituteId); });
+  if (expectedLeaveIds.some(function(id) { return !id; })) {
+    differences.push('來源代課編號不完整，暫不釋放');
+  }
+  var linkedLeaveIds = (leaveRows || []).slice(1).filter(function(row) {
+    return cleanText_(row[21]) === groupId;
+  }).map(function(row) { return cleanText_(row[9]); });
+  if (expectedLeaveIds.some(function(id, index) { return expectedLeaveIds.indexOf(id) !== index; }) ||
+      linkedLeaveIds.some(function(id, index) { return !id || linkedLeaveIds.indexOf(id) !== index; })) {
+    differences.push('來源代課編號有重複或缺漏，暫不釋放');
+  }
+  if (expectedLeaveIds.length !== linkedLeaveIds.length ||
+      expectedLeaveIds.some(function(id) { return linkedLeaveIds.indexOf(id) === -1; }) ||
+      linkedLeaveIds.some(function(id) { return expectedLeaveIds.indexOf(id) === -1; })) {
+    differences.push('來源代課編號與群組紀錄不一致，暫不釋放');
+  }
+  expectedLeaveIds.forEach(function(substituteId) {
+    var linked = (leaveRows || []).slice(1).filter(function(row) {
+      return cleanText_(row[9]) === substituteId && cleanText_(row[21]) === groupId &&
+        cleanText_(row[5]) === '已領取';
+    });
+    if (linked.length !== 1) differences.push('代課來源 ' + substituteId + ' 狀態不一致，暫不釋放');
+  });
+  var date = formatMyDate(requestRow[3]);
+  var room = cleanText_(requestRow[4]);
+  var specialName = normalizeSpecialCourseReconciliationName_(requestRow[8]);
+  if ((courseRows || []).some(function(row) {
+    return formatMyDate(row[0]) === date && getCourseRoom_(row[2]) === room &&
+      cleanText_(row[3]) === cleanText_(requestRow[2]) &&
+      normalizeSpecialCourseReconciliationName_(row[2]) === specialName &&
+      sources.every(function(slot) { return cleanText_(slot.calendarId) !== cleanText_(row[4]); });
+  })) {
+    differences.push('OB 仍有這堂特別課，請先取消或回復課表');
+  }
+  return differences;
 }
 
 function isSpecialRequestRowInMonth_(row, month) {
@@ -17076,12 +17297,14 @@ function getAdminDashboard_(session) {
           (item.status === '已領取' &&
             ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
       }).concat(ownSpecialRequests.filter(function(item) {
-        return ['待處理', '核對異常'].indexOf(item.status) !== -1 ||
+        return ['待處理', '核對異常', '取消後待回復 OB'].indexOf(item.status) !== -1 ||
           ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1;
       })),
       changeRequests: leaves.filter(function(item) {
         return ['申請取消中', '申請退出中'].indexOf(item.changeStatus) !== -1;
-      }),
+      }).concat(ownSpecialRequests.filter(function(item) {
+        return item.status === '申請取消中';
+      })),
       exceptions: leaves.filter(function(item, index) {
         if (ownSpecialGroupIds[item.specialGroupId]) return false;
         return isLeaveRowInMonth_(leaveSourceRows[index], targetMonth) &&

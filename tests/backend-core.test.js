@@ -2374,6 +2374,23 @@ test('getMyLeaves returns personal status, substitute, intended course, verifica
   });
 });
 
+test('teacher leave records follow date and start time from earliest to latest', () => {
+  const { backend } = createLeaveBackend({
+    courseRows: [],
+    leaveRows: [
+      ['stamp-c', '老師甲', '2026/08/11', '09:00', '第三堂', '已領取', '', '', '', 'leave-c'],
+      ['stamp-b', '老師甲', '2026/08/10', '17:30', '第二堂', '已領取', '', '', '', 'leave-b'],
+      ['stamp-a', '老師甲', '2026/08/10', '16:00', '第一堂', '已領取', '', '', '', 'leave-a'],
+    ],
+  });
+
+  assert.deepEqual(
+    backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' })
+      .map((row) => row['代課編號']),
+    ['leave-a', 'leave-b', 'leave-c'],
+  );
+});
+
 test('teacher leave records default to current plus next month and allow one archived month', () => {
   const { backend } = createLeaveBackend({
     courseRows: [],
@@ -2388,7 +2405,7 @@ test('teacher leave records default to current plus next month and allow one arc
 
   assert.deepEqual(
     backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' }).map((row) => row['代課編號']),
-    ['leave-aug', 'leave-jul'],
+    ['leave-jul', 'leave-aug'],
   );
   assert.deepEqual(
     backend.getMyLeaves_({ teacherName: '老師甲', role: '老師' }, '2026-06').map((row) => row['代課編號']),
@@ -6996,6 +7013,165 @@ test('legacy own-slot request still rejects two actual special courses', () => {
 
   assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 1, matched: 0, exceptions: 1 });
   assert.match(specialRequestSheet.values[1][17], /同一特別課安排找到多堂 OB 課程/);
+});
+
+test('own-slot special course cancellation requires its teacher and appears for admin review', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/08/10', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲', calendarId: 'own-1' },
+  ]);
+  const { backend, specialRequestSheet, auditSheet, adminSession, teacherASession, teacherBSession } = createInvitationBackend({
+    specialRequestRows: [
+      ['stamp', 'own-special-a', '老師甲', '2026/08/10', 'A', sourceSlots, '[]', '16:00', 'A－空環特別課', 'Lv.1', 90, '17:30', '使用後方空堂', '', '已完成', '已核對', 'old', '', 'special-1'],
+    ],
+  });
+
+  assert.throws(
+    () => backend.requestSpecialCourseCancellation_(teacherBSession, 'own-special-a', '不開特別課'),
+    /自己的特別課/,
+  );
+  const before = backend.getMySubs_('老師甲', '2026-08')[0];
+  assert.equal(before['可申請取消特別課'], true);
+  const request = backend.requestSpecialCourseCancellation_(teacherASession, 'own-special-a', '改回常態課');
+  assert.equal(request.status, '申請取消中');
+  assert.equal(specialRequestSheet.values[1][14], '申請取消中');
+  assert.equal(backend.getMySubs_('老師甲', '2026-08')[0]['可申請取消特別課'], false);
+  assert.deepEqual(
+    backend.getAdminDashboard_(adminSession).changeRequests.map((item) => item.specialGroupId),
+    ['own-special-a'],
+  );
+  assert.equal(auditSheet.values.at(-1)[3], 'own-special-a');
+  assert.throws(
+    () => backend.requestSpecialCourseCancellation_(teacherASession, 'own-special-a', '再送一次'),
+    /已送出/,
+  );
+});
+
+test('approved own-slot special cancellation keeps occupancy until original OB courses are restored', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/08/10', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲', calendarId: 'own-1' },
+    { sourceType: 'own', date: '2026/08/10', time: '17:30', room: 'A', courseName: 'A－空環 Lv.2', originalTeacher: '老師甲', calendarId: 'own-2' },
+  ]);
+  const { backend, specialRequestSheet, courseSheet, adminSession, teacherASession } = createInvitationBackend({
+    leaveRows: [],
+    courseRows: [
+      ['2026/08/10', '16:00', 'A－空環特別課', '老師甲', 'own-1', 'special-class', 'teacher-a', '否', ''],
+      ['2026/08/10', '17:30', 'A－空環特別課', '老師甲', 'special-2', 'special-class', 'teacher-a', '否', ''],
+    ],
+    specialRequestRows: [
+      ['stamp', 'own-special-b', '老師甲', '2026/08/10', 'A', sourceSlots, '[]', '16:00', 'A－空環特別課', 'Lv.1', 90, '17:30', '使用連續時段', '', '已完成', '已核對', 'old', '', 'special-2'],
+    ],
+  });
+
+  backend.requestSpecialCourseCancellation_(teacherASession, 'own-special-b', '改回常態課');
+  const approval = backend.resolveSpecialCourseCancellation_(adminSession, 'own-special-b', 'approve', '同意');
+  assert.equal(approval.status, '取消後待回復 OB');
+  assert.equal(specialRequestSheet.values[1][14], '取消後待回復 OB');
+  assert.ok(backend.buildTeacherCommitmentSlots_('老師甲', courseSheet.values.slice(1), [], specialRequestSheet.values.slice(1))
+    .some((slot) => slot.label === 'A－空環特別課'));
+
+  const beforeRestore = backend.reconcileObChanges_(adminSession);
+  assert.equal(beforeRestore.exceptions, 1);
+  assert.equal(specialRequestSheet.values[1][14], '取消後待回復 OB');
+  assert.match(specialRequestSheet.values[1][17], /原課程.*尚未回復/);
+
+  courseSheet.values.splice(1, 2,
+    ['2026/08/10', '16:00', 'A－空環 Lv.1', '老師甲', 'own-1', 'class-1', 'teacher-a', '否', ''],
+    ['2026/08/10', '17:30', 'A－空環 Lv.2', '老師甲', 'own-2', 'class-2', 'teacher-a', '否', ''],
+  );
+  const afterRestore = backend.reconcileObChanges_(adminSession);
+  assert.equal(afterRestore.matched, 1);
+  assert.equal(specialRequestSheet.values[1][14], '已取消');
+  assert.equal(specialRequestSheet.values[1][15], '已回復核對');
+  assert.equal(backend.getMySubs_('老師甲', '2026-08')[0]['可申請取消特別課'], false);
+});
+
+test('special cancellation does not reopen a claimed leave that is absent from its source slots', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/08/10', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲', calendarId: 'own-1' },
+  ]);
+  const linkedLeave = Array(27).fill('');
+  Object.assign(linkedLeave, {
+    0: 'stamp', 1: '老師乙', 2: '2026/08/10', 3: '17:30', 4: 'A－舞綢 Lv.1',
+    5: '已領取', 6: '老師甲', 9: 'leave-unlisted', 10: 'leave-1', 21: 'own-special-c',
+  });
+  const { backend, specialRequestSheet, leaveSheet, adminSession } = createInvitationBackend({
+    leaveRows: [linkedLeave],
+    courseRows: [
+      ['2026/08/10', '16:00', 'A－空環 Lv.1', '老師甲', 'own-1', 'class-1', 'teacher-a', '否', ''],
+      ['2026/08/10', '17:30', 'A－舞綢 Lv.1', '老師乙', 'leave-1', 'class-2', 'teacher-b', '否', ''],
+    ],
+    specialRequestRows: [
+      ['stamp', 'own-special-c', '老師甲', '2026/08/10', 'A', sourceSlots, '[]', '16:00', 'A－空環特別課', 'Lv.1', 90, '17:30', '使用後方空堂', '', '取消後待回復 OB', '待回復 OB', '', '', ''],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.equal(result.exceptions, 1);
+  assert.equal(specialRequestSheet.values[1][14], '取消後待回復 OB');
+  assert.equal(leaveSheet.values[1][5], '已領取');
+  assert.match(specialRequestSheet.values[1][17], /來源代課編號.*不一致/);
+});
+
+test('special cancellation waits when a leave source has no exact substitute id', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/08/10', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲', calendarId: 'own-1' },
+    { sourceType: 'leave', date: '2026/08/10', time: '17:30', room: 'A', courseName: 'A－舞綢 Lv.1', originalTeacher: '老師乙', calendarId: 'leave-1' },
+  ]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    leaveRows: [],
+    courseRows: [
+      ['2026/08/10', '16:00', 'A－空環 Lv.1', '老師甲', 'own-1', 'class-1', 'teacher-a', '否', ''],
+      ['2026/08/10', '17:30', 'A－舞綢 Lv.1', '老師乙', 'leave-1', 'class-1', 'teacher-b', '否', ''],
+    ],
+    specialRequestRows: [
+      ['stamp', 'own-special-missing-id', '老師甲', '2026/08/10', 'A', sourceSlots, '[]', '17:30', 'A－舞綢特別課', 'Lv.1', 90, '19:00', '使用連續時段', '', '取消後待回復 OB', '待回復 OB', '', '', ''],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.equal(result.exceptions, 1);
+  assert.equal(specialRequestSheet.values[1][14], '取消後待回復 OB');
+  assert.match(specialRequestSheet.values[1][17], /來源代課編號.*不完整/);
+});
+
+test('restored own special cancellation reopens only its exact linked leave source', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/08/10', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲', calendarId: 'own-1' },
+    { sourceType: 'leave', substituteId: 'leave-linked', date: '2026/08/10', time: '17:30', room: 'A', courseName: 'A－舞綢 Lv.1', originalTeacher: '老師乙', calendarId: 'leave-1' },
+  ]);
+  const linkedLeave = Array(27).fill('');
+  Object.assign(linkedLeave, {
+    0: 'stamp', 1: '老師乙', 2: '2026/08/10', 3: '17:30', 4: 'A－舞綢 Lv.1',
+    5: '已領取', 6: '老師甲', 9: 'leave-linked', 10: 'leave-1', 21: 'own-special-linked',
+    22: '特別課', 23: '16:00', 24: '19:00',
+  });
+  const unrelatedLeave = Array(27).fill('');
+  Object.assign(unrelatedLeave, {
+    0: 'stamp', 1: '老師丙', 2: '2026/08/10', 3: '20:00', 4: 'B－空環 Lv.1',
+    5: '已領取', 6: '老師丁', 9: 'leave-unrelated', 10: 'leave-2', 21: 'other-group',
+  });
+  const { backend, specialRequestSheet, leaveSheet, adminSession } = createInvitationBackend({
+    leaveRows: [linkedLeave, unrelatedLeave],
+    courseRows: [
+      ['2026/08/10', '16:00', 'A－空環 Lv.1', '老師甲', 'own-1', 'class-1', 'teacher-a', '否', ''],
+      ['2026/08/10', '17:30', 'A－舞綢 Lv.1', '老師乙', 'leave-1', 'class-2', 'teacher-b', '否', ''],
+    ],
+    specialRequestRows: [
+      ['stamp', 'own-special-linked', '老師甲', '2026/08/10', 'A', sourceSlots, '[]', '16:00', 'A－空環特別課', 'Lv.1', 90, '19:00', '使用連續時段', '', '取消後待回復 OB', '待回復 OB', '', '', ''],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.equal(result.matched, 1);
+  assert.equal(specialRequestSheet.values[1][14], '已取消');
+  assert.equal(leaveSheet.values[1][5], '確認中');
+  assert.equal(leaveSheet.values[1][6], '');
+  assert.deepEqual(leaveSheet.values[1].slice(21, 27), Array(6).fill(''));
+  assert.equal(leaveSheet.values[2][5], '已領取');
+  assert.equal(leaveSheet.values[2][21], 'other-group');
 });
 
 test('Liz October 11 historical pair reports a missing second OB special course even after both requests were completed', () => {

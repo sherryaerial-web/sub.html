@@ -7500,6 +7500,9 @@ function doPost(e) {
       confirmVvipEmail: function() {
         return confirmVvipEmail_(session, parameters.email);
       },
+      confirmVvipSelection: function() {
+        return confirmVvipSelection_(session, parameters.email, parameters.calendarId, parameters.recordKey);
+      },
       cancelVvipSelection: function() {
         return cancelVvipSelection_(session, parameters.email, parameters.calendarId, parameters.reason, parameters.recordKey);
       },
@@ -9865,6 +9868,42 @@ function confirmVvipEmail_(session, emailValue) {
         };
       }));
       return { email: email, confirmed: rows.length };
+    });
+  });
+}
+
+function confirmVvipSelection_(session, emailValue, calendarIdValue, recordKeyValue) {
+  var actor = assertCapabilitySession_(session, 'vvip_admin');
+  var email = normalizeVvipEmail_(emailValue);
+  var calendarId = cleanText_(calendarIdValue);
+  var recordKey = cleanText_(recordKeyValue);
+  if (!calendarId || !recordKey) throw new Error('請選擇要完成的 VVIP 選課紀錄。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var settings = getVvipSettings_(requireSheet_(ss, SHEETS.VVIP_SETTINGS));
+    var month = getVvipActiveMonth_(settings);
+    var sheet = requireSheet_(ss, SHEETS.VVIP_SELECTIONS);
+    var matches = getVvipSelectionRows_(sheet, email, month).filter(function(item) {
+      return cleanText_(item.row[3]) === calendarId &&
+        cleanText_(item.row[8]) === CONFIG.VVIP_PENDING_STATUS &&
+        buildVvipAdminRecordKey_(item.rowNumber, item.row) === recordKey;
+    });
+    if (matches.length !== 1) throw new Error('找不到待處理的 VVIP 選課紀錄，請更新頁面後再確認。');
+    var item = matches[0];
+    var now = getTimestamp_();
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(item.rowNumber, 9, 1, 5).setValues([[
+        CONFIG.VVIP_CONFIRMED_STATUS, now, '', '', actor
+      ]]);
+      appendAudits([{
+        actor: actor,
+        action: 'VVIP 完成 OB 選課',
+        targetId: calendarId,
+        before: CONFIG.VVIP_PENDING_STATUS,
+        after: CONFIG.VVIP_CONFIRMED_STATUS,
+        reason: email
+      }]);
+      return { email: email, calendarId: calendarId, confirmed: 1 };
     });
   });
 }

@@ -305,7 +305,7 @@ test('VVIP admin workspace remains a protected tab with management actions', () 
   assert.match(adminHtml, /VVIP 選課/);
   assert.match(adminHtml, /getVvipAdminDashboard/);
   assert.match(adminHtml, /setVvipSelectionOpen/);
-  assert.match(adminHtml, /confirmVvipEmail/);
+  assert.match(adminHtml, /confirmVvipSelection/);
   assert.match(adminHtml, /cancelVvipSelection/);
   assert.match(adminHtml, /exportVvipSelectionsCsv/);
   assert.match(adminHtml, /saveVvipMember/);

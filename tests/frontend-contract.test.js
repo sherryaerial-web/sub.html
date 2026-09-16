@@ -101,6 +101,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     getElementById: getElement,
     querySelectorAll(selector) {
       if (selector === '.claim-checkbox:checked') return [checkedClaim];
+      if (selector === '[data-admin-count]') return options.adminCountBadges || [];
       return [];
     },
     querySelector(selector) {
@@ -3877,6 +3878,62 @@ test('VVIP admin renders selection results before whitelist maintenance', () => 
   assert.ok(rendered.indexOf('依課程查看') < rendered.indexOf('會員登記'));
   assert.ok(rendered.indexOf('會員登記') < rendered.indexOf('新增 VVIP 名單'));
   assert.ok(rendered.indexOf('新增 VVIP 名單') < rendered.indexOf('data-admin-action="toggle-vvip-member"'));
+});
+
+test('VVIP pending view hides completed OB bookings while all view retains their completed status', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__vvipDashboardFixture = {
+    month: '2026-09', isOpen: true,
+    metrics: { members: 1, activeSelections: 2, pendingSelections: 1 },
+    members: [
+      { email: 'member@example.com', memberName: '會員甲', status: '待人工確認',
+        date: '2026/09/05', time: '19:45', courseName: '空環基礎',
+        teacherName: '老師甲', calendarId: 'cal-pending', recordKey: 'row-pending' },
+      { email: 'member@example.com', memberName: '會員甲', status: '已確認',
+        date: '2026/09/06', time: '19:45', courseName: '舞綢基礎',
+        teacherName: '老師乙', calendarId: 'cal-complete', recordKey: 'row-complete' },
+    ],
+    courseView: [], whitelist: [],
+  };
+  vm.runInContext('vvipDashboard = __vvipDashboardFixture; renderVvipAdminTab();', context);
+  const pending = getElement('admin-tab-content').innerHTML;
+  assert.match(pending, /待處理.*全部/);
+  assert.match(pending, /空環基礎/);
+  assert.doesNotMatch(pending, /舞綢基礎/);
+  assert.match(pending, /data-admin-action="complete-vvip-selection"/);
+  assert.match(pending, /data-vvip-record-key="row-pending"/);
+
+  vm.runInContext('vvipAdminFilter = "all"; renderVvipAdminTab();', context);
+  const all = getElement('admin-tab-content').innerHTML;
+  assert.match(all, /空環基礎/);
+  assert.match(all, /舞綢基礎/);
+  assert.match(all, /已完成/);
+  assert.doesNotMatch(all, /data-vvip-record-key="row-complete"[^>]*>[^<]*標記完成/);
+});
+
+test('VVIP completion sends the exact selected record rather than confirming every course by email', async () => {
+  const { context, submittedForms } = createFrontendRuntime({
+    confirmVvipSelection: { confirmed: 1 },
+    getVvipAdminDashboard: {
+      month: '2026-09', isOpen: true,
+      metrics: { members: 1, activeSelections: 2, pendingSelections: 1 },
+      members: [], courseView: [], whitelist: [],
+    },
+  });
+  await context.completeVvipSelection('member@example.com', 'cal-1', 'row-1');
+  const request = submittedForms.find((item) => item.fields.action === 'confirmVvipSelection');
+  assert.equal(request.fields.email, 'member@example.com');
+  assert.equal(request.fields.calendarId, 'cal-1');
+  assert.equal(request.fields.recordKey, 'row-1');
+  assert.equal(submittedForms.some((item) => item.fields.action === 'confirmVvipEmail'), false);
+});
+
+test('VVIP management badge counts only unfinished selections', () => {
+  const badge = { dataset: { adminCount: 'vvip' }, textContent: '' };
+  const { context } = createFrontendRuntime({}, { adminCountBadges: [badge] });
+  vm.runInContext(`vvipDashboard = { metrics: { activeSelections: 7, pendingSelections: 2 } };`, context);
+  context.updateAdminTabCounts();
+  assert.equal(badge.textContent, '2');
 });
 
 test('opening VVIP selection sends the administrator-selected cutoff time', async () => {

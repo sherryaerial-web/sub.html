@@ -295,6 +295,15 @@ const fixtures = {
       }
     }
   },
+  getVvipAdminDashboard: {
+    month: "2026-09", isOpen: true, closeAt: "2026-09-17 22:00:00",
+    metrics: { members: 1, activeSelections: 2, pendingSelections: 1 },
+    members: [
+      { email: "member@example.com", memberName: "會員甲", status: "待人工確認", date: "2026/09/20", time: "19:00", courseName: "A－空環 Lv.1", teacherName: "老師甲", calendarId: "visual-cal-1", recordKey: "visual-row-1", courseCancelled: false },
+      { email: "member@example.com", memberName: "會員甲", status: "已確認", date: "2026/09/21", time: "19:00", courseName: "B－舞綢 Lv.2", teacherName: "老師乙", calendarId: "visual-cal-2", recordKey: "visual-row-2", courseCancelled: false }
+    ],
+    courseView: [], whitelist: []
+  },
   getNotificationAdminDashboard: {
     teachers: ["Ivy", "Tako", "Ariel Lu"],
     administrators: ["Ivy", "Tako"],
@@ -469,6 +478,7 @@ const browser = await chromium.launch({
 const results = [];
 const payrollOnly = process.env.VISUAL_SCOPE === "payroll";
 const adminHeaderOnly = process.env.VISUAL_SCOPE === "admin-header";
+const vvipAdminOnly = process.env.VISUAL_SCOPE === "vvip-admin";
 
 try {
   for (const viewport of [
@@ -568,6 +578,20 @@ try {
       await page.locator('[data-admin-tab="payroll"]').click();
       await page.locator(".payroll-toolbar").waitFor();
       results.push(await capture(page, viewport.name, "admin-7-payroll"));
+      if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
+      await page.close();
+      continue;
+    }
+    if (vvipAdminOnly) {
+      await login(page, "Ivy");
+      await openView(page, "view-admin");
+      await page.locator('[data-admin-section="operations"]').click();
+      await page.locator('[data-admin-tab="vvip"]').click();
+      await page.locator('[data-admin-action="complete-vvip-selection"]').waitFor();
+      results.push(await capture(page, viewport.name, "vvip-pending"));
+      await page.locator('[data-admin-action="filter-vvip"][data-vvip-filter="all"]').click();
+      await page.locator("#admin-tab-content").getByText("已完成", { exact: true }).first().waitFor();
+      results.push(await capture(page, viewport.name, "vvip-all"));
       if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
       await page.close();
       continue;

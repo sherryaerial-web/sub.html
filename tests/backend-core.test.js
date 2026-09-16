@@ -8458,6 +8458,42 @@ test('VVIP admin opens, confirms, cancels, groups courses, and exports CSV safel
   assert.ok(auditSheet.values.some((row) => row[2] === 'VVIP 取消選課'));
 });
 
+test('VVIP administrator completes only the selected OB booking and keeps it in all records', () => {
+  const { backend, adminSession, adminToken, teacherSession, selectionSheet, auditSheet } = createVvipBackend();
+  backend.submitVvipSelection_('vvip-member-1', ['vvip-cal-1', 'vvip-cal-2']);
+  const before = backend.getVvipAdminDashboard_(adminSession);
+  const first = before.members.find((item) => item.calendarId === 'vvip-cal-1');
+  assert.equal(before.metrics.pendingSelections, 2);
+
+  assert.throws(
+    () => backend.confirmVvipSelection_(teacherSession, first.email, first.calendarId, first.recordKey),
+    /管理權限/
+  );
+  assert.throws(
+    () => backend.confirmVvipSelection_(adminSession, first.email, first.calendarId, 'stale-key'),
+    /找不到|已完成/
+  );
+  assert.equal(selectionSheet.values[1][8], '待人工確認');
+
+  const response = JSON.parse(backend.doPost({ parameter: {
+    action: 'confirmVvipSelection', sessionToken: adminToken,
+    email: first.email, calendarId: first.calendarId, recordKey: first.recordKey,
+  } }).text);
+  assert.equal(response.status, 'success');
+  const completed = response.data;
+  assert.equal(completed.confirmed, 1);
+  const after = backend.getVvipAdminDashboard_(adminSession);
+  assert.equal(after.metrics.pendingSelections, 1);
+  assert.equal(after.metrics.activeSelections, 2);
+  assert.equal(after.members.find((item) => item.calendarId === 'vvip-cal-1').status, '已確認');
+  assert.equal(after.members.find((item) => item.calendarId === 'vvip-cal-2').status, '待人工確認');
+  assert.ok(auditSheet.values.some((row) => row[2] === 'VVIP 完成 OB 選課' && row[3] === 'vvip-cal-1'));
+  assert.throws(
+    () => backend.confirmVvipSelection_(adminSession, first.email, first.calendarId, first.recordKey),
+    /找不到|已完成/
+  );
+});
+
 test('payroll bonus thresholds use the approved 15000 20000 and 30000 boundaries', () => {
   const backend = loadBackend();
   assert.equal(backend.calculateBonusRate_(14999), 0);

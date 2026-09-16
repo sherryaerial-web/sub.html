@@ -7174,6 +7174,111 @@ test('restored own special cancellation reopens only its exact linked leave sour
   assert.equal(leaveSheet.values[2][21], 'other-group');
 });
 
+test('Liz October 11 first special cancellation leaves 16:00 empty while preserving the second special', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/10/11', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: 'Liz 🌰', calendarId: '52961' },
+    { sourceType: 'own', date: '2026/10/11', time: '17:30', room: 'A', courseName: 'A－空環 Lv.2~3', originalTeacher: 'Liz 🌰', calendarId: '52954' },
+  ]);
+  const { backend, specialRequestSheet, courseSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10',
+    leaveRows: [],
+    courseRows: [
+      ['2026/10/11', '17:30', 'A－空環Flare專攻特別課Lv2', 'Liz 🌰', '54591', '432', '281', '否', ''],
+    ],
+    specialRequestRows: [
+      ['stamp', 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3', 'Liz 🌰', '2026/10/11', 'A', sourceSlots, '[]', '16:00', '空環中軸專攻班', '', 90, '17:30', '使用連續時段', '', '取消後待回復 OB', '核對異常', 'old', '原課程未回復', ''],
+      ['stamp', '483ecf21-566a-475e-b3a7-b205f5b67323', 'Liz 🌰', '2026/10/11', 'A', sourceSlots, '[]', '17:00', '空環Flare專攻特別課lv2', '', 90, '18:30', '使用連續時段', '', '已完成', '已核對', 'old', '', '54591'],
+    ],
+  });
+
+  const result = backend.reconcileObChanges_(adminSession);
+
+  assert.equal(result.exceptions, 0);
+  assert.equal(specialRequestSheet.values[1][14], '已取消');
+  assert.equal(specialRequestSheet.values[1][15], '已取消核對');
+  assert.equal(specialRequestSheet.values[2][14], '已完成');
+  assert.equal(specialRequestSheet.values[2][15], '已核對');
+  assert.equal(courseSheet.values.length, 2);
+  assert.equal(courseSheet.values[1][4], '54591');
+  assert.equal(backend.toAdminSpecialCourseRequestItem_(specialRequestSheet.values[1], []).cancellationMode, '保留空堂');
+  assert.equal(backend.toAdminSpecialCourseRequestItem_(specialRequestSheet.values[2], []).cancellationMode, '');
+});
+
+test('Liz October 11 first special cancellation still flags the second special touching the 19:00 class', () => {
+  const sourceSlots = JSON.stringify([
+    { sourceType: 'own', date: '2026/10/11', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: 'Liz 🌰', calendarId: '52961' },
+    { sourceType: 'own', date: '2026/10/11', time: '17:30', room: 'A', courseName: 'A－空環 Lv.2~3', originalTeacher: 'Liz 🌰', calendarId: '52954' },
+  ]);
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-10', leaveRows: [],
+    courseRows: [
+      ['2026/10/11', '17:30', 'A－空環Flare專攻特別課Lv2', 'Liz 🌰', '54591', '432', '281', '否', ''],
+      ['2026/10/11', '19:00', 'A－現代小品', '芮錤 77', '53052', '368', '1046', '否', ''],
+    ],
+    specialRequestRows: [
+      ['stamp', 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3', 'Liz 🌰', '2026/10/11', 'A', sourceSlots, '[]', '16:00', '空環中軸專攻班', '', 90, '17:30', '使用連續時段', '', '取消後待回復 OB', '核對異常', 'old', '原課程未回復', ''],
+      ['stamp', '483ecf21-566a-475e-b3a7-b205f5b67323', 'Liz 🌰', '2026/10/11', 'A', sourceSlots, '[]', '17:00', '空環Flare專攻特別課lv2', '', 90, '18:30', '使用連續時段', '', '待處理', '核對異常', 'old', '接續其他課程 A－現代小品 19:00 未留足 15 分鐘', '54591'],
+    ],
+  });
+
+  backend.reconcileObChanges_(adminSession);
+
+  assert.equal(specialRequestSheet.values[1][14], '已取消');
+  assert.equal(specialRequestSheet.values[2][14], '待處理');
+  assert.equal(specialRequestSheet.values[2][15], '核對異常');
+  assert.match(specialRequestSheet.values[2][17], /接續其他課程.*A－現代小品.*未留足 15 分鐘/);
+  assert.doesNotMatch(specialRequestSheet.values[2][17], /預期兩堂/);
+
+  backend.reconcileObChanges_(adminSession);
+  assert.equal(specialRequestSheet.values[1][14], '已取消');
+  assert.equal(specialRequestSheet.values[2][14], '待處理');
+  assert.match(specialRequestSheet.values[2][17], /接續其他課程.*A－現代小品.*未留足 15 分鐘/);
+});
+
+for (const scenario of [
+  {
+    name: 'the 16:00 special still exists',
+    extraCourses: [['2026/10/11', '16:00', 'A－空環中軸專攻特別課', 'Liz 🌰', '52961', '433', '281', '否', '']],
+    difference: /52961 仍在 OB/,
+  },
+  {
+    name: 'the 17:30 special is missing',
+    omitSurvivor: true,
+    difference: /保留的 17:30 特別課|Calendar ID 54591/,
+  },
+  {
+    name: 'another class occupies the released interval',
+    extraCourses: [['2026/10/11', '16:30', 'A－空環 Lv.1', '老師甲', 'other-occupant', '111', '222', '否', '']],
+    difference: /16:00–17:30 仍有其他 OB 課程/,
+  },
+]) {
+  test(`Liz October 11 first special cancellation stays pending when ${scenario.name}`, () => {
+    const sourceSlots = JSON.stringify([
+      { sourceType: 'own', date: '2026/10/11', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: 'Liz 🌰', calendarId: '52961' },
+      { sourceType: 'own', date: '2026/10/11', time: '17:30', room: 'A', courseName: 'A－空環 Lv.2~3', originalTeacher: 'Liz 🌰', calendarId: '52954' },
+    ]);
+    const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+      nextMonth: '2026-10',
+      leaveRows: [],
+      courseRows: [
+        ...scenario.omitSurvivor ? [] : [['2026/10/11', '17:30', 'A－空環Flare專攻特別課Lv2', 'Liz 🌰', '54591', '432', '281', '否', '']],
+        ...scenario.extraCourses || [],
+      ],
+      specialRequestRows: [
+        ['stamp', 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3', 'Liz 🌰', '2026/10/11', 'A', sourceSlots, '[]', '16:00', '空環中軸專攻班', '', 90, '17:30', '使用連續時段', '', '取消後待回復 OB', '核對異常', 'old', '原課程未回復', ''],
+        ['stamp', '483ecf21-566a-475e-b3a7-b205f5b67323', 'Liz 🌰', '2026/10/11', 'A', sourceSlots, '[]', '17:00', '空環Flare專攻特別課lv2', '', 90, '18:30', '使用連續時段', '', '已完成', '已核對', 'old', '', '54591'],
+      ],
+    });
+
+    backend.reconcileObChanges_(adminSession);
+
+    assert.equal(specialRequestSheet.values[1][14], '取消後待回復 OB');
+    assert.equal(specialRequestSheet.values[1][15], '核對異常');
+    assert.match(specialRequestSheet.values[1][17], scenario.difference);
+    assert.equal(specialRequestSheet.values[2][14], scenario.omitSurvivor ? '待處理' : '已完成');
+  });
+}
+
 test('Liz October 11 historical pair reports a missing second OB special course even after both requests were completed', () => {
   const sourceSlots = JSON.stringify([
     { sourceType: 'own', date: '2026/10/11', time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: 'Liz 🌰', calendarId: '52961' },

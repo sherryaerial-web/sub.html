@@ -1867,8 +1867,9 @@ test('admin Liz October 11 first special cancellation asks to keep the first slo
     originalTeacher: 'Liz 🌰', substituteTeacher: 'Liz 🌰', status: '取消後待回復 OB',
     verificationStatus: '核對異常', auditHistory: [], sourceSlots: [],
   }, []);
-  assert.match(markup, /16:00.*空堂/);
-  assert.match(markup, /17:30.*54591/);
+  assert.match(markup, /16:00–17:00.*空堂/);
+  assert.match(markup, /17:00.*52961/);
+  assert.doesNotMatch(markup, /移除 Calendar ID 52961|54591/);
   assert.doesNotMatch(markup, /回復來源課程/);
   assert.doesNotMatch(markup, /data-admin-action="link-special-replacement"/);
 });
@@ -1881,7 +1882,8 @@ test('Liz October 11 first special cancellation confirmation does not instruct r
     },
   });
   await context.resolveAdminSpecialCourseCancellation('aca7ee0f-6c5d-43d9-95ee-d85af9695ef3', 'approve', 'test');
-  assert.match(getElement('notice').textContent, /16:00.*空堂/);
+  assert.match(getElement('notice').textContent, /16:00–17:00.*空堂/);
+  assert.match(getElement('notice').textContent, /17:00.*52961/);
   assert.doesNotMatch(getElement('notice').textContent, /回復來源課程/);
 });
 
@@ -1897,7 +1899,8 @@ test('Liz October 11 first special teacher record explains the empty-slot cancel
       '取消方式': '保留空堂', '異動紀錄': [],
     }],
   });
-  assert.match(markup, /16:00.*空堂/);
+  assert.match(markup, /16:00–17:00.*空堂/);
+  assert.match(markup, /17:00.*特別課/);
   assert.doesNotMatch(markup, /原課程回復核對/);
 });
 

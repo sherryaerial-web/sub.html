@@ -16655,11 +16655,11 @@ function reconcileObChanges_(session) {
         ? timeTextToMinutes_(formatMyTime(ownSpecialRequestByGroup[lizOctoberPairIds[0]].row[11]))
         : -1;
       var outcome = getSpecialCourseRequestObOutcome_(requestRow, courseByCalendarId,
-        isLizOctoberSecond ? {
+        isLizOctoberPairRow && isLizOctoberSecond ? {
           excludedCalendarIds: ['52961'],
           allowedStartTimes: firstEnd >= 0
             ? [minutesToTimeText_(firstEnd), minutesToTimeText_(firstEnd + 15)]
-            : ['17:30']
+            : []
         } : null);
       var differences = outcome.differences;
       var warning = '';
@@ -16791,40 +16791,40 @@ function getLizOctoberFirstSpecialKeepEmptyDifferences_(requestRow, survivingRow
       formatMyDate(survivingRow[3]) !== '2026/10/11' ||
       cleanText_(survivingRow[4]) !== 'A' ||
       ['申請取消中', '取消後待回復 OB', '已取消'].indexOf(cleanText_(survivingRow[14])) !== -1 ||
-      cleanText_(survivingRow[18]) !== '54591') {
-    differences.push('17:30 另一堂特別課紀錄不完整或也在取消中，暫不釋放');
+      formatMyTime(survivingRow[7]) !== '17:00' ||
+      Number(survivingRow[10]) !== 90 ||
+      formatMyTime(survivingRow[11]) !== '18:30' ||
+      cleanText_(survivingRow[18]) !== '52961') {
+    differences.push('17:00–18:30 另一堂特別課紀錄不完整或也在取消中，暫不釋放');
   }
   if ((leaveRows || []).slice(1).some(function(row) {
     return cleanText_(row[21]) === firstGroupId;
   })) {
     differences.push('第一堂仍連結代課紀錄，暫不釋放');
   }
-  if (courseByCalendarId['52961']) {
-    differences.push('16:00 待取消特別課的原 Calendar ID 52961 仍在 OB');
-  }
   if (courseByCalendarId['52954']) {
     differences.push('17:30 原正課 Calendar ID 52954 仍在 OB，不能視為只保留特別課');
   }
   if (survivingRow) {
-    var survivingOutcome = getSpecialCourseRequestObOutcome_(survivingRow, courseByCalendarId, {
-      excludedCalendarIds: ['52961', '52954'],
-      allowedStartTimes: ['17:30']
-    });
-    if (survivingOutcome.effectiveCalendarId !== '54591') {
-      differences.push('17:30 特別課須保留原 Calendar ID 54591');
+    var survivingOutcome = getSpecialCourseRequestObOutcome_(survivingRow, courseByCalendarId);
+    if (survivingOutcome.effectiveCalendarId !== cleanText_(survivingRow[18])) {
+      differences.push('17:00 特別課的 OB Calendar ID 與保留紀錄不一致');
     }
     survivingOutcome.differences.forEach(function(message) {
-      differences.push('保留的 17:30 特別課：' + message);
+      differences.push('保留的 17:00 特別課：' + message);
     });
+    var survivingOb = courseByCalendarId[cleanText_(survivingRow[18])];
+    if (survivingOb && getCourseRoom_(survivingOb[2]) !== 'A') {
+      differences.push('保留的 17:00 特別課不在 A 教室');
+    }
   }
   if ((courseRows || []).some(function(row) {
-    if (formatMyDate(row[0]) !== '2026/10/11' || getCourseRoom_(row[2]) !== 'A' ||
-        cleanText_(row[4]) === '54591') return false;
+    if (formatMyDate(row[0]) !== '2026/10/11' || getCourseRoom_(row[2]) !== 'A') return false;
     var start = timeTextToMinutes_(formatMyTime(row[1]));
     var duration = getScheduledCourseDurationMinutes_(row[2]);
-    return start >= 0 && start < 17 * 60 + 30 && start + duration > 16 * 60;
+    return start >= 0 && start < 17 * 60 && start + duration > 16 * 60;
   })) {
-    differences.push('A 教室 16:00–17:30 仍有其他 OB 課程，不能視為空堂');
+    differences.push('A 教室 16:00–17:00 仍有 OB 課程，不能視為空堂');
   }
   return differences;
 }

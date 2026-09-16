@@ -10878,6 +10878,26 @@ test('rental waitlist reconciliation queue expires old rows and keeps FIFO per o
   assert.deepEqual(Array.from(queue.blocked, (item) => item.requestId), ['second']);
 });
 
+test('rental waitlist keeps FIFO when Sheets returns Date-valued creation times', () => {
+  const fixture = createPracticeBackend();
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  for (const [requestId, createdAt] of [
+    ['first', '2026-09-16T10:00:00+08:00'],
+    ['second', '2026-09-17T10:00:00+08:00'],
+  ]) {
+    requestSheet.values.push([
+      requestId, '', 'Tako', '45', '2026/09/18', 'A', '5', '173', 'A－場地租借', 60,
+      '10:00', '11:00', '候補', '', '', '', new Date(createdAt), new Date(createdAt), '系統自動',
+    ]);
+  }
+
+  const requests = fixture.backend.getRentalRecordsUnlocked_(fixture.spreadsheet).requests;
+  const queue = fixture.backend.buildRentalReconciliationQueue_(requests, '2026/09/17');
+  assert.deepEqual(Array.from(queue.candidates, (item) => item.requestId), ['first']);
+  assert.deepEqual(Array.from(queue.blocked, (item) => item.requestId), ['second']);
+});
+
 test('rental reconciliation expires a same-day waitlist after its end time', () => {
   const backend = loadBackend();
   const nowMs = new Date('2026-09-09T15:01:00+08:00').getTime();
@@ -11037,6 +11057,32 @@ test('rental late offer uses actual current time when an admin refresh specifies
     today: '2026/09/10', currentObRowsByDate: { '2026/09/10': [] },
   });
   assert.equal(result.offered, 1);
+  assert.equal(requestSheet.values[1][12], '待確認轉正');
+});
+
+test('rental late offer keeps its thirty-minute confirmation window when Sheets returns a Date', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'tako-offer', '', 'Tako', '45', '2026/09/17', 'A', '5', '173', 'A－場地租借', 60,
+    '01:05', '02:05', '待確認轉正', '', '', '',
+    new Date('2026-09-16T22:51:00+08:00'), new Date('2026-09-16T22:52:00+08:00'), '系統自動',
+  ]);
+  const nowMs = new Date('2026-09-16T22:56:15+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const history = fixture.backend.getMyRentalRequests_(fixture.teacher('Tako'), '2026-09');
+  assert.equal(history.items[0].status, '待確認轉正');
+  assert.equal(history.items[0].offerExpiresAt, '2026-09-16 23:22:00');
+
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/16', nowMs, dates: ['2026/09/17'],
+    currentObRowsByDate: { '2026/09/17': [] },
+  });
+  assert.equal(result.expired, 0);
   assert.equal(requestSheet.values[1][12], '待確認轉正');
 });
 

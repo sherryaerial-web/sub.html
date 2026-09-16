@@ -12891,6 +12891,13 @@ function getRentalCatalog_(session, forceRefreshValue) {
   return buildRentalCatalogForSession_(session, reference);
 }
 
+function normalizeRentalTimestamp_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+  }
+  return cleanText_(value);
+}
+
 function getRentalRecordsUnlocked_(spreadsheet) {
   ensureRentalStructureUnlocked_(spreadsheet);
   var seriesSheet = requireSheet_(spreadsheet, SHEETS.RENTAL_SERIES);
@@ -12918,8 +12925,8 @@ function getRentalRecordsUnlocked_(spreadsheet) {
         room: cleanText_(row[5]), roomId: cleanText_(row[6]), classId: cleanText_(row[7]),
         className: cleanText_(row[8]), durationMinutes: Number(row[9]), startTime: formatMyTime(row[10]),
         endTime: formatMyTime(row[11]), status: cleanText_(row[12]), waitlistCalendarIds: cleanText_(row[13]),
-        obCalendarId: cleanText_(row[14]), failureReason: cleanText_(row[15]), createdAt: cleanText_(row[16]),
-        updatedAt: cleanText_(row[17]), updatedBy: cleanText_(row[18])
+        obCalendarId: cleanText_(row[14]), failureReason: cleanText_(row[15]), createdAt: normalizeRentalTimestamp_(row[16]),
+        updatedAt: normalizeRentalTimestamp_(row[17]), updatedBy: cleanText_(row[18])
       };
     }).filter(function(item) { return item.requestId; })
   };

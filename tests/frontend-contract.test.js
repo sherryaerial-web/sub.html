@@ -4165,6 +4165,87 @@ test('teacher rental dialog selects only room start time and a 60 or 90 minute d
   assert.match(html, /callPostApi\("cancelTeacherRental"/);
 });
 
+test('rental late offer appears only in the rental history with a clear deadline and confirmation choices', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__history = {
+    rentals: { items: [{
+      requestId: 'offer-1', date: '2026/09/10', room: 'A', startTime: '14:00',
+      endTime: '15:00', className: 'A－場地租借', status: '待確認轉正',
+      offerExpiresAt: '2026-09-10 09:30:00',
+    }] },
+    practice: { items: [{
+      date: '2026/09/11', room: 'B', startTime: '15:00', endTime: '16:00', status: '已成立', role: '建立者',
+    }] },
+  };
+  vm.runInContext('renderMyPracticeBookings(__history)', context);
+  const markup = getElement('practice-history-list').innerHTML;
+  assert.match(markup, /教室租借[\s\S]*待確認轉正/);
+  assert.match(markup, /09:30/);
+  assert.match(markup, /確認要租/);
+  assert.match(markup, /放棄/);
+  assert.match(markup, /不足 6 小時[\s\S]*不可取消/);
+  assert.match(markup, /自主練習[\s\S]*2026\/09\/11/);
+  assert.doesNotMatch(markup, /data-practice-offer-accept/);
+});
+
+test('rental offer notification route opens the correct rental history month', () => {
+  const { context } = createFrontendRuntime();
+  const route = context.getInitialAppRoute('?view=practice&rentalMonth=2026-10');
+  assert.equal(route.viewId, 'view-practice');
+  assert.equal(route.rentalMonth, '2026-10');
+  assert.equal(context.getInitialAppRoute('?view=practice&rentalMonth=not-a-month').rentalMonth, '');
+});
+
+test('uncertain rental OB result is shown as under review without a second action', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__history = {
+    rentals: { items: [{
+      requestId: 'uncertain-1', date: '2026/09/10', room: 'A', startTime: '14:00',
+      endTime: '15:00', className: 'A－場地租借', status: '成立結果待核對',
+    }] },
+    practice: { items: [] },
+  };
+  vm.runInContext('renderMyPracticeBookings(__history)', context);
+  const markup = getElement('practice-history-list').innerHTML;
+  assert.match(markup, /OB 回應不明.*核對/);
+  assert.doesNotMatch(markup, /data-rental-offer-accept="uncertain-1"/);
+  assert.doesNotMatch(markup, /data-rental-history-cancel="uncertain-1"/);
+});
+
+test('rental six-hour cancellation hides ordinary cancel controls only for an established rental', () => {
+  const { context, getElement } = createFrontendRuntime({}, { now: '2026-09-10T09:00:00+08:00' });
+  context.__history = {
+    rentals: { items: [{
+      requestId: 'late-active', date: '2026/09/10', room: 'A', startTime: '14:00',
+      endTime: '15:00', className: 'A－場地租借', status: '已成立',
+    }, {
+      requestId: 'late-wait', date: '2026/09/10', room: 'B', startTime: '14:00',
+      endTime: '15:00', className: 'B－場地租借', status: '候補',
+    }] },
+    practice: { items: [{
+      date: '2026/09/10', room: 'C', startTime: '14:00', endTime: '15:00', status: '已成立', role: '建立者',
+    }] },
+  };
+  vm.runInContext('renderMyPracticeBookings(__history)', context);
+  const markup = getElement('practice-history-list').innerHTML;
+  assert.doesNotMatch(markup, /data-rental-history-cancel="late-active"/);
+  assert.match(markup, /data-rental-history-cancel="late-wait"/);
+  assert.match(markup, /距開始不足 6 小時/);
+  assert.match(markup, /自主練習[\s\S]*C 教室/);
+});
+
+test('rental six-hour cancellation explains the cutoff in its own calendar detail', () => {
+  const { context, getElement } = createFrontendRuntime({}, { now: '2026-09-10T09:00:00+08:00' });
+  context.__ownRental = {
+    id: 'ob:late-rental', type: 'rental', rentalRequestId: 'late-rental', isMine: true,
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', seriesId: 'series-1',
+  };
+  vm.runInContext('practiceState.date = "2026/09/10"; practiceState.room = "A"; openPracticeEditor({ block: __ownRental });', context);
+  assert.match(getElement('practice-dialog-copy').textContent, /不足 6 小時/);
+  assert.equal(getElement('rental-cancel-once').hidden, true);
+  assert.equal(getElement('rental-cancel-future').hidden, true);
+});
+
 test('rental dialog still shows the selected room when the account needs an instructor identity', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__rentalCatalog = {

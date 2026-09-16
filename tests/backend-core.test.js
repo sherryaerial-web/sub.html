@@ -10512,6 +10512,7 @@ test('rental day annotation marks the owner and immediately restores a missing O
 test('rental cancellation skips OB for waitlists and preserves active state when OB cancel fails', () => {
   const authServices = createAuthServices();
   const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-09T00:00:00+08:00').getTime();
   fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
   fixture.backend.sendRentalNotificationSafely_ = () => {};
   const reconcileDates = [];
@@ -10550,6 +10551,68 @@ test('rental cancellation skips OB for waitlists and preserves active state when
   fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), { requestId: 'active-1' });
   assert.equal(requestSheet.values[2][12], '已取消');
   assert.deepEqual(reconcileDates, [['2026/09/10'], ['2026/09/11']]);
+});
+
+test('rental six-hour cancellation blocks late active rentals but still permits waitlist withdrawal', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'active-late', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '已成立', '', 'ob-active-late', '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  requestSheet.values.push([
+    'wait-late', '', '小琪', '7', '2026/09/10', 'B', '2', '60', 'B場租60', 60,
+    '14:00', '15:00', '候補', '', '', '', '2026-09-01 10:01:00', '2026-09-01 10:01:00', '小琪',
+  ]);
+  const nowMs = new Date('2026-09-10T09:00:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.reconcileRentalWaitlist_ = () => ({ activated: 0 });
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  let obCancels = 0;
+  fixture.backend.cancelObCalendarItem_ = () => { obCancels += 1; return { cancelled: true }; };
+
+  assert.throws(() => fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), {
+    requestId: 'active-late', reason: '不能到',
+  }), /6 小時/);
+  assert.equal(obCancels, 0);
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), {
+    requestId: 'wait-late', reason: '不候補了',
+  }).status, '已取消');
+  assert.equal(obCancels, 0);
+});
+
+test('rental six-hour cancellation permits the boundary and requires an explicit admin exception later', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  for (const id of ['boundary', 'admin-exception']) {
+    requestSheet.values.push([
+      id, '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+      '14:00', '15:00', '已成立', '', 'ob-' + id, '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+    ]);
+  }
+  fixture.backend.reconcileRentalWaitlist_ = () => ({ activated: 0 });
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  const cancelledIds = [];
+  fixture.backend.cancelObCalendarItem_ = (_token, id) => { cancelledIds.push(id); return { cancelled: true }; };
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T08:00:00+08:00').getTime();
+  fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), { requestId: 'boundary' });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:00:00+08:00').getTime();
+  const admin = { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'] };
+  assert.throws(() => fixture.backend.cancelTeacherRental_(admin, {
+    requestId: 'admin-exception', reason: '臨時調整',
+  }), /6 小時/);
+  assert.throws(() => fixture.backend.cancelTeacherRental_(admin, {
+    requestId: 'admin-exception', overrideLateCancellation: true,
+  }), /原因/);
+  fixture.backend.cancelTeacherRental_(admin, {
+    requestId: 'admin-exception', overrideLateCancellation: true, reason: '老師生病，管理員例外取消',
+  });
+  assert.deepEqual(cancelledIds, ['ob-boundary', 'ob-admin-exception']);
 });
 
 test('rental waitlist reconciliation queue expires old rows and keeps FIFO per overlapping slot', () => {
@@ -10598,6 +10661,7 @@ test('rental waitlist reconciliation promotes the first available request and st
 
   const result = fixture.backend.reconcileRentalWaitlist_({
     today: '2026/09/09',
+    nowMs: new Date('2026-09-09T08:00:00+08:00').getTime(),
     dates: ['2026/09/10'],
     currentObRowsByDate: { '2026/09/10': [] },
   });
@@ -10636,6 +10700,7 @@ test('rental waitlist reconciliation stops the batch after OB rate limiting', ()
 
   const result = fixture.backend.reconcileRentalWaitlist_({
     today: '2026/09/09', dates: ['2026/09/10'],
+    nowMs: new Date('2026-09-09T08:00:00+08:00').getTime(),
     currentObRowsByDate: { '2026/09/10': [] },
   });
 
@@ -10663,12 +10728,348 @@ test('failed rental reconciliation recovers an already-created OB calendar witho
 
   const result = fixture.backend.reconcileRentalWaitlist_({
     today: '2026/09/09', dates: ['2026/09/10'],
+    nowMs: new Date('2026-09-09T08:00:00+08:00').getTime(),
     currentObRowsByDate: { '2026/09/10': [] },
   });
 
   assert.equal(result.activated, 1);
   assert.equal(requestSheet.values[1][12], '已成立');
   assert.equal(requestSheet.values[1][14], 'ob-existing-1');
+});
+
+test('rental late offer asks its teacher without writing OB or changing independent practice', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const practice = fixture.backend.createPracticeBooking_(fixture.teacher('Tako'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'late-1', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', 'course-1', '', '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  const nowMs = new Date('2026-09-10T09:00:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.getTimestamp_ = () => '2026-09-10 09:00:00';
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must wait for teacher confirmation'); };
+  const notices = [];
+  fixture.backend.sendRentalNotificationSafely_ = (result) => notices.push(result);
+
+  const first = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', nowMs, currentObRowsByDate: { '2026/09/10': [] },
+  });
+  const second = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', nowMs, currentObRowsByDate: { '2026/09/10': [] },
+  });
+
+  assert.equal(first.offered, 1);
+  assert.equal(second.offered, 0);
+  assert.equal(requestSheet.values[1][12], '待確認轉正');
+  assert.equal(requestSheet.values[1][14], '');
+  assert.equal(fixture.bookingSheet.values.find((row) => row[0] === practice.bookingId)[6], '已成立');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].teacherName, '小琪');
+});
+
+test('rental late offer uses actual current time when an admin refresh specifies the viewed date', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'manual-refresh', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', '', '', '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:00:00+08:00').getTime();
+  fixture.backend.getTimestamp_ = () => '2026-09-10 09:00:00';
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not post'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', currentObRowsByDate: { '2026/09/10': [] },
+  });
+  assert.equal(result.offered, 1);
+  assert.equal(requestSheet.values[1][12], '待確認轉正');
+});
+
+test('rental late reconciliation recovers a failed OB write instead of asking for a second booking', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'failed-existing', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '成立失敗待處理', '', '', 'network timeout',
+    '2026-09-01 10:00:00', '2026-09-10 08:00:00', '系統自動',
+  ]);
+  const nowMs = new Date('2026-09-10T09:00:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.findExistingObRentalByRequestId_ = () => ({ calendarId: 'ob-existing' });
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not post twice'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', nowMs, currentObRowsByDate: { '2026/09/10': [] },
+  });
+  assert.equal(result.activated, 1);
+  assert.equal(result.offered, 0);
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-existing');
+});
+
+test('rental late offer expires after thirty minutes without trying the next waitlist', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'first', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', '', '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  requestSheet.values.push([
+    'second', '', 'Tako', '8', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', '', '', '', '2026-09-01 10:01:00', '2026-09-01 10:01:00', 'Tako',
+  ]);
+  const nowMs = new Date('2026-09-10T09:30:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.getTimestamp_ = () => '2026-09-10 09:30:00';
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not post OB'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', nowMs, currentObRowsByDate: { '2026/09/10': [] },
+  });
+
+  assert.equal(result.expired, 1);
+  assert.equal(result.offered, 0);
+  assert.equal(requestSheet.values[1][12], '過期');
+  assert.equal(requestSheet.values[2][12], '過期');
+});
+
+test('rental late offer keeps an uncertain OB write for recovery instead of expiring it blindly', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'uncertain-timeout', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', 'OB write timed out',
+    '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  const nowMs = new Date('2026-09-10T09:30:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.findExistingObRentalByRequestId_ = () => { throw new Error('OB read unavailable'); };
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not post twice'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  assert.equal(fixture.backend.getMyRentalRequests_(fixture.teacher('小琪'), '2026-09').items[0].status,
+    '成立結果待核對');
+
+  const unresolved = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', nowMs, currentObRowsByDate: { '2026/09/10': [] },
+  });
+  assert.equal(unresolved.failed, 1);
+  assert.equal(requestSheet.values[1][12], '待確認轉正');
+  assert.throws(() => fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'uncertain-timeout', accept: true,
+  }), /OB read unavailable/);
+
+  fixture.backend.findExistingObRentalByRequestId_ = () => ({ calendarId: 'ob-uncertain-timeout' });
+  fixture.backend.getPracticeCurrentObRowsForDayView_ = () => [[
+    '2026/09/10', '14:00', 'A－場地租借', '小琪', 'ob-uncertain-timeout', '60', '7', '否', 'stamp',
+  ]];
+  const recovered = fixture.backend.reconcileRentalWaitlist_({ today: '2026/09/10', nowMs });
+  assert.equal(recovered.activated, 1);
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-uncertain-timeout');
+});
+
+test('rental at exactly six hours still auto-promotes and a started waitlist expires', () => {
+  const backend = loadBackend();
+  const atStart = new Date('2026-09-10T14:00:00+08:00').getTime();
+  const queue = backend.buildRentalReconciliationQueue_([
+    { requestId: 'started', status: '候補', date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', createdAt: '2026-09-01 10:00:00' },
+  ], '2026/09/10', atStart);
+  assert.deepEqual(Array.from(queue.expired, (item) => item.requestId), ['started']);
+
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'six-hour', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '候補', '', '', '', '2026-09-01 10:00:00', '2026-09-01 10:00:00', '小琪',
+  ]);
+  const nowMs = new Date('2026-09-10T08:00:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.postObRentalCalendar_ = () => ({ calendarId: 'ob-six-hour' });
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  const result = fixture.backend.reconcileRentalWaitlist_({
+    today: '2026/09/10', nowMs, currentObRowsByDate: { '2026/09/10': [] },
+  });
+  assert.equal(result.activated, 1);
+  assert.equal(requestSheet.values[1][12], '已成立');
+});
+
+test('rental confirmation accepts only its teacher and posts OB once after a live recheck', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'offer-1', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', '', '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  const nowMs = new Date('2026-09-10T09:10:00+08:00').getTime();
+  fixture.backend.currentTimeMs_ = () => nowMs;
+  fixture.backend.getTimestamp_ = () => '2026-09-10 09:10:00';
+  let liveReads = 0;
+  fixture.backend.getPracticeCurrentObRowsForDayView_ = (_date, force) => {
+    assert.equal(force, true);
+    liveReads += 1;
+    return [];
+  };
+  const posted = [];
+  fixture.backend.postObRentalCalendar_ = (_token, request) => {
+    posted.push({ ...request });
+    return { calendarId: 'ob-offer-1' };
+  };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  assert.throws(() => fixture.backend.respondRentalPromotion_(fixture.teacher('Tako'), {
+    requestId: 'offer-1', accept: true,
+  }), /自己的租借/);
+  const result = fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'offer-1', accept: true,
+  });
+  assert.equal(result.status, '已成立');
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-offer-1');
+  assert.equal(liveReads, 1);
+  assert.equal(posted.length, 1);
+  assert.throws(() => fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'offer-1', accept: true,
+  }), /已處理/);
+  assert.equal(posted.length, 1);
+});
+
+test('rental confirmation decline and timeout never write OB', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  for (const id of ['decline', 'timeout']) {
+    requestSheet.values.push([
+      id, '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+      '14:00', '15:00', '待確認轉正', '', '', '', '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+    ]);
+  }
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not post'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:10:00+08:00').getTime();
+  const declined = fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'decline', accept: false,
+  });
+  assert.equal(declined.status, '已取消');
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:30:00+08:00').getTime();
+  const expired = fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'timeout', accept: true,
+  });
+  assert.equal(expired.status, '過期');
+  assert.equal(requestSheet.values[1][14], '');
+  assert.equal(requestSheet.values[2][14], '');
+});
+
+test('rental confirmation rechecks occupied OB and leaves practice untouched', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const booking = fixture.backend.createPracticeBooking_(fixture.teacher('Tako'), {
+    date: '2026/09/10', room: 'A', startTime: '14:00', endTime: '15:00', recurrence: 'once',
+  });
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'occupied', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', '', '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:10:00+08:00').getTime();
+  fixture.backend.getPracticeCurrentObRowsForDayView_ = () => [[
+    '2026/09/10', '14:00', 'A－空環 Lv.0', 'Jina', 'ob-course-1', 'class-1', 'teacher-1', '否', 'stamp',
+  ]];
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not post'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'occupied', accept: true,
+  });
+  assert.equal(result.status, '過期');
+  assert.equal(requestSheet.values[1][14], '');
+  assert.equal(fixture.bookingSheet.values.find((row) => row[0] === booking.bookingId)[6], '已成立');
+});
+
+test('rental confirmation recovers an uncertain earlier OB write before treating its own calendar as a conflict', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'uncertain-offer', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', 'network timeout',
+    '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:10:00+08:00').getTime();
+  fixture.backend.getPracticeCurrentObRowsForDayView_ = () => [[
+    '2026/09/10', '14:00', 'A－場地租借', '小琪', 'ob-uncertain', '60', '7', '否', 'stamp',
+  ]];
+  fixture.backend.findExistingObRentalByRequestId_ = () => ({ calendarId: 'ob-uncertain' });
+  fixture.backend.postObRentalCalendar_ = () => { throw new Error('must not create again'); };
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+  const result = fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'uncertain-offer', accept: true,
+  });
+  assert.equal(result.status, '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-uncertain');
+});
+
+test('declining an uncertain rental offer cannot erase an OB rental that already exists', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'uncertain-decline', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', 'OB write timed out',
+    '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:10:00+08:00').getTime();
+  fixture.backend.findExistingObRentalByRequestId_ = () => ({ calendarId: 'ob-uncertain-decline' });
+  fixture.backend.getPracticeCurrentObRowsForDayView_ = () => [[
+    '2026/09/10', '14:00', 'A－場地租借', '小琪', 'ob-uncertain-decline', '60', '7', '否', 'stamp',
+  ]];
+  fixture.backend.sendRentalNotificationSafely_ = () => {};
+
+  const result = fixture.backend.respondRentalPromotion_(fixture.teacher('小琪'), {
+    requestId: 'uncertain-decline', accept: false,
+  });
+  assert.equal(result.status, '已成立');
+  assert.equal(requestSheet.values[1][12], '已成立');
+  assert.equal(requestSheet.values[1][14], 'ob-uncertain-decline');
+});
+
+test('ordinary rental cancellation cannot discard an unresolved OB write', () => {
+  const authServices = createAuthServices();
+  const fixture = createPracticeBackend({ services: { PropertiesService: authServices.PropertiesService } });
+  fixture.backend.ensureRentalStructureUnlocked_(fixture.spreadsheet);
+  const requestSheet = fixture.spreadsheet.getSheetByName('教室租借需求');
+  requestSheet.values.push([
+    'uncertain-cancel', '', '小琪', '7', '2026/09/10', 'A', '1', '60', 'A場租60', 60,
+    '14:00', '15:00', '待確認轉正', '', '', 'OB write timed out',
+    '2026-09-01 10:00:00', '2026-09-10 09:00:00', '系統自動',
+  ]);
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:10:00+08:00').getTime();
+  assert.throws(() => fixture.backend.cancelTeacherRental_(fixture.teacher('小琪'), {
+    requestId: 'uncertain-cancel',
+  }), /OB.*待核對/);
+  assert.equal(requestSheet.values[1][12], '待確認轉正');
 });
 
 test('my practice history returns only the signed-in teacher records for the requested month', () => {

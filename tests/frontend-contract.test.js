@@ -78,6 +78,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     '.claim-custom-difficulty': { value: '' },
     '.claim-start-delay': { value: '0' },
     '.claim-delay-summary': { textContent: '', dataset: {}, hidden: false },
+    '.claim-similarity-warning': { textContent: '', hidden: true },
     '.new-course-name': { value: '' },
     '.claim-note': { value: '' },
   };
@@ -2468,6 +2469,178 @@ test('time-only adjustment sends original handling with the selected delay', () 
     note: '',
     startDelayMinutes: 30,
   });
+});
+
+test('similar-course warning compares paired rooms, different teachers and level starts within 30 minutes', () => {
+  const { context } = createFrontendRuntime();
+  const candidate = {
+    date: '2026/10/10', time: '10:00', room: 'A', courseName: 'A－空環 Lv.0',
+    difficulty: 'Lv.0', calendarId: 'candidate',
+  };
+  const schedule = [
+    { date: '2026/10/10', time: '10:30', room: 'B', courseName: 'B－空環 Lv.0~2', difficulty: 'Lv.0~2', teacherName: '老師乙', calendarId: 'match' },
+    { date: '2026/10/10', time: '10:31', room: 'B', courseName: 'B－空環 Lv.0', difficulty: 'Lv.0', teacherName: '老師乙', calendarId: 'late' },
+    { date: '2026/10/10', time: '10:15', room: 'C', courseName: 'C－空環 Lv.0', difficulty: 'Lv.0', teacherName: '老師乙', calendarId: 'other-venue' },
+    { date: '2026/10/10', time: '10:15', room: 'B', courseName: 'B－空環 Lv.1~2', difficulty: 'Lv.1~2', teacherName: '老師乙', calendarId: 'other-level' },
+    { date: '2026/10/10', time: '10:15', room: 'B', courseName: 'B－空瑜 Lv.0', difficulty: 'Lv.0', teacherName: '老師乙', calendarId: 'other-type' },
+    { date: '2026/10/10', time: '10:15', room: 'B', courseName: 'B－空環 Lv.0', difficulty: 'Lv.0', teacherName: '老師甲', calendarId: 'same-teacher' },
+    { date: '2026/10/10', time: '10:15', room: 'B', courseName: 'B－空環 Lv.0', difficulty: 'Lv.0', teacherName: '老師乙', calendarId: 'candidate' },
+  ];
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.findSimilarClaimCourses(candidate, schedule, '老師甲')))
+      .map((course) => course.calendarId),
+    ['match'],
+  );
+});
+
+test('similar-course warning does not treat distinct floor subjects or unknown level as the same course', () => {
+  const { context } = createFrontendRuntime();
+  const candidate = { date: '2026/10/10', time: '10:00', room: 'C', courseName: 'C－瑜伽 Lv.0~2', difficulty: 'Lv.0~2' };
+  const schedule = [
+    { date: '2026/10/10', time: '10:00', room: 'D', courseName: 'D－皮拉提斯 Lv.0', difficulty: 'Lv.0', teacherName: '老師乙' },
+    { date: '2026/10/10', time: '10:00', room: 'D', courseName: 'D－瑜伽 Open level', difficulty: 'Open level', teacherName: '老師丙' },
+  ];
+  assert.equal(context.findSimilarClaimCourses(candidate, schedule, '老師甲').length, 0);
+});
+
+test('similar-course candidates use the teacher actual start time and selected course', () => {
+  const { context } = createFrontendRuntime();
+  const target = {
+    '日期': '2026/10/10', '時段': '10:00', '課程': 'A－舞綢 Lv.1', 'OB Calendar ID': 'cal-target',
+  };
+  const ordinary = context.buildOrdinaryClaimSimilarityCandidate(target, {
+    handlingType: 'existing', actualCourseName: 'A－空環 Lv.0~2', difficulty: 'Lv.0~2',
+    startDelayMinutes: 15,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(ordinary)), {
+    date: '2026/10/10', time: '10:15', room: 'A', courseName: 'A－空環 Lv.0~2',
+    difficulty: 'Lv.0~2', calendarId: 'cal-target',
+  });
+  const special = context.buildSpecialClaimSimilarityCandidate({
+    startSlotKey: 'own:cal-own', actualStartTime: '11:15', courseName: '空環中軸特別課', difficulty: 'Lv.0',
+  }, { 'own:cal-own': { date: '2026/10/10', room: 'C', calendarId: 'cal-own', startTime: '11:00' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(special)), {
+    date: '2026/10/10', time: '11:15', room: 'C', courseName: '空環中軸特別課',
+    difficulty: 'Lv.0', calendarId: 'cal-own',
+  });
+});
+
+test('similar-course notice is shown before an ordinary claim but never blocks a confirmed submission', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'], classes: [],
+      similarCourses: [{
+        calendarId: 'cal-other', date: '2026/10/10', time: '10:30', room: 'B',
+        courseName: 'B－空環 Lv.0~2', difficulty: 'Lv.0~2', teacherName: '老師乙',
+      }],
+      specialAvailability: {},
+    },
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-c', '原老師': '老師丙', '日期': '2026/10/10', '時段': '10:00',
+      '課程': 'A－空環 Lv.0', 'OB Calendar ID': 'cal-target', '課程大類': '空環', '可沿用原課程': true,
+    }],
+    claimSubstitute: { count: 1, occupiedSubstituteIds: [] },
+  });
+  vm.runInContext('authState.teacherName = "老師甲"', context);
+  await context.fetchAvailableSubstitutes();
+
+  await context.submitClaim();
+  assert.equal(submittedForms.some((form) => form.fields.action === 'claimSubstitute'), false);
+  assert.match(getElement('notice').textContent, /B 教室.*老師乙/);
+  assert.match(getElement('claim-submit').innerHTML, /仍要送出/);
+
+  await context.submitClaim();
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'claimSubstitute').length, 1);
+});
+
+test('similar-course warning updates beside the ordinary course selection', async () => {
+  const { context, claimCard, claimControls } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'], classes: [],
+      similarCourses: [{
+        calendarId: 'cal-other', date: '2026/10/10', time: '10:30', room: 'B',
+        courseName: 'B－空環 Lv.0~2', difficulty: 'Lv.0~2', teacherName: '老師乙',
+      }],
+      specialAvailability: {},
+    },
+    getAvailableSubstitutes: [{
+      '代課編號': 'leave-c', '原老師': '老師丙', '日期': '2026/10/10', '時段': '10:00',
+      '課程': 'A－空環 Lv.0', 'OB Calendar ID': 'cal-target', '課程大類': '空環', '可沿用原課程': true,
+    }],
+  });
+  vm.runInContext('authState.teacherName = "老師甲"', context);
+  await context.fetchAvailableSubstitutes();
+  context.updateOrdinaryClaimSimilarityWarning(claimCard);
+  assert.equal(claimControls['.claim-similarity-warning'].hidden, false);
+  assert.match(claimControls['.claim-similarity-warning'].textContent, /B 教室.*老師乙/);
+});
+
+test('similar-course warning also asks once before submitting a special course', async () => {
+  const { context, getElement, submittedForms, claimCard } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'], classes: [],
+      similarCourses: [{
+        calendarId: 'cal-other', date: '2026/10/10', time: '10:30', room: 'B',
+        courseName: 'B－空環 Lv.0~2', difficulty: 'Lv.0~2', teacherName: '老師乙',
+      }],
+      specialAvailability: {
+        'own:cal-own': { date: '2026/10/10', room: 'A', calendarId: 'cal-own', startTime: '10:00', maxDurationMinutes: 240 },
+      },
+    },
+    claimSpecialCourse: { count: 1, occupiedSlotKeys: ['own:cal-own'], substituteIds: [] },
+  });
+  vm.runInContext('authState.teacherName = "老師甲"', context);
+  await context.fetchAvailableSubstitutes();
+  context.document.querySelectorAll = (selector) => selector === '.claim-checkbox:checked'
+    ? [{ dataset: { slotKey: 'own:cal-own', substituteId: '' }, checked: true, closest() { return claimCard; } }]
+    : [];
+  getElement('special-actual-start').value = '10:00';
+  getElement('special-course-name').value = '空環中軸特別課';
+  getElement('special-course-difficulty').value = 'Lv.0';
+
+  await context.submitSpecialClaim();
+  assert.equal(submittedForms.some((form) => form.fields.action === 'claimSpecialCourse'), false);
+  assert.match(getElement('notice').textContent, /B 教室.*老師乙/);
+  await context.submitSpecialClaim();
+  assert.equal(submittedForms.filter((form) => form.fields.action === 'claimSpecialCourse').length, 1);
+});
+
+test('similar-course warning refreshes after the special-course duration stepper changes', async () => {
+  const { context, getElement, claimCard } = createFrontendRuntime({
+    getClaimOptions: {
+      capabilities: ['空環'], classes: [],
+      similarCourses: [{
+        calendarId: 'cal-other', date: '2026/10/10', time: '10:30', room: 'B',
+        courseName: 'B－空環 Lv.0~2', difficulty: 'Lv.0~2', teacherName: '老師乙',
+      }],
+      specialAvailability: {
+        'own:cal-own': { date: '2026/10/10', room: 'A', calendarId: 'cal-own', startTime: '10:00', maxDurationMinutes: 240 },
+      },
+    },
+  });
+  vm.runInContext('authState.teacherName = "老師甲"', context);
+  await context.fetchAvailableSubstitutes();
+  context.document.querySelector = (selector) => {
+    if (selector === 'input[name="claim-mode"]:checked') return { value: 'special' };
+    if (selector === 'input[name="special-duration"]:checked') return { value: 'custom' };
+    return null;
+  };
+  context.document.querySelectorAll = (selector) => selector === '.claim-checkbox:checked'
+    ? [{ dataset: { slotKey: 'own:cal-own', substituteId: '' }, checked: true, closest() { return claimCard; } }]
+    : [];
+  getElement('special-custom-duration').value = '90';
+  getElement('special-actual-start').value = '10:00';
+  getElement('special-course-name').value = '空環中軸特別課';
+  getElement('special-course-difficulty').value = 'Lv.0';
+  const warning = getElement('special-claim-similarity-warning');
+  warning.hidden = true;
+
+  getElement('special-duration-increase').click();
+
+  assert.equal(getElement('special-custom-duration').value, '105');
+  assert.equal(warning.hidden, false);
+  assert.match(warning.textContent, /B 教室.*老師乙/);
 });
 
 test('time-only early adjustment sends negative fifteen minutes in the existing field', () => {

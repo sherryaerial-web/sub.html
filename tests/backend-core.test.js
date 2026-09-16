@@ -2069,6 +2069,81 @@ test('combined claim page data reads shared CourseList and leave rows once', () 
   assert.equal(leaveReads, 2);
 });
 
+test('similar-course preview uses claimed plans and active special courses instead of stale source classes', () => {
+  const backend = loadBackend();
+  const courseRows = [
+    ['2026/10/10', '10:00', 'A－空環 Lv.0', '老師甲', 'cal-open'],
+    ['2026/10/10', '10:15', 'B－舞綢 Lv.1', '老師乙', 'cal-claimed'],
+    ['2026/10/10', '10:30', 'B－空環 Lv.2', '老師丙', 'cal-special'],
+    ['2026/10/10', '11:00', 'C－場地租借', '老師丁', 'cal-rental'],
+  ];
+  const openLeave = Array(28).fill('');
+  openLeave[2] = '2026/10/10'; openLeave[3] = '10:00'; openLeave[4] = 'A－空環 Lv.0';
+  openLeave[5] = '確認中'; openLeave[10] = 'cal-open';
+  const claimedLeave = Array(28).fill('');
+  claimedLeave[2] = '2026/10/10'; claimedLeave[3] = '10:15'; claimedLeave[4] = 'B－舞綢 Lv.1';
+  claimedLeave[5] = '已領取'; claimedLeave[6] = '老師戊'; claimedLeave[10] = 'cal-claimed';
+  claimedLeave[12] = 'B－空環 Lv.0~2'; claimedLeave[13] = 'Lv.0~2'; claimedLeave[25] = '10:30';
+  const specialRequest = Array(19).fill('');
+  specialRequest[1] = 'special-1'; specialRequest[2] = '老師己'; specialRequest[3] = '2026/10/10';
+  specialRequest[4] = 'B'; specialRequest[5] = JSON.stringify([{ calendarId: 'cal-special' }]);
+  specialRequest[7] = '10:30'; specialRequest[8] = '空環中軸特別課'; specialRequest[9] = 'Lv.2';
+  specialRequest[14] = '待處理';
+
+  const result = backend.buildClaimSimilarityCourses_(courseRows, [openLeave, claimedLeave], [specialRequest]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [
+    { calendarId: 'cal-claimed', date: '2026/10/10', time: '10:30', room: 'B', courseName: 'B－空環 Lv.0~2', difficulty: 'Lv.0~2', teacherName: '老師戊' },
+    { calendarId: 'special:special-1', date: '2026/10/10', time: '10:30', room: 'B', courseName: '空環中軸特別課', difficulty: 'Lv.2', teacherName: '老師己' },
+  ]);
+});
+
+test('similar-course preview moves an own continuation to its delayed start time', () => {
+  const backend = loadBackend();
+  const special = Array(19).fill('');
+  special[1] = 'special-continue'; special[2] = '老師甲'; special[3] = '2026/10/10';
+  special[4] = 'A'; special[5] = JSON.stringify([{
+    sourceType: 'own-continuation', calendarId: 'cal-next', actualStartTime: '10:45',
+  }]);
+  special[7] = '09:00'; special[8] = '舞綢特別課'; special[14] = '已完成';
+  const result = backend.buildClaimSimilarityCourses_(
+    [['2026/10/10', '10:30', 'A－空環 Lv.0', '老師甲', 'cal-next']], [], [special], '2026-10'
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(result.filter((course) => course.calendarId === 'cal-next'))), [
+    { calendarId: 'cal-next', date: '2026/10/10', time: '10:45', room: 'A', courseName: 'A－空環 Lv.0', difficulty: 'Lv.0', teacherName: '老師甲' },
+  ]);
+});
+
+test('similar-course preview removes an old calendar ID and uses the replacement room', () => {
+  const backend = loadBackend();
+  const claimed = Array(28).fill('');
+  claimed[2] = '2026/10/10'; claimed[3] = '10:00'; claimed[4] = 'A－空環 Lv.0';
+  claimed[5] = '已領取'; claimed[6] = '老師乙'; claimed[10] = 'cal-original';
+  claimed[12] = 'C－空環 Lv.0'; claimed[13] = 'Lv.0'; claimed[20] = 'cal-replacement';
+  claimed[25] = '10:30';
+  const result = backend.buildClaimSimilarityCourses_([
+    ['2026/10/10', '10:00', 'A－空環 Lv.0', '老師甲', 'cal-original'],
+    ['2026/10/10', '10:15', 'C－空環 Lv.0', '老師乙', 'cal-replacement'],
+  ], [claimed], [], '2026-10');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), [
+    { calendarId: 'cal-replacement', date: '2026/10/10', time: '10:30', room: 'C', courseName: 'C－空環 Lv.0', difficulty: 'Lv.0', teacherName: '老師乙' },
+  ]);
+});
+
+test('similar-course preview excludes historical special-course records', () => {
+  const backend = loadBackend();
+  const makeSpecial = (groupId, date) => {
+    const row = Array(19).fill('');
+    row[1] = groupId; row[2] = '老師甲'; row[3] = date; row[4] = 'A';
+    row[5] = '[]'; row[7] = '10:00'; row[8] = '空環特別課'; row[9] = 'Lv.0';
+    row[14] = '已完成';
+    return row;
+  };
+  const result = backend.buildClaimSimilarityCourses_(
+    [], [], [makeSpecial('old', '2026/09/10'), makeSpecial('current', '2026/10/10')], '2026-10'
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(result.map((course) => course.calendarId))), ['special:current']);
+});
+
 test('read-only admin dashboard does not wait for the global write lock', () => {
   const fixture = createInvitationBackend();
   const waitsBeforeRead = fixture.services.__lockState.waits;

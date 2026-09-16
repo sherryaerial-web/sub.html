@@ -683,6 +683,8 @@
     .claim-custom-course-name { margin-bottom: 12px; }
     textarea.claim-control { min-height: 82px; resize: vertical; line-height: 1.5; }
     .claim-required { color: var(--danger); }
+    .claim-similarity-warning { margin-top: 10px; padding: 10px 12px; border: 1px solid #e8d2a8; border-radius: 10px; background: #fff8ea; color: #745327; font-size: 12px; line-height: 1.5; white-space: pre-line; }
+    .claim-similarity-warning[hidden] { display: none; }
     .hint { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.45; }
     .claim-mode-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
     .claim-mode-option { min-height: 48px; }
@@ -1393,6 +1395,7 @@
 
     .notice.visible { display: block; }
     .notice.success { border-color: #c2d0d4; background: var(--success-soft); color: var(--success); }
+    .notice.warning { border-color: #e8d2a8; background: #fff8ea; color: #745327; }
     .notice.error { border-color: #e7bbb7; background: var(--coral-100); color: var(--coral-600); }
 
     .spin { animation: spin 0.9s linear infinite; }
@@ -2192,6 +2195,7 @@
               <div id="special-custom-duration-field" class="claim-field full" hidden><label for="special-custom-duration">自訂分鐘數（90–240）</label><div class="special-duration-stepper"><button id="special-duration-decrease" class="duration-step-button" type="button" aria-label="減少 15 分鐘">−</button><input id="special-custom-duration" class="claim-control" type="number" min="90" max="240" step="15" value="90" inputmode="numeric" readonly><button id="special-duration-increase" class="duration-step-button" type="button" aria-label="增加 15 分鐘">＋</button></div><p class="hint">請使用減少與增加按鈕選擇分鐘數，每次調整 15 分鐘。</p></div>
               <div class="claim-field full"><label for="special-course-note">備註</label><textarea id="special-course-note" class="claim-control" maxlength="240" placeholder="可填寫特別課內容、合併原因或其他安排"></textarea></div>
             </div>
+            <div id="special-claim-similarity-warning" class="claim-similarity-warning" role="status" hidden></div>
           </section>
           <div id="pending-leaves-list" class="list"><div class="state">載入中...</div></div>
           <button id="claim-submit" class="primary-button" type="button"><i data-lucide="hand"></i>確認領取勾選課程</button>
@@ -2474,6 +2478,7 @@
     let teacherHomeExpanded = false;
     let pendingLeaves = [];
     let claimOptions = { capabilities: [], classes: [] };
+    let claimSimilarityConfirmation = "";
     let claimPageState = "notInvited";
     const expandedClaimDates = new Set();
     let selectedLeaveDates = new Set();
@@ -5579,6 +5584,7 @@
         claimPageState = data?.state || "notInvited";
         pendingLeaves = data?.items || [];
         claimOptions = data?.options || { capabilities: [], classes: [] };
+        resetClaimSimilarityConfirmation();
         hasClaimSnapshot = true;
         pendingLeaves.sort((a, b) => `${a["日期"]} ${a["時段"]} ${a["原老師"]}`
           .localeCompare(`${b["日期"]} ${b["時段"]} ${b["原老師"]}`));
@@ -5644,6 +5650,140 @@
         .replace(/\s*(?:〈\s*優惠\s*〉|<\s*優惠\s*>|（\s*優惠\s*）|\(\s*優惠\s*\)|【\s*優惠\s*】|\s+優惠)\s*$/, "")
         .trim();
       return { courseTypeKey: courseName, courseTypeName: courseName, difficulty };
+    }
+
+    function getClaimSimilarityType(courseName) {
+      const category = getCourseCategory(courseName);
+      if (["空環", "空瑜", "舞綢", "綢吊", "鞦韆"].includes(category)) return category;
+      return normalizeCourseName(parseClaimCourseOption(courseName).courseTypeName);
+    }
+
+    function getClaimSimilarityLevel(difficulty, courseName) {
+      const value = normalizeClaimDifficulty(difficulty || parseClaimCourseOption(courseName).difficulty);
+      const numeric = /^lv\.?([0-9]+)/.exec(value);
+      return numeric ? `lv.${Number(numeric[1])}` : value;
+    }
+
+    function findSimilarClaimCourses(candidate, schedule, teacherName) {
+      const proposed = candidate || {};
+      const proposedRoom = String(proposed.room || "").toUpperCase();
+      const proposedVenue = ["A", "B"].includes(proposedRoom) ? "AB"
+        : (["C", "D"].includes(proposedRoom) ? "CD" : "");
+      const proposedMinutes = parseClaimTimeMinutes(proposed.time);
+      const proposedType = getClaimSimilarityType(proposed.courseName);
+      const proposedLevel = getClaimSimilarityLevel(proposed.difficulty, proposed.courseName);
+      const proposedDate = String(proposed.date || "").replace(/-/g, "/");
+      if (!proposedVenue || !proposedDate || !Number.isFinite(proposedMinutes) || !proposedType) return [];
+      return (schedule || []).filter((course) => {
+        const room = String(course.room || "").toUpperCase();
+        const venue = ["A", "B"].includes(room) ? "AB" : (["C", "D"].includes(room) ? "CD" : "");
+        const minutes = parseClaimTimeMinutes(course.time);
+        return venue === proposedVenue &&
+          String(course.date || "").replace(/-/g, "/") === proposedDate &&
+          Number.isFinite(minutes) && Math.abs(minutes - proposedMinutes) <= 30 &&
+          (!proposed.calendarId || String(course.calendarId || "") !== String(proposed.calendarId)) &&
+          String(course.teacherName || "").trim() !== String(teacherName || "").trim() &&
+          getClaimSimilarityType(course.courseName) === proposedType &&
+          getClaimSimilarityLevel(course.difficulty, course.courseName) === proposedLevel;
+      }).sort((a, b) => [a.time, a.room, a.courseName].join("|").localeCompare(
+        [b.time, b.room, b.courseName].join("|"), "zh-Hant"
+      ));
+    }
+
+    function buildOrdinaryClaimSimilarityCandidate(target, draft) {
+      const item = target || {};
+      const change = draft || {};
+      const originalMinutes = parseClaimTimeMinutes(item["時段"]);
+      const delay = Number(change.startDelayMinutes || 0);
+      const roomMatch = /^\s*([A-D])\s*[－—–-]/i.exec(String(item["課程"] || ""));
+      if (change.handlingType && change.handlingType !== "original" && !String(change.actualCourseName || "").trim()) return null;
+      if (!roomMatch || !Number.isFinite(originalMinutes) || !Number.isFinite(delay)) return null;
+      return {
+        date: String(item["日期"] || ""),
+        time: formatClaimTimeMinutes(originalMinutes + delay),
+        room: roomMatch[1].toUpperCase(),
+        courseName: String(change.actualCourseName || item["課程"] || "").trim(),
+        difficulty: String(change.difficulty || "").trim(),
+        calendarId: String(item["OB Calendar ID"] || "")
+      };
+    }
+
+    function buildSpecialClaimSimilarityCandidate(draft, availabilityMap) {
+      const change = draft || {};
+      const option = (availabilityMap || {})[String(change.startSlotKey || "")] || null;
+      if (!option) return null;
+      return {
+        date: String(option.date || ""),
+        time: String(change.actualStartTime || option.startTime || ""),
+        room: String(option.room || "").toUpperCase(),
+        courseName: String(change.courseName || "").trim(),
+        difficulty: String(change.difficulty || "").trim(),
+        calendarId: String(option.calendarId || "")
+      };
+    }
+
+    function getClaimSimilarityWarnings(candidate) {
+      return findSimilarClaimCourses(
+        candidate,
+        claimOptions.similarCourses || [],
+        authState.actingTeacherName || authState.teacherName
+      );
+    }
+
+    function formatClaimSimilarityWarning(warnings) {
+      if (!warnings.length) return "";
+      const details = warnings.slice(0, 3).map((course) =>
+        `${course.date} ${course.time}｜${course.room} 教室｜${course.teacherName}｜${course.courseName}`
+      );
+      if (warnings.length > 3) details.push(`另有 ${warnings.length - 3} 堂相似課程`);
+      return `提醒：同館已有其他老師開相近課程，開始時間相差 30 分鐘內。建議調整課程或難度：\n${details.join("\n")}`;
+    }
+
+    function updateOrdinaryClaimSimilarityWarning(card) {
+      const warning = card?.querySelector(".claim-similarity-warning");
+      if (!warning) return;
+      const selected = card.querySelector(".claim-checkbox")?.checked;
+      const substituteId = card.querySelector(".claim-checkbox")?.dataset?.substituteId || "";
+      const target = pendingLeaves.find((item) => item["代課編號"] === substituteId);
+      let conflicts = [];
+      if (selected && target && getCurrentClaimMode() === "ordinary") {
+        conflicts = getClaimSimilarityWarnings(
+          buildOrdinaryClaimSimilarityCandidate(target, readClaimDraft(card))
+        );
+      }
+      warning.hidden = conflicts.length === 0;
+      warning.textContent = formatClaimSimilarityWarning(conflicts);
+    }
+
+    function updateSpecialClaimSimilarityWarning() {
+      const warning = byId("special-claim-similarity-warning");
+      const conflicts = getCurrentClaimMode() === "special"
+        ? getClaimSimilarityWarnings(buildSpecialClaimSimilarityCandidate(
+            readSpecialCourseDraft(), claimOptions.specialAvailability || {}
+          ))
+        : [];
+      warning.hidden = conflicts.length === 0;
+      warning.textContent = formatClaimSimilarityWarning(conflicts);
+    }
+
+    function resetClaimSimilarityConfirmation() {
+      claimSimilarityConfirmation = "";
+      const button = byId("claim-submit");
+      if (button.dataset.defaultHtml) button.innerHTML = button.dataset.defaultHtml;
+    }
+
+    function confirmClaimSimilarityBeforeSubmit(payload, warnings) {
+      if (!warnings.length) {
+        claimSimilarityConfirmation = "";
+        return true;
+      }
+      const signature = JSON.stringify(payload);
+      if (claimSimilarityConfirmation === signature) return true;
+      claimSimilarityConfirmation = signature;
+      setNotice(`${formatClaimSimilarityWarning(warnings)}\n若仍要照此安排，請再按一次「仍要送出」。`, "warning");
+      byId("claim-submit").innerHTML = '<i data-lucide="triangle-alert"></i>仍要送出';
+      refreshIcons();
+      return false;
     }
 
     function getClaimOptionParts(option) {
@@ -5907,6 +6047,7 @@
                 </div>
               </div>
             </div>
+            <div class="claim-similarity-warning" role="status" hidden></div>
           </div>
         </article>
       `;
@@ -6031,7 +6172,10 @@
       const editor = card.querySelector(".claim-editor");
       const claimMode = document.querySelector('input[name="claim-mode"]:checked')?.value || "ordinary";
       editor.hidden = !checked || claimMode === "special";
-      if (!checked) return;
+      if (!checked || claimMode === "special") {
+        updateOrdinaryClaimSimilarityWarning(card);
+        return;
+      }
       const handling = card.querySelector('input[type="radio"]:checked')?.value || "original";
       const showAdjustment = handling === "existing";
       card.querySelector(".claim-fields").hidden = !showAdjustment;
@@ -6047,6 +6191,7 @@
         if (!useOriginalCourse && !useCustomFloorCourse) populateClaimDifficultyOptions(card, true);
         updateOrdinaryClaimDelaySummary(card);
       }
+      updateOrdinaryClaimSimilarityWarning(card);
     }
 
     function readClaimDraft(card) {
@@ -6331,10 +6476,12 @@
         : '<i data-lucide="hand"></i>確認領取勾選課程';
       button.dataset.defaultHtml = button.innerHTML;
       if (special) updateSpecialClaimSummary();
+      updateSpecialClaimSimilarityWarning();
       refreshIcons();
     }
 
     function handleClaimModeChange() {
+      resetClaimSimilarityConfirmation();
       expandedClaimDates.clear();
       renderAvailableSubstitutes();
     }
@@ -6350,6 +6497,11 @@
       } catch (error) {
         return setNotice(error.message, "error");
       }
+
+      const specialWarnings = getClaimSimilarityWarnings(buildSpecialClaimSimilarityCandidate(
+        draft, claimOptions.specialAvailability || {}
+      ));
+      if (!confirmClaimSimilarityBeforeSubmit({ mode: "special", draft }, specialWarnings)) return;
 
       const button = byId("claim-submit");
       clearNotice();
@@ -6415,6 +6567,12 @@
           return setNotice(error.message, "error");
         }
       }
+
+      const similarityWarnings = items.flatMap((item) => {
+        const target = pendingLeaves.find((entry) => entry["代課編號"] === item.substituteId);
+        return getClaimSimilarityWarnings(buildOrdinaryClaimSimilarityCandidate(target, item));
+      });
+      if (!confirmClaimSimilarityBeforeSubmit({ mode: "ordinary", items }, similarityWarnings)) return;
 
       const button = byId("claim-submit");
       clearNotice();
@@ -9000,11 +9158,13 @@ https://sherryaerial-web.github.io/sub.html/
       } catch (error) { setNotice(error.message, "error"); }
     });
     function handleClaimEditorChange(event) {
+      resetClaimSimilarityConfirmation();
       const card = event.target.closest ? event.target.closest(".claim-card") : null;
       if (card) updateClaimCardState(card);
       if ((document.querySelector('input[name="claim-mode"]:checked')?.value || "ordinary") === "special") {
         updateSpecialSelectionConstraints(event.target.classList?.contains("claim-checkbox") ? event.target : null);
         updateSpecialClaimSummary();
+        updateSpecialClaimSimilarityWarning();
       } else {
         updateOrdinarySelectionConstraints();
       }
@@ -9016,20 +9176,29 @@ https://sherryaerial-web.github.io/sub.html/
       if (toggle) toggleClaimDateGroup(toggle.dataset.claimDateToggle);
     });
     document.querySelectorAll('input[name="claim-mode"]').forEach((input) => input.addEventListener("change", handleClaimModeChange));
-    byId("special-claim-panel").addEventListener("change", updateClaimMode);
+    byId("special-claim-panel").addEventListener("change", () => {
+      resetClaimSimilarityConfirmation();
+      updateClaimMode();
+    });
     byId("special-claim-panel").addEventListener("input", () => {
+      resetClaimSimilarityConfirmation();
       updateSpecialSelectionConstraints();
       updateSpecialClaimSummary();
+      updateSpecialClaimSimilarityWarning();
     });
     byId("special-duration-decrease").addEventListener("click", () => {
+      resetClaimSimilarityConfirmation();
       adjustSpecialCustomDuration(-15);
       updateSpecialSelectionConstraints();
       updateSpecialClaimSummary();
+      updateSpecialClaimSimilarityWarning();
     });
     byId("special-duration-increase").addEventListener("click", () => {
+      resetClaimSimilarityConfirmation();
       adjustSpecialCustomDuration(15);
       updateSpecialSelectionConstraints();
       updateSpecialClaimSummary();
+      updateSpecialClaimSimilarityWarning();
     });
     byId("push-enable").addEventListener("click", requestPushPermission);
     byId("push-disable").addEventListener("click", disablePushNotifications);

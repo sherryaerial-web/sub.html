@@ -11782,6 +11782,7 @@ function buildAvailableSubstitutesFromContext_(context) {
   return pendingRows.map(function(row) {
     return {
       '代課編號': cleanText_(row[9]),
+      'OB Calendar ID': getEffectiveOpenLeaveCalendarId_(row),
       '原老師': cleanText_(row[1]),
       '日期': formatMyDate(row[2]),
       '時段': formatMyTime(row[3]),
@@ -11795,11 +11796,111 @@ function buildAvailableSubstitutesFromContext_(context) {
   });
 }
 
+function buildClaimSimilarityCourses_(courseRows, leaveRows, specialRequestRows, targetMonth) {
+  var coursesById = {};
+  var month = cleanText_(targetMonth);
+  function isTargetMonth(date) {
+    return !month || cleanText_(date).slice(0, 7).replace('/', '-') === month;
+  }
+  (courseRows || []).forEach(function(row) {
+    var calendarId = cleanText_(row && row[4]);
+    var courseName = cleanText_(row && row[2]);
+    var room = getCourseRoom_(courseName);
+    var date = formatMyDate(row && row[0]);
+    var time = formatMyTime(row && row[1]);
+    var teacherName = cleanText_(row && row[3]);
+    if (!calendarId || !date || !isTargetMonth(date) || !time || !room || !teacherName || /場地租借/.test(courseName)) return;
+    coursesById[calendarId] = {
+      calendarId: calendarId,
+      date: date,
+      time: time,
+      room: room,
+      courseName: courseName,
+      difficulty: parseClaimCourseOption_(courseName).difficulty,
+      teacherName: teacherName
+    };
+  });
+
+  (leaveRows || []).forEach(function(row) {
+    var calendarId = getEffectiveOpenLeaveCalendarId_(row);
+    var originalCalendarId = cleanText_(row && row[10]);
+    var date = formatMyDate(row && row[2]);
+    if (!calendarId || !isTargetMonth(date)) return;
+    var status = cleanText_(row && row[5]);
+    if (status === '確認中' || status === '延後占用') {
+      delete coursesById[calendarId];
+      if (originalCalendarId !== calendarId) delete coursesById[originalCalendarId];
+      return;
+    }
+    if (status !== '已領取' || cleanText_(row && row[21])) return;
+    if (originalCalendarId !== calendarId) delete coursesById[originalCalendarId];
+    var effectiveCourse = coursesById[calendarId];
+    if (!effectiveCourse) return;
+    var courseName = cleanText_(row && row[12]) || effectiveCourse.courseName;
+    var room = effectiveCourse.room;
+    var time = formatMyTime(row && row[25]) || effectiveCourse.time;
+    var teacherName = cleanText_(row && row[6]);
+    if (!courseName || !room || !date || !time || !teacherName) return;
+    coursesById[calendarId] = {
+      calendarId: calendarId,
+      date: date,
+      time: time,
+      room: room,
+      courseName: courseName,
+      difficulty: cleanText_(row && row[13]) || parseClaimCourseOption_(courseName).difficulty,
+      teacherName: teacherName
+    };
+  });
+
+  (specialRequestRows || []).forEach(function(row) {
+    var status = cleanText_(row && row[14]);
+    if (['已取消', '取消後待回復 OB'].indexOf(status) !== -1) return;
+    var groupId = cleanText_(row && row[1]);
+    var room = cleanText_(row && row[4]).toUpperCase();
+    var date = formatMyDate(row && row[3]);
+    var time = formatMyTime(row && row[7]);
+    var courseName = cleanText_(row && row[8]);
+    var teacherName = cleanText_(row && row[2]);
+    if (!groupId || !/^[A-D]$/.test(room) || !date || !isTargetMonth(date) || !time || !courseName || !teacherName) return;
+    var sourceSlots = [];
+    try { sourceSlots = JSON.parse(cleanText_(row && row[5]) || '[]'); } catch (error) {}
+    if (Array.isArray(sourceSlots)) sourceSlots.forEach(function(slot) {
+      var sourceCalendarId = cleanText_(slot && slot.calendarId);
+      if (cleanText_(slot && slot.sourceType) === 'own-continuation') {
+        var continuationTime = formatMyTime(slot && slot.actualStartTime);
+        if (sourceCalendarId && continuationTime && coursesById[sourceCalendarId]) {
+          coursesById[sourceCalendarId].time = continuationTime;
+        }
+        return;
+      }
+      if (sourceCalendarId) delete coursesById[sourceCalendarId];
+    });
+    var replacementCalendarId = cleanText_(row && row[18]);
+    if (replacementCalendarId) delete coursesById[replacementCalendarId];
+    coursesById['special:' + groupId] = {
+      calendarId: 'special:' + groupId,
+      date: date,
+      time: time,
+      room: room,
+      courseName: courseName,
+      difficulty: cleanText_(row && row[9]) || parseClaimCourseOption_(courseName).difficulty,
+      teacherName: teacherName
+    };
+  });
+  return Object.keys(coursesById).map(function(id) { return coursesById[id]; });
+}
+
 function buildClaimOptionsFromContext_(context) {
   if (!context.active) return { capabilities: [], classes: [] };
   return {
     capabilities: context.capabilities,
     classes: context.claimClasses,
+    similarCourses: buildClaimSimilarityCourses_(
+      context.courseRows,
+      context.leaveRows,
+      context.specialRequestRows,
+      getNextMonthKey_()
+    ),
     specialAvailability: getTeacherSpecialCourseAvailability_(
       context.teacher,
       context.leaveRows,

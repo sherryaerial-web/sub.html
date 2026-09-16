@@ -2494,6 +2494,26 @@ test('similar-course warning compares paired rooms, different teachers and level
   );
 });
 
+test('similar-course warning matches unpadded CourseList dates in both paired venues', () => {
+  const { context } = createFrontendRuntime();
+  for (const [claimRoom, otherRoom] of [['A', 'B'], ['B', 'A'], ['C', 'D'], ['D', 'C']]) {
+    const candidate = {
+      date: '2026/10/04', time: '10:00', room: claimRoom,
+      courseName: `${claimRoom}－空環 Lv.0`, difficulty: 'Lv.0', calendarId: 'claim',
+    };
+    const schedule = [{
+      date: '2026/10/4', time: '10:15', room: otherRoom,
+      courseName: `${otherRoom}－空環 Lv.0~2`, difficulty: 'Lv.0~2',
+      teacherName: '老師乙', calendarId: `other-${otherRoom}`,
+    }];
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(context.findSimilarClaimCourses(candidate, schedule, '老師甲')))
+        .map((course) => course.calendarId),
+      [`other-${otherRoom}`],
+    );
+  }
+});
+
 test('similar-course warning does not treat distinct floor subjects or unknown level as the same course', () => {
   const { context } = createFrontendRuntime();
   const candidate = { date: '2026/10/10', time: '10:00', room: 'C', courseName: 'C－瑜伽 Lv.0~2', difficulty: 'Lv.0~2' };

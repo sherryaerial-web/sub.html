@@ -5664,6 +5664,12 @@
       return numeric ? `lv.${Number(numeric[1])}` : value;
     }
 
+    function normalizeClaimSimilarityDate(value) {
+      const match = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(String(value || "").trim());
+      if (!match) return "";
+      return `${match[1]}/${match[2].padStart(2, "0")}/${match[3].padStart(2, "0")}`;
+    }
+
     function findSimilarClaimCourses(candidate, schedule, teacherName) {
       const proposed = candidate || {};
       const proposedRoom = String(proposed.room || "").toUpperCase();
@@ -5672,14 +5678,14 @@
       const proposedMinutes = parseClaimTimeMinutes(proposed.time);
       const proposedType = getClaimSimilarityType(proposed.courseName);
       const proposedLevel = getClaimSimilarityLevel(proposed.difficulty, proposed.courseName);
-      const proposedDate = String(proposed.date || "").replace(/-/g, "/");
+      const proposedDate = normalizeClaimSimilarityDate(proposed.date);
       if (!proposedVenue || !proposedDate || !Number.isFinite(proposedMinutes) || !proposedType) return [];
       return (schedule || []).filter((course) => {
         const room = String(course.room || "").toUpperCase();
         const venue = ["A", "B"].includes(room) ? "AB" : (["C", "D"].includes(room) ? "CD" : "");
         const minutes = parseClaimTimeMinutes(course.time);
         return venue === proposedVenue &&
-          String(course.date || "").replace(/-/g, "/") === proposedDate &&
+          normalizeClaimSimilarityDate(course.date) === proposedDate &&
           Number.isFinite(minutes) && Math.abs(minutes - proposedMinutes) <= 30 &&
           (!proposed.calendarId || String(course.calendarId || "") !== String(proposed.calendarId)) &&
           String(course.teacherName || "").trim() !== String(teacherName || "").trim() &&

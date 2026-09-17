@@ -8330,7 +8330,18 @@
       setButtonBusy(button, true, "處理中...");
       try {
         const result = await callPostApi("closeUnclaimedSubstituteCourses", { substituteIds });
-        setNotice(`處理完成：已取消 ${result.closed || 0} 堂、已有預約 ${result.booked || 0} 堂、場租保留 ${result.excluded || 0} 堂、失敗 ${result.failed || 0} 堂。`, result.failed ? "error" : "success");
+        if (result.stoppedByRateLimit) {
+          const resetDate = result.retryAt ? new Date(result.retryAt) : null;
+          const resetTime = resetDate && !Number.isNaN(resetDate.getTime())
+            ? new Intl.DateTimeFormat("zh-TW", {
+                timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
+                hour: "2-digit", minute: "2-digit", hour12: false
+              }).format(resetDate)
+            : "";
+          setNotice(`OB API 額度已滿，已停止本次關課。已取消 ${result.closed || 0} 堂、已有預約 ${result.booked || 0} 堂、場租保留 ${result.excluded || 0} 堂、失敗 ${result.failed || 0} 堂、尚未嘗試 ${result.unprocessed || 0} 堂。${resetTime ? `請於 ${resetTime} 後` : "請等 OB 額度重置後"}按「更新資料」，再勾選剩餘課程繼續。`, "error");
+        } else {
+          setNotice(`處理完成：已取消 ${result.closed || 0} 堂、已有預約 ${result.booked || 0} 堂、場租保留 ${result.excluded || 0} 堂、失敗 ${result.failed || 0} 堂。`, result.failed ? "error" : "success");
+        }
         await fetchAdminDashboard();
       } finally {
         if (button.isConnected) setButtonBusy(button, false, "");

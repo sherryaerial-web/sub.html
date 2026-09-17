@@ -7888,7 +7888,31 @@ function getObApiJson_(url, options, label) {
   var responseCode = response.getResponseCode();
   var body = response.getContentText();
   if (responseCode < 200 || responseCode >= 300) {
-    throw new Error((label || 'OB API') + '失敗（HTTP ' + responseCode + '）。');
+    var requestError = new Error((label || 'OB API') + '失敗（HTTP ' + responseCode + '）。');
+    requestError.statusCode = responseCode;
+    if (responseCode === 429) {
+      var headers = typeof response.getAllHeaders === 'function'
+        ? response.getAllHeaders() : typeof response.getHeaders === 'function'
+          ? response.getHeaders() : {};
+      var resetValue = '';
+      var retryAfterValue = '';
+      Object.keys(headers || {}).forEach(function(name) {
+        var value = headers[name];
+        if (Array.isArray(value)) value = value[0];
+        if (name.toLowerCase() === 'x-ratelimit-reset') resetValue = String(value || '');
+        if (name.toLowerCase() === 'retry-after') retryAfterValue = String(value || '');
+      });
+      var resetSeconds = Number(resetValue);
+      var retryAtMillis = resetValue && isFinite(resetSeconds) && resetSeconds > 0
+        ? resetSeconds * 1000 : NaN;
+      if (!isFinite(retryAtMillis) && retryAfterValue) {
+        var delaySeconds = Number(retryAfterValue);
+        retryAtMillis = isFinite(delaySeconds) && delaySeconds >= 0
+          ? Date.now() + delaySeconds * 1000 : Date.parse(retryAfterValue);
+      }
+      if (isFinite(retryAtMillis)) requestError.retryAt = new Date(retryAtMillis).toISOString();
+    }
+    throw requestError;
   }
   try {
     return JSON.parse(body);
@@ -11546,9 +11570,13 @@ function closeUnclaimedSubstituteCourses_(session, substituteIds) {
       booked: 0,
       excluded: 0,
       failed: 0,
+      unprocessed: 0,
+      stoppedByRateLimit: false,
+      retryAt: '',
       items: []
     };
-    ids.forEach(function(id) {
+    ids.forEach(function(id, index) {
+      if (result.stoppedByRateLimit) return;
       var record = recordById[id];
       if (!record || !isOrdinaryOpenLeaveRow_(record.row) ||
           !isLeaveRowInMonth_(record.row, targetMonth)) {
@@ -11623,6 +11651,11 @@ function closeUnclaimedSubstituteCourses_(session, substituteIds) {
           result: '執行失敗',
           error: error && error.message ? error.message : String(error)
         });
+        if (error && Number(error.statusCode) === 429) {
+          result.stoppedByRateLimit = true;
+          result.retryAt = cleanText_(error.retryAt);
+          result.unprocessed = ids.length - index - 1;
+        }
       }
     });
     return result;

@@ -4287,6 +4287,30 @@ test('admin workspace exposes independent next-day and whole-month course closur
   assert.match(html, /item\.actor/);
 });
 
+test('whole-month closure shows the OB rate-limit reset time and unattempted count', async () => {
+  const { context, getElement } = createFrontendRuntime();
+  const originalQuery = context.document.querySelectorAll;
+  context.document.querySelectorAll = (selector) => selector === '.unclaimed-substitute-checkbox:checked'
+    ? [{ value: 'leave-1' }, { value: 'leave-2' }]
+    : originalQuery(selector);
+  context.window.confirm = () => true;
+  context.window.setTimeout = () => 0;
+  context.callPostApi = async () => ({
+    closed: 0, booked: 0, excluded: 0, failed: 1, unprocessed: 1,
+    stoppedByRateLimit: true, retryAt: '2026-09-17T17:00:00.000Z',
+  });
+  context.fetchAdminDashboard = async () => {};
+  const button = { dataset: {}, innerHTML: '取消勾選的未領課程', isConnected: true };
+
+  await context.closeSelectedUnclaimedSubstitutes(button);
+
+  assert.match(getElement('notice').textContent, /OB.*額度/);
+  assert.match(getElement('notice').textContent, /09\/18.*01:00/);
+  assert.match(getElement('notice').textContent, /尚未嘗試 1 堂/);
+  assert.match(getElement('notice').textContent, /更新資料/);
+  assert.match(getElement('notice').className, /error/);
+});
+
 test('closure manager renders an editable one-short community message with one-tap copy', async () => {
   const dashboard = {
     teachers: [], pendingInvitations: [], activeInvitees: [], missingObCancellations: [],

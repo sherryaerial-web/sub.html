@@ -9634,6 +9634,71 @@ test('next-month unclaimed closure rechecks live OB name and never cancels a ven
   assert.equal(result.items[0].result, '場地租借，未取消');
 });
 
+test('OB API 429 keeps its status and reset time for a batch to stop safely', () => {
+  const backend = loadBackend({
+    UrlFetchApp: {
+      fetch() {
+        return {
+          getResponseCode: () => 429,
+          getContentText: () => 'Too Many Requests',
+          getAllHeaders: () => ({ 'x-ratelimit-reset': '1789664400', 'Retry-After': '120' }),
+        };
+      },
+    },
+  });
+
+  assert.throws(
+    () => backend.getObApiJson_('https://api.omceanbooking.com/v1/calendar/1', {}, '讀取 OB 課程'),
+    (error) => {
+      assert.equal(error.statusCode, 429);
+      assert.equal(error.retryAt, '2026-09-17T17:00:00.000Z');
+      return true;
+    },
+  );
+});
+
+test('next-month unclaimed closure stops after the first OB 429 and leaves later rows untouched', () => {
+  const fixture = createInvitationBackend({
+    nextMonth: '2026-09',
+    leaveRows: [
+      ['2026-08-20', '老師甲', '2026/09/05', '10:00', 'A－空環', '確認中', '', '', '', 'leave-first', 'cal-first'],
+      ['2026-08-20', '老師乙', '2026/09/06', '11:00', 'B－舞綢', '確認中', '', '', '', 'leave-limited', 'cal-limited'],
+      ['2026-08-20', '老師丙', '2026/09/07', '12:00', 'C－空瑜', '確認中', '', '', '', 'leave-unattempted', 'cal-unattempted'],
+    ],
+  });
+  fixture.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const fetched = [];
+  fixture.backend.fetchCalendarDetail_ = (_token, calendarId) => {
+    fetched.push(calendarId);
+    if (calendarId === 'cal-limited') {
+      const error = new Error('讀取 OB 課程失敗（HTTP 429）。');
+      error.statusCode = 429;
+      error.retryAt = '2026-09-17T17:00:00.000Z';
+      throw error;
+    }
+    return {
+      calendarId, date: '2026/09/05', time: '10:00', courseName: 'A－空環',
+      teacherName: '老師甲', enrollmentCount: 0, points: 1, cancelled: false,
+    };
+  };
+  fixture.backend.cancelObCalendarItem_ = (_token, calendarId) => ({ calendarId, cancelled: true });
+
+  const result = fixture.backend.closeUnclaimedSubstituteCourses_(
+    fixture.adminSession,
+    ['leave-first', 'leave-limited', 'leave-unattempted'],
+  );
+
+  assert.deepEqual(fetched, ['cal-first', 'cal-limited']);
+  assert.equal(result.closed, 1);
+  assert.equal(result.failed, 1);
+  assert.equal(result.unprocessed, 1);
+  assert.equal(result.stoppedByRateLimit, true);
+  assert.equal(result.retryAt, '2026-09-17T17:00:00.000Z');
+  assert.equal(fixture.leaveSheet.values[1][5], '已取消');
+  assert.equal(fixture.leaveSheet.values[2][5], '確認中');
+  assert.equal(fixture.leaveSheet.values[3][5], '確認中');
+});
+
 test('practice intervals enforce five-minute steps and a fifteen-minute minimum', () => {
   const backend = loadBackend();
 

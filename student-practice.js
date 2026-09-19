@@ -285,7 +285,7 @@
       byId('booking-dialog').close();
       byId('success-title').textContent = result.status === '已成立' ? '登記已成立' : '申請已收到';
       byId('success-copy').textContent = result.status === '已成立'
-        ? '已完成登記。如需取消或換時間，請在開始前 2 小時聯繫官方 LINE。'
+        ? '已完成登記。如需取消或換時間，請在開始前聯繫官方 LINE。'
         : '目前待老師確認資格，尚未成立，請勿重複送出。';
       byId('success-dialog').showModal();
       await loadAvailability();

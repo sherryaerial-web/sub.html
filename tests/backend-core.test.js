@@ -13332,6 +13332,48 @@ test('student practice admin cancellation removes one student and releases only 
   assert.equal(fixture.groupSheet.values[1][5], '已取消');
 });
 
+test('student practice admin can cancel until the practice starts', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '已確認', '', '', '', '', '',
+    ]],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [[
+      'participant-1', 'group-1', 'student-1', '已確認', '已成立', '', '', '', '',
+    ]],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:30:00+08:00').getTime();
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const result = fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-1', '學生開始前來訊取消');
+
+  assert.equal(result.status, '已取消');
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+});
+
+test('student practice admin cannot cancel after the practice has started', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '已確認', '', '', '', '', '',
+    ]],
+    groups: [[
+      'group-1', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [[
+      'participant-1', 'group-1', 'student-1', '已確認', '已成立', '', '', '', '',
+    ]],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T10:01:00+08:00').getTime();
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(
+    () => fixture.backend.cancelStudentPracticeParticipant_(admin, 'participant-1', '學生來訊取消'),
+    /已開始.*無法取消/
+  );
+});
+
 test('student practice admin can move one student atomically and preserves the original on conflict', () => {
   const fixture = createStudentPracticeAdminFixture({
     qualifications: [[
@@ -13369,6 +13411,76 @@ test('student practice admin can move one student atomically and preserves the o
   assert.deepEqual(fixture.groupSheet.values.at(-1).slice(1, 6), [
     '2026/09/10', 'C', '16:00', '17:30', '待確認資格',
   ]);
+});
+
+test('student practice admin can move a student inside two hours to a future slot', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '', '', '', '', '', '',
+      '已確認', '', 'Tako', '待確認資格', '', '',
+    ]],
+    groups: [[
+      'group-old', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [[
+      'participant-1', 'group-old', 'student-1', '已確認', '已成立', '', '', '', '原備註',
+    ]],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:30:00+08:00').getTime();
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  const result = fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'B',
+    startTime: '10:30', durationMinutes: 60, reason: '學生開始前來訊換時間',
+  });
+
+  assert.equal(result.startTime, '10:30');
+  assert.equal(fixture.participantSheet.values[1][1], result.groupId);
+  assert.equal(fixture.groupSheet.values[1][5], '已取消');
+});
+
+test('student practice admin cannot move a practice that has started', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '', '', '', '', '', '',
+      '已確認', '', 'Tako', '待確認資格', '', '',
+    ]],
+    groups: [[
+      'group-old', '2026/09/10', 'A', '10:00', '11:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [[
+      'participant-1', 'group-old', 'student-1', '已確認', '已成立', '', '', '', '',
+    ]],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T10:01:00+08:00').getTime();
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(() => fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'B',
+    startTime: '10:30', durationMinutes: 60, reason: '學生來訊換時間',
+  }), /原自主練習已開始.*無法換時間/);
+});
+
+test('student practice admin cannot move a student to a slot that has started', () => {
+  const fixture = createStudentPracticeAdminFixture({
+    qualifications: [[
+      'student-1', '學生甲', 'student@example.com', 'hash-1', '', '', '', '', '', '',
+      '已確認', '', 'Tako', '待確認資格', '', '',
+    ]],
+    groups: [[
+      'group-old', '2026/09/10', 'A', '12:00', '13:00', '已成立', '', '', '', 'Tako',
+    ]],
+    participants: [[
+      'participant-1', 'group-old', 'student-1', '已確認', '已成立', '', '', '', '',
+    ]],
+  });
+  fixture.backend.currentTimeMs_ = () => new Date('2026-09-10T09:30:00+08:00').getTime();
+  const admin = { teacherName: 'Tako', role: '管理員', managementCapabilities: ['course_admin'] };
+
+  assert.throws(() => fixture.backend.moveStudentPracticeParticipant_(admin, {
+    participantId: 'participant-1', date: '2026/09/10', room: 'B',
+    startTime: '09:00', durationMinutes: 60, reason: '學生來訊換時間',
+  }), /新.*時段已開始.*尚未開始/);
 });
 
 test('rental catalog uses OB rental classes and their fixed durations', () => {

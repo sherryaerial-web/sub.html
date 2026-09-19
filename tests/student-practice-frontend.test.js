@@ -80,14 +80,17 @@ test('student page is a focused mobile booking surface with the confirmed deadli
   const html = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';
   assert.match(html, /選擇自主練習時間/);
   assert.match(html, /開始前 2 小時/);
-  assert.match(html, /取消或換時間請洽官方 LINE/);
+  assert.match(html, /如需取消或換時間，請在開始前聯繫官方 LINE/);
   assert.match(html, /APP 名稱/);
   assert.match(html, /APP 內註冊 Email/);
   assert.match(html, /id="app-email"[^>]*type="email"/);
   assert.doesNotMatch(html, /身分辨識尾碼/);
   assert.doesNotMatch(html, /薪資|代課紀錄|管理工作台/);
   const scriptPath = path.join(__dirname, '..', 'student-practice.js');
-  assert.match(fs.readFileSync(scriptPath, 'utf8'), /sherry_student_practice_token_v2/);
+  const script = fs.readFileSync(scriptPath, 'utf8');
+  assert.match(script, /sherry_student_practice_token_v2/);
+  assert.match(script, /如需取消或換時間，請在開始前聯繫官方 LINE/);
+  assert.doesNotMatch(script, /如需取消或換時間，請在開始前 2 小時聯繫官方 LINE/);
 });
 
 test('student public API reads availability from the gateway without Turnstile', async () => {

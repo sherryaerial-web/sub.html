@@ -3554,8 +3554,8 @@ function cancelStudentPracticeParticipant_(session, participantIdValue, reasonVa
     var group = records.groups.filter(function(item) { return item.groupId === participant.groupId; })[0];
     if (!group) throw new Error('找不到學生自主練習場次。');
     var interval = normalizePracticeInterval_(group.date, group.startTime, group.endTime);
-    if (interval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
-      throw new Error('學生自主練習最晚需在開始前 2 小時取消或換時間。');
+    if (interval.startMs <= currentTimeMs_()) {
+      throw new Error('這筆學生自主練習已開始，無法取消。');
     }
     var remaining = records.participants.filter(function(item) {
       return item.groupId === group.groupId && item.participantId !== participantId &&
@@ -3685,8 +3685,8 @@ function moveStudentPracticeParticipant_(session, inputValue) {
       throw new Error('找不到原學生自主練習場次。');
     }
     var oldInterval = normalizePracticeInterval_(oldGroup.date, oldGroup.startTime, oldGroup.endTime);
-    if (oldInterval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
-      throw new Error('學生自主練習最晚需在開始前 2 小時取消或換時間。');
+    if (oldInterval.startMs <= currentTimeMs_()) {
+      throw new Error('原自主練習已開始，無法換時間。');
     }
 
     var room = requirePracticeRoom_(input.room);
@@ -3701,10 +3701,9 @@ function moveStudentPracticeParticipant_(session, inputValue) {
       input.startTime,
       minutesToTimeText_(startMinutes + duration)
     );
-    if (interval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
-      throw new Error('最晚請在自主練習開始前 2 小時完成換時間。');
+    if (interval.startMs <= currentTimeMs_()) {
+      throw new Error('新的自主練習時段已開始，請選擇尚未開始的時段。');
     }
-
     var courseRows;
     try {
       courseRows = getPracticeCurrentObRowsForDayView_(interval.date, true);

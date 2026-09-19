@@ -12953,6 +12953,32 @@ test('student practice submission preserves pending request and confirmed studen
   assert.equal(spreadsheet.getSheetByName('學生自主練習資格').values[1][13], '待確認資格');
 });
 
+test('student practice submission reuses a confirmed matching name and email without a browser token', () => {
+  const { backend, spreadsheet } = createStudentPracticeSubmissionFixture();
+
+  const first = backend.submitStudentPractice_({
+    appName: 'Crystal Hee', email: 'neat917@gmail.com', date: '2026/09/10', room: 'C',
+    startTime: '10:00', durationMinutes: 60,
+  });
+  const qualificationSheet = spreadsheet.getSheetByName('學生自主練習資格');
+  qualificationSheet.values[1][13] = '已確認';
+  qualificationSheet.values.push([
+    'duplicate-pending', '  crystal   hee  ', 'NEAT917@GMAIL.COM', 'other-token-hash', '', '', '', '',
+    '2026/09/11 08:00:00', '2026/09/11 08:00:00', '', '', '', '待確認資格', '', '',
+  ]);
+
+  const later = backend.submitStudentPractice_({
+    appName: ' crystal  hee ', email: ' NEAT917@GMAIL.COM ', date: '2026/09/12', room: 'D',
+    startTime: '14:00', durationMinutes: 90,
+  });
+
+  assert.equal(first.status, '待確認資格');
+  assert.equal(later.status, '已成立');
+  assert.equal(later.qualificationVenue, '劍潭');
+  assert.equal(qualificationSheet.values.length, 3);
+  assert.equal(spreadsheet.getSheetByName('學生自主練習參與者').values[2][2], qualificationSheet.values[1][0]);
+});
+
 test('student practice submission notifies Kuan Rong and Tako after the registration is saved', () => {
   const { backend, spreadsheet } = createStudentPracticeSubmissionFixture({ enableNotifications: true });
   const deliveries = [];

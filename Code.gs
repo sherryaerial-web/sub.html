@@ -2837,6 +2837,24 @@ function getStudentPracticeQualificationVenueForRoom_(roomValue) {
   return room === 'A' || room === 'B' ? '晴光' : '劍潭';
 }
 
+function normalizeStudentPracticeIdentityPart_(value) {
+  return cleanText_(value).replace(/\s+/g, ' ').toLowerCase();
+}
+
+function findStudentPracticeQualificationByIdentity_(qualificationsValue, appNameValue, emailValue, venueValue) {
+  var appName = normalizeStudentPracticeIdentityPart_(appNameValue);
+  var email = normalizeStudentPracticeIdentityPart_(emailValue);
+  if (!appName || !email) return null;
+  var matches = (qualificationsValue || []).filter(function(item) {
+    return normalizeStudentPracticeIdentityPart_(item.appName) === appName &&
+      normalizeStudentPracticeIdentityPart_(item.email) === email;
+  });
+  if (!matches.length) return null;
+  return matches.filter(function(item) {
+    return getStudentPracticeQualificationFields_(item, venueValue).status === '已確認';
+  })[0] || matches[0];
+}
+
 function getStudentPracticeQualificationFields_(qualificationValue, venueValue) {
   var qualification = qualificationValue || {};
   var venue = cleanText_(venueValue);
@@ -3062,6 +3080,16 @@ function submitStudentPractice_(inputValue) {
     if (interval.startMs - currentTimeMs_() < 2 * 60 * 60 * 1000) {
       throw new Error('最晚請在自主練習開始前 2 小時完成登記。');
     }
+    var qualificationVenue = getStudentPracticeQualificationVenueForRoom_(room);
+    if (!qualification && !rawToken) {
+      qualification = findStudentPracticeQualificationByIdentity_(
+        records.qualifications, appName, email, qualificationVenue
+      );
+      if (qualification) {
+        appName = qualification.appName;
+        email = qualification.email;
+      }
+    }
     var duplicate = records.participants.filter(function(participant) {
       return qualification && participant.studentId === qualification.studentId &&
         participant.groupId === (targetGroup && targetGroup.groupId) &&
@@ -3090,7 +3118,6 @@ function submitStudentPractice_(inputValue) {
     var now = getTimestamp_();
     var newToken = rawToken;
     var studentId = qualification ? qualification.studentId : Utilities.getUuid();
-    var qualificationVenue = getStudentPracticeQualificationVenueForRoom_(room);
     var qualificationFields = getStudentPracticeQualificationFields_(qualification, qualificationVenue);
     var qualificationStatus = qualification && qualificationFields.status === '已確認'
       ? '已確認' : STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION;

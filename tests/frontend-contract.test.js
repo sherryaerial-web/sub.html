@@ -4284,6 +4284,7 @@ test('admin workspace exposes independent next-day and whole-month course closur
   assert.match(html, /data-admin-action=["']close-unclaimed-substitutes["']/);
   assert.match(html, /整月未領代課/);
   assert.match(html, /場地租借／場租不納入關課/);
+  assert.match(html, /私人包班不徵人也不納入關課/);
   assert.match(html, /item\.actor/);
 });
 

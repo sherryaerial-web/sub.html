@@ -7769,6 +7769,12 @@ function getCourseClosureRule_(detail, stageValue) {
     base.reason = '場地租借／場租不納入未達人數關課。';
     return base;
   }
+  if (detail && isPrivateClassCourseName_(detail.courseName)) {
+    base.ruleKey = 'private-class-excluded';
+    base.ruleLabel = '私人包班永久保留';
+    base.reason = '私人包班不徵人，也不納入未達人數關課，永久保留。';
+    return base;
+  }
   if (!detail || !cleanText_(detail.calendarId) || !cleanText_(detail.date) ||
       !cleanText_(detail.time) || !cleanText_(detail.courseName) ||
       detail.enrollmentCount == null || !isFinite(Number(detail.enrollmentCount))) {
@@ -7827,6 +7833,11 @@ function getCourseClosureRule_(detail, stageValue) {
 function isVenueRentalCourseName_(courseNameValue) {
   var courseName = cleanText_(courseNameValue).replace(/\s+/g, '');
   return /場地租借|場租/.test(courseName);
+}
+
+function isPrivateClassCourseName_(courseNameValue) {
+  var courseName = cleanText_(courseNameValue).replace(/\s+/g, '');
+  return /私人包班/.test(courseName);
 }
 
 function getCourseClosureLocation_(courseNameValue) {
@@ -7895,6 +7906,25 @@ function saveCourseClosureSocialCopy_(copyValue) {
   return stored;
 }
 
+function sanitizeStoredCourseClosureSocialCopy_(copyValue) {
+  var copy = copyValue || {};
+  if (!Array.isArray(copy.items)) return copy;
+  var items = copy.items.filter(function(item) {
+    return !isPrivateClassCourseName_(item && item.courseName);
+  });
+  if (items.length === copy.items.length) return copy;
+  var lines = items.map(function(item, index) {
+    return (index === 0 ? '明' : '') + cleanText_(item.time) +
+      cleanText_(item.location) + cleanText_(item.teacherName) + cleanText_(item.courseName);
+  });
+  if (lines.length) lines.push('各缺一，等到23:40');
+  return Object.assign({}, copy, {
+    content: lines.join('\n'),
+    calendarIds: items.map(function(item) { return cleanText_(item.calendarId); }),
+    items: items
+  });
+}
+
 function getCourseClosureSocialCopy_(targetDateValue) {
   var properties = getScriptProperties_();
   if (!properties) return null;
@@ -7903,7 +7933,7 @@ function getCourseClosureSocialCopy_(targetDateValue) {
   var raw = properties.getProperty(propertyKey);
   if (!raw) return null;
   try {
-    return JSON.parse(raw);
+    return sanitizeStoredCourseClosureSocialCopy_(JSON.parse(raw));
   } catch (error) {
     return null;
   }

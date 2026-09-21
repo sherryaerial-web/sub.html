@@ -9018,6 +9018,31 @@ test('next-day closure policy always excludes venue rentals at both stages', () 
   });
 });
 
+test('next-day closure policy always keeps private classes at both stages', () => {
+  const backend = loadBackend();
+  const detail = {
+    calendarId: 'private-class-987',
+    date: '2026/09/22',
+    time: '14:00',
+    courseName: '劍潭妹妹私人包班',
+    teacherName: '妹妹',
+    enrollmentCount: 1,
+    points: 1,
+    cancelled: false,
+  };
+
+  ['22:30', '23:40'].forEach((stage) => {
+    const rule = JSON.parse(JSON.stringify(
+      backend.getCourseClosureRule_(detail, stage),
+    ));
+    assert.equal(rule.ruleKey, 'private-class-excluded');
+    assert.equal(rule.eligible, false);
+    assert.equal(rule.onlyEmpty, false);
+    assert.equal(rule.manualReview, false);
+    assert.match(rule.reason, /永久保留/);
+  });
+});
+
 test('22:30 community copy lists only courses one person short of the 23:40 minimum', () => {
   const backend = loadBackend();
   const copy = backend.buildCourseClosureSocialCopy_('2026/09/01', [
@@ -9027,6 +9052,7 @@ test('22:30 community copy lists only courses one person short of the 23:40 mini
     { calendarId: '4', date: '2026/09/01', time: '20:00', courseName: 'B－空瑜', teacherName: 'Jina', enrollmentCount: 2, points: 1 },
     { calendarId: '5', date: '2026/09/01', time: '21:00', courseName: 'A－場地租借', teacherName: '', enrollmentCount: 0, points: 1 },
     { calendarId: '6', date: '2026/09/01', time: '21:30', courseName: 'A－空環', teacherName: '老師甲', enrollmentCount: 2, points: 1 },
+    { calendarId: '7', date: '2026/09/01', time: '14:00', courseName: '劍潭妹妹私人包班', teacherName: '妹妹', enrollmentCount: 1, points: 1 },
   ]);
 
   assert.equal(copy.content, [
@@ -9037,6 +9063,31 @@ test('22:30 community copy lists only courses one person short of the 23:40 mini
     '各缺一，等到23:40',
   ].join('\n'));
   assert.deepEqual(JSON.parse(JSON.stringify(copy.calendarIds)), ['1', '2', '3', '4']);
+});
+
+test('stored community copy removes a private class generated before the exclusion rule', () => {
+  const stored = {
+    targetDate: '2026/09/22',
+    updatedAt: '2026-09-21 22:34:32',
+    content: '明10:30劍潭壹壹空環\n14:00劍潭妹妹私人包班\n各缺一，等到23:40',
+    calendarIds: ['ordinary-1', 'private-1'],
+    items: [
+      { calendarId: 'ordinary-1', time: '10:30', location: '劍潭', teacherName: '壹壹', courseName: '空環' },
+      { calendarId: 'private-1', time: '14:00', location: '劍潭', teacherName: '妹妹', courseName: '妹妹私人包班' },
+    ],
+  };
+  const backend = loadBackend({
+    PropertiesService: {
+      getScriptProperties: () => ({ getProperty: () => JSON.stringify(stored) }),
+    },
+  });
+
+  const copy = backend.getCourseClosureSocialCopy_('2026/09/22');
+
+  assert.equal(copy.content, '明10:30劍潭壹壹空環\n各缺一，等到23:40');
+  assert.deepEqual(JSON.parse(JSON.stringify(copy.calendarIds)), ['ordinary-1']);
+  assert.deepEqual(JSON.parse(JSON.stringify(copy.items)), [stored.items[0]]);
+  assert.equal(copy.updatedAt, stored.updatedAt);
 });
 
 test('closure result push targets course admins once and includes failure details', () => {

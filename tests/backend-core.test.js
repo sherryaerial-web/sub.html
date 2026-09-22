@@ -8991,6 +8991,39 @@ test('Miaomiao discounted silk hammock requires three students while ordinary si
   assert.equal(anotherTeacher.eligible, false);
 });
 
+test('discount courses keep the original category minimum instead of using the discounted points', () => {
+  const backend = loadBackend();
+  const detail = (overrides = {}) => ({
+    calendarId: 'discount-1',
+    date: '2026/09/23',
+    time: '10:30',
+    courseName: 'A－空瑜 Lv.0〈優惠〉',
+    teacherName: 'Melody Wang',
+    enrollmentCount: 1,
+    points: 2,
+    cancelled: false,
+    ...overrides,
+  });
+
+  const aerialYoga = backend.getCourseClosureRule_(detail(), '23:40');
+  assert.equal(aerialYoga.minimumEnrollment, 3);
+  assert.equal(aerialYoga.cancelAtOrBelow, 2);
+
+  const aerialHoop = backend.getCourseClosureRule_(detail({
+    courseName: 'C－空環 Lv.1〈優惠〉',
+  }), '23:40');
+  assert.equal(aerialHoop.minimumEnrollment, 2);
+  assert.equal(aerialHoop.cancelAtOrBelow, 1);
+
+  const silkHammock = backend.getCourseClosureRule_(detail({
+    courseName: 'B－綢吊 Lv.1〈優惠〉',
+    teacherName: '其他老師',
+    points: 4,
+  }), '23:40');
+  assert.equal(silkHammock.minimumEnrollment, 2);
+  assert.equal(silkHammock.cancelAtOrBelow, 1);
+});
+
 test('next-day closure policy always excludes venue rentals at both stages', () => {
   const backend = loadBackend();
   const detail = (courseName) => ({
@@ -9063,6 +9096,30 @@ test('22:30 community copy lists only courses one person short of the 23:40 mini
     '各缺一，等到23:40',
   ].join('\n'));
   assert.deepEqual(JSON.parse(JSON.stringify(copy.calendarIds)), ['1', '2', '3', '4']);
+});
+
+test('22:30 community copy also lists discount courses two people short but never zero-enrollment courses', () => {
+  const backend = loadBackend();
+  const copy = backend.buildCourseClosureSocialCopy_('2026/09/23', [
+    { calendarId: 'one-general', date: '2026/09/23', time: '09:30', courseName: 'A－舞綢 Lv.1', teacherName: '珍珍', enrollmentCount: 1, points: 1 },
+    { calendarId: 'one-discount-yoga', date: '2026/09/23', time: '10:00', courseName: 'B－空瑜 Lv.0〈優惠〉', teacherName: '老師甲', enrollmentCount: 2, points: 2 },
+    { calendarId: 'one-discount-hoop', date: '2026/09/23', time: '10:15', courseName: 'C－空環 Lv.1〈優惠〉', teacherName: '老師乙', enrollmentCount: 1, points: 2 },
+    { calendarId: 'two-discount-yoga', date: '2026/09/23', time: '10:30', courseName: 'D－空瑜 Lv.0〈優惠〉', teacherName: 'Melody Wang', enrollmentCount: 1, points: 2 },
+    { calendarId: 'zero-discount-hoop', date: '2026/09/23', time: '11:00', courseName: 'C－空環 Lv.1〈優惠〉', teacherName: '老師丙', enrollmentCount: 0, points: 2 },
+    { calendarId: 'zero-general', date: '2026/09/23', time: '11:30', courseName: 'A－舞綢 Lv.1', teacherName: '老師丁', enrollmentCount: 0, points: 1 },
+  ]);
+
+  assert.equal(copy.content, [
+    '明09:30晴光珍珍舞綢',
+    '10:00晴光老師甲空瑜',
+    '10:15劍潭老師乙空環',
+    '各缺一，',
+    '10:30劍潭Melody Wang空瑜缺二',
+    '等到23:40',
+  ].join('\n'));
+  assert.deepEqual(JSON.parse(JSON.stringify(copy.calendarIds)), [
+    'one-general', 'one-discount-yoga', 'one-discount-hoop', 'two-discount-yoga',
+  ]);
 });
 
 test('stored community copy removes a private class generated before the exclusion rule', () => {

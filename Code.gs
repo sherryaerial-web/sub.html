@@ -7812,8 +7812,25 @@ function getCourseClosureRule_(detail, stageValue) {
       base.ruleLabel = '妙妙綢吊優惠課至少 3 人';
       base.minimumEnrollment = 3;
       base.cancelAtOrBelow = 2;
-    } else if (['Jina', '小美', '卡拉', '卡拉 卡拉'].indexOf(teacherName) !== -1 ||
-               Number(detail.points) === 2) {
+    } else if (['Jina', '小美', '卡拉', '卡拉 卡拉'].indexOf(teacherName) !== -1) {
+      base.ruleKey = 'teacher-or-two-points';
+      base.ruleLabel = '指定老師／2 點課至少 3 人';
+      base.minimumEnrollment = 3;
+      base.cancelAtOrBelow = 2;
+    } else if (getCoursePromotionType_(courseName) === 'monthly-discount') {
+      var discountCategory = getCourseCategory_(courseName);
+      if (discountCategory === '空瑜') {
+        base.ruleKey = 'discount-aerial-yoga';
+        base.ruleLabel = '空瑜優惠課至少 3 人';
+        base.minimumEnrollment = 3;
+        base.cancelAtOrBelow = 2;
+      } else {
+        base.ruleKey = 'discount-original-minimum';
+        base.ruleLabel = '優惠課沿用原課至少 2 人';
+        base.minimumEnrollment = 2;
+        base.cancelAtOrBelow = 1;
+      }
+    } else if (Number(detail.points) === 2) {
       base.ruleKey = 'teacher-or-two-points';
       base.ruleLabel = '指定老師／2 點課至少 3 人';
       base.minimumEnrollment = 3;
@@ -7854,34 +7871,61 @@ function getCourseClosureDisplayName_(courseNameValue) {
 
 function buildCourseClosureSocialCopy_(targetDateValue, details) {
   var targetDate = normalizeClosureTargetDate_(targetDateValue);
-  var items = (details || []).filter(function(detail) {
+  var candidates = (details || []).map(function(detail) {
     var detailDate = cleanText_(detail && detail.date).replace(/-/g, '/');
-    if (!detail || detailDate !== targetDate) return false;
+    if (!detail || detailDate !== targetDate) return null;
     var rule = getCourseClosureRule_(detail, '23:40');
-    return !rule.manualReview && rule.minimumEnrollment != null &&
-      Number(detail.enrollmentCount) === Number(rule.minimumEnrollment) - 1;
+    if (rule.manualReview || rule.minimumEnrollment == null) return null;
+    var enrollmentCount = Number(detail.enrollmentCount);
+    var shortage = Number(rule.minimumEnrollment) - enrollmentCount;
+    if (enrollmentCount <= 0 || shortage < 1) return null;
+    if (shortage !== 1 && !(
+      shortage === 2 && getCoursePromotionType_(detail.courseName) === 'monthly-discount'
+    )) return null;
+    return { detail: detail, shortage: shortage };
+  }).filter(function(candidate) {
+    return candidate !== null;
   }).sort(function(left, right) {
-    return [cleanText_(left.time), cleanText_(left.calendarId)].join('|')
-      .localeCompare([cleanText_(right.time), cleanText_(right.calendarId)].join('|'));
+    if (left.shortage !== right.shortage) return left.shortage - right.shortage;
+    return [cleanText_(left.detail.time), cleanText_(left.detail.calendarId)].join('|')
+      .localeCompare([cleanText_(right.detail.time), cleanText_(right.detail.calendarId)].join('|'));
   });
-  var lines = items.map(function(item, index) {
-    return (index === 0 ? '明' : '') + cleanText_(item.time) +
-      getCourseClosureLocation_(item.courseName) +
-      cleanText_(item.teacherName) +
-      getCourseClosureDisplayName_(item.courseName);
+  var oneShort = candidates.filter(function(candidate) { return candidate.shortage === 1; });
+  var twoShort = candidates.filter(function(candidate) { return candidate.shortage === 2; });
+  var lines = [];
+  oneShort.forEach(function(candidate) {
+    var item = candidate.detail;
+    lines.push((lines.length === 0 ? '明' : '') + cleanText_(item.time) +
+      getCourseClosureLocation_(item.courseName) + cleanText_(item.teacherName) +
+      getCourseClosureDisplayName_(item.courseName));
   });
-  if (lines.length) lines.push('各缺一，等到23:40');
+  if (oneShort.length && !twoShort.length) {
+    lines.push('各缺一，等到23:40');
+  } else {
+    if (oneShort.length) lines.push('各缺一，');
+    twoShort.forEach(function(candidate) {
+      var item = candidate.detail;
+      lines.push((lines.length === 0 ? '明' : '') + cleanText_(item.time) +
+        getCourseClosureLocation_(item.courseName) + cleanText_(item.teacherName) +
+        getCourseClosureDisplayName_(item.courseName) + '缺二');
+    });
+    if (twoShort.length) lines.push('等到23:40');
+  }
   return {
     targetDate: targetDate,
     content: lines.join('\n'),
-    calendarIds: items.map(function(item) { return cleanText_(item.calendarId); }),
-    items: items.map(function(item) {
+    calendarIds: candidates.map(function(candidate) {
+      return cleanText_(candidate.detail.calendarId);
+    }),
+    items: candidates.map(function(candidate) {
+      var item = candidate.detail;
       return {
         calendarId: cleanText_(item.calendarId),
         time: cleanText_(item.time),
         location: getCourseClosureLocation_(item.courseName),
         teacherName: cleanText_(item.teacherName),
-        courseName: getCourseClosureDisplayName_(item.courseName)
+        courseName: getCourseClosureDisplayName_(item.courseName),
+        shortage: candidate.shortage
       };
     })
   };

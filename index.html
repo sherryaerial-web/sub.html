@@ -7830,7 +7830,15 @@
       const studentSummary = studentData.summary || {};
       const studentRequests = (Array.isArray(studentData.requests) ? studentData.requests : [])
         .filter((item) => item.status !== "已取消");
-      const studentCards = studentRequests.map((item) => {
+      const now = Date.now();
+      const isEndedStudentRequest = (item) => {
+        const date = String(item.date || "").replace(/\//g, "-");
+        const end = Date.parse(`${date}T${item.endTime || ""}:00+08:00`);
+        return Number.isFinite(end) && end <= now;
+      };
+      const currentStudentRequests = studentRequests.filter((item) => !isEndedStudentRequest(item));
+      const endedStudentRequests = studentRequests.filter(isEndedStudentRequest);
+      const renderStudentCard = (item) => {
         const pending = item.status === "待確認資格";
         const companion = item.qualificationRole === "陪同者";
         const qualificationVenue = item.qualificationVenue || (["A", "B"].includes(item.room) ? "晴光" : "劍潭");
@@ -7848,7 +7856,13 @@
             <button class="danger-button" type="button" data-admin-action="cancel-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-x"></i>取消這位學生</button>
           </div>
         </article>`;
-      }).join("") || '<div class="state">目前沒有學生自主練習待辦</div>';
+      };
+      const studentCards = currentStudentRequests.map(renderStudentCard).join("") || '<div class="state">目前沒有進行中或即將開始的學生自主練習</div>';
+      const endedStudentCards = endedStudentRequests.length ? `
+        <details class="admin-control student-practice-history">
+          <summary>已結束紀錄（${endedStudentRequests.length} 筆）</summary>
+          <div class="practice-admin-list">${endedStudentRequests.map(renderStudentCard).join("")}</div>
+        </details>` : "";
       const bookingCards = bookings.map((booking) => {
         const participants = (booking.participants || []).map((participant) => `
           <div class="practice-admin-participant">
@@ -7884,6 +7898,7 @@
           <div class="admin-summary"><div class="summary-item"><span>待確認學生資格</span><strong>${Number(studentSummary.pendingQualification) || 0}</strong></div><div class="summary-item"><span>已成立</span><strong>${Number(studentSummary.active) || 0}</strong></div><div class="summary-item"><span>時段異動待處理</span><strong>${Number(studentSummary.changePending) || 0}</strong></div></div>
         </section>
         <div class="practice-admin-list">${studentCards}</div>
+        ${endedStudentCards}
         <section class="admin-control"><strong>老師自主練習</strong><div class="item-meta">以下為原有老師自主練習與候補紀錄。</div></section>
         <form id="practice-admin-filter-form" class="admin-control practice-admin-filters">
           <label class="notification-field">開始日期<input id="practice-admin-date-from" class="text-input" type="date" value="${escapeHtml(filters.dateFrom || "")}"></label>

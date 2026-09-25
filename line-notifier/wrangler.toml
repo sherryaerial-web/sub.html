@@ -1,0 +1,13 @@
+name = "sherry-closure-line-notifier"
+main = "src/index.mjs"
+compatibility_date = "2026-09-26"
+
+[vars]
+ENABLED = "false"
+
+[triggers]
+crons = ["30-59 14 * * *", "0-39 15 * * *"] # Asia/Taipei 22:30-23:39
+
+# Add the dedicated DB binding only after creating the approved production D1 database.
+# Binding name: DB. Apply schema.sql before enabling. Never reuse the classroom/AI DB.
+# Secrets: DELIVERY_SECRET, ADMIN_SECRET, LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN.

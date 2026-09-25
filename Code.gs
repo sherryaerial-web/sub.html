@@ -8583,10 +8583,106 @@ function refreshPracticeAfterCourseClosure_(resultValue) {
   return result.practiceRefresh;
 }
 
+// LINE is an optional, isolated post-closure side effect. No OB/Sheet writes here.
+function queueCourseClosureLineCopySafely_(result) {
+  try {
+    var properties = getScriptProperties_();
+    if (!properties || properties.getProperty('CLOSURE_LINE_ENABLED') !== 'true') return { skipped: true };
+    if (!result || result.stage !== '22:30' || result.failedCount !== 0 || !result.socialCopy) return { skipped: true };
+    var content = String(result.socialCopy.content || '');
+    var targetDate = cleanText_(result.targetDate).replace(/-/g, '/');
+    // Stay below Script Properties' per-value byte limit; never truncate recruitment copy.
+    if (!content.trim() || content.length > 2000 || !/^\d{4}\/\d{2}\/\d{2}$/.test(targetDate)) return { skipped: true, reason: 'invalid-copy' };
+    var expires = Date.parse(targetDate.replace(/\//g, '-') + 'T00:00:00+08:00') - 20 * 60000;
+    var now = currentTimeMs_();
+    if (!isFinite(expires) || now >= expires || now < expires - 70 * 60000) return { skipped: true, reason: 'outside-window' };
+    withScriptLock_(function() {
+      var raw = properties.getProperty('CLOSURE_LINE_PENDING');
+      var existing = raw ? JSON.parse(raw) : null;
+      if (existing && existing.payload.targetDate === targetDate) {
+        if (existing.payload.content !== content) {
+          existing.conflictReason = 'copy-changed';
+          existing.conflictAt = now;
+          properties.setProperty('CLOSURE_LINE_PENDING', JSON.stringify(existing));
+        }
+        return;
+      }
+      properties.setProperty('CLOSURE_LINE_PENDING', JSON.stringify({
+        payload: { targetDate: targetDate, stage: '22:30', content: content, failedCount: 0 },
+        expires: expires, status: 'pending', attempts: 0, nextAt: 0, leaseUntil: 0
+      }));
+    });
+    return drainCourseClosureLineCopySafely_();
+  } catch (error) {
+    console.warn('LINE closure queue unavailable; closure result preserved.');
+    return { failed: true, reason: 'line-queue-unavailable' };
+  }
+}
+
+function drainCourseClosureLineCopySafely_() {
+  try {
+    var properties = getScriptProperties_();
+    if (!properties || properties.getProperty('CLOSURE_LINE_ENABLED') !== 'true') return { skipped: true };
+    var url = properties.getProperty('CLOSURE_LINE_URL') || '';
+    var secret = properties.getProperty('CLOSURE_LINE_SECRET') || '';
+    if (!/^https:\/\/[a-zA-Z0-9.-]+\/closure$/.test(url) || secret.length < 32) return { skipped: true, reason: 'not-configured' };
+    var now = currentTimeMs_();
+    var pending = withScriptLock_(function() {
+      var raw = properties.getProperty('CLOSURE_LINE_PENDING');
+      if (!raw) return null;
+      var item = JSON.parse(raw);
+      if (item.status !== 'pending') return null;
+      if (now >= item.expires) {
+        item.status = 'expired';
+        properties.setProperty('CLOSURE_LINE_PENDING', JSON.stringify(item));
+        return null;
+      }
+      if (item.leaseUntil > now || item.nextAt > now || item.attempts >= 6) return null;
+      item.leaseUntil = now + 120000;
+      item.lease = Utilities.getUuid();
+      item.attempts += 1;
+      properties.setProperty('CLOSURE_LINE_PENDING', JSON.stringify(item));
+      return item;
+    });
+    if (!pending) return { skipped: true };
+    var timestamp = currentTimeMs_();
+    var nonce = Utilities.getUuid();
+    var payload = JSON.stringify(pending.payload);
+    var envelope = { timestamp: timestamp, nonce: nonce, payload: payload,
+      signature: bytesToBase64Url_(Utilities.computeHmacSha256Signature(timestamp + '\n' + nonce + '\n/closure\n' + payload, secret)) };
+    var status = 'pending', reason = 'transport-error';
+    try {
+      var response = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json',
+        payload: JSON.stringify(envelope), muteHttpExceptions: true, followRedirects: false });
+      var code = response.getResponseCode();
+      var body = JSON.parse(response.getContentText());
+      if (code === 202 && body.ok === true && body.queued === true) { status = 'queued'; reason = ''; }
+      else if (code >= 400 && code < 500 && code !== 429) { status = 'failed'; reason = 'gateway-http-' + code; }
+      else reason = 'gateway-http-' + code;
+    } catch (error) { /* Retain the frozen payload for later scheduler delivery. */ }
+    if (status === 'pending' && pending.attempts >= 6) status = 'failed';
+    withScriptLock_(function() {
+      var raw = properties.getProperty('CLOSURE_LINE_PENDING');
+      var latest = raw ? JSON.parse(raw) : null;
+      if (!latest || latest.lease !== pending.lease) return;
+      latest.status = status;
+      latest.lastError = reason;
+      latest.leaseUntil = 0;
+      latest.nextAt = currentTimeMs_() + 60000 * Math.pow(2, pending.attempts - 1);
+      properties.setProperty('CLOSURE_LINE_PENDING', JSON.stringify(latest));
+    });
+    return { status: status, reason: reason };
+  } catch (error) {
+    console.warn('LINE closure delivery unavailable; closure result preserved.');
+    return { failed: true, reason: 'line-delivery-unavailable' };
+  }
+}
+
 function executeNextDayClosures_(session, stageValue) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   assertManualCourseClosureStageAvailable_(stageValue);
   var result = executeNextDayClosuresCore_(actor, stageValue, getTomorrowDate_());
+  queueCourseClosureLineCopySafely_(result);
   notifyCourseClosureFailures_(result);
   refreshPracticeAfterCourseClosure_(result);
   notifyCourseClosureResult_(result);
@@ -8594,6 +8690,7 @@ function executeNextDayClosures_(session, stageValue) {
 }
 
 function runCourseClosureScheduler() {
+  drainCourseClosureLineCopySafely_();
   var now = new Date(currentTimeMs_());
   var dateKey = Utilities.formatDate(now, getTimeZone_(), 'yyyy-MM-dd');
   var time = Utilities.formatDate(now, getTimeZone_(), 'HH:mm');
@@ -8614,6 +8711,7 @@ function runCourseClosureScheduler() {
   var stage = getCourseClosureDueStage_(time);
   if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult, practice: practiceReconciliationResult };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
+  queueCourseClosureLineCopySafely_(result);
   notifyCourseClosureFailures_(result);
   refreshPracticeAfterCourseClosure_(result);
   notifyCourseClosureResult_(result);

@@ -1,12 +1,21 @@
 name = "sherry-closure-line-notifier"
 main = "src/index.mjs"
-compatibility_date = "2026-09-26"
+compatibility_date = "2026-08-29"
 
 [vars]
 ENABLED = "false"
 
 [triggers]
 crons = ["30-59 14 * * *", "0-39 15 * * *"] # Asia/Taipei 22:30-23:39
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sherry-closure-line-notifier"
+database_id = "5287befb-64d3-4763-8f4d-cca486012890"
+
+[[services]]
+binding = "LINE_PROXY"
+service = "sherry-line-ai-staging"
 
 # Add the dedicated DB binding only after creating the approved production D1 database.
 # Binding name: DB. Apply schema.sql before enabling. Never reuse the classroom/AI DB.

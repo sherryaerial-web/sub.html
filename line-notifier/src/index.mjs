@@ -1,3 +1,4 @@
+import { proxyLine } from './proxy.mjs';
 const encoder = new TextEncoder();
 const roles = ['ivy', 'tako'];
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -36,7 +37,11 @@ async function authenticate(raw, path, env, now) {
 }
 
 async function binding(raw, request, env, now) {
-  if (!env.LINE_CHANNEL_SECRET || !equal(request.headers.get('x-line-signature'), await sign(env.LINE_CHANNEL_SECRET, raw, 'base64'))) return json({ error: 'unauthorized' }, 401);
+  const signature = request.headers.get('x-line-signature');
+  const verified = env.LINE_PROXY
+    ? await proxyLine(env, 'verify', { raw, signature }).then(async r => r.ok && (await r.json()).valid === true)
+    : env.LINE_CHANNEL_SECRET && equal(signature, await sign(env.LINE_CHANNEL_SECRET, raw, 'base64'));
+  if (!verified) return json({ error: 'unauthorized' }, 401);
   let body; try { body = JSON.parse(raw); } catch { return json({ error: 'invalid_json' }, 400); }
   if (!Array.isArray(body.events) || body.events.length > 100) return json({ error: 'invalid_events' }, 400);
   for (const event of body.events) {
@@ -112,7 +117,7 @@ export async function handle(request, env, deps = {}) {
 }
 
 export async function drain(env, deps = {}) {
-  if (env.ENABLED !== 'true' || !env.DB || !env.LINE_CHANNEL_ACCESS_TOKEN) return;
+  if (env.ENABLED !== 'true' || !env.DB || (!env.LINE_CHANNEL_ACCESS_TOKEN && !env.LINE_PROXY)) return;
   const clock = deps.now || Date.now;
   const fetchImpl = deps.fetchImpl || fetch;
   const now = clock();
@@ -128,7 +133,7 @@ export async function drain(env, deps = {}) {
     else if (clock() >= item.expires) { status = 'expired'; }
     else {
       try {
-        const response = await fetchImpl('https://api.line.me/v2/bot/message/push', {
+        const response = env.LINE_PROXY ? await proxyLine(env, 'push', { to: item.user_id, text: item.content, retryKey: item.retry_key, expires: item.expires }) : await fetchImpl('https://api.line.me/v2/bot/message/push', {
           method: 'POST', signal: AbortSignal.timeout(10000),
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`, 'X-Line-Retry-Key': item.retry_key },
           body: JSON.stringify({ to: item.user_id, messages: [{ type: 'text', text: item.content }] })

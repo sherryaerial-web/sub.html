@@ -1,5 +1,13 @@
 # 關課徵人文案 LINE 私訊
 
+## 正式接線補充（2026-09-26）
+
+已唯讀確認 OA active webhook 是 `https://sherry-line-ai-staging.sherry-line-ai.workers.dev/webhook`（名字雖含 staging，確實為現用入口）。正式部署採用下載的線上 bundle 加最小 relay/bridge，而非 dirty 本機客服 checkout。
+
+通知 Worker 透過 `LINE_PROXY` service binding 使用現有 LINE 服務。LINE channel secret 不取出、不複製；`integration/bridge.mjs` 在原服務內驗證 LINE 簽章、換取短效 token 及發送。專用 `BRIDGE_SECRET` 與原服務的 `CLOSURE_LINE_BRIDGE_SECRET` 配對，原服務的 `CLOSURE_LINE_SEND_ENABLED=false` 是第二道發送開關。推播 payload 帶 expires，取 token 前後都核對截止時間。
+
+此正式模式通知 Worker 不需要 LINE_CHANNEL_SECRET／LINE_CHANNEL_ACCESS_TOKEN；原文件的直接 token 模式僅為可選測試介面。通知專用 D1 為 `5287befb-64d3-4763-8f4d-cca486012890`，不與客服 DB 共用。管理／交付 secrets 不顯示內容、不進 Git。
+
 預設關閉。本地程式完成不代表上線；正式部署、設定 secrets、建立通知專用 D1，以及測試傳送須取得使用者授權。不得直接部署旁邊 LINE-AI checkout 的全部未提交修改。
 
 ## 接線

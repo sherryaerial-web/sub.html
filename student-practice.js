@@ -3,6 +3,7 @@
 
   var STORAGE_KEY = 'sherry_student_practice_token_v2';
   var PUBLIC_ROUTES = {
+    status: { method: 'POST', path: '/api/student-practice/status', protected: false },
     availability: { method: 'GET', path: '/api/student-practice/availability', protected: false },
     submit: { method: 'POST', path: '/api/student-practice/submit', protected: true }
   };
@@ -33,7 +34,9 @@
       throw new Error('服務回覆格式錯誤，請稍後再試。');
     }
     if (!response.ok || !payload || payload.status !== 'success') {
-      throw new Error(payload && payload.error && payload.error.message || payload && payload.message || '服務暫時無法使用。');
+      var error = new Error(payload && payload.error && payload.error.message || payload && payload.message || '服務暫時無法使用。');
+      error.code = payload && payload.error && payload.error.code || '';
+      throw error;
     }
     return payload.data;
   }
@@ -54,7 +57,38 @@
       request.headers = { 'Content-Type': 'application/json;charset=UTF-8' };
       request.body = JSON.stringify(Object.assign({}, params || {}, { turnstileToken: token }));
     }
-    return readGatewayPayload(await config.fetchImpl(url.toString(), request));
+    var controller = typeof global.AbortController === 'function' ? new global.AbortController() : null;
+    var timer;
+    if (controller) {
+      request.signal = controller.signal;
+      timer = global.setTimeout(function() { controller.abort(); }, 30000);
+    }
+    try {
+      return await readGatewayPayload(await config.fetchImpl(url.toString(), request));
+    } finally {
+      if (timer) global.clearTimeout(timer);
+    }
+  }
+
+  async function submitWithReceipt(payload, token, options) {
+    options = options || {};
+    var call = options.call || callPublicApi;
+    var wait = options.wait || function() { return new Promise(function(resolve) { global.setTimeout(resolve, 3000); }); };
+    try {
+      return await call('submit', { practice: payload }, token);
+    } catch (error) {
+      if (['upstream_rejected', 'turnstile_required', 'turnstile_failed', 'turnstile_invalid',
+        'turnstile_rejected', 'rate_limited', 'origin_not_allowed', 'gateway_not_configured', 'invalid_request'].indexOf(error.code) !== -1) throw error;
+      if (options.onChecking) options.onChecking();
+      for (var attempt = 0; attempt < 3; attempt++) {
+        await wait();
+        try {
+          var receipt = await call('status', { requestId: payload.requestId });
+          if (receipt && receipt.found && receipt.result && receipt.result.participantId) return receipt.result;
+        } catch (_lookupError) { /* A failed lookup does not prove the write failed. */ }
+      }
+      throw new Error('尚未確認登記結果，請勿重複送出。請聯繫官方 LINE，提供姓名與練習時段協助查詢。');
+    }
   }
 
   function buildSlotCards(data) {
@@ -115,6 +149,7 @@
   }
 
   global.StudentPracticePage = {
+    submitWithReceipt: submitWithReceipt,
     buildSlotCards: buildSlotCards,
     buildSubmissionPayload: buildSubmissionPayload,
     buildBookingFormState: buildBookingFormState,
@@ -280,8 +315,24 @@
         email: byId('app-email').value
       }, byId('student-note').value);
       var turnstileToken = getStudentTurnstileToken();
-      var result = await callPublicApi('submit', { practice: payload }, turnstileToken);
-      if (result.studentToken) localStorage.setItem(STORAGE_KEY, result.studentToken);
+      var submissionKey = JSON.stringify(payload);
+      if (!state.lastSubmission || state.lastSubmission.key !== submissionKey) {
+        state.lastSubmission = { key: submissionKey, requestId: global.crypto.randomUUID() };
+      }
+      payload.requestId = state.lastSubmission.requestId;
+      var result = await submitWithReceipt(payload, turnstileToken, {
+        onChecking: function() {
+          button.textContent = '確認登記結果中…';
+          showNotice('回覆較慢，正在確認是否已收到登記，請勿重複送出。', '');
+        }
+      });
+      if (!result || !result.participantId || !['已成立', '待確認資格'].includes(result.status)) {
+        throw new Error('登記結果尚未確認，請聯繫官方 LINE 查詢，請勿重複送出。');
+      }
+      if (result.studentToken) {
+        try { localStorage.setItem(STORAGE_KEY, result.studentToken); } catch (_storageError) { /* Registration is already saved. */ }
+      }
+      showNotice('', '');
       byId('booking-dialog').close();
       byId('success-title').textContent = result.status === '已成立' ? '登記已成立' : '申請已收到';
       byId('success-copy').textContent = result.status === '已成立'

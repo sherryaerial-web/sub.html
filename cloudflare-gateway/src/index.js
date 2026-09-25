@@ -116,7 +116,13 @@ export default {
         }
       }
 
-      const payload = route.action === 'getStudentPracticeAvailability'
+      if (route.action === 'getStudentPracticeSubmissionStatus' &&
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(body.requestId || ''))) {
+        throw new GatewayError(400, 'invalid_request', '登記查詢編號不正確。');
+      }
+      const payload = route.action === 'getStudentPracticeSubmissionStatus'
+        ? { requestId: body.requestId }
+        : route.action === 'getStudentPracticeAvailability'
         ? { date: url.searchParams.get('date') || '' }
         : route.action === 'getVvipMembers'
           ? {}

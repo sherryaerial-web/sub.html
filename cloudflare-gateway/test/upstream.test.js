@@ -5,6 +5,35 @@ import { callGas, GAS_UPSTREAM_TIMEOUT_MS } from '../src/upstream.js';
 
 const GAS_URL = 'https://script.google.com/macros/s/test/exec';
 
+test('receipt lookup is rate limited and signed without replaying a submission or Turnstile', async () => {
+  const requests = [];
+  let limits = 0;
+  const requestId = '01234567-89ab-4cde-8fab-0123456789ab';
+  const env = {
+    ALLOWED_ORIGINS: 'https://sherryaerial-web.github.io',
+    GAS_UPSTREAM_URL: GAS_URL, GAS_GATEWAY_SECRET: 'g'.repeat(32),
+    PUBLIC_READ_LIMITER: { limit: async () => { limits++; return { success: true }; } },
+    fetch: async (request) => {
+      requests.push(request);
+      return new Response(JSON.stringify({ status: 'success', data: { found: false } }));
+    },
+  };
+  const makeRequest = (id) => new Request('https://gateway.test/api/student-practice/status', {
+    method: 'POST', headers: { Origin: env.ALLOWED_ORIGINS, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requestId: id }),
+  });
+  const response = await worker.fetch(makeRequest(requestId), env, {});
+  assert.equal(response.status, 200);
+  assert.equal(limits, 1);
+  assert.equal(requests.length, 1);
+  const form = new URLSearchParams(await requests[0].text());
+  assert.equal(form.get('action'), 'getStudentPracticeSubmissionStatus');
+  assert.deepEqual(JSON.parse(form.get('gatewayPayload')), { requestId });
+  assert.ok(form.get('gatewaySignature'));
+  assert.equal((await worker.fetch(makeRequest('guess'), env, {})).status, 400);
+  assert.equal(requests.length, 1);
+});
+
 test('default upstream timeout allows slow GAS cold starts', () => {
   assert.equal(GAS_UPSTREAM_TIMEOUT_MS, 20_000);
 });

@@ -1,5 +1,10 @@
 const definitions = [
   {
+    method: 'POST', path: '/api/student-practice/status',
+    action: 'getStudentPracticeSubmissionStatus', turnstileRequired: false,
+    write: false, maxBodyBytes: 1024,
+  },
+  {
     method: 'GET',
     path: '/api/student-practice/availability',
     action: 'getStudentPracticeAvailability',

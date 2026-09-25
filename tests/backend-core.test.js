@@ -13024,6 +13024,27 @@ function createStudentPracticeSubmissionFixture(options = {}) {
   return { backend, spreadsheet };
 }
 
+test('student practice receipt recovers a committed registration without another OB call or notification', () => {
+  const { backend, spreadsheet } = createStudentPracticeSubmissionFixture();
+  const requestId = '01234567-89ab-4cde-8fab-0123456789ab';
+  let notifications = 0;
+  backend.notifyStudentPracticeRegistrationSafely_ = () => { notifications++; };
+  const input = { requestId, appName: '學生甲', email: 'student@example.com', date: '2026/09/10', room: 'A', startTime: '10:00', durationMinutes: 60 };
+  const first = backend.submitStudentPractice_(input);
+  backend.getPracticeCurrentObRowsForDayView_ = () => { throw new Error('must not call OB'); };
+  const receipt = backend.getStudentPracticeSubmissionStatus_(requestId);
+  assert.equal(receipt.found, true);
+  assert.equal(receipt.result.participantId, first.participantId);
+  assert.equal(receipt.result.studentToken, undefined);
+  assert.equal(receipt.result.email, undefined);
+  assert.equal(backend.submitStudentPractice_(input).participantId, first.participantId);
+  assert.equal(notifications, 1);
+  assert.throws(() => backend.submitStudentPractice_({ ...input, room: 'B' }), /另一筆登記/);
+  assert.equal(spreadsheet.getSheetByName('學生自主練習參與者').values.length, 2);
+  assert.equal(backend.getStudentPracticeSubmissionStatus_('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee').found, false);
+  assert.throws(() => backend.getStudentPracticeSubmissionStatus_('guess'), /查詢編號/);
+});
+
 test('student practice submission preserves pending request and confirmed student establishes immediately', () => {
   const { backend, spreadsheet } = createStudentPracticeSubmissionFixture();
 

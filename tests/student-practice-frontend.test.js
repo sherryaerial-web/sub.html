@@ -17,6 +17,44 @@ function successResponse(data) {
   return { ok: true, status: 200, json: async () => ({ status: 'success', data }) };
 }
 
+test('student submit recovers a lost response by querying only and never resubmits', async () => {
+  const page = loadStudentPracticePage();
+  const calls = [];
+  const result = await page.submitWithReceipt({ requestId: 'receipt-1' }, 'token', {
+    wait: async () => {},
+    call: async (route) => {
+      calls.push(route);
+      if (route === 'submit') throw new Error('network lost');
+      return { found: true, result: { participantId: 'saved-1', status: '待確認資格' } };
+    },
+  });
+  assert.equal(result.participantId, 'saved-1');
+  assert.deepEqual(calls, ['submit', 'status']);
+});
+
+test('student submit bounds result queries and does not label an unknown outcome as failed', async () => {
+  const page = loadStudentPracticePage();
+  const calls = [];
+  await assert.rejects(page.submitWithReceipt({ requestId: 'receipt-1' }, 'token', {
+    wait: async () => {},
+    call: async (route) => {
+      calls.push(route);
+      if (route === 'submit') throw new Error('timeout');
+      return { found: false };
+    },
+  }), /尚未確認登記結果，請勿重複送出/);
+  assert.deepEqual(calls, ['submit', 'status', 'status', 'status']);
+});
+
+test('student submit preserves a definite rejection without status queries', async () => {
+  const page = loadStudentPracticePage();
+  let calls = 0;
+  await assert.rejects(page.submitWithReceipt({}, 'token', {
+    call: async () => { calls++; throw Object.assign(new Error('時段已滿'), { code: 'upstream_rejected' }); },
+  }), /時段已滿/);
+  assert.equal(calls, 1);
+});
+
 test('student page maps public empty and shared slots without exposing names', () => {
   const page = loadStudentPracticePage();
   const cards = page.buildSlotCards({

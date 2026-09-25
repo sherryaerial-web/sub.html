@@ -3035,10 +3035,51 @@ function notifyStudentPracticeRegistrationSafely_(detailsValue) {
   }
 }
 
+function findStudentPracticeSubmissionReceiptUnlocked_(ss, requestId, input) {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(requestId)) {
+    throw new Error('登記查詢編號不正確。');
+  }
+  var sheet = ss.getSheetByName(SHEETS.STUDENT_PRACTICE_AUDIT);
+  if (!sheet) return { found: false };
+  var rows = getSheetValuesWithExpectedHeaders_(sheet, SHEET_HEADERS.STUDENT_PRACTICE_AUDIT);
+  var requestHash = hashStudentPracticeToken_(requestId);
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (['送出學生自主練習', '加入學生自主練習'].indexOf(cleanText_(rows[i][2])) === -1) continue;
+    var after;
+    try { after = JSON.parse(rows[i][6]); } catch (error) { continue; }
+    if (!after || after.requestHash !== requestHash) continue;
+    if (input && after.inputHash !== hashStudentPracticeToken_(JSON.stringify(input))) {
+      throw new Error('此查詢編號已用於另一筆登記，請重新開啟表單。');
+    }
+    return { found: true, result: {
+      participantId: cleanText_(rows[i][4]), groupId: after.groupId,
+      date: after.date, room: after.room, startTime: after.startTime,
+      endTime: after.endTime, status: after.status
+    } };
+  }
+  return { found: false };
+}
+
+function getStudentPracticeSubmissionStatus_(requestIdValue) {
+  return withScriptLock_(function() {
+    return findStudentPracticeSubmissionReceiptUnlocked_(
+      SpreadsheetApp.getActiveSpreadsheet(), cleanText_(requestIdValue)
+    );
+  });
+}
+
 function submitStudentPractice_(inputValue) {
   var input = inputValue || {};
+  var recovered = false;
   var result = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (input.requestId) {
+      var receipt = findStudentPracticeSubmissionReceiptUnlocked_(ss, cleanText_(input.requestId), input);
+      if (receipt.found) {
+        recovered = true;
+        return receipt.result;
+      }
+    }
     ensureStudentPracticeStructureUnlocked_(ss);
     var records = getStudentPracticeRecordsUnlocked_(ss);
     var rawToken = cleanText_(input.studentToken);
@@ -3161,7 +3202,9 @@ function submitStudentPractice_(inputValue) {
         action: targetGroup ? '加入學生自主練習' : '送出學生自主練習',
         targetType: '參與者',
         targetId: participantId,
-        after: { groupId: groupId, date: interval.date, room: room, startTime: interval.startTime, endTime: interval.endTime, status: registrationStatus }
+        after: { groupId: groupId, date: interval.date, room: room, startTime: interval.startTime, endTime: interval.endTime, status: registrationStatus,
+          requestHash: input.requestId ? hashStudentPracticeToken_(cleanText_(input.requestId)) : '',
+          inputHash: input.requestId ? hashStudentPracticeToken_(JSON.stringify(input)) : '' }
       });
       return {
         participantId: participantId,
@@ -3179,6 +3222,7 @@ function submitStudentPractice_(inputValue) {
       };
     });
   });
+  if (recovered) return result;
   invalidatePracticeDayViewCache_(result.date);
   notifyStudentPracticeRegistrationSafely_(result);
   delete result.studentName;
@@ -7075,6 +7119,14 @@ function doPost(e) {
             ? verifiedVvipPayload.calendarIds
             : parseJsonArray_(parameters.calendarIds, 'VVIP 課程')
         )
+      });
+    }
+
+    if (action === 'getStudentPracticeSubmissionStatus') {
+      var verifiedReceiptPayload = verifyPublicGatewayRequest_(action, parameters);
+      return createPostResponse_(parameters, {
+        status: 'success',
+        data: getStudentPracticeSubmissionStatus_(verifiedReceiptPayload.requestId)
       });
     }
 

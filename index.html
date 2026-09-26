@@ -839,6 +839,34 @@
     .admin-tools-shell { display: grid; gap: 12px; }
     .admin-tools-shell .admin-command-bar { margin: 0; }
     .admin-control { margin-bottom: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+    .invoice-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: end; }
+    .invoice-toolbar-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .invoice-toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .invoice-profile-field { display: grid; min-width: min(100%, 260px); gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .invoice-section-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    .invoice-section-button { min-height: 40px; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 750; }
+    .invoice-section-button.active { background: var(--aqua-100); color: var(--sea-800); }
+    .invoice-list { display: grid; gap: 12px; }
+    .invoice-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .invoice-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .invoice-card-title { min-width: 0; }
+    .invoice-card-title strong { display: block; overflow-wrap: anywhere; }
+    .invoice-status { flex: 0 0 auto; padding: 4px 7px; border-radius: 6px; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: 750; }
+    .invoice-status.is-warning { background: var(--amber-100); color: var(--amber-700); }
+    .invoice-status.is-error { background: var(--danger-soft); color: var(--danger); }
+    .invoice-status.is-success { background: var(--success-soft); color: var(--success); }
+    .invoice-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 13px; }
+    .invoice-field { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .invoice-field.full { grid-column: 1 / -1; }
+    .invoice-company-fields { display: contents; }
+    .invoice-items { display: grid; gap: 5px; margin-top: 11px; padding: 10px; border-radius: 7px; background: var(--soft); }
+    .invoice-item-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; color: var(--muted); font-size: 12px; }
+    .invoice-error-note { margin-top: 10px; padding: 9px 10px; border-radius: 7px; background: var(--danger-soft); color: var(--danger); font-size: 12px; font-weight: 650; }
+    .invoice-warning-note { margin-top: 10px; padding: 9px 10px; border-radius: 7px; background: var(--amber-100); color: var(--amber-700); font-size: 12px; font-weight: 650; }
+    .invoice-batch-bar { position: sticky; bottom: 12px; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: rgba(255, 253, 249, .97); box-shadow: var(--shadow-md); }
+    .invoice-confirm-list { display: grid; gap: 10px; max-height: 56vh; overflow-y: auto; overscroll-behavior: contain; }
+    .invoice-confirm-card { padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); }
+    #invoice-issue-dialog { width: min(calc(100% - 28px), 620px); }
     .ob-cancellation-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; }
     .ob-cancellation-checkbox { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--sea-700); }
     .vvip-course-view { display: grid; gap: 16px; margin-top: 14px; }
@@ -1574,6 +1602,19 @@
       .monthly-next-card { grid-template-columns: 1fr; padding: 15px; }
       .monthly-next-card .primary-button, .monthly-next-card .danger-button { width: 100%; justify-content: center; }
       .notification-recipient-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .invoice-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+      .invoice-toolbar-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: stretch; }
+      .invoice-toolbar-actions > button { min-width: 0; justify-content: center; }
+      .invoice-section-nav { display: flex; width: calc(100% + 28px); margin-right: -14px; margin-left: -14px; padding: 7px 14px; overflow-x: auto; border-right: 0; border-left: 0; border-radius: 0; }
+      .invoice-section-button { min-width: max-content; flex: 0 0 auto; }
+      .invoice-card-head { align-items: stretch; flex-direction: column; }
+      .invoice-status { align-self: flex-start; }
+      .invoice-fields { grid-template-columns: 1fr; }
+      .invoice-field.full { grid-column: auto; }
+      .invoice-batch-bar { bottom: calc(76px + env(safe-area-inset-bottom)); align-items: stretch; flex-direction: column; }
+      .invoice-batch-bar button { width: 100%; justify-content: center; }
+      #invoice-issue-dialog { width: 100%; max-width: none; max-height: 88dvh; margin: auto 0 0; border-radius: 18px 18px 0 0; }
+      #invoice-issue-dialog .dialog-body { max-height: 88dvh; overflow-y: auto; padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
       .inbox-header { align-items: stretch; }
       .inbox-header .compact-button { width: 100%; }
       .inbox-message { grid-template-columns: auto minmax(0, 1fr); }
@@ -2290,6 +2331,7 @@
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="operations" data-capability="course_admin"><i data-lucide="list-todo"></i>每月營運</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知</button>
+              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="invoices" data-capability="invoice_admin"><i data-lucide="receipt-text"></i>發票</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="tools" data-capability="course_admin"><i data-lucide="wrench"></i>更多工具</button>
             </nav>
             <div class="admin-main">
@@ -2324,6 +2366,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="courseAdjustments" data-capability="course_admin"><i data-lucide="arrow-left-right"></i>調課確認<span class="admin-tab-count" data-admin-count="courseAdjustments">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="delayClosures" data-capability="course_admin"><i data-lucide="clock-arrow-down"></i>代關課程<span class="admin-tab-count" data-admin-count="delayClosures">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知中心</button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="invoices" data-capability="invoice_admin"><i data-lucide="receipt-text"></i>發票管理<span class="admin-tab-count" data-admin-count="invoices">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="practice" data-capability="course_admin"><i data-lucide="sparkles"></i>自主練習<span class="admin-tab-count" data-admin-count="practice">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">—</span></button>
@@ -2409,6 +2452,18 @@
     </form>
   </dialog>
 
+  <dialog id="invoice-issue-dialog" aria-labelledby="invoice-issue-title" aria-describedby="invoice-issue-copy">
+    <div class="dialog-body">
+      <h3 id="invoice-issue-title">確認開立發票</h3>
+      <p id="invoice-issue-copy" class="section-copy">請逐筆確認帳號、收件資料、商品與總額；送出後會正式呼叫綠界。</p>
+      <div id="invoice-issue-summary" class="invoice-confirm-list"></div>
+      <div class="dialog-actions">
+        <button id="invoice-issue-cancel" class="compact-button" type="button"><i data-lucide="arrow-left"></i>返回修改</button>
+        <button id="invoice-issue-confirm" class="primary-button" type="button"><i data-lucide="send"></i>確認正式開立</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="practice-dialog" aria-labelledby="practice-dialog-title">
     <form id="practice-form" class="dialog-body">
       <h3 id="practice-dialog-title" tabindex="-1" autofocus>登記自主練習</h3>
@@ -2487,6 +2542,7 @@
     let vvipDashboard = null;
     let vvipAdminFilter = "pending";
     let payrollDashboard = null;
+    let invoiceDashboard = null;
     let notificationDashboard = null;
     let notificationInbox = null;
     let inboxFilter = "all";
@@ -2520,19 +2576,23 @@
       closureManagement: "operations",
       monthlyDiscount: "operations",
       vvip: "operations",
-      notifications: "notifications"
+      notifications: "notifications",
+      invoices: "invoices"
     };
     const ADMIN_SECTION_DEFAULT_TABS = {
       courses: "pendingInvitations",
       practice: "practice",
       payroll: "payroll",
       operations: "closureManagement",
-      notifications: "notifications"
+      notifications: "notifications",
+      invoices: "invoices"
     };
     let activeAdminSection = "dashboard";
     let activeAdminTab = "pendingInvitations";
     let notificationCenterSection = "schedules";
     let notificationScheduleEditorOpen = false;
+    let activeInvoiceTab = "pending";
+    let invoiceIssueDialogState = null;
     let requestDialogState = null;
     let notificationPreviewState = null;
     let pushSdk = null;
@@ -2703,7 +2763,9 @@
         const longRunningActions = new Set([
           "closeMissingObCancellations",
           "executeNextDayClosures",
-          "closeUnclaimedSubstituteCourses"
+          "closeUnclaimedSubstituteCourses",
+          "syncInvoicePurchases",
+          "issueInvoiceBatch"
         ]);
         const timeoutMs = longRunningActions.has(action) ? 180000 : 45000;
         timeoutId = window.setTimeout(() => {
@@ -3934,7 +3996,7 @@
       const allowedAdminTabs = new Set([
         "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
         "delayClosures", "closureManagement", "monthlyDiscount", "changeRequests", "exceptions", "completed",
-        "payroll", "vvip", "notifications", "practice"
+        "payroll", "vvip", "notifications", "practice", "invoices"
       ]);
       const viewId = viewMap[params.get("view")] || "";
       const requestedTab = params.get("tab") || "";
@@ -4189,7 +4251,8 @@
       if (targetView === "view-admin" && !authState.managementCapabilities.length) targetView = "view-home";
       if (targetView === "view-admin" && route.adminTab) {
         const tabCapability = route.adminTab === "payroll" ? "payroll_admin"
-          : route.adminTab === "vvip" ? "vvip_admin" : "course_admin";
+          : route.adminTab === "vvip" ? "vvip_admin"
+          : route.adminTab === "invoices" ? "invoice_admin" : "course_admin";
         if (authState.managementCapabilities.includes(tabCapability)) {
           activeAdminTab = route.adminTab;
           activeAdminSection = ADMIN_TAB_SECTIONS[route.adminTab] || "courses";
@@ -4242,6 +4305,9 @@
       inboxFilter = "all";
       practiceAdminDashboard = null;
       studentPracticeAdminDashboard = null;
+      invoiceDashboard = null;
+      activeInvoiceTab = "pending";
+      invoiceIssueDialogState = null;
       activeViewId = "";
       pushIdentityExternalId = "";
       pushSessionTeacherName = "";
@@ -7266,6 +7332,7 @@
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       if (activeAdminTab === "notifications") return fetchNotificationAdminDashboard(rethrow);
       if (activeAdminTab === "practice") return fetchPracticeAdminDashboard(rethrow);
+      if (activeAdminTab === "invoices") return fetchInvoiceAdminDashboard(rethrow);
       const content = byId("admin-tab-content");
       const hadSnapshot = adminDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
@@ -7288,6 +7355,23 @@
           const button = byId(id);
           if (button) button.disabled = false;
         });
+      }
+    }
+
+    async function fetchInvoiceAdminDashboard(rethrow = false) {
+      const content = byId("admin-tab-content");
+      const hadSnapshot = invoiceDashboard !== null;
+      if (hadSnapshot) renderAdminDashboard();
+      beginReadRefresh(content, hadSnapshot, '<div class="state">載入發票管理資料中...</div>');
+      try {
+        invoiceDashboard = await callApi("getInvoiceAdminDashboard");
+        renderAdminDashboard();
+      } catch (error) {
+        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+        else setNotice(`發票管理資料更新失敗：${error.message}`, "error");
+        if (rethrow) throw error;
+      } finally {
+        endReadRefresh(content);
       }
     }
 
@@ -7465,6 +7549,12 @@
             : "—";
           return;
         }
+        if (badge.dataset.adminCount === "invoices") {
+          badge.textContent = invoiceDashboard
+            ? String((invoiceDashboard.queue || []).filter((item) => ["PENDING", "INVALID", "FAILED", "UNCERTAIN", "REFUND_REVIEW"].includes(String(item.status))).length)
+            : "—";
+          return;
+        }
         if (badge.dataset.adminCount === "courseClosureCandidates") {
           const candidates = data.courseClosure && data.courseClosure.unclaimedCandidates;
           badge.textContent = Array.isArray(candidates) ? String(candidates.length) : "0";
@@ -7627,6 +7717,279 @@
       content.innerHTML = `<div class="notification-layout">${renderMonthlyOperationsPanel(notificationDashboard)}</div>`;
     }
 
+    function invoiceItemsFor(invoiceId, items = (invoiceDashboard && invoiceDashboard.items) || []) {
+      return items.filter((item) => String(item.invoiceId) === String(invoiceId));
+    }
+
+    function isInvoiceBatchEligible(invoice, items = (invoiceDashboard && invoiceDashboard.items) || []) {
+      if (!invoice || String(invoice.status) !== "PENDING" || String(invoice.invoiceKind || "personal") !== "personal") return false;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(invoice.customerEmail || "").trim())) return false;
+      const salesAmount = Number(invoice.salesAmount);
+      if (!Number.isInteger(salesAmount) || salesAmount < 0) return false;
+      const rows = invoiceItemsFor(invoice.invoiceId, items);
+      if (!rows.length) return false;
+      let total = 0;
+      for (const row of rows) {
+        const count = Number(row.itemCount);
+        const price = Number(row.itemPrice);
+        const amount = Number(row.itemAmount);
+        if (!Number.isInteger(count) || count < 1 || !Number.isInteger(price) || price < 0 ||
+            !Number.isInteger(amount) || amount !== count * price) return false;
+        total += amount;
+      }
+      return total === salesAmount;
+    }
+
+    function getInvoiceBatchCandidateIds(queue, items, selectedIds) {
+      const selected = new Set((selectedIds || []).map(String));
+      return (queue || [])
+        .filter((invoice) => selected.has(String(invoice.invoiceId)) && isInvoiceBatchEligible(invoice, items || []))
+        .map((invoice) => String(invoice.invoiceId));
+    }
+
+    function invoiceMerchantLabel(profile) {
+      return String(profile) === "secondary" ? "次要帳號" : "主要帳號";
+    }
+
+    function invoiceStatusPresentation(statusValue) {
+      const status = String(statusValue || "");
+      const labels = {
+        PENDING: "待開立", INVALID: "資料異常", ISSUING: "開立中", ISSUED: "已開立",
+        FAILED: "開立失敗", UNCERTAIN: "結果待確認", REFUND_REVIEW: "退款待處理",
+        REFUND_RESOLVED: "退款已處理",
+      };
+      const className = ["INVALID", "FAILED"].includes(status) ? "is-error"
+        : ["UNCERTAIN", "REFUND_REVIEW"].includes(status) ? "is-warning"
+        : ["ISSUED", "REFUND_RESOLVED"].includes(status) ? "is-success" : "";
+      return { label: labels[status] || status || "未知狀態", className };
+    }
+
+    function renderInvoiceItems(invoiceId) {
+      const rows = invoiceItemsFor(invoiceId);
+      if (!rows.length) return '<div class="invoice-error-note">缺少商品明細，請先確認 OB 訂單資料。</div>';
+      return `<div class="invoice-items">${rows.map((item) => `
+        <div class="invoice-item-row">
+          <span>${escapeHtml(item.itemName || "未命名商品")} × ${escapeHtml(item.itemCount || 0)}（單價 ${escapeHtml(formatMoney(item.itemPrice || 0))}）</span>
+          <strong>${escapeHtml(formatMoney(item.itemAmount || 0))}</strong>
+        </div>`).join("")}</div>`;
+    }
+
+    function renderInvoiceCard(invoice) {
+      const status = String(invoice.status || "");
+      const presentation = invoiceStatusPresentation(status);
+      const editable = ["PENDING", "INVALID", "FAILED"].includes(status);
+      const business = String(invoice.invoiceKind || "personal") === "business";
+      const eligibleForBatch = isInvoiceBatchEligible(invoice);
+      const errorText = [invoice.errorCode, invoice.errorMessage].filter(Boolean).join("｜");
+      const customerLabel = invoice.customerName || invoice.customerEmail || "未提供客戶資料";
+      const editableFields = editable ? `
+        <div class="invoice-fields">
+          <label class="invoice-field"><span>Email</span><input class="text-input" type="email" data-invoice-field="customerEmail" data-invoice-id="${escapeHtml(invoice.invoiceId)}" value="${escapeHtml(invoice.customerEmail || "")}" required></label>
+          <label class="invoice-field"><span>發票類型</span><select class="admin-select" data-invoice-field="invoiceKind" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><option value="personal" ${business ? "" : "selected"}>個人發票</option><option value="business" ${business ? "selected" : ""}>公司發票</option></select></label>
+          <label class="invoice-field"><span>開票帳號</span><select class="admin-select" data-invoice-field="merchantProfile" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><option value="primary" ${String(invoice.merchantProfile) === "secondary" ? "" : "selected"}>主要帳號</option><option value="secondary" ${String(invoice.merchantProfile) === "secondary" ? "selected" : ""}>次要帳號</option></select></label>
+          <div class="invoice-company-fields" data-invoice-company-fields="${escapeHtml(invoice.invoiceId)}" ${business ? "" : "hidden"}>
+            <label class="invoice-field"><span>統一編號</span><input class="text-input" type="text" inputmode="numeric" maxlength="8" data-invoice-field="customerIdentifier" data-invoice-id="${escapeHtml(invoice.invoiceId)}" value="${escapeHtml(invoice.customerIdentifier || "")}"></label>
+            <label class="invoice-field"><span>公司抬頭</span><input class="text-input" type="text" data-invoice-field="customerName" data-invoice-id="${escapeHtml(invoice.invoiceId)}" value="${escapeHtml(invoice.customerName || "")}"></label>
+            <label class="invoice-field full"><span>公司地址</span><input class="text-input" type="text" data-invoice-field="customerAddress" data-invoice-id="${escapeHtml(invoice.invoiceId)}" value="${escapeHtml(invoice.customerAddress || "")}"></label>
+          </div>
+        </div>` : "";
+      let actions = "";
+      if (status === "PENDING") {
+        actions = `${eligibleForBatch ? `<label><input class="invoice-batch-checkbox" type="checkbox" value="${escapeHtml(invoice.invoiceId)}"> 加入個人發票批次</label>` : ""}<button class="compact-button" type="button" data-admin-action="save-invoice-draft" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><i data-lucide="save"></i>儲存資料</button><button class="primary-button inline-button" type="button" data-admin-action="issue-invoice" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><i data-lucide="send"></i>確認並開立</button>`;
+      } else if (status === "INVALID") {
+        actions = `<button class="primary-button inline-button" type="button" data-admin-action="save-invoice-draft" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><i data-lucide="save"></i>修正並轉回待開立</button>`;
+      } else if (status === "FAILED") {
+        actions = `<button class="compact-button" type="button" data-admin-action="save-invoice-draft" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><i data-lucide="save"></i>儲存修正</button><button class="primary-button inline-button" type="button" data-admin-action="retry-invoice" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><i data-lucide="rotate-ccw"></i>確認修正後可重試</button>`;
+      } else if (status === "REFUND_REVIEW") {
+        actions = `<input class="text-input" type="text" placeholder="填寫已在綠界完成的退款／折讓處理" data-invoice-refund-note="${escapeHtml(invoice.invoiceId)}"><button class="primary-button inline-button" type="button" data-admin-action="resolve-invoice-refund" data-invoice-id="${escapeHtml(invoice.invoiceId)}" data-version="${escapeHtml(invoice.version || 0)}"><i data-lucide="check"></i>完成退款追蹤</button>`;
+      }
+      return `<article class="invoice-card" data-invoice-card="${escapeHtml(invoice.invoiceId)}">
+        <div class="invoice-card-head"><div class="invoice-card-title"><strong>${escapeHtml(customerLabel)}</strong><div class="item-meta">付款參考編號：${escapeHtml(invoice.paymentReferenceId || "—")}｜購買時間：${escapeHtml(invoice.purchasedAt || "—")}</div><div class="item-meta">${escapeHtml(invoiceMerchantLabel(invoice.merchantProfile))}｜總額 ${escapeHtml(formatMoney(invoice.salesAmount || 0))}${invoice.ecpayInvoiceNo ? `｜發票號碼 ${escapeHtml(invoice.ecpayInvoiceNo)}` : ""}</div></div><span class="invoice-status ${presentation.className}">${escapeHtml(presentation.label)}</span></div>
+        ${renderInvoiceItems(invoice.invoiceId)}
+        ${editableFields}
+        ${errorText ? `<div class="invoice-error-note">${escapeHtml(errorText)}</div>` : ""}
+        ${status === "UNCERTAIN" ? '<div class="invoice-warning-note">開立結果不明，請先至綠界查詢，確認是否已產生發票後再處理；此處不提供直接重試。</div>' : ""}
+        ${actions ? `<div class="admin-item-actions">${actions}</div>` : ""}
+      </article>`;
+    }
+
+    function renderInvoiceAuditRows() {
+      const audit = (invoiceDashboard && invoiceDashboard.audit) || [];
+      if (!audit.length) return '<div class="state">目前沒有發票操作紀錄</div>';
+      return `<div class="invoice-list">${audit.map((entry) => `<article class="invoice-card"><div class="invoice-card-head"><div class="invoice-card-title"><strong>${escapeHtml(entry.action || "操作")}</strong><div class="item-meta">${escapeHtml(entry.createdAt || "—")}｜${escapeHtml(entry.actor || "系統")}｜發票 ${escapeHtml(entry.invoiceId || "—")}</div></div><span class="invoice-status">${escapeHtml(entry.result || "—")}</span></div>${entry.detail ? `<div class="item-meta">${escapeHtml(entry.detail)}</div>` : ""}</article>`).join("")}</div>`;
+    }
+
+    function renderInvoiceAdminTab() {
+      const content = byId("admin-tab-content");
+      if (!invoiceDashboard) {
+        content.innerHTML = '<div class="state">載入發票管理資料中...</div>';
+        return;
+      }
+      const queue = invoiceDashboard.queue || [];
+      const settings = invoiceDashboard.settings || {};
+      const scheduler = invoiceDashboard.scheduler || {};
+      const definitions = [
+        ["pending", "待開立", ["PENDING"]],
+        ["invalid", "資料異常", ["INVALID", "FAILED", "UNCERTAIN"]],
+        ["issued", "已開立", ["ISSUED", "REFUND_RESOLVED"]],
+        ["refunds", "退款待處理", ["REFUND_REVIEW"]],
+        ["audit", "操作紀錄", []],
+      ];
+      if (!definitions.some((item) => item[0] === activeInvoiceTab)) activeInvoiceTab = "pending";
+      const activeDefinition = definitions.find((item) => item[0] === activeInvoiceTab);
+      const visible = activeInvoiceTab === "audit" ? [] : queue.filter((item) => activeDefinition[2].includes(String(item.status)));
+      const eligible = getInvoiceBatchCandidateIds(queue, invoiceDashboard.items || [], queue.map((item) => item.invoiceId));
+      const scheduleText = settings.scheduleText || scheduler.scheduleText || "每日約 00:00";
+      content.innerHTML = `
+        <section class="admin-control invoice-toolbar">
+          <div><strong>發票管理</strong><div class="invoice-toolbar-meta"><span>上次同步：${escapeHtml(settings.lastSyncAt || "尚未完成")}</span><span>排程：${escapeHtml(scheduleText)}${scheduler.installed ? "（已安裝）" : "（尚未安裝）"}</span></div></div>
+          <div class="invoice-toolbar-actions">
+            <label class="invoice-profile-field"><span>預設開票帳號（僅影響之後同步）</span><select id="invoice-default-merchant" class="admin-select"><option value="primary" ${String(settings.defaultMerchantProfile) === "secondary" ? "" : "selected"}>主要帳號</option><option value="secondary" ${String(settings.defaultMerchantProfile) === "secondary" ? "selected" : ""}>次要帳號</option></select></label>
+            <button class="compact-button" type="button" data-admin-action="set-invoice-default-merchant"><i data-lucide="save"></i>儲存預設帳號</button>
+            <button class="compact-button" type="button" data-admin-action="sync-invoice-ob"><i data-lucide="refresh-cw"></i>立即同步 OB</button>
+            ${scheduler.installed ? "" : '<button class="compact-button" type="button" data-admin-action="install-invoice-scheduler"><i data-lucide="clock"></i>安裝每日排程</button>'}
+          </div>
+        </section>
+        <nav class="invoice-section-nav" role="tablist" aria-label="發票處理狀態">${definitions.map(([key, label, statuses]) => {
+          const count = key === "audit" ? ((invoiceDashboard.audit || []).length) : queue.filter((item) => statuses.includes(String(item.status))).length;
+          return `<button class="invoice-section-button ${activeInvoiceTab === key ? "active" : ""}" type="button" role="tab" aria-selected="${activeInvoiceTab === key ? "true" : "false"}" data-admin-action="switch-invoice-tab" data-invoice-tab="${key}">${label} ${count}</button>`;
+        }).join("")}</nav>
+        ${activeInvoiceTab === "audit" ? renderInvoiceAuditRows() : `<div class="invoice-list">${visible.map(renderInvoiceCard).join("") || `<div class="state">目前沒有${escapeHtml(activeDefinition[1])}發票</div>`}</div>`}
+        ${activeInvoiceTab === "pending" ? `<div class="invoice-batch-bar"><span>只有資料完整的個人待開立發票可批次處理（目前 ${eligible.length} 筆）</span><button class="primary-button inline-button" type="button" data-admin-action="issue-invoice-batch" ${eligible.length ? "" : "disabled"}><i data-lucide="send"></i>確認勾選後批次開立</button></div>` : ""}`;
+      refreshIcons();
+    }
+
+    function readInvoiceDraftFromCard(invoiceId, confirmRetry = false) {
+      const invoice = ((invoiceDashboard && invoiceDashboard.queue) || []).find((item) => String(item.invoiceId) === String(invoiceId));
+      if (!invoice) throw new Error("找不到這筆發票草稿。");
+      const read = (field) => document.querySelector(`[data-invoice-field="${field}"][data-invoice-id="${CSS.escape(String(invoiceId))}"]`)?.value ?? "";
+      return {
+        invoiceId: String(invoiceId), version: Number(invoice.version),
+        customerEmail: read("customerEmail").trim(), invoiceKind: read("invoiceKind") || "personal",
+        merchantProfile: read("merchantProfile") || "primary",
+        customerIdentifier: read("customerIdentifier").trim(), customerName: read("customerName").trim(),
+        customerAddress: read("customerAddress").trim(), confirmRetry,
+      };
+    }
+
+    async function saveInvoiceDraft(invoiceId, button, confirmRetry = false) {
+      setButtonBusy(button, true, "儲存中...");
+      try {
+        await callPostApi("updateInvoiceDraft", { invoice: readInvoiceDraftFromCard(invoiceId, confirmRetry) });
+        setNotice(confirmRetry ? "發票已轉回待開立，請再次確認後開立。" : "發票資料已儲存。");
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    function openInvoiceIssueDialog(invoiceIds, mode) {
+      const ids = (invoiceIds || []).map(String);
+      const queue = (invoiceDashboard && invoiceDashboard.queue) || [];
+      const selected = ids.map((id) => queue.find((item) => String(item.invoiceId) === id)).filter(Boolean);
+      if (!selected.length) throw new Error("請先勾選要開立的發票。");
+      invoiceIssueDialogState = { invoiceIds: selected.map((item) => String(item.invoiceId)), mode: mode || "single" };
+      byId("invoice-issue-summary").innerHTML = selected.map((invoice) => {
+        const taxId = String(invoice.invoiceKind) === "business" ? `｜統編 ${escapeHtml(invoice.customerIdentifier || "—")}` : "";
+        return `<article class="invoice-confirm-card"><strong>${escapeHtml(invoiceMerchantLabel(invoice.merchantProfile))}${taxId}</strong><div class="item-meta">付款參考編號：${escapeHtml(invoice.paymentReferenceId || "—")}</div><div class="item-meta">Email：${escapeHtml(invoice.customerEmail || "—")}</div>${renderInvoiceItems(invoice.invoiceId)}<div class="item-meta"><strong>總額：${escapeHtml(formatMoney(invoice.salesAmount || 0))}</strong></div></article>`;
+      }).join("");
+      const dialog = byId("invoice-issue-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+      refreshIcons();
+    }
+
+    function closeInvoiceIssueDialog() {
+      invoiceIssueDialogState = null;
+      const dialog = byId("invoice-issue-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+    }
+
+    function summarizeInvoiceIssueResults(results) {
+      return (results || []).reduce((summary, item) => {
+        const status = item && item.result ? String(item.result.status || "") : "";
+        if (item && item.success && status === "ISSUED") summary.issued += 1;
+        else if (item && item.success && status === "UNCERTAIN") summary.uncertain += 1;
+        else summary.failed += 1;
+        return summary;
+      }, { issued: 0, failed: 0, uncertain: 0 });
+    }
+
+    async function confirmInvoiceIssue() {
+      if (!invoiceIssueDialogState) return;
+      const button = byId("invoice-issue-confirm");
+      setButtonBusy(button, true, "開立中...");
+      try {
+        if (invoiceIssueDialogState.mode === "batch") {
+          const result = await callPostApi("issueInvoiceBatch", { invoiceIds: invoiceIssueDialogState.invoiceIds });
+          const summary = summarizeInvoiceIssueResults(result);
+          const hasReview = summary.failed > 0 || summary.uncertain > 0;
+          setNotice(`批次完成：已開立 ${summary.issued} 筆、失敗 ${summary.failed} 筆、結果待確認 ${summary.uncertain} 筆。${summary.uncertain ? " 請先至綠界查詢結果待確認的發票。" : ""}`, hasReview ? "error" : "success");
+        } else {
+          const result = await callPostApi("issueInvoiceDraft", { invoiceId: invoiceIssueDialogState.invoiceIds[0] });
+          if (result.status === "ISSUED") setNotice("發票已成功開立。");
+          else if (result.status === "UNCERTAIN") setNotice("開立結果不明，請先至綠界查詢後再處理；系統不會直接重試。", "error");
+          else setNotice(`發票未開立：${result.errorMessage || result.errorCode || "請到資料異常查看"}`, "error");
+        }
+        closeInvoiceIssueDialog();
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function syncInvoicePurchases(button) {
+      setButtonBusy(button, true, "同步中...");
+      try {
+        const result = await callPostApi("syncInvoicePurchases");
+        if (result.status === "paused") {
+          setNotice("已同步部分資料；OB API 暫時達上限，稍後再按「立即同步 OB」即可接續。", "error");
+        } else {
+          setNotice(`OB 訂單同步完成；新增或更新 ${Number(result.counters && result.counters.createdOrUpdated) || 0} 筆。`);
+        }
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function setDefaultInvoiceMerchant(button) {
+      const merchantProfile = byId("invoice-default-merchant").value;
+      setButtonBusy(button, true, "儲存中...");
+      try {
+        await callPostApi("setDefaultInvoiceMerchant", { merchantProfile });
+        setNotice("預設開票帳號已更新；只影響之後新同步的發票。");
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function installInvoiceScheduler(button) {
+      setButtonBusy(button, true, "安裝中...");
+      try {
+        await callPostApi("installInvoiceSyncScheduler");
+        setNotice("每日約 00:00 的發票同步排程已安裝。");
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    async function resolveInvoiceRefund(invoiceId, version, button) {
+      const note = document.querySelector(`[data-invoice-refund-note="${CSS.escape(String(invoiceId))}"]`)?.value.trim() || "";
+      if (!note) throw new Error("請填寫退款／折讓處理備註。");
+      setButtonBusy(button, true, "儲存中...");
+      try {
+        await callPostApi("resolveInvoiceRefund", { refund: { invoiceId, version: Number(version), note } });
+        setNotice("退款追蹤已結案；此動作不會代替綠界退款或折讓操作。");
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
     function renderAdminTab(fromDashboard = false) {
       // Older deep links and internal refresh paths set only activeAdminTab.
       // Keep those paths working while the new management home controls its
@@ -7650,6 +8013,8 @@
         renderNotificationAdminTab();
       } else if (activeAdminTab === "practice") {
         renderPracticeAdminDashboard();
+      } else if (activeAdminTab === "invoices") {
+        renderInvoiceAdminTab();
       } else if (activeAdminTab === "monthlyDiscount") {
         renderMonthlyDiscountAdminTab();
       } else if (activeAdminTab === "pendingInvitations") {
@@ -8635,6 +9000,7 @@ https://sherryaerial-web.github.io/sub.html/
       else if (tab === "payroll") fetchPayrollAdminDashboard();
       else if (tab === "notifications") fetchNotificationAdminDashboard();
       else if (tab === "practice") fetchPracticeAdminDashboard();
+      else if (tab === "invoices") fetchInvoiceAdminDashboard();
       else renderAdminDashboard();
     }
 
@@ -8704,6 +9070,10 @@ https://sherryaerial-web.github.io/sub.html/
       try { await confirmNotificationPreview(event); } catch (error) { setNotice(error.message, "error"); }
     });
     byId("notification-preview-cancel").addEventListener("click", closeNotificationPreview);
+    byId("invoice-issue-cancel").addEventListener("click", closeInvoiceIssueDialog);
+    byId("invoice-issue-confirm").addEventListener("click", async () => {
+      try { await confirmInvoiceIssue(); } catch (error) { setNotice(error.message, "error"); }
+    });
     byId("my-leaves-month-search").addEventListener("click", async () => {
       const month = byId("my-leaves-month").value;
       if (!month) {
@@ -8782,6 +9152,47 @@ https://sherryaerial-web.github.io/sub.html/
       if (!button) return;
       try {
         const action = button.dataset.adminAction;
+        if (action === "switch-invoice-tab") {
+          activeInvoiceTab = button.dataset.invoiceTab || "pending";
+          renderInvoiceAdminTab();
+          return;
+        }
+        if (action === "sync-invoice-ob") {
+          await syncInvoicePurchases(button);
+          return;
+        }
+        if (action === "set-invoice-default-merchant") {
+          await setDefaultInvoiceMerchant(button);
+          return;
+        }
+        if (action === "install-invoice-scheduler") {
+          await installInvoiceScheduler(button);
+          return;
+        }
+        if (action === "save-invoice-draft") {
+          await saveInvoiceDraft(button.dataset.invoiceId, button, false);
+          return;
+        }
+        if (action === "retry-invoice") {
+          await saveInvoiceDraft(button.dataset.invoiceId, button, true);
+          return;
+        }
+        if (action === "issue-invoice") {
+          await saveInvoiceDraft(button.dataset.invoiceId, button, false);
+          openInvoiceIssueDialog([button.dataset.invoiceId], "single");
+          return;
+        }
+        if (action === "issue-invoice-batch") {
+          const selectedIds = Array.from(document.querySelectorAll(".invoice-batch-checkbox:checked")).map((field) => field.value);
+          const eligibleIds = getInvoiceBatchCandidateIds(invoiceDashboard?.queue || [], invoiceDashboard?.items || [], selectedIds);
+          if (!eligibleIds.length) throw new Error("請先勾選資料完整的個人待開立發票。");
+          openInvoiceIssueDialog(eligibleIds, "batch");
+          return;
+        }
+        if (action === "resolve-invoice-refund") {
+          await resolveInvoiceRefund(button.dataset.invoiceId, button.dataset.version, button);
+          return;
+        }
         if (action === "switch-notification-section") {
           notificationCenterSection = button.dataset.notificationSection || "schedules";
           notificationScheduleEditorOpen = false;
@@ -9143,6 +9554,12 @@ https://sherryaerial-web.github.io/sub.html/
     });
     byId("admin-tab-content").addEventListener("change", (event) => {
       if (!event.target.matches) return;
+      if (event.target.matches('[data-invoice-field="invoiceKind"]')) {
+        const invoiceId = event.target.dataset.invoiceId;
+        const companyFields = document.querySelector(`[data-invoice-company-fields="${CSS.escape(invoiceId)}"]`);
+        if (companyFields) companyFields.hidden = event.target.value !== "business";
+        return;
+      }
       if (event.target.matches(".admin-teacher-checkbox")) {
         syncAdminTeacherRoundButton(event.target.closest(".teacher-round"));
         return;

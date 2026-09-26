@@ -4127,15 +4127,16 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the fifteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
+test('keeps the sixteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
   const adminTabs = html.match(/<div class=["']admin-tabs["'][^>]*>[\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
-  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 15);
+  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 16);
   assert.match(adminTabs, /data-admin-tab=["']monthlyDiscount["']/);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
   assert.match(html, /data-capability=["']course_admin["']/);
   assert.match(html, /data-capability=["']payroll_admin["']/);
   assert.match(html, /data-capability=["']vvip_admin["']/);
+  assert.match(html, /data-capability=["']invoice_admin["']/);
   assert.match(html, /updateAdminTabCounts/);
 });
 
@@ -4239,7 +4240,7 @@ test('admin queue rendering does not leak Array.map indexes into cards', () => {
 });
 
 test('admin workspace groups legacy tools behind a task-first home without changing teacher navigation', () => {
-  const sectionNames = ['dashboard', 'courses', 'practice', 'payroll', 'operations', 'notifications', 'tools'];
+  const sectionNames = ['dashboard', 'courses', 'practice', 'payroll', 'operations', 'notifications', 'invoices', 'tools'];
   sectionNames.forEach((section) => {
     assert.match(html, new RegExp(`data-admin-section=["']${section}["']`));
   });
@@ -4252,7 +4253,7 @@ test('admin workspace groups legacy tools behind a task-first home without chang
 
   const legacyTabMarkup = html.match(/<div[^>]*id=["']admin-subtabs["'][\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
   const legacyTabs = legacyTabMarkup.match(/data-admin-tab=["'][^"']+["']/g) || [];
-  assert.equal(new Set(legacyTabs).size, 15);
+  assert.equal(new Set(legacyTabs).size, 16);
   ['admin-sync', 'admin-reconcile', 'admin-leave-pause', 'admin-export-all', 'admin-act-as'].forEach((id) => {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   });
@@ -5182,4 +5183,105 @@ test('practice admin includes student qualification and independent cancellation
   assert.match(html, /markStudentPracticeParticipantAsCompanion/);
   assert.match(html, /cancelStudentPracticeParticipant/);
   assert.match(html, /moveStudentPracticeParticipant/);
+});
+
+test('invoice admin workbench is capability-gated and exposes the required workflow', () => {
+  assert.match(html, /data-admin-section="invoices"[^>]*data-capability="invoice_admin"/);
+  assert.match(html, /data-admin-tab="invoices"[^>]*data-capability="invoice_admin"/);
+  assert.match(html, /待開立/);
+  assert.match(html, /資料異常/);
+  assert.match(html, /已開立/);
+  assert.match(html, /退款待處理/);
+  assert.match(html, /操作紀錄/);
+  assert.match(html, /預設開票帳號/);
+  assert.match(html, /上次同步/);
+  assert.match(html, /每日約 00:00/);
+  assert.match(html, /立即同步 OB/);
+  assert.match(html, /統一編號/);
+  assert.match(html, /公司抬頭/);
+  assert.match(html, /公司地址/);
+  assert.doesNotMatch(html, /invoice-[^"']*(?:carrier|love-code)|發票載具|愛心碼/i);
+  assert.doesNotMatch(html, /INVOICE_GATEWAY_SECRET|ECPAY_(?:HASH|MERCHANT)|自訂 Gateway URL/);
+});
+
+test('invoice admin batch collects only complete personal pending drafts', () => {
+  const { context } = createFrontendRuntime();
+  const queue = [
+    { invoiceId: 'ok', status: 'PENDING', invoiceKind: 'personal', customerEmail: 'ok@example.com', salesAmount: 1200 },
+    { invoiceId: 'business', status: 'PENDING', invoiceKind: 'business', customerEmail: 'biz@example.com', salesAmount: 1200 },
+    { invoiceId: 'invalid', status: 'INVALID', invoiceKind: 'personal', customerEmail: 'bad@example.com', salesAmount: 1200 },
+    { invoiceId: 'missing-email', status: 'PENDING', invoiceKind: 'personal', customerEmail: '', salesAmount: 1200 },
+    { invoiceId: 'wrong-total', status: 'PENDING', invoiceKind: 'personal', customerEmail: 'sum@example.com', salesAmount: 1200 },
+  ];
+  const items = [
+    { invoiceId: 'ok', itemName: '十堂課卡', itemCount: 1, itemPrice: 1200, itemAmount: 1200 },
+    { invoiceId: 'business', itemName: '十堂課卡', itemCount: 1, itemPrice: 1200, itemAmount: 1200 },
+    { invoiceId: 'invalid', itemName: '十堂課卡', itemCount: 1, itemPrice: 1200, itemAmount: 1200 },
+    { invoiceId: 'missing-email', itemName: '十堂課卡', itemCount: 1, itemPrice: 1200, itemAmount: 1200 },
+    { invoiceId: 'wrong-total', itemName: '十堂課卡', itemCount: 1, itemPrice: 1000, itemAmount: 1000 },
+  ];
+
+  const eligible = context.getInvoiceBatchCandidateIds(queue, items, [
+    'ok', 'business', 'invalid', 'missing-email', 'wrong-total', 'forged',
+  ]);
+
+  assert.deepEqual(Array.from(eligible), ['ok']);
+});
+
+test('invoice admin renderer separates statuses and never offers uncertain retry', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__invoiceDashboard = {
+    queue: [
+      { invoiceId: 'pending-1', status: 'PENDING', invoiceKind: 'personal', merchantProfile: 'primary', customerEmail: 'pending@example.com', customerName: '學生甲', paymentReferenceId: 'pay-1', salesAmount: 1200, version: 1 },
+      { invoiceId: 'uncertain-1', status: 'UNCERTAIN', invoiceKind: 'personal', merchantProfile: 'secondary', customerEmail: 'uncertain@example.com', customerName: '學生乙', paymentReferenceId: 'pay-2', salesAmount: 800, version: 2, errorMessage: '連線結果不明' },
+    ],
+    items: [
+      { invoiceId: 'pending-1', itemName: '十堂課卡', itemCount: 1, itemPrice: 1200, itemAmount: 1200 },
+      { invoiceId: 'uncertain-1', itemName: '五堂課卡', itemCount: 1, itemPrice: 800, itemAmount: 800 },
+    ],
+    audit: [],
+    settings: { defaultMerchantProfile: 'primary', lastSyncAt: '2026-09-26 00:03:00', scheduleText: '每日約 00:00' },
+    scheduler: { installed: true, scheduleText: '每日約 00:00' },
+  };
+  vm.runInContext('invoiceDashboard = __invoiceDashboard; activeInvoiceTab = "invalid"; renderInvoiceAdminTab();', context);
+  const markup = getElement('admin-tab-content').innerHTML;
+
+  assert.match(markup, /先至綠界查詢/);
+  assert.doesNotMatch(markup, /data-admin-action="retry-invoice"[^>]*data-invoice-id="uncertain-1"/);
+  assert.match(markup, /資料異常/);
+  assert.match(markup, /每日約 00:00/);
+});
+
+test('invoice admin confirmation shows account reference recipient items and total', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__invoiceDashboard = {
+    queue: [{
+      invoiceId: 'business-1', status: 'PENDING', invoiceKind: 'business', merchantProfile: 'secondary',
+      customerEmail: 'accounting@example.com', customerIdentifier: '12345678', customerName: '晴光有限公司',
+      customerAddress: '台北市中山區', paymentReferenceId: 'pay-business-1', salesAmount: 2400, version: 1,
+    }],
+    items: [{ invoiceId: 'business-1', itemName: '十堂課卡', itemCount: 2, itemPrice: 1200, itemAmount: 2400 }],
+    audit: [], settings: {}, scheduler: {},
+  };
+  vm.runInContext('invoiceDashboard = __invoiceDashboard; openInvoiceIssueDialog(["business-1"], "single");', context);
+  const markup = getElement('invoice-issue-summary').innerHTML;
+
+  assert.match(markup, /次要帳號/);
+  assert.match(markup, /12345678/);
+  assert.match(markup, /pay-business-1/);
+  assert.match(markup, /accounting@example.com/);
+  assert.match(markup, /十堂課卡/);
+  assert.match(markup, /2,400/);
+});
+
+test('invoice admin reports issued failed and uncertain gateway outcomes separately', () => {
+  const { context } = createFrontendRuntime();
+  const summary = context.summarizeInvoiceIssueResults([
+    { success: true, result: { status: 'ISSUED' } },
+    { success: true, result: { status: 'FAILED' } },
+    { success: true, result: { status: 'UNCERTAIN' } },
+    { success: false, error: '連線失敗' },
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(summary)), { issued: 1, failed: 2, uncertain: 1 });
 });

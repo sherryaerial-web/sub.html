@@ -490,7 +490,7 @@ git commit -m "feat: add invoice management workbench"
 - Modify: `cloudflare-gateway/README.md`
 - Modify: `docs/superpowers/plans/2026-09-26-ob-ecpay-invoice-integration.md`（勾選實際完成項目與記錄結果）
 
-- [ ] **Step 1: 執行 GAS／前端完整測試**
+- [x] **Step 1: 執行 GAS／前端完整測試**
 
 Run:
 
@@ -500,7 +500,7 @@ node --test tests/*.test.js
 
 Expected: 全部 PASS；若目前 branch 本來就有不相關失敗，先記錄基線並證明本次沒有新增失敗，不可擅自修其他功能。
 
-- [ ] **Step 2: 執行 Gateway 完整測試與 dry-run**
+- [x] **Step 2: 執行 Gateway 完整測試與 dry-run**
 
 Run:
 
@@ -514,11 +514,11 @@ Workdir: `cloudflare-gateway`
 
 Expected: 全部 PASS，只有打包與假資料，不連正式綠界或 GAS。
 
-- [ ] **Step 3: 進行五項 review focus 專項檢查**
+- [x] **Step 3: 進行五項 review focus 專項檢查**
 
 逐項記錄 Review Focus 1–5 的測試名稱、輸入、預期與實際結果。特別用故障注入模擬「綠界接受後連線中斷」，確認 queue 只能變成 `UNCERTAIN`。
 
-- [ ] **Step 4: 文件化受控設定步驟**
+- [x] **Step 4: 文件化受控設定步驟**
 
 在 README 加入但不執行：
 
@@ -532,7 +532,7 @@ Expected: 全部 PASS，只有打包與假資料，不連正式綠界或 GAS。
 
 每一步都標示「需另行取得使用者允許」，並附回復方式；不可把 secret 範例值寫入 Git。
 
-- [ ] **Step 5: 停在 staging 部署核准點**
+- [x] **Step 5: 停在 staging 部署核准點**
 
 向使用者報告：
 
@@ -548,12 +548,23 @@ Expected: 全部 PASS，只有打包與假資料，不連正式綠界或 GAS。
 
 沙箱需驗證個人、多品項、公司統編與錯誤情境。全部通過後，仍需使用者指定一筆真實訂單並再次明確允許，才能切到正式環境做單筆測試；單筆成功後才另行討論開放批次，永不把一次部署允許解讀成大量開票允許。
 
-- [ ] **Step 7: 提交文件更新（不 push、不 deploy）**
+- [x] **Step 7: 提交文件更新（不 push、不 deploy）**
 
 ```bash
 git add README.md cloudflare-gateway/README.md docs/superpowers/plans/2026-09-26-ob-ecpay-invoice-integration.md
 git commit -m "docs: add invoice integration operations runbook"
 ```
+
+### Task 8 實際驗證結果（2026-09-26）
+
+- GAS／前端完整測試首次為 769/770；唯一失敗是新增發票分頁後，VVIP 測試仍把管理分頁總數寫死為 15。將同一份測試契約更新為 16 後，最終完整回歸為 770/770 通過。
+- Gateway：`npm test` 為 32/32 通過；production 與 staging 的 Wrangler dry-run 都通過，只打包假資料，未部署、未連 GAS、未連綠界。
+- Review Focus 1：`invoice OB sync saves a 429 cursor and resumes without duplicating the completed purchase`。輸入為同一付款參考編號的兩筆商品，第二筆 detail 回 429；預期保存 `{start:0,itemIndex:1}` 並從第二筆續跑、不重抓第一筆；實際通過，queue 保持一筆、items 為兩筆、總額 3000。
+- Review Focus 2：`invoice issue changes transport exceptions to uncertain and prevents recursive duplicate calls` 與 `invoice issue blocks issued uncertain and unconfirmed failed drafts before gateway access`。輸入為送出中的重複呼叫及已為 `ISSUED`／`UNCERTAIN`／未確認 `FAILED` 的草稿；預期 Gateway 最多呼叫一次且終態不可重送；實際通過。
+- Review Focus 3：`ECPay invoice separates transport and business rejection outcomes`。輸入為 HTTP 200 但外層 `TransCode=0`，以及外層成功但解密後 `RtnCode=999999`；預期兩者皆明確 `rejected`，由 GAS 落到 `FAILED`；實際通過且未洩漏密文／Merchant 資料。
+- Review Focus 4：`invoice issue changes transport exceptions to uncertain and prevents recursive duplicate calls`。故障注入在請求送出後拋出 `timeout after send`，模擬綠界可能已接受但連線中斷；預期 queue 只能變 `UNCERTAIN`、Gateway 呼叫一次且禁止重送；實際通過。
+- Review Focus 5：`ECPay payload builds one personal invoice with fixed tax flags and consecutive items` 與 `ECPay payload requires complete business identity and emits print notation`。輸入為個人多品項，以及缺統編／抬頭／地址的公司草稿；預期個人 `Print="0"`、連續 `ItemSeq`、合計相符，公司缺任一欄即拒絕且完整時 `Print="1"`；實際通過。
+- 目前停在 staging 部署核准點。尚未部署 Worker／GAS、未設定 secret／Script Properties、未建立正式 Sheet、未授予正式 capability、未安裝 trigger、未寫入正式 OB／Sheets，也未開立任何發票。
 
 ## 完成定義
 

@@ -60,6 +60,25 @@ npx wrangler deploy --env staging
 
 上述 secret 必須用 `wrangler secret put` 的互動提示輸入，不得放進指令、commit、試算表或前端。`ECPAY_ENVIRONMENT=stage` 是非機密環境變數；正式發布時才改為 `production`。
 
+`wrangler.toml` 已宣告 staging 的 `INVOICE_REQUEST_GUARD` Durable Object binding 與 `v1` SQLite class migration；第一次經允許部署 staging 時才會在 Cloudflare 建立／套用，不需要在 Dashboard 人工新增另一個同名 binding。回退 Worker 程式時保留 Durable Object storage 供 nonce 與事故追查，不直接刪除。
+
+### 發票 staging 逐步操作與回復
+
+每一列都必須分開取得使用者允許；前一步成功不會自動授權下一步。
+
+| 階段 | 經允許後才執行 | 驗證 | 回復 |
+|---|---|---|---|
+| Gateway secrets | 以上述互動指令設定 `INVOICE_GATEWAY_SECRET`、`ECPAY_PRIMARY_MERCHANT_ID`、`ECPAY_PRIMARY_HASH_KEY`、`ECPAY_PRIMARY_HASH_IV`、`ECPAY_SECONDARY_MERCHANT_ID`、`ECPAY_SECONDARY_HASH_KEY`、`ECPAY_SECONDARY_HASH_IV` | secret 名稱存在；終端、Git 與 log 沒有真值 | 依名稱刪除或輪替 staging secret，不碰 production |
+| Gateway staging | `npx wrangler deploy --env staging` | `/health` 正常；`POST /internal/ecpay/invoices/issue` 無簽章、過期簽章及重播 nonce 都被拒絕 | 重新部署部署前 commit；保留 Durable Object storage |
+| GAS staging | 在測試 GAS Script Properties 設 `INVOICE_GATEWAY_URL`、`INVOICE_GATEWAY_SECRET` | URL 指向 staging internal route；shared secret 與 Worker 相同 | 移除兩個 staging properties，切回部署前 GAS version |
+| staging 管理員 | 只對測試帳號加入 `invoice_admin` | 其他管理員仍不可讀取或操作發票 | 只移除該測試帳號的 `invoice_admin` |
+| 假 OB 草稿 | 在測試試算表用假 OB 回應建立明確標記的單筆 queue | 只新增 `InvoiceQueue`、`InvoiceItems`、`InvoiceAudit`、`InvoiceSettings`；既有 Sheet 列數不變 | 只按測試 `invoiceId`／`paymentReferenceId` 清理已核准測試列，不清空整表 |
+| 約 00:00 排程 | 人工同步驗證後執行 `installInvoiceSyncScheduler()` | 只有一個 `runScheduledInvoiceSync` trigger，時區 `Asia/Taipei` | 只刪該 handler trigger；不刪其他排程 |
+
+假 OB 草稿先以 repository 的 fixture 測試驗證資料契約；真正寫入 staging 測試 Sheet 前仍須另行允許。staging smoke 必須使用 ECPay 測試環境，禁止把 `ECPAY_ENVIRONMENT` 改成 `production`。
+
+staging 完整通過後，production 的 secrets、Worker deploy、GAS deploy、四張正式 Sheet、正式 `invoice_admin` 與正式 trigger 都要再次逐項核准。切 production 後仍只能在使用者指定一筆真實訂單並再次允許時做單筆測試；不得把部署核准解讀成開票或批次開票核准。
+
 部署後依序檢查：
 
 1. `GET /health` 回傳 `configured: true`。
@@ -68,6 +87,7 @@ npx wrangler deploy --env staging
 4. 同一路由超過頻率限制回傳 429。
 5. GAS 錯誤或逾時不重試寫入，也不回傳內部網址、token、簽章或 Sheet 資訊。
 6. 經另外允許後才做具名學生及 VVIP 測試寫入，並到 Tako 管理頁核對。
+7. 發票 internal route 的個人、多品項、公司、明確拒絕與連線中斷測試使用假資料；中斷結果只能是 `UNCERTAIN`，不可自動重送。
 
 Production 使用上述全部 `wrangler secret put` 指令但不加 `--env staging`，之後才執行 `npx wrangler deploy`。不要把 production 值複製到 staging 檔案。
 
@@ -88,3 +108,5 @@ GAS 相容部署期間保持 `PUBLIC_GATEWAY_ENFORCED=false`。Worker、公開�
 輪替 HMAC 秘密時，先讓 GAS 與 Worker 使用同一新值，再做 smoke test；兩端不同步時所有公開寫入都會失敗。Turnstile secret 只在 Worker 輪替，site key 變更時才需同步更新兩個公開頁。
 
 發生事故時先把 GAS `PUBLIC_GATEWAY_ENFORCED` 改為 `false` 並部署，再回復三個公開前端檔案。不得以回復程式為理由還原或整張覆寫正式 Sheet。
+
+發票 internal route 與公開寫入路由互相獨立。若只有發票功能異常，先移除 staging／production GAS 的 `INVOICE_GATEWAY_URL` 或切回先前 GAS 版本，使新開票請求停止；不要關閉學生自主練習與 VVIP 公開閘道，也不要重送 `UNCERTAIN` 草稿。確認綠界實際結果後再人工修復狀態。

@@ -137,6 +137,7 @@ A:J 固定欄位如下，K:AB 依功能版本追加；既有欄位不可搬動�
 - `自主練習例外`、`自主練習操作紀錄`：保存單次取消／衝突跳過與完整異動紀錄，避免循環場次被錯誤重建。
 - `學生自主練習資格`、`學生自主練習場次`、`學生自主練習參與者`、`學生自主練習操作紀錄`：獨立保存學生資格、共用場次、每位學生的登記與稽核；資格依館別分成晴光（A／B）與劍潭（C／D），公開頁不回傳姓名、課名或 OB ID。
 - `通知訊息`、`通知收件人`：分開保存通知內容與每位收件人的未讀／已讀狀態；只追加新功能上線後的訊息，不回填舊推播，也不會覆寫其他工作表。
+- `InvoiceQueue`、`InvoiceItems`、`InvoiceAudit`、`InvoiceSettings`：分開保存發票草稿、商品明細、操作稽核與發票設定。只會在另行核准執行發票結構設定或 staging smoke test 時建立；既有工作表不搬動、不清空、不整張覆寫。
 
 自主練習工作表與正式 `CourseList`、請假代課及薪資資料完全分離；初始化只建立缺少的工作表與空白欄位，不清空或覆寫既有人工資料。
 
@@ -251,6 +252,31 @@ OB `calendar` API 可提供課程、完整指導者、容量與出席人數，�
 4. 回復不需要還原、搬動或整張覆寫任何 Google Sheet；故障期間新增資料先保留並按 ID 人工核對。
 
 Worker 的本機測試、設定名稱與 smoke check 詳見 `cloudflare-gateway/README.md`。
+
+## OB 轉帳發票（尚未部署）
+
+此功能只同步自 2026/09/26 起、付款方式為轉帳且 OB 已標示付款完成的課卡訂單。送出訂單但尚未完成轉帳者不會進入待開立清單。每日約 00:00 的排程只同步並建立草稿，**不會自動開票**；管理員仍須在「管理 → 發票」逐筆檢查或勾選合格的個人發票後確認開立。
+
+- 預設寄送到訂單 Email，不蒐集手機條碼或其他載具。
+- 個人發票固定 `Print="0"`；公司發票必須有合法 8 碼統編、抬頭與地址，並使用 `Print="1"`。
+- 商品名稱、數量、單價與發票金額由 OB 訂單明細核對；多張課卡會保留多品項，不以訂單總額冒充單價。
+- 兩組統編／綠界商店帳號由管理員人工切換；預設帳號只影響之後新同步的草稿，既有草稿保留原帳號與操作紀錄。
+- `UNCERTAIN` 表示綠界可能已收件但系統沒收到可判定結果，禁止直接重送，必須先到綠界查詢。
+- OB 退款只標示「退款待處理」；本系統不自動作廢或折讓，管理員在綠界人工處理後才回來留下結案備註。
+
+### 受控 staging 驗證順序
+
+下列每一步都要**另行取得使用者明確允許**。完成本機測試不代表可部署、建立正式 Sheet、授權帳號、安裝排程或開立發票。
+
+1. **Cloudflare staging**：確認 `wrangler.toml` 的 staging `INVOICE_REQUEST_GUARD` Durable Object binding 與 `v1` migration；互動設定 `INVOICE_GATEWAY_SECRET` 及兩組 ECPay 測試 Merchant secrets，再部署 staging Worker。回復時重新部署部署前 Worker commit；保留 Durable Object 稽核資料，不直接刪 storage。
+2. **GAS staging properties**：在綁定測試試算表的 staging GAS 設定 `INVOICE_GATEWAY_URL` 與同一份 `INVOICE_GATEWAY_SECRET`。回復時移除這兩個 staging properties 並切回部署前 GAS 版本。
+3. **測試帳號權限**：只在 staging `登入帳號` 的指定測試管理員 I 欄加入 `invoice_admin`。回復時依該帳號與欄位移除，不改其他 capability。
+4. **假 OB 資料**：只在測試試算表以假 OB 回應建立一筆可辨識的 `PENDING` 草稿，確認四張發票 Sheet 與既有 Sheet 列數。不得用正式 OB 訂單，也不得呼叫綠界 production。回復時只依該筆測試 `invoiceId`／`paymentReferenceId` 清理核准的測試列，不可清空整張表。
+5. **staging 沙箱**：依序驗證個人、多品項、公司統編、外層 `TransCode` 失敗、內層 `RtnCode` 失敗及連線中斷；連線中斷只能進 `UNCERTAIN`。回復時停用 staging Gateway URL，保留 audit 供追查。
+6. **每日排程**：確認人工同步無誤後才執行 `installInvoiceSyncScheduler()`，建立每日約 00:00、`Asia/Taipei` 的唯一 `runScheduledInvoiceSync` trigger。回復時只刪除該 handler 的 trigger，其他既有 trigger 不動。
+7. **正式規劃**：staging 全部通過後，才另案核准 production secrets、GAS 正式部署、正式 Sheet 建立、正式 capability 與正式 trigger。之後仍須再指定一筆真實訂單並另行允許，才能做單筆正式開票；單筆成功不代表允許批次開票。
+
+兩組 ECPay Merchant ID、HashKey、HashIV 只存 Cloudflare Worker Secrets；Gateway shared secret 只存 Worker Secret 與 GAS Script Properties。真值、範例值、回應密文或完整簽章都不得放進 Git、前端、Sheet 或對話。
 
 ## 完整部署順序
 

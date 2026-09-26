@@ -204,6 +204,22 @@ const EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS = [
   '最近未開日期', '分數', '理由', '狀態', '建立時間', '更新時間', '操作者',
 ];
 
+const EXPECTED_INVOICE_QUEUE_HEADERS = [
+  'invoiceId', 'paymentReferenceId', 'status', 'merchantProfile', 'invoiceKind',
+  'customerEmail', 'customerIdentifier', 'customerName', 'customerAddress', 'salesAmount',
+  'relateNumber', 'ecpayInvoiceNo', 'ecpayInvoiceDate', 'ecpayRandomNumber',
+  'errorCode', 'errorMessage', 'purchasedAt', 'refundDetectedAt', 'refundResolvedAt',
+  'refundResolvedBy', 'refundNote', 'issuedAt', 'createdAt', 'updatedAt', 'version',
+];
+const EXPECTED_INVOICE_ITEM_HEADERS = [
+  'itemId', 'invoiceId', 'obPurchaseId', 'itemSeq', 'itemName', 'itemCount', 'itemWord',
+  'itemPrice', 'itemAmount', 'obPaymentStatus', 'obPaymentMethod', 'purchasedAt', 'createdAt',
+];
+const EXPECTED_INVOICE_AUDIT_HEADERS = [
+  'auditId', 'invoiceId', 'actor', 'action', 'beforeJson', 'afterJson', 'result', 'detail', 'createdAt',
+];
+const EXPECTED_INVOICE_SETTING_HEADERS = ['key', 'value', 'updatedBy', 'updatedAt'];
+
 function createSheetFixture(name, values) {
   const protections = [];
   return {
@@ -861,6 +877,45 @@ test('functional capabilities are independent from teaching categories and enfor
   assert.equal(backend.requireCapability_(tako.sessionToken, 'course_admin').teacherName, 'Tako');
   assert.throws(() => backend.requireCapability_(tako.sessionToken, 'payroll_admin'), /薪資管理權限/);
   assert.throws(() => backend.requireCapability_(teacher.sessionToken, 'course_admin'), /課程管理權限/);
+});
+
+test('invoice capability is explicit and independent from existing management capabilities', () => {
+  const bootstrap = loadBackend(createAuthServices());
+  const { backend } = createAuthBackend([
+    createAccount(bootstrap, 'Ivy', '0912', { role: '管理員' })
+      .concat('', 'course_admin,payroll_admin,vvip_admin,invoice_admin'),
+    createAccount(bootstrap, '一般管理員', '2468', { role: '管理員' })
+      .concat('', 'course_admin,payroll_admin,vvip_admin'),
+    createAccount(bootstrap, '舊管理員', '1357', { role: '管理員' })
+      .concat('', ''),
+    createAccount(bootstrap, '課程管理員', '1127')
+      .concat('', 'course_admin'),
+  ]);
+
+  const ivy = backend.authenticate_('Ivy', '0912');
+  const ordinaryAdmin = backend.authenticate_('一般管理員', '2468');
+  const legacyAdmin = backend.authenticate_('舊管理員', '1357');
+  const courseAdmin = backend.authenticate_('課程管理員', '1127');
+
+  assert.deepEqual(Array.from(ivy.managementCapabilities), [
+    'course_admin', 'payroll_admin', 'vvip_admin', 'invoice_admin',
+  ]);
+  assert.equal(backend.requireCapability_(ivy.sessionToken, 'invoice_admin').teacherName, 'Ivy');
+  assert.throws(
+    () => backend.requireCapability_(ordinaryAdmin.sessionToken, 'invoice_admin'),
+    /發票管理權限/,
+  );
+  assert.deepEqual(Array.from(legacyAdmin.managementCapabilities), [
+    'course_admin', 'payroll_admin', 'vvip_admin',
+  ]);
+  assert.throws(
+    () => backend.requireCapability_(legacyAdmin.sessionToken, 'invoice_admin'),
+    /發票管理權限/,
+  );
+  assert.throws(
+    () => backend.requireCapability_(courseAdmin.sessionToken, 'invoice_admin'),
+    /發票管理權限/,
+  );
 });
 
 test('login rejects an invalid PIN and records a failed attempt', () => {
@@ -2765,13 +2820,65 @@ test('creates supporting sheets and does not change the structure when rerun', (
       '學生自主練習資格', '學生自主練習場次',
       '學生自主練習參與者', '學生自主練習操作紀錄',
       '課程調整', '通知訊息', '通知收件人'
-      , '課程開課觀測', '優惠課程歷史', '優惠課程推薦'
+      , '課程開課觀測', '優惠課程歷史', '優惠課程推薦',
+      'InvoiceQueue', 'InvoiceItems', 'InvoiceAudit', 'InvoiceSettings'
     ].sort()
   );
   assert.deepEqual(
     spreadsheet.getSheetByName('特別課安排').values[0],
     EXPECTED_SPECIAL_REQUEST_HEADERS
   );
+});
+
+test('invoice schema creates four isolated sheets with fixed headers', () => {
+  const spreadsheet = createSpreadsheetFixture([]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  const result = backend.ensureInvoiceSheets_(spreadsheet);
+
+  assert.deepEqual(Object.keys(result).sort(), ['audit', 'items', 'queue', 'settings']);
+  assert.deepEqual(spreadsheet.getSheetByName('InvoiceQueue').values[0], EXPECTED_INVOICE_QUEUE_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('InvoiceItems').values[0], EXPECTED_INVOICE_ITEM_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('InvoiceAudit').values[0], EXPECTED_INVOICE_AUDIT_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('InvoiceSettings').values[0], EXPECTED_INVOICE_SETTING_HEADERS);
+});
+
+test('invoice schema appends only missing tail headers without moving data', () => {
+  const existingHeaders = EXPECTED_INVOICE_QUEUE_HEADERS.slice(0, 4);
+  const existingRow = ['invoice-1', 'payment-1', 'PENDING', 'primary'];
+  const queueSheet = createSheetFixture('InvoiceQueue', [existingHeaders, existingRow]);
+  const spreadsheet = createSpreadsheetFixture([queueSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  backend.ensureInvoiceSheets_(spreadsheet);
+
+  assert.deepEqual(queueSheet.values[0], EXPECTED_INVOICE_QUEUE_HEADERS);
+  assert.deepEqual(queueSheet.values[1].slice(0, 4), existingRow);
+  assert.equal(queueSheet.values[1].length, 4);
+});
+
+test('invoice schema rejects an existing mismatched header without rewriting it', () => {
+  const queueSheet = createSheetFixture('InvoiceQueue', [
+    ['wrongInvoiceId', 'paymentReferenceId'],
+    ['keep-me', 'payment-1'],
+  ]);
+  const spreadsheet = createSpreadsheetFixture([queueSheet]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+
+  assert.throws(() => backend.ensureInvoiceSheets_(spreadsheet), /第 1 欄標題應為「invoiceId」/);
+  assert.deepEqual(queueSheet.values, [
+    ['wrongInvoiceId', 'paymentReferenceId'],
+    ['keep-me', 'payment-1'],
+  ]);
+});
+
+test('invoice schema exposes only the approved invoice statuses', () => {
+  const backend = loadBackend();
+
+  assert.deepEqual(Array.from(Object.values(backend.INVOICE_STATUSES)), [
+    'PENDING', 'INVALID', 'ISSUING', 'ISSUED', 'FAILED', 'UNCERTAIN',
+    'REFUND_REVIEW', 'REFUND_RESOLVED',
+  ]);
 });
 
 test('legacy migration backfills only unique exact OB links and marks every unresolved active row', () => {

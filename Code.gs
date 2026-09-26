@@ -39,7 +39,11 @@ var SHEETS = {
   NOTIFICATION_RECIPIENTS: '通知收件人',
   DISCOUNT_OBSERVATIONS: '課程開課觀測',
   DISCOUNT_HISTORY: '優惠課程歷史',
-  DISCOUNT_RECOMMENDATIONS: '優惠課程推薦'
+  DISCOUNT_RECOMMENDATIONS: '優惠課程推薦',
+  INVOICE_QUEUE: 'InvoiceQueue',
+  INVOICE_ITEMS: 'InvoiceItems',
+  INVOICE_AUDIT: 'InvoiceAudit',
+  INVOICE_SETTINGS: 'InvoiceSettings'
 };
 
 var SHEET_HEADERS = {
@@ -182,8 +186,38 @@ var SHEET_HEADERS = {
     '推薦批次 ID', '推薦月份', '項目 ID', '類型', '排序', '固定時段鍵', '星期',
     '時間', '教室', '課程', '老師', '觀測堂數', '未開堂數', '未開率',
     '最近未開日期', '分數', '理由', '狀態', '建立時間', '更新時間', '操作者'
-  ]
+  ],
+  INVOICE_QUEUE: [
+    'invoiceId', 'paymentReferenceId', 'status', 'merchantProfile', 'invoiceKind',
+    'customerEmail', 'customerIdentifier', 'customerName', 'customerAddress', 'salesAmount',
+    'relateNumber', 'ecpayInvoiceNo', 'ecpayInvoiceDate', 'ecpayRandomNumber',
+    'errorCode', 'errorMessage', 'purchasedAt', 'refundDetectedAt', 'refundResolvedAt',
+    'refundResolvedBy', 'refundNote', 'issuedAt', 'createdAt', 'updatedAt', 'version'
+  ],
+  INVOICE_ITEMS: [
+    'itemId', 'invoiceId', 'obPurchaseId', 'itemSeq', 'itemName', 'itemCount', 'itemWord',
+    'itemPrice', 'itemAmount', 'obPaymentStatus', 'obPaymentMethod', 'purchasedAt', 'createdAt'
+  ],
+  INVOICE_AUDIT: [
+    'auditId', 'invoiceId', 'actor', 'action', 'beforeJson', 'afterJson', 'result', 'detail', 'createdAt'
+  ],
+  INVOICE_SETTINGS: ['key', 'value', 'updatedBy', 'updatedAt']
 };
+
+var INVOICE_STATUSES = {
+  PENDING: 'PENDING',
+  INVALID: 'INVALID',
+  ISSUING: 'ISSUING',
+  ISSUED: 'ISSUED',
+  FAILED: 'FAILED',
+  UNCERTAIN: 'UNCERTAIN',
+  REFUND_REVIEW: 'REFUND_REVIEW',
+  REFUND_RESOLVED: 'REFUND_RESOLVED'
+};
+
+var DEFAULT_ADMIN_MANAGEMENT_CAPABILITIES = [
+  'course_admin', 'payroll_admin', 'vvip_admin'
+];
 
 var PRACTICE_STATUS = {
   WAITLISTED: '候補',
@@ -299,7 +333,7 @@ var CONFIG = {
   PAYROLL_REVIEW_STATUS: '有異議'
 };
 
-var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin'];
+var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin', 'invoice_admin'];
 
 var SUPPLEMENTAL_TEACHER_CAPABILITIES = {
   'Vivi': ['鞦韆'],
@@ -534,7 +568,8 @@ function requireCapability_(token, capability) {
     var labels = {
       course_admin: '課程管理權限',
       payroll_admin: '薪資管理權限',
-      vvip_admin: 'VVIP 管理權限'
+      vvip_admin: 'VVIP 管理權限',
+      invoice_admin: '發票管理權限'
     };
     throw new Error('沒有' + (labels[required] || '此功能管理權限') + '。');
   }
@@ -963,7 +998,7 @@ function normalizeManagementCapabilities_(value) {
 function getAccountManagementCapabilities_(account) {
   var capabilities = normalizeManagementCapabilities_(account && account.managementCapabilities);
   if (!capabilities.length && account && isAdminRole_(account.role)) {
-    return MANAGEMENT_CAPABILITIES.slice();
+    return DEFAULT_ADMIN_MANAGEMENT_CAPABILITIES.slice();
   }
   return capabilities;
 }
@@ -2714,6 +2749,7 @@ function ensureSystemStructure_() {
     ensureStudentPracticeStructureUnlocked_(ss);
     ensureNotificationInboxStructureUnlocked_(ss);
     ensureMonthlyDiscountStructureUnlocked_(ss);
+    ensureInvoiceSheets_(ss);
     var accountSheet = ensureSupportingSheet_(ss, SHEETS.ACCOUNTS, SHEET_HEADERS.ACCOUNTS);
     protectAccountsSheet_(accountSheet);
 
@@ -6879,6 +6915,16 @@ function ensureSupportingSheet_(ss, sheetName, headers) {
   var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
   ensureSheetHeaders_(sheet, headers);
   return sheet;
+}
+
+function ensureInvoiceSheets_(spreadsheet) {
+  var ss = spreadsheet || SpreadsheetApp.getActiveSpreadsheet();
+  return {
+    queue: ensureSupportingSheet_(ss, SHEETS.INVOICE_QUEUE, SHEET_HEADERS.INVOICE_QUEUE),
+    items: ensureSupportingSheet_(ss, SHEETS.INVOICE_ITEMS, SHEET_HEADERS.INVOICE_ITEMS),
+    audit: ensureSupportingSheet_(ss, SHEETS.INVOICE_AUDIT, SHEET_HEADERS.INVOICE_AUDIT),
+    settings: ensureSupportingSheet_(ss, SHEETS.INVOICE_SETTINGS, SHEET_HEADERS.INVOICE_SETTINGS)
+  };
 }
 
 function ensureSheetHeaders_(sheet, expectedHeaders) {

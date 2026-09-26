@@ -1425,6 +1425,51 @@ function createNotificationBackend() {
   };
 }
 
+test('weekly waitlist creates independent course links and empty weeks without duplicates', () => {
+  const rows = [
+    ['2026/10/03','14:00','A－空環 Lv.1','Tako','first'],
+    ['2026/10/17','14:00','A－空環 Lv.1','Tako','third'],
+  ];
+  const f=createPracticeBackend({courseRows:rows});
+  const input={calendarId:'first',date:'2026/10/03',startTime:'14:00',endTime:'15:00',recurrence:'weekly'};
+  const first=f.backend.createPracticeWaitlist_(f.teacher('Liz 🌰'),input);
+  assert.ok(first.seriesId);
+  assert.deepEqual(f.bookingSheet.values.slice(1).map(r=>[r[2],r[6],r[8]]),[
+    ['2026/10/03','候補','first'],['2026/10/10','已成立',''],['2026/10/17','候補','third']]);
+  const again=f.backend.createPracticeWaitlist_(f.teacher('Liz 🌰'),input);
+  assert.equal(again.seriesId,first.seriesId);
+  assert.equal(f.bookingSheet.values.length,4);
+  assert.equal(f.seriesSheet.values.length,2);
+});
+
+test('weekly waitlist planner skips occupied and cancelled dates and preserves ordinary policy', () => {
+  const f=createPracticeBackend();
+  const records=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  const series={seriesId:'s',creatorName:'Liz 🌰',room:'A',startDate:'2026/10/03',startTime:'14:00',endTime:'15:00',status:'啟用中',mode:'waitlist'};
+  const rows=[['2026/10/03','13:00','A－空環 Lv.1','Tako','buffer'],['2026/10/03','14:00','A－空環 Lv.1','Tako','overlap']];
+  let p=f.backend.planPracticeSeriesOccurrence_(records,series,'2026/10/03',rows);
+  assert.equal(p.status,'候補');assert.deepEqual(Array.from(p.calendarIds),['buffer','overlap']);
+  assert.equal(f.backend.planPracticeSeriesOccurrence_(records,{...series,mode:'ordinary'},'2026/10/03',rows).action,'skip');
+  records.exceptions.push({seriesId:'s',date:'2026/10/03'});
+  assert.equal(f.backend.planPracticeSeriesOccurrence_(records,series,'2026/10/03',[]).action,'skip');
+  records.exceptions=[];
+  records.bookings.push({bookingId:'other',date:'2026/10/03',room:'A',startTime:'14:00',endTime:'15:00',status:'已成立'});
+  assert.equal(f.backend.planPracticeSeriesOccurrence_(records,series,'2026/10/03',[]).action,'skip');
+});
+
+test('weekly waitlist fails closed on unavailable OB and skips rentals', () => {
+  const f = createPracticeBackend({courseRows: [
+    ['2026/10/03','14:00','A－空環 Lv.1','Tako','first'],
+    ['2026/10/10','14:00','A－場地租借','Tako','rental']
+  ]});
+  f.backend.createPracticeWaitlist_(f.teacher('Liz 🌰'), {calendarId:'first',date:'2026/10/03',startTime:'14:00',endTime:'15:00',recurrence:'weekly'});
+  assert.equal(f.bookingSheet.values.length, 2);
+  const before = JSON.stringify(f.seriesSheet.values);
+  f.backend.getPracticeCurrentObRows_ = () => {throw new Error('unavailable');};
+  assert.throws(() => f.backend.createPracticeWaitlist_(f.teacher('Tako'), {calendarId:'first',date:'2026/10/03',recurrence:'weekly'}), /無法即時核對/);
+  assert.equal(JSON.stringify(f.seriesSheet.values), before);
+});
+
 function createPracticeBackend(options = {}) {
   const courseSheet = createSheetFixture('CourseList', [
     EXPECTED_COURSE_HEADERS,

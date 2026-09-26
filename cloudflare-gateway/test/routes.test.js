@@ -4,6 +4,7 @@ import worker from '../src/index.js';
 import { matchRoute } from '../src/routes.js';
 
 const routes = [
+  ['POST', '/internal/ecpay/invoices/issue', 'issueEcpayInvoice'],
   ['GET', '/api/student-practice/availability', 'getStudentPracticeAvailability'],
   ['POST', '/api/student-practice/submit', 'submitStudentPractice'],
   ['GET', '/api/vvip/members', 'getVvipMembers'],
@@ -17,7 +18,15 @@ test('only the documented method and path pairs resolve', () => {
     assert.equal(matchRoute(method, path).action, action);
   }
   assert.equal(matchRoute('GET', '/api/vvip/submit'), null);
+  assert.equal(matchRoute('GET', '/internal/ecpay/invoices/issue'), null);
   assert.equal(matchRoute('POST', '/api/anything'), null);
+});
+
+test('internal invoice route is isolated from browser security metadata', () => {
+  const route = matchRoute('POST', '/internal/ecpay/invoices/issue');
+  assert.equal(route.internal, true);
+  assert.equal(route.turnstileRequired, false);
+  assert.equal(route.maxBodyBytes, 32 * 1024);
 });
 
 test('health reports configuration without contacting GAS', async () => {

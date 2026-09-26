@@ -5,6 +5,15 @@ const definitions = [
     write: false, maxBodyBytes: 1024,
   },
   {
+    method: 'POST',
+    path: '/internal/ecpay/invoices/issue',
+    action: 'issueEcpayInvoice',
+    internal: true,
+    turnstileRequired: false,
+    write: true,
+    maxBodyBytes: 32 * 1024,
+  },
+  {
     method: 'GET',
     path: '/api/student-practice/availability',
     action: 'getStudentPracticeAvailability',

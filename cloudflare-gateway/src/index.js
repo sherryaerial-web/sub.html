@@ -8,6 +8,13 @@ import {
 } from './security.js';
 import { verifyTurnstile } from './turnstile.js';
 import { callGas } from './upstream.js';
+import {
+  getInternalInvoiceNonce,
+  verifyInternalInvoiceRequest,
+} from './internal-auth.js';
+import { InvoiceRequestGuard } from './invoice-request-guard.js';
+
+export { InvoiceRequestGuard };
 
 function jsonResponse(payload, status = 200, headers = {}) {
   return new Response(JSON.stringify(payload), {
@@ -50,6 +57,53 @@ export default {
         status: 'success',
         data: { configured: isConfigured(env) },
       }, isConfigured(env) ? 200 : 503);
+    }
+
+    if (route.internal) {
+      try {
+        const body = await readJsonBody(request, route.maxBodyBytes);
+        const payload = await verifyInternalInvoiceRequest(
+          request,
+          body,
+          env.INVOICE_GATEWAY_SECRET,
+          { nowSeconds: env.nowSeconds },
+        );
+        const binding = env.INVOICE_REQUEST_GUARD;
+        if (!binding || typeof binding.idFromName !== 'function' || typeof binding.get !== 'function') {
+          throw new GatewayError(503, 'internal_guard_not_configured', '內部服務尚未完成設定。');
+        }
+        const guard = binding.get(binding.idFromName('invoice-request-guard'));
+        const guardResponse = await guard.fetch('https://invoice-request-guard/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nonce: getInternalInvoiceNonce(request),
+            nowMs: (Number(env.nowSeconds) || Math.floor(Date.now() / 1000)) * 1000,
+          }),
+        });
+        if (guardResponse.status === 409) {
+          throw new GatewayError(409, 'internal_replay', '此內部請求已處理。');
+        }
+        if (!guardResponse.ok) {
+          throw new GatewayError(503, 'internal_guard_unavailable', '內部服務暫時無法使用。');
+        }
+        void payload;
+        return jsonResponse({
+          status: 'error',
+          error: { code: 'not_implemented', message: '發票服務尚未啟用。' },
+        }, 501);
+      } catch (error) {
+        if (error instanceof GatewayError) {
+          return jsonResponse({
+            status: 'error',
+            error: { code: error.code, message: error.message },
+          }, error.status);
+        }
+        return jsonResponse({
+          status: 'error',
+          error: { code: 'invalid_request', message: '無法處理這次請求。' },
+        }, 400);
+      }
     }
 
     let origin;

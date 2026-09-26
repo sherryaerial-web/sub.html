@@ -22,6 +22,14 @@ namespace_id = "31002"
 limit = 60
 period = 60
 
+[[durable_objects.bindings]]
+name = "INVOICE_REQUEST_GUARD"
+class_name = "InvoiceRequestGuard"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["InvoiceRequestGuard"]
+
 [env.staging]
 name = "sherry-classroom-gateway-staging"
 
@@ -44,3 +52,7 @@ namespace_id = "31102"
 [env.staging.ratelimits.simple]
 limit = 60
 period = 60
+
+[[env.staging.durable_objects.bindings]]
+name = "INVOICE_REQUEST_GUARD"
+class_name = "InvoiceRequestGuard"

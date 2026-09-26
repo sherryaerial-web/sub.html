@@ -4445,9 +4445,18 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
     SHEET_HEADERS.PRACTICE_PARTICIPANTS
   );
   var exceptionValues = getSheetValuesWithExpectedHeaders_(exceptionSheet, SHEET_HEADERS.PRACTICE_EXCEPTIONS);
-  getSheetValuesWithExpectedHeaders_(auditSheet, SHEET_HEADERS.PRACTICE_AUDIT);
+  var practiceAudits = getSheetValuesWithExpectedHeaders_(auditSheet, SHEET_HEADERS.PRACTICE_AUDIT);
+  var importedSeries = {};
+  practiceAudits.slice(1).forEach(function(row) {
+    if (cleanText_(row[2]) === 'TimeTree 循環移轉' && cleanText_(row[3]) === '系列') importedSeries[cleanText_(row[4])] = true;
+  });
+  var studentSheet = spreadsheet.getSheetByName(SHEETS.STUDENT_PRACTICE_GROUPS);
+  var studentGroups = studentSheet ? getSheetValuesWithExpectedHeaders_(studentSheet, SHEET_HEADERS.STUDENT_PRACTICE_GROUPS).slice(1).map(function(row) {
+    return { date: formatMyDate(row[1]), room: cleanText_(row[2]), startTime: formatMyTime(row[3]), endTime: formatMyTime(row[4]), status: cleanText_(row[5]) };
+  }) : [];
 
   return {
+    studentGroups: studentGroups,
     sheets: {
       series: seriesSheet,
       bookings: bookingSheet,
@@ -4470,7 +4479,7 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
         createdAt: cleanText_(row[9]),
         updatedAt: cleanText_(row[10]),
         updatedBy: cleanText_(row[11]),
-        mode: cleanText_(row[12]) || (cleanText_(row[11]).indexOf('TimeTree 移轉') !== -1 ? 'waitlist' : 'ordinary')
+        mode: cleanText_(row[12]) || (importedSeries[cleanText_(row[0])] || cleanText_(row[11]).indexOf('TimeTree 移轉') !== -1 ? 'waitlist' : 'ordinary')
       };
     }).filter(function(item) { return item.seriesId; }),
     bookings: bookingValues.slice(1).map(function(row, index) {
@@ -4523,6 +4532,11 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
 }
 
 function appendPracticeRowUnlocked_(sheet, headers, row) {
+  if (headers === SHEET_HEADERS.PRACTICE_SERIES) {
+    var modeHeader = cleanText_(sheet.getRange(1, 13).getValue());
+    if (modeHeader && modeHeader !== headers[12]) throw new Error('自主練習系列第 13 欄已被其他資料使用。');
+    if (!modeHeader) sheet.getRange(1, 13).setValue(headers[12]);
+  }
   sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length).setValues([row]);
 }
 
@@ -4671,6 +4685,11 @@ function planPracticeSeriesOccurrence_(records, series, date, courseRows) {
       practiceIntervalsConflict_(interval, normalizePracticeInterval_(b.date, b.startTime, b.endTime), 15);
   });
   var hard = conflicts.filter(function(c) { return c.type !== 'course'; })[0];
+  if ((records.studentGroups || []).some(function(group) {
+    return group.date === date && group.room === series.room &&
+      [STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION].indexOf(group.status) !== -1 &&
+      practiceIntervalsConflict_(interval, normalizePracticeInterval_(group.date, group.startTime, group.endTime), 15);
+  })) return { action: 'skip', reason: '已有學生自主練習' };
   var canWait = series.mode === 'waitlist' || cleanText_(series.updatedBy).indexOf('TimeTree 移轉') !== -1;
   if (waiting || hard || (!canWait && conflicts.length)) {
     return { action: 'skip', reason: hard ? hard.label : (waiting ? '已有候補自主練習' : '正課衝突') };
@@ -4859,6 +4878,150 @@ function getTimeTreePracticeMigration202609Manifest_() {
     { sourceId: 'ariel-thu-a-1500', teacherName: 'Ariel Lu', date: '2026/09/17', room: 'A', startTime: '15:00', endTime: '17:00', recurrence: 'weekly' },
     { sourceId: 'liz-sat-b-1330', teacherName: 'Liz 🌰', date: '2026/09/19', room: 'B', startTime: '13:30', endTime: '18:30', recurrence: 'weekly' }
   ];
+}
+
+// Read-only migration plan. The digest includes every input used to decide occupancy.
+// Teacher identity in the existing schema is the exact account name, not an invented numeric ID.
+function planTeacherPracticeSeriesMigration_(records, courseRows, coverage, lizTeacherName) {
+  var result = { attach: [], newSeries: [], retire: [], modes: [], create: [], skip: [], ambiguous: [] };
+  if (!coverage || coverage.verified !== true) throw new Error('尚未確認可補建課表範圍。');
+  if (!cleanText_(lizTeacherName)) throw new Error('尚未確認 Liz 老師帳號。');
+  var shadow = JSON.parse(JSON.stringify({ series: records.series, bookings: records.bookings,
+    participants: records.participants, exceptions: records.exceptions, studentGroups: records.studentGroups || [] }));
+  result.inputDigest = bytesToHex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify([shadow, courseRows, coverage, lizTeacherName]), Utilities.Charset.UTF_8));
+  var weekday = function(date) {
+    return new Date(parsePracticeDateTime_(date, '00:00').getTime() + 8 * 3600000).getUTCDay();
+  };
+  // Explicit 2026-09-27 decision: do not alter or add Liz October occurrences.
+  // Rooms verified against her actual registrations: Saturday B, Sunday A.
+  [{day:6,room:'B',start:'13:30',end:'18:00',first:'2026/11/07'},
+   {day:0,room:'A',start:'16:00',end:'19:00',first:'2026/11/01'}].forEach(function(slot) {
+    var id = 'migration-202611-liz-' + slot.day;
+    var existing = shadow.series.filter(function(s) { return s.seriesId === id; })[0];
+    if (existing) {
+      if (existing.creatorName !== lizTeacherName || existing.room !== slot.room ||
+          existing.startTime !== slot.start || existing.endTime !== slot.end || existing.startDate !== slot.first) {
+        result.ambiguous.push({ seriesId: id, reason: '固定循環識別碼已被不同設定使用' });
+      }
+      return; // An explicitly stopped replacement must never be restarted on retry.
+    }
+    shadow.series.filter(function(s) {
+      return s.creatorName === lizTeacherName && weekday(s.startDate) === slot.day &&
+        s.room === slot.room && s.startTime === slot.start && s.status === '啟用中';
+    }).forEach(function(s) {
+      if (s.stopDate && s.stopDate <= '2026/10/01') return;
+      if (shadow.bookings.some(function(b) { return b.seriesId === s.seriesId && b.date >= '2026/11/01'; }) ||
+          shadow.exceptions.some(function(e) { return e.seriesId === s.seriesId && e.date >= '2026/11/01'; })) {
+        result.ambiguous.push({ seriesId:s.seriesId, reason:'舊系列已有十一月紀錄，須先核對，不能重建' }); return;
+      }
+      result.retire.push({seriesId:s.seriesId,stopDate:'2026/10/01'});
+      s.stopDate='2026/10/01';
+    });
+    var series={seriesId:id,creatorName:lizTeacherName,room:slot.room,weekday:slot.day,
+      startDate:slot.first,startTime:slot.start,endTime:slot.end,status:'啟用中',mode:'waitlist'};
+    shadow.series.push(series);
+    result.newSeries.push(series);
+  });
+  shadow.series.filter(function(s) { return s.status === '啟用中'; }).sort(function(a,b) {
+    return b.startDate.localeCompare(a.startDate) || a.seriesId.localeCompare(b.seriesId);
+  }).forEach(function(series) {
+    var start = parsePracticeDateTime_(series.startDate, '00:00').getTime();
+    var from = parsePracticeDateTime_(coverage.from, '00:00').getTime();
+    var end = parsePracticeDateTime_(coverage.to, '00:00').getTime();
+    if (end < from || end - from > 366 * 86400000) throw new Error('補建範圍不正確。');
+    if (start < from) start += Math.ceil((from-start)/(7*86400000))*7*86400000;
+    for (var t=start;t<=end;t+=7*86400000) {
+      var date=Utilities.formatDate(new Date(t),'Asia/Taipei','yyyy/MM/dd');
+      if (series.creatorName === lizTeacherName && date < '2026/11/01') continue;
+      if (Array.isArray(coverage.dates) && coverage.dates.indexOf(date) === -1) continue;
+      var plan=planPracticeSeriesOccurrence_(shadow,series,date,courseRows);
+      var item={seriesId:series.seriesId,teacherName:series.creatorName,date:date,room:series.room,
+        startTime:series.startTime,endTime:series.endTime,status:plan.status,calendarIds:plan.calendarIds,reason:plan.reason};
+      if(plan.action==='create') {
+        result.create.push(item);
+        shadow.bookings.push({bookingId:'preview-'+series.seriesId+'-'+date,seriesId:series.seriesId,
+          creatorName:series.creatorName,date:date,room:series.room,startTime:series.startTime,endTime:series.endTime,status:plan.status});
+      } else result.skip.push(item);
+    }
+  });
+  return result;
+}
+
+function assertTeacherPracticeMigrationPlan_(plan, expectedDigest) {
+  if (!expectedDigest || plan.inputDigest !== expectedDigest) throw new Error('資料已變更，請重新預覽後再確認。');
+  if (plan.ambiguous.length) throw new Error('Liz 登記有待確認差異，尚未修改任何資料。');
+}
+
+function getTeacherPracticeMigrationContextUnlocked_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var liz = getTeachers_().filter(function(t) { return t['指導者'] === 'Liz 🌰'; });
+  if (liz.length !== 1) throw new Error('尚未確認唯一有效的 Liz 老師帳號。');
+  var from = Utilities.formatDate(new Date(currentTimeMs_()), 'Asia/Taipei', 'yyyy/MM/dd');
+  if (from < '2026/10/01') from = '2026/10/01';
+  var snapshot = getSheetValuesWithExpectedHeaders_(requireSheet_(ss, SHEETS.COURSE_LIST), SHEET_HEADERS.COURSE_LIST).slice(1);
+  var to = getPracticeSeriesHorizonDate_(snapshot, from);
+  var rows = getPracticeCurrentObRows_(from, to);
+  if (!Array.isArray(rows)) throw new Error('無法確認即時 OB 課表。');
+  var dates = [];
+  rows.forEach(function(row) {
+    var date = formatMyDate(row[0]);
+    if (date >= from && date <= to && cleanText_(row[4]) && dates.indexOf(date) === -1) dates.push(date);
+  });
+  return {records:getPracticeRecordsUnlocked_(ss),rows:rows,
+    coverage:{from:from,to:to,dates:dates.sort(),verified:true},lizTeacherName:liz[0]['指導者']};
+}
+
+function previewTeacherPracticeSeriesMigration_(session) {
+  assertCapabilitySession_(session, 'course_admin');
+  return withScriptLock_(function() {
+    var context=getTeacherPracticeMigrationContextUnlocked_();
+    return planTeacherPracticeSeriesMigration_(context.records,context.rows,context.coverage,context.lizTeacherName);
+  });
+}
+
+function applyTeacherPracticeSeriesMigration_(session, expectedDigest) {
+  assertCapabilitySession_(session, 'course_admin');
+  var result=withScriptLock_(function() {
+    var context=getTeacherPracticeMigrationContextUnlocked_();
+    var records=context.records;
+    var plan=planTeacherPracticeSeriesMigration_(records,context.rows,context.coverage,context.lizTeacherName);
+    assertTeacherPracticeMigrationPlan_(plan,expectedDigest);
+    var actor=getSessionTeacherName_(session);
+    return runStateTransitionUnlocked_([records.sheets.series,records.sheets.bookings,
+      records.sheets.participants,records.sheets.exceptions,records.sheets.audit],function(appendAudits) {
+      plan.retire.forEach(function(change) {
+        var series=records.series.filter(function(s) {return s.seriesId===change.seriesId;})[0];
+        records.sheets.series.getRange(series.rowNumber,8).setValue(change.stopDate);
+        records.sheets.series.getRange(series.rowNumber,11,1,2).setValues([[getTimestamp_(),actor]]);
+        series.stopDate=change.stopDate;
+        appendPracticeAuditUnlocked_(records.sheets.audit,{actor:actor,action:'Liz 舊循環結束接續',
+          targetType:'系列',targetId:series.seriesId,after:change,reason:'十月現有場次保留，十一月另建固定循環'});
+      });
+      plan.newSeries.forEach(function(series) {
+        var now=getTimestamp_();
+        appendPracticeRowUnlocked_(records.sheets.series,SHEET_HEADERS.PRACTICE_SERIES,[
+          series.seriesId,series.creatorName,series.room,series.weekday,series.startTime,series.endTime,
+          series.startDate,'','啟用中',now,now,actor,series.mode
+        ]);
+        records.series.push(series);
+        appendPracticeAuditUnlocked_(records.sheets.audit,{actor:actor,action:'建立十一月固定循環',
+          targetType:'系列',targetId:series.seriesId,after:series,reason:'保留十月登記'});
+      });
+      var affected=[];
+      plan.create.forEach(function(item) {
+        var series=records.series.filter(function(s) {return s.seriesId===item.seriesId;})[0];
+        var added=createPracticeOccurrenceUnlocked_(records,series,item.date,actor,appendAudits,context.rows);
+        if (!added.created) throw new Error('補建結果與預覽不同，已回復，請重新預覽。');
+        affected.push(item.date);
+      });
+      appendAudits([{actor:actor,action:'循環自主練習接續',targetId:plan.inputDigest,
+        before:'',after:'新增系列 '+plan.newSeries.length+'，新增場次 '+affected.length,reason:'Liz 十月不變'}]);
+      return {createdSeries:plan.newSeries.length,createdOccurrences:affected.length,affectedDates:affected};
+    });
+  });
+  invalidatePracticeDayViewCache_(result.affectedDates);
+  return result;
 }
 
 function getPracticeWeekday_(dateValue) {
@@ -5468,7 +5631,7 @@ function createPracticeWaitlist_(session, inputValue) {
         var series = { seriesId: seriesId, creatorName: teacherName, room: room, startDate: date,
           startTime: startTime, endTime: endTime, status: '啟用中', mode: 'waitlist' };
         appendPracticeRowUnlocked_(records.sheets.series, SHEET_HEADERS.PRACTICE_SERIES, [
-          seriesId, teacherName, room, parsePracticeDateTime_(date, '00:00').getDay(),
+          seriesId, teacherName, room, new Date(parsePracticeDateTime_(date, '00:00').getTime() + 8 * 3600000).getUTCDay(),
           startTime, endTime, date, '', '啟用中', now, now, teacherName, 'waitlist'
         ]);
         var expansion = expandPracticeSeriesUnlocked_(records, series,

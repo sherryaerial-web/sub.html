@@ -1434,6 +1434,7 @@ test('weekly waitlist creates independent course links and empty weeks without d
   const input={calendarId:'first',date:'2026/10/03',startTime:'14:00',endTime:'15:00',recurrence:'weekly'};
   const first=f.backend.createPracticeWaitlist_(f.teacher('Liz 🌰'),input);
   assert.ok(first.seriesId);
+  assert.equal(f.seriesSheet.values[1][3],6);
   assert.deepEqual(f.bookingSheet.values.slice(1).map(r=>[r[2],r[6],r[8]]),[
     ['2026/10/03','候補','first'],['2026/10/10','已成立',''],['2026/10/17','候補','third']]);
   const again=f.backend.createPracticeWaitlist_(f.teacher('Liz 🌰'),input);
@@ -1485,6 +1486,79 @@ test('practice series extension is bounded idempotent and respects stopped dates
   assert.equal(f.backend.extendActivePracticeSeriesUnlocked_(records,{...coverage,to:'2026/11/30'},[],'test').created,0);
 });
 
+test('practice recurring planner blocks student practice and detects immutable migration origin', () => {
+  const f = createPracticeBackend();
+  f.seriesSheet.values.push(['legacy','Liz 🌰','A',0,'16:00','19:00','2026/09/06','','啟用中','','','Liz 🌰']);
+  f.practiceAuditSheet.values.push(['','冠蓉','TimeTree 循環移轉','系列','legacy','','','']);
+  const records=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  assert.equal(records.series[0].mode,'waitlist');
+  records.studentGroups=[{date:'2026/10/04',room:'A',startTime:'17:00',endTime:'18:00',status:'已成立'}];
+  assert.equal(f.backend.planPracticeSeriesOccurrence_(records,records.series[0],'2026/10/04',[]).action,'skip');
+});
+
+test('practice migration leaves Liz October unchanged and schedules November fixed series', () => {
+  const f=createPracticeBackend();
+  const records=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  records.series.push({seriesId:'sep',creatorName:'Tako',room:'C',startDate:'2026/09/04',weekday:5,startTime:'14:00',endTime:'17:00',status:'啟用中',mode:'waitlist'});
+  records.bookings.push({bookingId:'liz-sat',seriesId:'',creatorName:'Liz 🌰',date:'2026/10/03',room:'B',startTime:'13:30',endTime:'18:00',status:'候補'});
+  records.participants.push({participantId:'p',bookingId:'liz-sat',teacherName:'Liz 🌰',role:'建立者',status:'有效'});
+  const coverage={from:'2026/10/01',to:'2026/10/31',verified:true};
+  const before=JSON.stringify(records.bookings);
+  const plan=f.backend.planTeacherPracticeSeriesMigration_(records,[],coverage,'Liz 🌰');
+  assert.equal(plan.attach.length,0);
+  assert.equal(plan.newSeries.length,2);
+  assert.deepEqual(Array.from(plan.newSeries,s=>[s.startDate,s.room,s.startTime,s.endTime]),[
+    ['2026/11/07','B','13:30','18:00'],['2026/11/01','A','16:00','19:00']]);
+  assert.equal(plan.create.filter(x=>x.teacherName==='Liz 🌰').length,0);
+  assert.equal(JSON.stringify(records.bookings),before);
+  assert.ok(plan.create.some(x=>x.seriesId==='sep'));
+  records.bookings.push({bookingId:'liz-other',creatorName:'Liz 🌰',date:'2026/10/17',room:'B',startTime:'13:30',endTime:'18:30',status:'候補'});
+  const changed=f.backend.planTeacherPracticeSeriesMigration_(records,[],coverage,'Liz 🌰');
+  assert.notEqual(changed.inputDigest,plan.inputDigest);
+  assert.equal(changed.ambiguous.length,0);
+  records.series.push({seriesId:'old-liz',creatorName:'Liz 🌰',room:'B',startDate:'2026/09/19',startTime:'13:30',endTime:'18:30',status:'啟用中',mode:'waitlist'});
+  const november=f.backend.planTeacherPracticeSeriesMigration_(records,[],{...coverage,to:'2026/11/30'},'Liz 🌰');
+  assert.ok(november.retire.some(s=>s.seriesId==='old-liz'&&s.stopDate==='2026/10/01'));
+  assert.equal(november.create.some(x=>x.teacherName==='Liz 🌰'&&x.date<'2026/11/01'),false);
+  assert.equal(JSON.stringify(records.bookings),JSON.stringify([...JSON.parse(before),records.bookings[1]]));
+});
+
+test('practice migration apply rejects stale digest and preserves every October Liz row', () => {
+  const f=createPracticeBackend({courseRows:[['2026/10/03','10:00','B－空環','Tako','c']]});
+  f.backend.getTeachers_=()=>[{'指導者':'Liz 🌰'}];
+  const admin={teacherName:'冠蓉',role:'管理者',managementCapabilities:['course_admin']};
+  f.bookingSheet.values.push(['liz-sat','','2026/10/03','B','13:30','18:00','候補','Liz 🌰','c','','','','']);
+  f.seriesSheet.values.push(['old-liz','Liz 🌰','B',6,'13:30','18:30','2026/09/19','','啟用中','','','TimeTree 移轉','waitlist']);
+  const before=JSON.stringify(f.bookingSheet.values);
+  assert.throws(()=>f.backend.applyTeacherPracticeSeriesMigration_(admin,'stale'),/重新預覽/);
+  assert.equal(f.seriesSheet.values.length,2);
+  const preview=f.backend.previewTeacherPracticeSeriesMigration_(admin);
+  f.backend.applyTeacherPracticeSeriesMigration_(admin,preview.inputDigest);
+  assert.equal(JSON.stringify(f.bookingSheet.values),before);
+  assert.equal(f.seriesSheet.values.length,4);
+  assert.equal(f.seriesSheet.values[1][7],'2026/10/01');
+  const retry=f.backend.previewTeacherPracticeSeriesMigration_(admin);
+  assert.equal(retry.newSeries.length,0);
+  f.backend.applyTeacherPracticeSeriesMigration_(admin,retry.inputDigest);
+  assert.equal(f.seriesSheet.values.length,4);
+  assert.throws(()=>f.backend.applyTeacherPracticeSeriesMigration_(f.teacher('Tako'),retry.inputDigest),/權限/);
+});
+
+test('practice migration rolls back series metadata when a write fails', () => {
+  const f=createPracticeBackend({courseRows:[['2026/10/03','10:00','B－空環','Tako','c']]});
+  const admin={teacherName:'冠蓉',managementCapabilities:['course_admin']};
+  f.backend.getTeachers_=()=>[{'指導者':'Liz 🌰'}];
+  const preview=f.backend.previewTeacherPracticeSeriesMigration_(admin);
+  const before=JSON.stringify(f.seriesSheet.values);
+  const append=f.backend.appendPracticeAuditUnlocked_;
+  f.backend.appendPracticeAuditUnlocked_=()=>{throw new Error('write failure');};
+  assert.throws(()=>f.backend.applyTeacherPracticeSeriesMigration_(admin,preview.inputDigest),/write failure/);
+  assert.equal(JSON.stringify(f.seriesSheet.values),before);
+  f.backend.appendPracticeAuditUnlocked_=append;
+  f.backend.getTeachers_=()=>[];
+  assert.throws(()=>f.backend.previewTeacherPracticeSeriesMigration_(admin),/Liz/);
+});
+
 function createPracticeBackend(options = {}) {
   const courseSheet = createSheetFixture('CourseList', [
     EXPECTED_COURSE_HEADERS,
@@ -1498,6 +1572,9 @@ function createPracticeBackend(options = {}) {
     ...(options.services || {}),
     SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
   });
+  backend.Utilities.DigestAlgorithm = {SHA_256:'SHA_256'};
+  backend.Utilities.Charset = {UTF_8:'UTF_8'};
+  backend.Utilities.computeDigest = (_algorithm,value) => Array.from(require('node:crypto').createHash('sha256').update(value).digest());
   backend.ensurePracticeStructure_();
   backend.getPracticeCurrentObRows_ = () => options.courseRows || [];
   backend.getPracticeCancelledWaitlistCalendarIds_ = (calendarIds) => (

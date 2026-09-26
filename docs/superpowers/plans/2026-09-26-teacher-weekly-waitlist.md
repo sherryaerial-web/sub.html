@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+2026-09-27 approved revision supersedes Task 4 October attachment steps: Liz October rows stay unchanged; create stable November series for B Saturday 13:30–18:00 (11/7) and A Sunday 16:00–19:00 (11/1). Cap her two old series at 10/1 without editing existing occurrences. Test exact preservation, stable retry and no creation before November. Other September continuation remains in scope.
+
 - Existing Sheet indexes are fixed; append a series mode column only at the end. Missing mode means existing ordinary behavior, except positively identified legacy TimeTree waitlist series.
 - Unpublished/unknown future schedules are not empty rooms. Extend only across verified published coverage, not merely an assumed next month.
 - No extra high-frequency polling; reuse successful sync/reconciliation data where possible.

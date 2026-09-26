@@ -75,33 +75,61 @@ export function sanitizeInternalInvoicePayload(body) {
   const source = value.invoice && typeof value.invoice === 'object' && !Array.isArray(value.invoice)
     ? value.invoice
     : null;
-  if (!source || !Array.isArray(source.items) || source.items.length < 1 || source.items.length > 100) {
+  if (!source || !Array.isArray(source.Items) || source.Items.length < 1 || source.Items.length > 100) {
     throw new GatewayError(400, 'invalid_invoice_payload', '發票資料格式錯誤。');
   }
-  const invoiceKind = copyString(source.invoiceKind, 20);
-  if (!['personal', 'business'].includes(invoiceKind)) {
-    throw new GatewayError(400, 'invalid_invoice_payload', '發票資料格式錯誤。');
-  }
-  return {
-    merchantProfile: profile,
-    invoice: {
-      relateNumber: copyString(source.relateNumber, 30),
-      customerEmail: copyString(source.customerEmail, 200),
-      customerIdentifier: copyString(source.customerIdentifier, 8),
-      customerName: copyString(source.customerName, 60),
-      customerAddress: copyString(source.customerAddress, 200),
-      salesAmount: copyInteger(source.salesAmount, 0),
-      invoiceKind,
-      items: source.items.map((item) => ({
-        itemSeq: copyInteger(item && item.itemSeq, 1),
-        itemName: copyString(item && item.itemName, 100),
-        itemCount: copyInteger(item && item.itemCount, 1),
-        itemWord: copyString(item && item.itemWord, 20),
-        itemPrice: copyInteger(item && item.itemPrice, 0),
-        itemAmount: copyInteger(item && item.itemAmount, 0),
-      })),
-    },
+  const invoice = {
+    RelateNumber: copyString(source.RelateNumber, 30),
+    CustomerIdentifier: copyString(source.CustomerIdentifier, 8),
+    CustomerName: copyString(source.CustomerName, 60),
+    CustomerAddr: copyString(source.CustomerAddr, 100),
+    CustomerPhone: copyString(source.CustomerPhone, 20),
+    CustomerEmail: copyString(source.CustomerEmail, 80),
+    Print: copyString(source.Print, 1),
+    Donation: copyString(source.Donation, 1),
+    LoveCode: copyString(source.LoveCode, 7),
+    CarrierType: copyString(source.CarrierType, 1),
+    CarrierNum: copyString(source.CarrierNum, 64),
+    TaxType: copyString(source.TaxType, 1),
+    SalesAmount: copyInteger(source.SalesAmount, 0),
+    InvoiceRemark: copyString(source.InvoiceRemark, 200),
+    InvType: copyString(source.InvType, 2),
+    vat: copyString(source.vat, 1),
+    Items: source.Items.map((item) => ({
+      ItemSeq: copyInteger(item && item.ItemSeq, 1),
+      ItemName: copyString(item && item.ItemName, 100),
+      ItemCount: copyInteger(item && item.ItemCount, 1),
+      ItemWord: copyString(item && item.ItemWord, 6),
+      ItemPrice: copyInteger(item && item.ItemPrice, 0),
+      ItemAmount: copyInteger(item && item.ItemAmount, 0),
+    })),
   };
+  const identifierValid = invoice.CustomerIdentifier === '' || /^\d{8}$/.test(invoice.CustomerIdentifier);
+  const businessFieldsValid = invoice.CustomerIdentifier === ''
+    ? invoice.Print === '0'
+    : invoice.Print === '1' && Boolean(invoice.CustomerName) && Boolean(invoice.CustomerAddr);
+  const itemTotal = invoice.Items.reduce((total, item, index) => {
+    if (item.ItemSeq !== index + 1 || !item.ItemName || !item.ItemWord
+      || item.ItemPrice * item.ItemCount !== item.ItemAmount) {
+      throw new GatewayError(400, 'invalid_invoice_payload', '發票資料格式錯誤。');
+    }
+    return total + item.ItemAmount;
+  }, 0);
+  if (!/^[A-Za-z0-9]{1,30}$/.test(invoice.RelateNumber)
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invoice.CustomerEmail)
+    || !identifierValid
+    || !businessFieldsValid
+    || invoice.Donation !== '0'
+    || invoice.LoveCode !== ''
+    || invoice.CarrierType !== ''
+    || invoice.CarrierNum !== ''
+    || invoice.TaxType !== '1'
+    || invoice.InvType !== '07'
+    || invoice.vat !== '1'
+    || itemTotal !== invoice.SalesAmount) {
+    throw new GatewayError(400, 'invalid_invoice_payload', '發票資料格式錯誤。');
+  }
+  return { merchantProfile: profile, invoice };
 }
 
 export async function verifyInternalInvoiceRequest(request, body, secret, options = {}) {

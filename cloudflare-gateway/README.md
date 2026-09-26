@@ -1,6 +1,6 @@
-# Sherry Classroom Public Gateway
+# Sherry Classroom Gateway
 
-此 Worker 只服務學生自主練習與 VVIP 公開頁。它驗證來源、JSON 大小、Turnstile、頻率限制，再以 HMAC-SHA256 簽章轉送 GAS。老師與管理員 API 不經過此 Worker。
+此 Worker 服務學生自主練習、VVIP 公開頁，以及僅供 GAS 呼叫的綠界發票內部路由。公開路由會驗證來源、JSON 大小、Turnstile、頻率限制，再以 HMAC-SHA256 簽章轉送 GAS；內部發票路由使用另一組 HMAC 與 Durable Object nonce 防重送，不接受瀏覽器直接呼叫。
 
 ## 路由
 
@@ -12,6 +12,7 @@
 | GET | `/api/vvip/members` | 否 |
 | POST | `/api/vvip/selection` | 是，action `vvip_selection_lookup` |
 | POST | `/api/vvip/submit` | 是，action `vvip_selection_submit` |
+| POST | `/internal/ecpay/invoices/issue` | 不適用；GAS HMAC、5 分鐘時窗、nonce 防重送 |
 
 未列出的 path 或 method 一律拒絕。Production CORS 與 Turnstile hostname 只允許 `sherryaerial-web.github.io`；staging 另外允許 `localhost` 與 `127.0.0.1` 預覽。
 
@@ -26,6 +27,10 @@
 - `TURNSTILE_SECRET_KEY`：該環境 Turnstile widget 的 secret key。
 - `ALLOWED_ORIGINS`：逗號分隔的完整 Origin，不使用模糊或尾碼比對。
 - `TURNSTILE_HOSTNAMES`：逗號分隔的精確 hostname。
+- `INVOICE_GATEWAY_SECRET`：至少 32 bytes，只與 GAS 的同名 Script Property 共用。
+- `ECPAY_PRIMARY_MERCHANT_ID`、`ECPAY_PRIMARY_HASH_KEY`、`ECPAY_PRIMARY_HASH_IV`：第一組綠界商店設定。
+- `ECPAY_SECONDARY_MERCHANT_ID`、`ECPAY_SECONDARY_HASH_KEY`、`ECPAY_SECONDARY_HASH_IV`：第二組綠界商店設定。
+- `ECPAY_ENVIRONMENT`：只接受 `stage` 或 `production`，不得由請求指定 URL。
 
 ```bash
 npm install
@@ -43,8 +48,17 @@ WRANGLER_LOG_PATH=/private/tmp/sherry-gateway-wrangler.log npm run check -- --en
 npx wrangler secret put GAS_UPSTREAM_URL --env staging
 npx wrangler secret put GAS_GATEWAY_SECRET --env staging
 npx wrangler secret put TURNSTILE_SECRET_KEY --env staging
+npx wrangler secret put INVOICE_GATEWAY_SECRET --env staging
+npx wrangler secret put ECPAY_PRIMARY_MERCHANT_ID --env staging
+npx wrangler secret put ECPAY_PRIMARY_HASH_KEY --env staging
+npx wrangler secret put ECPAY_PRIMARY_HASH_IV --env staging
+npx wrangler secret put ECPAY_SECONDARY_MERCHANT_ID --env staging
+npx wrangler secret put ECPAY_SECONDARY_HASH_KEY --env staging
+npx wrangler secret put ECPAY_SECONDARY_HASH_IV --env staging
 npx wrangler deploy --env staging
 ```
+
+上述 secret 必須用 `wrangler secret put` 的互動提示輸入，不得放進指令、commit、試算表或前端。`ECPAY_ENVIRONMENT=stage` 是非機密環境變數；正式發布時才改為 `production`。
 
 部署後依序檢查：
 
@@ -55,7 +69,7 @@ npx wrangler deploy --env staging
 5. GAS 錯誤或逾時不重試寫入，也不回傳內部網址、token、簽章或 Sheet 資訊。
 6. 經另外允許後才做具名學生及 VVIP 測試寫入，並到 Tako 管理頁核對。
 
-Production 使用相同三個 `wrangler secret put` 指令但不加 `--env staging`，之後才執行 `npx wrangler deploy`。不要把 production 值複製到 staging 檔案。
+Production 使用上述全部 `wrangler secret put` 指令但不加 `--env staging`，之後才執行 `npx wrangler deploy`。不要把 production 值複製到 staging 檔案。
 
 ## 啟用與驗證
 

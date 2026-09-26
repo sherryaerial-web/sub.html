@@ -13,6 +13,7 @@ import {
   verifyInternalInvoiceRequest,
 } from './internal-auth.js';
 import { InvoiceRequestGuard } from './invoice-request-guard.js';
+import { issueEcpayInvoice_ } from './ecpay-invoice.js';
 
 export { InvoiceRequestGuard };
 
@@ -87,11 +88,17 @@ export default {
         if (!guardResponse.ok) {
           throw new GatewayError(503, 'internal_guard_unavailable', '內部服務暫時無法使用。');
         }
-        void payload;
-        return jsonResponse({
-          status: 'error',
-          error: { code: 'not_implemented', message: '發票服務尚未啟用。' },
-        }, 501);
+        const result = await issueEcpayInvoice_(
+          {
+            ...payload,
+            traceId: crypto.randomUUID(),
+            timestamp: Math.floor(Date.now() / 1000),
+          },
+          env,
+          typeof env.fetch === 'function' ? env.fetch : fetch,
+        );
+        const status = result.outcome === 'issued' ? 200 : result.outcome === 'rejected' ? 422 : 502;
+        return jsonResponse({ status: result.outcome === 'issued' ? 'success' : 'error', data: result }, status);
       } catch (error) {
         if (error instanceof GatewayError) {
           return jsonResponse({

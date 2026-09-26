@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.js';
 import {
+  sanitizeInternalInvoicePayload,
   signInternalInvoiceRequest,
   verifyInternalInvoiceRequest,
 } from '../src/internal-auth.js';
@@ -13,20 +14,29 @@ function invoiceBody(extra = {}) {
   return {
     merchantProfile: 'primary',
     invoice: {
-      relateNumber: '20260926001',
-      customerEmail: 'student@example.com',
-      customerIdentifier: '',
-      customerName: '學生',
-      customerAddress: '',
-      salesAmount: 3000,
-      invoiceKind: 'personal',
-      items: [{
-        itemSeq: 1,
-        itemName: '十堂課卡',
-        itemCount: 1,
-        itemWord: '張',
-        itemPrice: 3000,
-        itemAmount: 3000,
+      RelateNumber: '20260926001',
+      CustomerIdentifier: '',
+      CustomerName: '學生',
+      CustomerAddr: '',
+      CustomerPhone: '',
+      CustomerEmail: 'student@example.com',
+      Print: '0',
+      Donation: '0',
+      LoveCode: '',
+      CarrierType: '',
+      CarrierNum: '',
+      TaxType: '1',
+      SalesAmount: 3000,
+      InvoiceRemark: '',
+      InvType: '07',
+      vat: '1',
+      Items: [{
+        ItemSeq: 1,
+        ItemName: '十堂課卡',
+        ItemCount: 1,
+        ItemWord: '張',
+        ItemPrice: 3000,
+        ItemAmount: 3000,
       }],
     },
     ...extra,
@@ -64,14 +74,15 @@ test('internal invoice authentication accepts the fixed canonical contract and s
   }), SECRET, { nowSeconds: 1_800_000_100 });
 
   assert.equal(result.merchantProfile, 'primary');
-  assert.equal(result.invoice.relateNumber, '20260926001');
+  assert.equal(result.invoice.RelateNumber, '20260926001');
   assert.equal(result.ignoredTopLevel, undefined);
   assert.deepEqual(Object.keys(result.invoice).sort(), [
-    'customerAddress', 'customerEmail', 'customerIdentifier', 'customerName',
-    'invoiceKind', 'items', 'relateNumber', 'salesAmount',
+    'CarrierNum', 'CarrierType', 'CustomerAddr', 'CustomerEmail', 'CustomerIdentifier',
+    'CustomerName', 'CustomerPhone', 'Donation', 'InvType', 'InvoiceRemark', 'Items',
+    'LoveCode', 'Print', 'RelateNumber', 'SalesAmount', 'TaxType', 'vat',
   ]);
-  assert.deepEqual(Object.keys(result.invoice.items[0]).sort(), [
-    'itemAmount', 'itemCount', 'itemName', 'itemPrice', 'itemSeq', 'itemWord',
+  assert.deepEqual(Object.keys(result.invoice.Items[0]).sort(), [
+    'ItemAmount', 'ItemCount', 'ItemName', 'ItemPrice', 'ItemSeq', 'ItemWord',
   ]);
 });
 
@@ -103,6 +114,25 @@ test('internal invoice authentication rejects missing headers invalid HMAC and o
         nowSeconds: 1_800_000_000,
       }),
       (error) => error.code === item.code,
+    );
+  }
+});
+
+test('internal invoice payload rejects invalid tax flags identity fields and amount totals', () => {
+  const valid = invoiceBody();
+  const invalidInvoices = [
+    { ...valid.invoice, TaxType: '2' },
+    { ...valid.invoice, Donation: '1' },
+    { ...valid.invoice, CustomerEmail: 'not-an-email' },
+    { ...valid.invoice, SalesAmount: 2999 },
+    { ...valid.invoice, CustomerIdentifier: '12345678', Print: '0' },
+    { ...valid.invoice, CustomerIdentifier: '12345678', Print: '1', CustomerAddr: '' },
+  ];
+
+  for (const invoice of invalidInvoices) {
+    assert.throws(
+      () => sanitizeInternalInvoicePayload({ merchantProfile: 'primary', invoice }),
+      /發票資料格式錯誤/,
     );
   }
 });
@@ -172,15 +202,20 @@ test('internal invoice route bypasses browser controls but rejects replay withou
   const env = {
     INVOICE_GATEWAY_SECRET: SECRET,
     INVOICE_REQUEST_GUARD: createGuardBinding(),
+    ECPAY_ENVIRONMENT: 'stage',
+    ECPAY_PRIMARY_MERCHANT_ID: '2000132',
+    ECPAY_PRIMARY_HASH_KEY: 'ejCk326UnaZWKisg',
+    ECPAY_PRIMARY_HASH_IV: 'q9jcZX8Ib9LM8wYk',
     PUBLIC_WRITE_LIMITER: { async limit() { publicLimitCalls += 1; return { success: true }; } },
     PUBLIC_READ_LIMITER: { async limit() { publicLimitCalls += 1; return { success: true }; } },
+    fetch: async () => new Response('not-json', { status: 200 }),
     nowSeconds: 1_800_000_000,
   };
   const first = await worker.fetch(await signedRequest(), env, {});
   const replay = await worker.fetch(await signedRequest(), env, {});
   const replayText = await replay.text();
 
-  assert.equal(first.status, 501);
+  assert.equal(first.status, 502);
   assert.equal(replay.status, 409);
   assert.equal(publicLimitCalls, 0);
   assert.equal(first.headers.get('Access-Control-Allow-Origin'), null);

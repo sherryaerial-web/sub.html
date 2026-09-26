@@ -4457,6 +4457,7 @@ function getPracticeRecordsUnlocked_(spreadsheet) {
 
   return {
     studentGroups: studentGroups,
+    practiceAudits: practiceAudits.slice(1),
     sheets: {
       series: seriesSheet,
       bookings: bookingSheet,
@@ -4670,6 +4671,30 @@ function getPracticeSeriesHorizonDate_(courseRows, startDateValue) {
   }, startDate);
 }
 
+function getPracticeSeriesMembers_(records, series, date) {
+  var byId = {};
+  records.bookings.forEach(function(b) { byId[b.bookingId] = b; });
+  var members = {};
+  members[series.creatorName] = { teacherName: series.creatorName, role: PRACTICE_ROLE.CREATOR,
+    startTime: series.startTime, endTime: series.endTime, joinScope: '每週' };
+  (records.participants || []).filter(function(p) {
+    var b = byId[p.bookingId];
+    return p.seriesId === series.seriesId && b && b.date < date &&
+      (p.joinScope === '本次及往後每週' || (p.teacherName === series.creatorName && p.status === PRACTICE_PARTICIPANT_STATUS.ACTIVE));
+  }).sort(function(a,b) { return byId[a.bookingId].date.localeCompare(byId[b.bookingId].date) || cleanText_(a.joinedAt).localeCompare(cleanText_(b.joinedAt)); }).forEach(function(p) {
+    var leftFuture = (records.practiceAudits || []).some(function(row) {
+      var b = byId[cleanText_(row[4])];
+      return cleanText_(row[2]) === '退出本次及往後自主練習' && cleanText_(row[1]) === p.teacherName &&
+        b && b.seriesId === series.seriesId && b.date <= date && cleanText_(row[0]) >= cleanText_(p.joinedAt);
+    });
+    if (leftFuture) { if (p.teacherName !== series.creatorName) delete members[p.teacherName]; return; }
+    members[p.teacherName] = { teacherName:p.teacherName,
+      role:p.teacherName === series.creatorName ? PRACTICE_ROLE.CREATOR : PRACTICE_ROLE.PARTICIPANT,
+      startTime:p.startTime, endTime:p.endTime, joinScope:p.teacherName === series.creatorName ? '每週' : '本次及往後每週' };
+  });
+  return Object.keys(members).map(function(name) { return members[name]; });
+}
+
 function planPracticeSeriesOccurrence_(records, series, date, courseRows) {
   if (series.status !== '啟用中' || date < series.startDate ||
       (series.stopDate && date >= series.stopDate)) return { action: 'skip', reason: '系列未啟用或已停止' };
@@ -4677,7 +4702,18 @@ function planPracticeSeriesOccurrence_(records, series, date, courseRows) {
       records.exceptions.some(function(e) { return e.seriesId === series.seriesId && e.date === date; })) {
     return { action: 'skip', reason: '已有場次或取消例外' };
   }
-  var interval = normalizePracticeInterval_(date, series.startTime, series.endTime);
+  // A newer overlapping series expresses the teacher's latest intent, even if its
+  // occurrence was cancelled or the newer series was subsequently stopped.
+  if ((records.series || []).some(function(other) {
+    return other.seriesId !== series.seriesId && other.creatorName === series.creatorName &&
+      other.room === series.room && other.startDate > series.startDate && other.startDate <= date &&
+      (parsePracticeDateTime_(other.startDate, '00:00') - parsePracticeDateTime_(series.startDate, '00:00')) % (7 * 86400000) === 0 &&
+      other.startTime < series.endTime && other.endTime > series.startTime;
+  })) return { action:'skip', reason:'已有較新的循環設定' };
+  var members = getPracticeSeriesMembers_(records, series, date);
+  var startTime = members.map(function(p) { return p.startTime; }).sort()[0];
+  var endTime = members.map(function(p) { return p.endTime; }).sort().pop();
+  var interval = normalizePracticeInterval_(date, startTime, endTime);
   var conflicts = findPracticeConflictsUnlocked_({ room: series.room, interval: interval }, records, courseRows);
   // A waitlisted practice also reserves its place in the queue; do not create a competing series.
   var waiting = records.bookings.some(function(b) {
@@ -4696,27 +4732,35 @@ function planPracticeSeriesOccurrence_(records, series, date, courseRows) {
   }
   var ids = conflicts.filter(function(c) { return c.type === 'course'; }).map(function(c) { return c.id; });
   return { action: 'create', status: ids.length ? PRACTICE_STATUS.WAITLISTED : PRACTICE_STATUS.ACTIVE,
+    startTime:startTime, endTime:endTime, members:members,
     calendarIds: ids, reason: ids.length ? '等待所有相關 OB 課程取消後補入' : '' };
 }
 
 function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits, courseRows) {
-  if (series.mode === 'waitlist') {
+  var recurringMembers = getPracticeSeriesMembers_(records, series, date);
+  if (series.mode === 'waitlist' || recurringMembers.length > 1 ||
+      recurringMembers[0].startTime !== series.startTime || recurringMembers[0].endTime !== series.endTime) {
     var plan = planPracticeSeriesOccurrence_(records, series, date, courseRows || []);
     if (plan.action !== 'create') return { created: false, skipped: true, reason: plan.reason };
     var id = Utilities.getUuid();
-    var participantId = Utilities.getUuid();
     var timestamp = getTimestamp_();
     appendPracticeRowUnlocked_(records.sheets.bookings, SHEET_HEADERS.PRACTICE_BOOKINGS, [
-      id, series.seriesId, date, series.room, series.startTime, series.endTime, plan.status,
+      id, series.seriesId, date, series.room, plan.startTime, plan.endTime, plan.status,
       series.creatorName, serializePracticeWaitlistCalendarIds_(plan.calendarIds), plan.reason,
       timestamp, timestamp, actor
     ]);
-    appendPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.PRACTICE_PARTICIPANTS, [
-      participantId, id, series.seriesId, series.creatorName, PRACTICE_ROLE.CREATOR,
-      series.startTime, series.endTime, '每週', PRACTICE_PARTICIPANT_STATUS.ACTIVE, timestamp, ''
-    ]);
+    plan.members.forEach(function(member) {
+      var memberId = Utilities.getUuid();
+      appendPracticeRowUnlocked_(records.sheets.participants, SHEET_HEADERS.PRACTICE_PARTICIPANTS, [
+        memberId, id, series.seriesId, member.teacherName, member.role,
+        member.startTime, member.endTime, member.joinScope, PRACTICE_PARTICIPANT_STATUS.ACTIVE, timestamp, ''
+      ]);
+      records.participants.push({participantId:memberId,bookingId:id,seriesId:series.seriesId,
+        teacherName:member.teacherName,role:member.role,startTime:member.startTime,endTime:member.endTime,
+        joinScope:member.joinScope,status:PRACTICE_PARTICIPANT_STATUS.ACTIVE,joinedAt:timestamp});
+    });
     records.bookings.push({ bookingId: id, seriesId: series.seriesId, date: date, room: series.room,
-      startTime: series.startTime, endTime: series.endTime, status: plan.status, creatorName: series.creatorName });
+      startTime: plan.startTime, endTime: plan.endTime, status: plan.status, creatorName: series.creatorName });
     appendPracticeAuditUnlocked_(records.sheets.audit, { actor: actor, action: '建立循環候補場次',
       targetType: '場次', targetId: id, after: plan, reason: series.seriesId });
     if (appendAudits) appendAudits([{ actor: actor, action: '建立循環候補場次', targetId: id,
@@ -4805,7 +4849,7 @@ function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendA
   return { created: true, bookingId: bookingId };
 }
 
-function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor, appendAudits, courseRows) {
+function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor, appendAudits, courseRows, verifiedDates) {
   if (series.status !== '啟用中') return { created: 0, skipped: 0 };
   var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
   parsePracticeDateTime_(throughDate, '00:00');
@@ -4816,6 +4860,10 @@ function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor,
   while (cursor.getTime() <= end.getTime()) {
     var date = Utilities.formatDate(cursor, 'Asia/Taipei', 'yyyy/MM/dd');
     if (series.stopDate && date >= series.stopDate) break;
+    if (Array.isArray(verifiedDates) && verifiedDates.indexOf(date) === -1) {
+      cursor = new Date(cursor.getTime() + 7 * 86400000);
+      continue;
+    }
     var result = createPracticeOccurrenceUnlocked_(
       records,
       series,
@@ -4887,9 +4935,12 @@ function planTeacherPracticeSeriesMigration_(records, courseRows, coverage, lizT
   if (!coverage || coverage.verified !== true) throw new Error('尚未確認可補建課表範圍。');
   if (!cleanText_(lizTeacherName)) throw new Error('尚未確認 Liz 老師帳號。');
   var shadow = JSON.parse(JSON.stringify({ series: records.series, bookings: records.bookings,
-    participants: records.participants, exceptions: records.exceptions, studentGroups: records.studentGroups || [] }));
+    participants: records.participants, exceptions: records.exceptions, studentGroups: records.studentGroups || [],
+    practiceAudits: records.practiceAudits || [] }));
+  var occupancyRows = courseRows.map(function(row) { return row.slice(0, 8).concat([row[9]]); })
+    .sort(function(a,b) { return JSON.stringify(a).localeCompare(JSON.stringify(b)); });
   result.inputDigest = bytesToHex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
-    JSON.stringify([shadow, courseRows, coverage, lizTeacherName]), Utilities.Charset.UTF_8));
+    JSON.stringify([shadow, occupancyRows, coverage, lizTeacherName]), Utilities.Charset.UTF_8));
   var weekday = function(date) {
     return new Date(parsePracticeDateTime_(date, '00:00').getTime() + 8 * 3600000).getUTCDay();
   };
@@ -4908,9 +4959,13 @@ function planTeacherPracticeSeriesMigration_(records, courseRows, coverage, lizT
     }
     shadow.series.filter(function(s) {
       return s.creatorName === lizTeacherName && weekday(s.startDate) === slot.day &&
-        s.room === slot.room && s.startTime === slot.start && s.status === '啟用中';
+        s.startTime < slot.end && s.endTime > slot.start && s.status === '啟用中';
     }).forEach(function(s) {
       if (s.stopDate && s.stopDate <= '2026/10/01') return;
+      if (s.room !== slot.room || s.startTime !== slot.start ||
+          (s.endTime !== slot.end && !(slot.day === 6 && s.endTime === '18:30'))) {
+        result.ambiguous.push({seriesId:s.seriesId,reason:'Liz 既有循環的教室或時間不同，須先核對'}); return;
+      }
       if (shadow.bookings.some(function(b) { return b.seriesId === s.seriesId && b.date >= '2026/11/01'; }) ||
           shadow.exceptions.some(function(e) { return e.seriesId === s.seriesId && e.date >= '2026/11/01'; })) {
         result.ambiguous.push({ seriesId:s.seriesId, reason:'舊系列已有十一月紀錄，須先核對，不能重建' }); return;
@@ -4937,11 +4992,11 @@ function planTeacherPracticeSeriesMigration_(records, courseRows, coverage, lizT
       if (Array.isArray(coverage.dates) && coverage.dates.indexOf(date) === -1) continue;
       var plan=planPracticeSeriesOccurrence_(shadow,series,date,courseRows);
       var item={seriesId:series.seriesId,teacherName:series.creatorName,date:date,room:series.room,
-        startTime:series.startTime,endTime:series.endTime,status:plan.status,calendarIds:plan.calendarIds,reason:plan.reason};
+        startTime:plan.startTime || series.startTime,endTime:plan.endTime || series.endTime,status:plan.status,calendarIds:plan.calendarIds,reason:plan.reason};
       if(plan.action==='create') {
         result.create.push(item);
         shadow.bookings.push({bookingId:'preview-'+series.seriesId+'-'+date,seriesId:series.seriesId,
-          creatorName:series.creatorName,date:date,room:series.room,startTime:series.startTime,endTime:series.endTime,status:plan.status});
+          creatorName:series.creatorName,date:date,room:series.room,startTime:plan.startTime,endTime:plan.endTime,status:plan.status});
       } else result.skip.push(item);
     }
   });
@@ -5635,7 +5690,8 @@ function createPracticeWaitlist_(session, inputValue) {
           startTime, endTime, date, '', '啟用中', now, now, teacherName, 'waitlist'
         ]);
         var expansion = expandPracticeSeriesUnlocked_(records, series,
-          getPracticeSeriesHorizonDate_(courseRows, date), teacherName, appendAudits, courseRows);
+          getPracticeSeriesHorizonDate_(courseRows, date), teacherName, appendAudits, courseRows,
+          courseRows.filter(function(row) { return cleanText_(row[4]); }).map(function(row) { return formatMyDate(row[0]); }));
         var bookings = records.bookings.filter(function(b) { return b.seriesId === seriesId; });
         if (!bookings.length || bookings[0].date !== date) throw new Error('本週已有自主練習，請重新整理後再登記。');
         return { seriesId: seriesId, bookingId: bookings[0].bookingId, status: bookings[0].status,
@@ -6963,9 +7019,12 @@ function runScheduledPracticeReconciliation() {
   });
   publishedDates.forEach(function(date) { if (dates.indexOf(date) === -1) dates.push(date); });
   var currentObRows = [];
+  var verifiedDates = [];
   try {
     dates.forEach(function(date) {
-      currentObRows = currentObRows.concat(getPracticeCurrentObRowsForDayView_(date));
+      var dayRows = getPracticeCurrentObRowsForDayView_(date, publishedDates.indexOf(date) !== -1);
+      if (publishedDates.indexOf(date) !== -1 && dayRows.some(function(row) { return formatMyDate(row[0]) === date && cleanText_(row[4]); })) verifiedDates.push(date);
+      currentObRows = currentObRows.concat(dayRows);
     });
   } catch (error) {
     var fallbackResult = reconcilePracticeBookings_({
@@ -6989,7 +7048,7 @@ function runScheduledPracticeReconciliation() {
     return runStateTransitionUnlocked_([records.sheets.bookings, records.sheets.participants,
       records.sheets.exceptions, records.sheets.audit], function(appendAudits) {
       return extendActivePracticeSeriesUnlocked_(records,
-        { from: today, to: throughDate, dates: publishedDates, verified: true }, currentObRows, '系統', appendAudits);
+        { from: today, to: throughDate, dates: verifiedDates, verified: true }, currentObRows, '系統', appendAudits);
     });
   });
   invalidatePracticeDayViewCache_(dates);

@@ -1428,6 +1428,7 @@ function createNotificationBackend() {
 test('weekly waitlist creates independent course links and empty weeks without duplicates', () => {
   const rows = [
     ['2026/10/03','14:00','A－空環 Lv.1','Tako','first'],
+    ['2026/10/10','14:00','D－空環 Lv.1','Tako','other-room'],
     ['2026/10/17','14:00','A－空環 Lv.1','Tako','third'],
   ];
   const f=createPracticeBackend({courseRows:rows});
@@ -1557,6 +1558,63 @@ test('practice migration rolls back series metadata when a write fails', () => {
   f.backend.appendPracticeAuditUnlocked_=append;
   f.backend.getTeachers_=()=>[];
   assert.throws(()=>f.backend.previewTeacherPracticeSeriesMigration_(admin),/Liz/);
+});
+
+test('practice extension prefers successor series and does not resurrect its cancellation', () => {
+  const f=createPracticeBackend();
+  const r=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  r.series=[{seriesId:'old',creatorName:'Tako',room:'C',startDate:'2026/09/04',startTime:'14:00',endTime:'17:00',status:'啟用中',mode:'waitlist'},
+    {seriesId:'new',creatorName:'Tako',room:'C',startDate:'2026/10/02',startTime:'14:00',endTime:'16:00',status:'啟用中',mode:'waitlist'}];
+  r.exceptions=[{seriesId:'new',date:'2026/11/06'}];
+  f.backend.extendActivePracticeSeriesUnlocked_(r,{from:'2026/11/01',to:'2026/11/13',verified:true},[],'test');
+  assert.deepEqual(f.bookingSheet.values.slice(1).map(x=>[x[1],x[2],x[5]]),[['new','2026/11/13','16:00']]);
+});
+
+test('practice extension inherits weekly joiners and respects future exit', () => {
+  const f=createPracticeBackend({courseRows:[['2026/09/10','08:00','D－空環','A','a']]});
+  const created=f.backend.createPracticeBooking_(f.teacher('小琪'),{date:'2026/09/10',room:'A',startTime:'14:00',endTime:'16:00',recurrence:'weekly'});
+  f.backend.joinPracticeBooking_(f.teacher('Ariel Lu'),{bookingId:created.bookingId,startTime:'15:00',endTime:'17:00',scope:'future'});
+  let r=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  f.backend.extendActivePracticeSeriesUnlocked_(r,{from:'2026/10/01',to:'2026/10/01',verified:true},[],'test');
+  const b=f.bookingSheet.values.find(x=>x[2]==='2026/10/01');
+  assert.equal(b[5],'17:00');
+  assert.deepEqual(f.participantSheet.values.filter(x=>x[1]===b[0]).map(x=>[x[3],x[5],x[6]]),[['小琪','14:00','16:00'],['Ariel Lu','15:00','17:00']]);
+  f.backend.leavePracticeBooking_(f.teacher('Ariel Lu'),{bookingId:b[0],scope:'future'});
+  r=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  f.backend.extendActivePracticeSeriesUnlocked_(r,{from:'2026/11/05',to:'2026/11/05',verified:true},[],'test');
+  const next=f.bookingSheet.values.find(x=>x[2]==='2026/11/05');
+  assert.equal(next[5],'16:00');
+  assert.equal(f.participantSheet.values.filter(x=>x[1]===next[0]).length,1);
+});
+
+test('practice migration digest ignores fetch timestamps but detects occupancy and Liz room ambiguity', () => {
+  const f=createPracticeBackend();
+  const r=f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  const coverage={from:'2026/10/01',to:'2026/11/30',verified:true};
+  const row=['2026/11/07','14:00','B－空環','Tako','c','','','','first'];
+  const first=f.backend.planTeacherPracticeSeriesMigration_(r,[row],coverage,'Liz 🌰');
+  const changed=row.slice(); changed[8]='later';
+  assert.equal(f.backend.planTeacherPracticeSeriesMigration_(r,[changed],coverage,'Liz 🌰').inputDigest,first.inputDigest);
+  changed[1]='15:00';
+  assert.notEqual(f.backend.planTeacherPracticeSeriesMigration_(r,[changed],coverage,'Liz 🌰').inputDigest,first.inputDigest);
+  r.series.push({seriesId:'other-room',creatorName:'Liz 🌰',room:'C',startDate:'2026/09/19',startTime:'13:30',endTime:'18:30',status:'啟用中',mode:'waitlist'});
+  assert.ok(f.backend.planTeacherPracticeSeriesMigration_(r,[row],coverage,'Liz 🌰').ambiguous.some(x=>x.seriesId==='other-room'));
+});
+
+test('weekly waitlist does not treat a missing future day as published empty availability', () => {
+  const f=createPracticeBackend({courseRows:[['2026/10/03','14:00','A－空環','Tako','one'],['2026/10/17','14:00','A－空環','Tako','three']]});
+  f.backend.createPracticeWaitlist_(f.teacher('Liz 🌰'),{calendarId:'one',date:'2026/10/03',startTime:'14:00',endTime:'15:00',recurrence:'weekly'});
+  assert.deepEqual(f.bookingSheet.values.slice(1).map(r=>r[2]),['2026/10/03','2026/10/17']);
+});
+
+test('scheduled practice extension rejects empty live days despite a published snapshot', () => {
+  const f=createPracticeBackend({courseRows:[['2026/10/03','14:00','A－空環','Tako','one']]});
+  f.seriesSheet.values.push(['s','Liz 🌰','A',6,'14:00','15:00','2026/09/05','','啟用中','','','','waitlist']);
+  f.backend.currentTimeMs_=()=>new Date('2026-10-01T12:00:00+08:00').getTime();
+  f.backend.getPracticeCurrentObRowsForDayView_=()=>[];
+  const result=f.backend.runScheduledPracticeReconciliation();
+  assert.equal(result.extension.created,0);
+  assert.equal(f.bookingSheet.values.length,1);
 });
 
 function createPracticeBackend(options = {}) {

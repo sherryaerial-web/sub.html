@@ -4787,6 +4787,7 @@ function createPracticeOccurrenceUnlocked_(records, series, date, actor, appendA
 }
 
 function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor, appendAudits, courseRows) {
+  if (series.status !== '啟用中') return { created: 0, skipped: 0 };
   var throughDate = cleanText_(throughDateValue).replace(/-/g, '/');
   parsePracticeDateTime_(throughDate, '00:00');
   var cursor = parsePracticeDateTime_(series.startDate, '00:00');
@@ -4795,6 +4796,7 @@ function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor,
   var skipped = 0;
   while (cursor.getTime() <= end.getTime()) {
     var date = Utilities.formatDate(cursor, 'Asia/Taipei', 'yyyy/MM/dd');
+    if (series.stopDate && date >= series.stopDate) break;
     var result = createPracticeOccurrenceUnlocked_(
       records,
       series,
@@ -4808,6 +4810,30 @@ function expandPracticeSeriesUnlocked_(records, series, throughDateValue, actor,
     cursor = new Date(cursor.getTime() + 7 * 24 * 60 * 60 * 1000);
   }
   return { created: created, skipped: skipped };
+}
+
+function extendActivePracticeSeriesUnlocked_(records, coverage, courseRows, actor, appendAudits) {
+  var result = { created: 0, skipped: 0, affectedDates: [] };
+  if (!coverage || coverage.verified !== true || !coverage.from || !coverage.to) return result;
+  var from = parsePracticeDateTime_(coverage.from, '00:00').getTime();
+  var to = parsePracticeDateTime_(coverage.to, '00:00').getTime();
+  if (to < from || to - from > 366 * 86400000) throw new Error('循環延伸範圍不正確。');
+  records.series.forEach(function(series) {
+    if (series.status !== '啟用中') return;
+    var cursor = parsePracticeDateTime_(series.startDate, '00:00').getTime();
+    if (cursor < from) cursor += Math.ceil((from - cursor) / (7 * 86400000)) * 7 * 86400000;
+    for (; cursor <= to; cursor += 7 * 86400000) {
+      var date = Utilities.formatDate(new Date(cursor), 'Asia/Taipei', 'yyyy/MM/dd');
+      if (series.stopDate && date >= series.stopDate) break;
+      if (Array.isArray(coverage.dates) && coverage.dates.indexOf(date) === -1) continue;
+      var plan = planPracticeSeriesOccurrence_(records, series, date, courseRows);
+      if (plan.action !== 'create') { result.skipped += 1; continue; }
+      var added = createPracticeOccurrenceUnlocked_(records, series, date, actor, appendAudits, courseRows);
+      if (added.created) { result.created += 1; result.affectedDates.push(date); }
+      else result.skipped += 1;
+    }
+  });
+  return result;
 }
 
 function getTimeTreePracticeMigration202609Manifest_() {
@@ -6750,6 +6776,29 @@ function runScheduledPracticeReconciliation() {
     'yyyy/MM/dd'
   );
   var dates = getScheduledPracticeReconciliationDates_(today, throughDate);
+  // Only dates already represented in the published CourseList are eligible for extension.
+  // Fetch each candidate day live; a sparse snapshot never proves an unpublished day is empty.
+  var publishedDates = withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var records = getPracticeRecordsUnlocked_(ss);
+    var rows = requireSheet_(ss, SHEETS.COURSE_LIST).getDataRange().getValues().slice(1);
+    var published = {};
+    rows.forEach(function(row) { var d = formatMyDate(row[0]); if (cleanText_(row[4])) published[d] = true; });
+    var candidates = [];
+    records.series.forEach(function(series) {
+      if (series.status !== '啟用中') return;
+      var start = parsePracticeDateTime_(series.startDate, '00:00').getTime();
+      var from = parsePracticeDateTime_(today, '00:00').getTime();
+      if (start < from) start += Math.ceil((from - start) / (7 * 86400000)) * 7 * 86400000;
+      for (var t = start; t <= parsePracticeDateTime_(throughDate, '00:00').getTime(); t += 7 * 86400000) {
+        var d = Utilities.formatDate(new Date(t), 'Asia/Taipei', 'yyyy/MM/dd');
+        if (series.stopDate && d >= series.stopDate) break;
+        if (published[d] && candidates.indexOf(d) === -1) candidates.push(d);
+      }
+    });
+    return candidates;
+  });
+  publishedDates.forEach(function(date) { if (dates.indexOf(date) === -1) dates.push(date); });
   var currentObRows = [];
   try {
     dates.forEach(function(date) {
@@ -6771,6 +6820,14 @@ function runScheduledPracticeReconciliation() {
     today: today,
     throughDate: throughDate,
     currentObRows: currentObRows
+  });
+  liveResult.extension = withScriptLock_(function() {
+    var records = getPracticeRecordsUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
+    return runStateTransitionUnlocked_([records.sheets.bookings, records.sheets.participants,
+      records.sheets.exceptions, records.sheets.audit], function(appendAudits) {
+      return extendActivePracticeSeriesUnlocked_(records,
+        { from: today, to: throughDate, dates: publishedDates, verified: true }, currentObRows, '系統', appendAudits);
+    });
   });
   invalidatePracticeDayViewCache_(dates);
   liveResult.courseSource = 'live';

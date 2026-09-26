@@ -1470,6 +1470,21 @@ test('weekly waitlist fails closed on unavailable OB and skips rentals', () => {
   assert.equal(JSON.stringify(f.seriesSheet.values), before);
 });
 
+test('practice series extension is bounded idempotent and respects stopped dates', () => {
+  const f = createPracticeBackend();
+  const records = f.backend.getPracticeRecordsUnlocked_(f.spreadsheet);
+  records.series.push({seriesId:'sep',creatorName:'Liz 🌰',room:'A',startDate:'2026/09/26',startTime:'13:30',endTime:'18:00',status:'啟用中',mode:'waitlist',stopDate:'2026/10/24'});
+  records.exceptions.push({seriesId:'sep',date:'2026/10/10'});
+  const coverage = {from:'2026/10/01',to:'2026/10/31',verified:true};
+  assert.equal(f.backend.extendActivePracticeSeriesUnlocked_(records,{...coverage,verified:false},[],'test').created,0);
+  const result = f.backend.extendActivePracticeSeriesUnlocked_(records,coverage,[],'test');
+  assert.equal(result.created,2);
+  assert.deepEqual(Array.from(result.affectedDates),['2026/10/03','2026/10/17']);
+  assert.equal(f.backend.extendActivePracticeSeriesUnlocked_(records,coverage,[],'test').created,0);
+  records.series[0].status = '已停止';
+  assert.equal(f.backend.extendActivePracticeSeriesUnlocked_(records,{...coverage,to:'2026/11/30'},[],'test').created,0);
+});
+
 function createPracticeBackend(options = {}) {
   const courseSheet = createSheetFixture('CourseList', [
     EXPECTED_COURSE_HEADERS,

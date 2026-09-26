@@ -468,6 +468,7 @@ function createInvoiceSyncBackend() {
     EXPECTED_ACCOUNT_HEADERS,
     createAccount(bootstrap, 'Ivy', '0912', { role: '管理員' })
       .concat('', 'course_admin,payroll_admin,vvip_admin,invoice_admin'),
+    createAccount(bootstrap, '老師甲', '1234').concat('', ''),
   ]);
   const queueSheet = createSheetFixture('InvoiceQueue', [EXPECTED_INVOICE_QUEUE_HEADERS]);
   const itemSheet = createSheetFixture('InvoiceItems', [EXPECTED_INVOICE_ITEM_HEADERS]);
@@ -490,6 +491,7 @@ function createInvoiceSyncBackend() {
     auditSheet,
     settingsSheet,
     sessionToken: backend.authenticate_('Ivy', '0912').sessionToken,
+    teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
   };
 }
 
@@ -570,6 +572,50 @@ function createGatewayResponse(statusCode, data) {
       status: data.outcome === 'issued' ? 'success' : 'error',
       data,
     }),
+  };
+}
+
+function createInvoiceSchedulerBackend() {
+  const fixture = createInvoiceSyncBackend();
+  const triggers = [];
+  const builders = [];
+  const ScriptApp = {
+    getProjectTriggers() { return triggers.slice(); },
+    deleteTrigger(trigger) {
+      const index = triggers.indexOf(trigger);
+      if (index >= 0) triggers.splice(index, 1);
+    },
+    newTrigger(handler) {
+      const record = { handler, kind: '', hour: null, minute: null, days: null, timezone: '' };
+      const builder = {
+        timeBased() { record.kind = 'timeBased'; return this; },
+        atHour(value) { record.hour = value; return this; },
+        nearMinute(value) { record.minute = value; return this; },
+        everyDays(value) { record.days = value; return this; },
+        inTimezone(value) { record.timezone = value; return this; },
+        create() {
+          const trigger = { getHandlerFunction: () => handler, __record: record };
+          triggers.push(trigger);
+          return trigger;
+        },
+      };
+      builders.push(record);
+      return builder;
+    },
+  };
+  const backend = loadBackend({
+    ...fixture.services,
+    ScriptApp,
+    SpreadsheetApp: { getActiveSpreadsheet() { return fixture.spreadsheet; } },
+  });
+  return {
+    ...fixture,
+    backend,
+    ScriptApp,
+    triggers,
+    builders,
+    sessionToken: backend.authenticate_('Ivy', '0912').sessionToken,
+    teacherToken: backend.authenticate_('老師甲', '1234').sessionToken,
   };
 }
 
@@ -3446,6 +3492,134 @@ test('invoice batch isolates personal failures and refuses business invoices wit
   assert.match(result[1].error, /公司發票/);
   assert.match(result[2].error, /狀態/);
   assert.equal(fixture.gatewayCalls.length, 1);
+});
+
+test('invoice admin actions reject accounts without invoice capability at the server boundary', () => {
+  const fixture = createInvoiceSyncBackend();
+  const teacherSession = fixture.backend.requireSession_(fixture.teacherToken);
+  const calls = [
+    () => fixture.backend.getInvoiceAdminDashboard_(teacherSession),
+    () => fixture.backend.updateInvoiceDraft_(teacherSession, { invoiceId: 'missing', version: 1 }),
+    () => fixture.backend.setDefaultInvoiceMerchant_(teacherSession, 'secondary'),
+    () => fixture.backend.resolveInvoiceRefund_(teacherSession, { invoiceId: 'missing', version: 1 }),
+  ];
+  calls.forEach((call) => assert.throws(call, /發票管理權限/));
+
+  const actions = [
+    ['getInvoiceAdminDashboard', {}],
+    ['updateInvoiceDraft', { invoice: JSON.stringify({ invoiceId: 'missing', version: 1 }) }],
+    ['setDefaultInvoiceMerchant', { merchantProfile: 'secondary' }],
+    ['resolveInvoiceRefund', { refund: JSON.stringify({ invoiceId: 'missing', version: 1 }) }],
+    ['syncInvoicePurchases', {}],
+    ['issueInvoiceDraft', { invoiceId: 'missing' }],
+    ['issueInvoiceBatch', { invoiceIds: JSON.stringify(['missing']) }],
+    ['installInvoiceSyncScheduler', {}],
+  ];
+  for (const [action, params] of actions) {
+    fixture.backend.console = { error() {} };
+    const response = JSON.parse(fixture.backend.doPost({ parameter: {
+      action, sessionToken: fixture.teacherToken, ...params,
+    } }).text);
+    assert.equal(response.status, 'error', action);
+    assert.match(response.message, /發票管理權限/, action);
+  }
+});
+
+test('invoice admin action updates company data and merchant profile only with matching version and audit', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-edit', version: 4 });
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+
+  assert.throws(() => fixture.backend.updateInvoiceDraft_(session, {
+    invoiceId: 'invoice-edit', version: 3, invoiceKind: 'business',
+  }), /版本|更新/);
+
+  const result = fixture.backend.updateInvoiceDraft_(session, {
+    invoiceId: 'invoice-edit', version: 4, invoiceKind: 'business',
+    customerIdentifier: '12345678', customerName: '測試公司',
+    customerAddress: '台北市測試路 1 號', merchantProfile: 'secondary',
+  });
+
+  assert.equal(result.version, 5);
+  const row = fixture.queueSheet.values[1];
+  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('invoiceKind')], 'business');
+  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('customerIdentifier')], '12345678');
+  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('merchantProfile')], 'secondary');
+  assert.equal(fixture.auditSheet.values.at(-1)[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')], 'DRAFT_UPDATED');
+});
+
+test('invoice admin action changes the default merchant only for future synchronized invoices', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-existing', merchantProfile: 'primary' });
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+
+  fixture.backend.setDefaultInvoiceMerchant_(session, 'secondary');
+  fixture.backend.upsertInvoiceCandidate_(fixture.spreadsheet, {
+    paymentReferenceId: 'ORDER-FUTURE', customerEmail: 'future@example.com', customerName: '未來學生',
+    purchasedAt: '2026-09-27T00:00:00Z', salesAmount: 1200,
+    items: [{
+      obPurchaseId: 'future-purchase', paymentStatus: 'paid', paymentMethod: 'Bank Transfer',
+      itemName: '課卡', itemCount: 1, itemWord: '張', itemPrice: 1200, itemAmount: 1200,
+      purchasedAt: '2026-09-27T00:00:00Z',
+    }],
+  }, 'Ivy', {
+    defaultMerchantProfile: fixture.backend.getInvoiceSettingUnlocked_(
+      fixture.settingsSheet, 'invoiceDefaultMerchantProfile', 'primary',
+    ),
+  });
+
+  assert.equal(fixture.queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('merchantProfile')], 'primary');
+  assert.equal(fixture.queueSheet.values[2][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('merchantProfile')], 'secondary');
+  assert.equal(fixture.auditSheet.values.at(-2)[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')], 'DEFAULT_MERCHANT_CHANGED');
+});
+
+test('invoice scheduler installs one Taipei midnight trigger and reuses the protected sync core', () => {
+  const fixture = createInvoiceSchedulerBackend();
+
+  const first = fixture.backend.installInvoiceSyncScheduler();
+  const second = fixture.backend.installInvoiceSyncScheduler();
+
+  assert.equal(first.created, true);
+  assert.equal(second.created, false);
+  assert.equal(fixture.triggers.length, 1);
+  assert.deepEqual(fixture.triggers[0].__record, {
+    handler: 'runScheduledInvoiceSync', kind: 'timeBased', hour: 0, minute: 0,
+    days: 1, timezone: 'Asia/Taipei',
+  });
+
+  let scheduledCall = null;
+  fixture.backend.syncInvoicePurchasesForActor_ = (actor, options) => {
+    scheduledCall = { actor, options };
+    return { status: 'complete', requestCount: 0 };
+  };
+  const result = fixture.backend.runScheduledInvoiceSync();
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { status: 'complete', requestCount: 0 });
+  assert.equal(scheduledCall.actor, '系統排程');
+});
+
+test('invoice refund resolution is tracking only and never calls the issue gateway', () => {
+  const fixture = createInvoiceIssueBackend(() => {
+    throw new Error('refund tracking must not call gateway');
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-refund-resolve', status: 'REFUND_REVIEW', version: 7,
+    ecpayInvoiceNo: 'AB12345678', refundDetectedAt: '2026-09-27 10:00:00',
+  });
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+
+  assert.throws(() => fixture.backend.resolveInvoiceRefund_(session, {
+    invoiceId: 'invoice-refund-resolve', version: 6, note: '已人工處理',
+  }), /版本|更新/);
+  const result = fixture.backend.resolveInvoiceRefund_(session, {
+    invoiceId: 'invoice-refund-resolve', version: 7, note: '已人工確認，不自動作廢或折讓',
+  });
+
+  assert.equal(result.status, 'REFUND_RESOLVED');
+  assert.equal(fixture.gatewayCalls.length, 0);
+  const row = fixture.queueSheet.values[1];
+  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], 'REFUND_RESOLVED');
+  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('refundResolvedBy')], 'Ivy');
+  assert.match(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('refundNote')], /不自動/);
 });
 
 test('legacy migration backfills only unique exact OB links and marks every unresolved active row', () => {

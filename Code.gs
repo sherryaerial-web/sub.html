@@ -340,6 +340,9 @@ var CONFIG = {
   INVOICE_GATEWAY_URL_PROPERTY: 'INVOICE_GATEWAY_URL',
   INVOICE_GATEWAY_SECRET_PROPERTY: 'INVOICE_GATEWAY_SECRET',
   INVOICE_RELATE_SEQUENCE_PREFIX: 'invoiceRelateSequence',
+  INVOICE_SCHEDULER_INSTALLED_PROPERTY: 'INVOICE_SYNC_SCHEDULER_INSTALLED_AT',
+  INVOICE_SYNC_HOUR_SETTING: 'invoiceSyncHour',
+  INVOICE_SYNC_TIMEZONE_SETTING: 'invoiceSyncTimezone',
   INVOICE_SYNC_MAX_REQUESTS: 90
 };
 
@@ -7340,8 +7343,7 @@ function parseInvoiceSyncCursor_(value) {
   }
 }
 
-function syncInvoicePurchases_(sessionToken, optionsValue) {
-  var session = requireCapability_(sessionToken, 'invoice_admin');
+function syncInvoicePurchasesForActor_(actorValue, optionsValue) {
   var options = optionsValue || {};
   return withScriptLock_(function() {
     var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -7358,7 +7360,7 @@ function syncInvoicePurchases_(sessionToken, optionsValue) {
     ));
     var requestCount = 0;
     var counters = { createdOrUpdated: 0, skipped: 0, refunds: 0 };
-    var actor = cleanText_(session.teacherName) || '系統同步';
+    var actor = cleanText_(actorValue) || '系統同步';
     var defaultMerchantProfile = cleanText_(
       getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, 'primary')
     ) || 'primary';
@@ -7473,6 +7475,11 @@ function syncInvoicePurchases_(sessionToken, optionsValue) {
     }
     return pause('request_budget', cursor.start, cursor.itemIndex, null);
   });
+}
+
+function syncInvoicePurchases_(sessionToken, optionsValue) {
+  var session = requireCapability_(sessionToken, 'invoice_admin');
+  return syncInvoicePurchasesForActor_(session.teacherName, optionsValue);
 }
 
 function resumeInvoiceSync_(sessionToken, optionsValue) {
@@ -7818,6 +7825,304 @@ function issueInvoiceBatch_(sessionToken, invoiceIdsValue) {
       return { invoiceId: invoiceId, success: false, error: getErrorMessage_(error) };
     }
   });
+}
+
+function publicInvoiceRow_(rowValue) {
+  var row = rowValue || {};
+  var result = {};
+  SHEET_HEADERS.INVOICE_QUEUE.forEach(function(header) {
+    result[header] = row[header] == null ? '' : row[header];
+  });
+  return result;
+}
+
+function publicInvoiceItemRow_(rowValue) {
+  var row = rowValue || {};
+  var result = {};
+  SHEET_HEADERS.INVOICE_ITEMS.forEach(function(header) {
+    result[header] = row[header] == null ? '' : row[header];
+  });
+  return result;
+}
+
+function publicInvoiceAuditRow_(rowValue) {
+  var row = rowValue || {};
+  var result = {};
+  SHEET_HEADERS.INVOICE_AUDIT.forEach(function(header) {
+    result[header] = row[header] == null ? '' : row[header];
+  });
+  return result;
+}
+
+function getInvoiceSyncTriggers_() {
+  if (typeof ScriptApp === 'undefined' || !ScriptApp.getProjectTriggers) return [];
+  return ScriptApp.getProjectTriggers().filter(function(trigger) {
+    return trigger.getHandlerFunction && trigger.getHandlerFunction() === 'runScheduledInvoiceSync';
+  });
+}
+
+function getInvoiceSchedulerStatus_() {
+  var properties = getScriptProperties_();
+  var installedAt = properties
+    ? cleanText_(properties.getProperty(CONFIG.INVOICE_SCHEDULER_INSTALLED_PROPERTY))
+    : '';
+  var triggers = getInvoiceSyncTriggers_();
+  return {
+    installed: triggers.length === 1 || Boolean(installedAt),
+    triggerCount: triggers.length,
+    installedAt: installedAt,
+    scheduleText: '每日約 00:00',
+    timezone: 'Asia/Taipei'
+  };
+}
+
+function getInvoiceAdminDashboard_(session) {
+  assertCapabilitySession_(session, 'invoice_admin');
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    var queue = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE)
+      .map(publicInvoiceRow_)
+      .sort(function(left, right) {
+        return cleanText_(right.purchasedAt).localeCompare(cleanText_(left.purchasedAt));
+      });
+    var items = invoiceSheetRows_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS)
+      .map(publicInvoiceItemRow_);
+    var audit = invoiceSheetRows_(sheets.audit, SHEET_HEADERS.INVOICE_AUDIT)
+      .slice(-200)
+      .reverse()
+      .map(publicInvoiceAuditRow_);
+    return {
+      queue: queue,
+      items: items,
+      audit: audit,
+      settings: {
+        defaultMerchantProfile: cleanText_(getInvoiceSettingUnlocked_(
+          sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, 'primary'
+        )) || 'primary',
+        lastSyncAt: cleanText_(getInvoiceSettingUnlocked_(
+          sheets.settings, CONFIG.INVOICE_SYNC_LAST_AT_SETTING, ''
+        )),
+        scheduleHour: cleanText_(getInvoiceSettingUnlocked_(
+          sheets.settings, CONFIG.INVOICE_SYNC_HOUR_SETTING, '0'
+        )) || '0',
+        scheduleText: '每日約 00:00',
+        timezone: 'Asia/Taipei'
+      },
+      scheduler: getInvoiceSchedulerStatus_()
+    };
+  });
+}
+
+function normalizeInvoiceMerchantProfile_(value) {
+  var profile = cleanText_(value);
+  if (['primary', 'secondary'].indexOf(profile) === -1) throw new Error('開票帳號不正確。');
+  return profile;
+}
+
+function updateInvoiceDraft_(session, updateValue) {
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
+  var update = updateValue || {};
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    var draft = findUniqueInvoiceQueueRow_(sheets.queue, update.invoiceId);
+    if (Number(update.version) !== Number(draft.version)) {
+      throw new Error('發票草稿版本已更新，請重新載入。');
+    }
+    if ([INVOICE_STATUSES.PENDING, INVOICE_STATUSES.INVALID, INVOICE_STATUSES.FAILED]
+      .indexOf(cleanText_(draft.status)) === -1) {
+      throw new Error('此發票狀態不可修改。');
+    }
+    var invoiceKind = cleanText_(update.invoiceKind || draft.invoiceKind) || 'personal';
+    if (['personal', 'business'].indexOf(invoiceKind) === -1) throw new Error('發票類型不正確。');
+    var identifier = invoiceKind === 'business'
+      ? cleanText_(update.customerIdentifier != null ? update.customerIdentifier : draft.customerIdentifier)
+      : '';
+    var email = cleanText_(
+      update.customerEmail != null ? update.customerEmail : draft.customerEmail
+    ).toLowerCase();
+    var name = cleanText_(update.customerName != null ? update.customerName : draft.customerName);
+    var address = invoiceKind === 'business'
+      ? cleanText_(update.customerAddress != null ? update.customerAddress : draft.customerAddress)
+      : '';
+    if (invoiceKind === 'business') {
+      if (!/^\d{8}$/.test(identifier)) throw new Error('公司發票缺少正確的8碼統一編號。');
+      if (!name) throw new Error('公司發票缺少抬頭。');
+      if (!address) throw new Error('公司發票缺少地址。');
+    }
+    var merchantProfile = normalizeInvoiceMerchantProfile_(
+      update.merchantProfile != null ? update.merchantProfile : draft.merchantProfile
+    );
+    var items = getInvoiceItemsForDraft_(sheets.items, draft.invoiceId);
+    validateInvoiceForIssue_({
+      invoiceKind: invoiceKind,
+      customerEmail: email,
+      customerIdentifier: identifier,
+      customerName: name,
+      customerAddress: address,
+      salesAmount: draft.salesAmount,
+      relateNumber: cleanText_(draft.relateNumber) || 'VALIDATION1'
+    }, items);
+    var nextStatus = cleanText_(draft.status);
+    if (nextStatus === INVOICE_STATUSES.INVALID ||
+        (nextStatus === INVOICE_STATUSES.FAILED && update.confirmRetry === true)) {
+      nextStatus = INVOICE_STATUSES.PENDING;
+    }
+    var nextVersion = Number(draft.version) + 1;
+    var patch = {
+      invoiceKind: invoiceKind,
+      customerEmail: email,
+      customerIdentifier: identifier,
+      customerName: name,
+      customerAddress: address,
+      merchantProfile: merchantProfile,
+      relateNumber: merchantProfile !== cleanText_(draft.merchantProfile) ||
+        (nextStatus === INVOICE_STATUSES.PENDING && cleanText_(draft.status) === INVOICE_STATUSES.FAILED)
+        ? '' : cleanText_(draft.relateNumber),
+      status: nextStatus,
+      errorCode: nextStatus === INVOICE_STATUSES.PENDING ? '' : cleanText_(draft.errorCode),
+      errorMessage: nextStatus === INVOICE_STATUSES.PENDING ? '' : cleanText_(draft.errorMessage),
+      updatedAt: formatInvoiceTimestamp_(new Date()),
+      version: nextVersion
+    };
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, draft.rowNumber, patch);
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: draft.invoiceId,
+      actor: actor,
+      action: 'DRAFT_UPDATED',
+      before: {
+        version: draft.version,
+        status: draft.status,
+        merchantProfile: draft.merchantProfile,
+        invoiceKind: draft.invoiceKind
+      },
+      after: {
+        version: nextVersion,
+        status: nextStatus,
+        merchantProfile: merchantProfile,
+        invoiceKind: invoiceKind
+      },
+      result: 'updated'
+    });
+    return { invoiceId: cleanText_(draft.invoiceId), status: nextStatus, version: nextVersion };
+  });
+}
+
+function setDefaultInvoiceMerchant_(session, merchantProfileValue) {
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
+  var merchantProfile = normalizeInvoiceMerchantProfile_(merchantProfileValue);
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    var before = cleanText_(getInvoiceSettingUnlocked_(
+      sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, 'primary'
+    )) || 'primary';
+    setInvoiceSettingUnlocked_(
+      sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, merchantProfile, actor
+    );
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      actor: actor,
+      action: 'DEFAULT_MERCHANT_CHANGED',
+      before: { merchantProfile: before },
+      after: { merchantProfile: merchantProfile },
+      result: 'updated',
+      detail: '僅影響後續新同步發票'
+    });
+    return { merchantProfile: merchantProfile };
+  });
+}
+
+function resolveInvoiceRefund_(session, resolutionValue) {
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
+  var resolution = resolutionValue || {};
+  var note = cleanText_(resolution.note);
+  if (!note) throw new Error('請填寫退款處理備註。');
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    var draft = findUniqueInvoiceQueueRow_(sheets.queue, resolution.invoiceId);
+    if (Number(resolution.version) !== Number(draft.version)) {
+      throw new Error('發票草稿版本已更新，請重新載入。');
+    }
+    if (cleanText_(draft.status) !== INVOICE_STATUSES.REFUND_REVIEW) {
+      throw new Error('此發票狀態不可結案退款追蹤。');
+    }
+    var nextVersion = Number(draft.version) + 1;
+    var resolvedAt = formatInvoiceTimestamp_(new Date());
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, draft.rowNumber, {
+      status: INVOICE_STATUSES.REFUND_RESOLVED,
+      refundResolvedAt: resolvedAt,
+      refundResolvedBy: actor,
+      refundNote: note,
+      updatedAt: resolvedAt,
+      version: nextVersion
+    });
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: draft.invoiceId,
+      actor: actor,
+      action: 'REFUND_RESOLVED',
+      before: { status: draft.status, version: draft.version },
+      after: { status: INVOICE_STATUSES.REFUND_RESOLVED, version: nextVersion },
+      result: 'resolved',
+      detail: note
+    });
+    return {
+      invoiceId: cleanText_(draft.invoiceId),
+      status: INVOICE_STATUSES.REFUND_RESOLVED,
+      version: nextVersion
+    };
+  });
+}
+
+function installInvoiceSyncSchedulerInternal_(actorValue) {
+  if (typeof ScriptApp === 'undefined' || !ScriptApp.newTrigger) {
+    throw new Error('發票同步排程服務無法使用。');
+  }
+  var triggers = getInvoiceSyncTriggers_();
+  while (triggers.length > 1) {
+    ScriptApp.deleteTrigger(triggers.pop());
+  }
+  var created = false;
+  if (!triggers.length) {
+    ScriptApp.newTrigger('runScheduledInvoiceSync')
+      .timeBased()
+      .atHour(0)
+      .nearMinute(0)
+      .everyDays(1)
+      .inTimezone('Asia/Taipei')
+      .create();
+    created = true;
+  }
+  var installedAt = formatInvoiceTimestamp_(new Date());
+  PropertiesService.getScriptProperties().setProperty(
+    CONFIG.INVOICE_SCHEDULER_INSTALLED_PROPERTY,
+    installedAt
+  );
+  withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    setInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_SYNC_HOUR_SETTING, '0', actorValue);
+    setInvoiceSettingUnlocked_(
+      sheets.settings, CONFIG.INVOICE_SYNC_TIMEZONE_SETTING, 'Asia/Taipei', actorValue
+    );
+  });
+  return {
+    installed: true,
+    created: created,
+    triggerCount: getInvoiceSyncTriggers_().length,
+    installedAt: installedAt,
+    scheduleText: '每日約 00:00',
+    timezone: 'Asia/Taipei'
+  };
+}
+
+function installInvoiceSyncScheduler() {
+  return installInvoiceSyncSchedulerInternal_('系統設定');
+}
+
+function installInvoiceSyncScheduler_(session) {
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
+  return installInvoiceSyncSchedulerInternal_(actor);
+}
+
+function runScheduledInvoiceSync() {
+  return syncInvoicePurchasesForActor_('系統排程', {});
 }
 
 function ensureSheetHeaders_(sheet, expectedHeaders) {
@@ -8257,6 +8562,39 @@ function doPost(e) {
       },
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
+      },
+      getInvoiceAdminDashboard: function() {
+        return getInvoiceAdminDashboard_(session);
+      },
+      updateInvoiceDraft: function() {
+        return updateInvoiceDraft_(
+          session,
+          parseJsonObject_(parameters.invoice, '發票草稿')
+        );
+      },
+      setDefaultInvoiceMerchant: function() {
+        return setDefaultInvoiceMerchant_(session, parameters.merchantProfile);
+      },
+      resolveInvoiceRefund: function() {
+        return resolveInvoiceRefund_(
+          session,
+          parseJsonObject_(parameters.refund, '發票退款處理')
+        );
+      },
+      syncInvoicePurchases: function() {
+        return syncInvoicePurchases_(parameters.sessionToken, {});
+      },
+      issueInvoiceDraft: function() {
+        return issueInvoiceDraft_(parameters.sessionToken, parameters.invoiceId);
+      },
+      issueInvoiceBatch: function() {
+        return issueInvoiceBatch_(
+          parameters.sessionToken,
+          parseJsonArray_(parameters.invoiceIds, '發票清單')
+        );
+      },
+      installInvoiceSyncScheduler: function() {
+        return installInvoiceSyncScheduler_(session);
       },
       getMonthlyDiscountDashboard: function() {
         return getMonthlyDiscountDashboard_(session);
@@ -12481,7 +12819,8 @@ function assertCapabilitySession_(session, capability) {
     var labels = {
       course_admin: '課程管理權限',
       payroll_admin: '薪資管理權限',
-      vvip_admin: 'VVIP 管理權限'
+      vvip_admin: 'VVIP 管理權限',
+      invoice_admin: '發票管理權限'
     };
     throw new Error('沒有' + (labels[required] || '此功能管理權限') + '。');
   }

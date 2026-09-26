@@ -4916,6 +4916,43 @@ test('weekly practice waitlist selection survives reopening and submission', asy
   assert.equal(JSON.parse(request.fields.practice).recurrence,'weekly');
 });
 
+test('weekly waitlist confirms directly once and preserves the editor on server failure', async () => {
+  const { context, getElement, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false, now: '2026-09-09T12:00:00+08:00' });
+  context.__block = { type: 'course', calendarId: 'weekly-direct', date: '2026/09/10', room: 'A', startTime: '11:00', endTime: '12:00', label: 'A－空環' };
+  vm.runInContext('practiceState.date="2026/09/10"; practiceState.room="A"; practiceState.data={rooms:[{room:"A",blocks:[__block]}]}; openPracticeEditor({block:__block});', context);
+  getElement('practice-editor-weekly').checked = true;
+  const pending = context.submitPracticeEditor({ preventDefault() {} });
+  await context.submitPracticeEditor({ preventDefault() {} });
+  await new Promise(setImmediate);
+  const requests = submittedForms.filter(form => form.fields.action === 'createPracticeWaitlist');
+  assert.equal(requests.length, 1);
+  assert.equal(JSON.parse(requests[0].fields.practice).recurrence, 'weekly');
+  assert.equal(getElement('practice-submit').disabled, true);
+  emitWindowEvent('message', {
+    origin: 'https://script.googleusercontent.com', source: requests[0].frameWindow,
+    data: { source: 'sherry-gas-relay', requestId: requests[0].fields.requestId, payload: { status: 'error', message: '測試：時段已占用' } },
+  });
+  await pending;
+  assert.equal(getElement('practice-editor-weekly').checked, true);
+  assert.equal(getElement('practice-editor-start').value, '11:00');
+  assert.equal(getElement('practice-dialog').open, true);
+  assert.equal(getElement('practice-submit').disabled, false);
+});
+
+test('weekly waitlist direct success clears future cache and closes the editor without a cart', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({}, { now: '2026-09-09T12:00:00+08:00' });
+  context.__block = { type: 'course', calendarId: 'weekly-direct', date: '2026/09/10', room: 'A', startTime: '11:00', endTime: '12:00', label: 'A－空環' };
+  vm.runInContext('practiceState.date="2026/09/10"; practiceState.room="A"; practiceState.data={rooms:[{room:"A",blocks:[__block]}]}; practiceState.dayCache["2026/09/17"]={rooms:[]}; openPracticeEditor({block:__block});', context);
+  getElement('practice-editor-weekly').checked = true;
+  await context.submitPracticeEditor({ preventDefault() {} });
+  const requests = submittedForms.filter(form => form.fields.action === 'createPracticeWaitlist');
+  assert.equal(requests.length, 1);
+  assert.equal(JSON.parse(requests[0].fields.practice).recurrence, 'weekly');
+  assert.equal(getElement('practice-dialog').open, false);
+  assert.equal(vm.runInContext('practiceState.dayCache["2026/09/17"]', context), undefined);
+  assert.equal(vm.runInContext('Object.keys(practiceState.waitlistSelections).length', context), 0);
+});
+
 test('course waitlists stay selected across dates until one batch confirmation', async () => {
   const { context, getElement, submittedForms } = createFrontendRuntime({}, {
     now: '2026-09-09T12:00:00+08:00',
@@ -5003,7 +5040,7 @@ test('custom practice dialog focuses its title instead of opening the native dat
   assert.equal(context.document.activeElement?.id, 'practice-dialog-title');
 });
 
-test('course click opens an adjustable waitlist editor and confirmation adds its chosen interval to the batch', async () => {
+test('course click opens an adjustable waitlist editor and confirmation submits its chosen interval directly', async () => {
   const { context, getElement, submittedForms } = createFrontendRuntime();
   context.__practiceFixture = {
     date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
@@ -5027,14 +5064,17 @@ test('course click opens an adjustable waitlist editor and confirmation adds its
   getElement('practice-editor-end').value = '12:15';
   await context.submitPracticeEditor({ preventDefault() {} });
 
-  assert.equal(submittedForms.filter((form) => form.fields.action === 'createPracticeWaitlist').length, 0);
-  assert.equal(vm.runInContext('practiceState.waitlistSelections["cal-jina"].startTime', context), '10:45');
-  assert.equal(vm.runInContext('practiceState.waitlistSelections["cal-jina"].endTime', context), '12:15');
-  assert.equal(getElement('practice-waitlist-count').textContent, '已選 1 堂候補');
+  const requests = submittedForms.filter((form) => form.fields.action === 'createPracticeWaitlist');
+  assert.equal(requests.length, 1);
+  const practice = JSON.parse(requests[0].fields.practice);
+  assert.equal(practice.startTime, '10:45');
+  assert.equal(practice.endTime, '12:15');
+  assert.equal(practice.recurrence, 'once');
+  assert.equal(vm.runInContext('Object.keys(practiceState.waitlistSelections).length', context), 0);
 });
 
 test('one waitlist editor interval may span two formal courses without blocking submission', async () => {
-  const { context, getElement } = createFrontendRuntime();
+  const { context, getElement, submittedForms } = createFrontendRuntime();
   context.__practiceFixture = {
     date: '2026/09/10', teacherName: '冠蓉', quickDurations: [60, 90, 120],
     rooms: [
@@ -5052,7 +5092,8 @@ test('one waitlist editor interval may span two formal courses without blocking 
   assert.equal(getElement('practice-editor-warning').textContent, '');
   assert.equal(getElement('practice-submit').disabled, false);
   await context.submitPracticeEditor({ preventDefault() {} });
-  assert.equal(vm.runInContext('practiceState.waitlistSelections["cal-first"].endTime', context), '13:30');
+  const request = submittedForms.find(form => form.fields.action === 'createPracticeWaitlist');
+  assert.equal(JSON.parse(request.fields.practice).endTime, '13:30');
 });
 
 test('practice calendar marks completed blocks and past date choices as historical', () => {

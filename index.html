@@ -5101,9 +5101,9 @@
         mode === "mine" || (mode === "join" && !seriesChoice);
       byId("practice-recurrence-label").textContent = mode === "join" ? "加入這次與之後" : "每週同一時段，直到我停止";
       byId("practice-editor-weekly").checked = waitlistSelection?.recurrence === "weekly";
-      if (mode === "waitlist") byId("practice-dialog-copy").textContent += " 可勾選每週循環：每週獨立核對，有課候補、空堂成立；遇場租或其他自主練習會跳過。未公布課表的日期會等公布後再接續。";
+      if (mode === "waitlist") byId("practice-dialog-copy").textContent += " 只需選第一個時段，勾選每週循環後即自動接續，不需逐週選取，直到你停止循環。有課候補、空堂成立；遇場租或其他自主練習會跳過。未公布課表的日期會等公布後再接續。";
       byId("practice-submit").hidden = mode === "rental" || mode === "rental-own" || mode === "mine";
-      byId("practice-submit").textContent = mode === "waitlist" ? "加入候補清單" : mode === "join" ? "確認加入" : "確認登記";
+      byId("practice-submit").textContent = mode === "join" ? "確認加入" : "確認登記";
       byId("practice-leave").hidden = mode !== "mine";
       byId("practice-leave").textContent = block?.isCreator ? "只取消這次" : "只退出這次";
       byId("practice-leave-future").hidden = mode !== "mine" || !block?.seriesId;
@@ -5130,7 +5130,7 @@
     async function submitPracticeEditor(event) {
       event.preventDefault();
       const editor = practiceState.editor;
-      if (!editor) return;
+      if (!editor || editor.submitting) return;
       syncPracticeEditorAvailability();
       if (byId("practice-editor-warning").dataset.blocking === "true") return;
       const fixedWaitlist = editor.mode === "waitlist" && editor.block;
@@ -5144,28 +5144,37 @@
         recurrence: byId("practice-editor-weekly").checked ? "weekly" : "once",
         scope: byId("practice-editor-weekly").checked ? "future" : "once"
       };
-      if (editor.mode === "waitlist") {
-        savePracticeWaitlistSelection(editor.block, practice.startTime, practice.endTime, practice.recurrence);
-        closePracticeEditor();
-        setNotice("已加入候補清單，可繼續選擇其他日期或課程。");
-        return;
-      }
       const button = byId("practice-submit");
+      editor.submitting = true;
       setButtonBusy(button, true, "處理中...");
       try {
         let result;
-        if (editor.mode === "join") result = await callPostApi("joinPracticeBooking", { practice });
+        if (editor.mode === "waitlist") result = await callPostApi("createPracticeWaitlist", { practice });
+        else if (editor.mode === "join") result = await callPostApi("joinPracticeBooking", { practice });
         else result = await callPostApi("createPracticeBooking", { practice });
+        if (editor.mode === "waitlist") {
+          const key = getPracticeWaitlistSelectionKey(editor.block);
+          delete practiceState.waitlistSelections[key];
+          delete practiceState.waitlistErrors[key];
+          renderPracticeWaitlistCart();
+        }
         practiceState.date = practice.date;
         practiceState.room = practice.room;
         delete practiceState.dayCache[practice.date];
         delete practiceState.dayCacheFetchedAt[practice.date];
+        if (practice.recurrence === "weekly") {
+          practiceState.dayCache = {};
+          practiceState.dayCacheFetchedAt = {};
+        }
         closePracticeEditor();
-        setNotice(editor.mode === "join" ? "已加入自主練習。" : "自主練習已登記。");
+        setNotice(editor.mode === "join" ? "已加入自主練習。" : practice.recurrence === "weekly"
+          ? "已登記每週循環，會自動接續，不需逐週選取；未公布課表的日期會等公布後接續，直到你停止循環。"
+          : editor.mode === "waitlist" ? "已登記這次候補；課程取消後會自動補入。" : "自主練習已登記。");
         await loadPracticeDay(practiceState.date);
       } catch (error) {
         setNotice(error.message, "error");
       } finally {
+        editor.submitting = false;
         setButtonBusy(button, false, "");
       }
     }

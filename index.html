@@ -4557,7 +4557,8 @@
       const selections = getSelectedPracticeWaitlists();
       const cart = byId("practice-waitlist-cart");
       cart.hidden = selections.length === 0;
-      byId("practice-waitlist-count").textContent = `已選 ${selections.length} 堂候補`;
+      const weeklyCount = selections.filter((selection) => selection.recurrence === "weekly").length;
+      byId("practice-waitlist-count").textContent = `已選 ${selections.length} 堂候補${weeklyCount ? `（${weeklyCount} 筆每週循環，其餘單次）` : ""}`;
       const errors = selections.map((selection) => {
         const reason = practiceState.waitlistErrors?.[selection.key];
         return reason ? `${selection.label}：${reason}` : "";
@@ -4589,7 +4590,7 @@
       refreshIcons();
     }
 
-    function savePracticeWaitlistSelection(block, startTime, endTime) {
+    function savePracticeWaitlistSelection(block, startTime, endTime, recurrence = "once") {
       if (!block || block.type !== "course") return;
       const key = getPracticeWaitlistSelectionKey(block);
       practiceState.waitlistSelections[key] = {
@@ -4599,6 +4600,7 @@
         room: block.room || practiceState.room,
         startTime,
         endTime,
+        recurrence: recurrence === "weekly" ? "weekly" : "once",
         label: block.label || "未命名課程",
         teacherName: block.teacherName || ""
       };
@@ -4633,14 +4635,18 @@
               room: selection.room,
               startTime: selection.startTime,
               endTime: selection.endTime,
-              recurrence: "once",
-              scope: "once"
+              recurrence: selection.recurrence || "once",
+              scope: selection.recurrence === "weekly" ? "future" : "once"
             }
           });
           successCount += 1;
           delete practiceState.waitlistSelections[selection.key];
           delete practiceState.dayCache[selection.date];
           delete practiceState.dayCacheFetchedAt[selection.date];
+          if (selection.recurrence === "weekly") {
+            practiceState.dayCache = {};
+            practiceState.dayCacheFetchedAt = {};
+          }
         } catch (error) {
           practiceState.waitlistErrors[selection.key] = error.message || "候補登記失敗";
         }
@@ -5091,10 +5097,11 @@
       const editable = ["create", "join", "waitlist"].includes(mode);
       byId("practice-editor-fields").hidden = !editable;
       const seriesChoice = mode === "join" && !!block?.seriesId;
-      byId("practice-recurrence-field").hidden = mode === "waitlist" || mode === "rental" || mode === "rental-own" ||
+      byId("practice-recurrence-field").hidden = mode === "rental" || mode === "rental-own" ||
         mode === "mine" || (mode === "join" && !seriesChoice);
       byId("practice-recurrence-label").textContent = mode === "join" ? "加入這次與之後" : "每週同一時段，直到我停止";
-      byId("practice-editor-weekly").checked = false;
+      byId("practice-editor-weekly").checked = waitlistSelection?.recurrence === "weekly";
+      if (mode === "waitlist") byId("practice-dialog-copy").textContent += " 可勾選每週循環：每週獨立核對，有課候補、空堂成立；遇場租或其他自主練習會跳過。未公布課表的日期會等公布後再接續。";
       byId("practice-submit").hidden = mode === "rental" || mode === "rental-own" || mode === "mine";
       byId("practice-submit").textContent = mode === "waitlist" ? "加入候補清單" : mode === "join" ? "確認加入" : "確認登記";
       byId("practice-leave").hidden = mode !== "mine";
@@ -5138,7 +5145,7 @@
         scope: byId("practice-editor-weekly").checked ? "future" : "once"
       };
       if (editor.mode === "waitlist") {
-        savePracticeWaitlistSelection(editor.block, practice.startTime, practice.endTime);
+        savePracticeWaitlistSelection(editor.block, practice.startTime, practice.endTime, practice.recurrence);
         closePracticeEditor();
         setNotice("已加入候補清單，可繼續選擇其他日期或課程。");
         return;

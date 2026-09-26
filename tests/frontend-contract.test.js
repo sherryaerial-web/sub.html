@@ -4905,6 +4905,17 @@ test('practice creator can only cancel an existing booking and cannot edit it', 
   assert.equal(vm.runInContext('practiceState.editor.mode', context), 'mine');
 });
 
+test('weekly practice waitlist selection survives reopening and submission', async () => {
+  const {context,getElement,submittedForms} = createFrontendRuntime({}, {now:'2026-09-09T12:00:00+08:00'});
+  context.__block = {type:'course',calendarId:'weekly',date:'2026/09/10',room:'A',startTime:'11:00',endTime:'12:00',label:'A－空環'};
+  vm.runInContext('practiceState.date="2026/09/10"; practiceState.room="A"; savePracticeWaitlistSelection(__block,"11:00","12:00","weekly"); openPracticeEditor({mode:"waitlist",block:__block});',context);
+  assert.equal(getElement('practice-recurrence-field').hidden,false);
+  assert.equal(getElement('practice-editor-weekly').checked,true);
+  await context.submitSelectedPracticeWaitlists();
+  const request = submittedForms.find(f => f.fields.action === 'createPracticeWaitlist');
+  assert.equal(JSON.parse(request.fields.practice).recurrence,'weekly');
+});
+
 test('course waitlists stay selected across dates until one batch confirmation', async () => {
   const { context, getElement, submittedForms } = createFrontendRuntime({}, {
     now: '2026-09-09T12:00:00+08:00',

@@ -458,6 +458,50 @@ function createAuthBackend(accounts, services = createAuthServices()) {
   return { backend, accountSheet, services };
 }
 
+function createInvoiceSyncBackend() {
+  const services = createAuthServices();
+  services.Utilities.formatDate = formatTaipeiDate;
+  let uuid = 0;
+  services.Utilities.getUuid = () => `invoice-test-${++uuid}`;
+  const bootstrap = loadBackend(services);
+  const accountSheet = createSheetFixture('登入帳號', [
+    EXPECTED_ACCOUNT_HEADERS,
+    createAccount(bootstrap, 'Ivy', '0912', { role: '管理員' })
+      .concat('', 'course_admin,payroll_admin,vvip_admin,invoice_admin'),
+  ]);
+  const queueSheet = createSheetFixture('InvoiceQueue', [EXPECTED_INVOICE_QUEUE_HEADERS]);
+  const itemSheet = createSheetFixture('InvoiceItems', [EXPECTED_INVOICE_ITEM_HEADERS]);
+  const auditSheet = createSheetFixture('InvoiceAudit', [EXPECTED_INVOICE_AUDIT_HEADERS]);
+  const settingsSheet = createSheetFixture('InvoiceSettings', [EXPECTED_INVOICE_SETTING_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([
+    accountSheet, queueSheet, itemSheet, auditSheet, settingsSheet,
+  ]);
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'ob-test-token');
+  const backend = loadBackend({
+    ...services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return spreadsheet; } },
+  });
+  return {
+    backend,
+    services,
+    spreadsheet,
+    queueSheet,
+    itemSheet,
+    auditSheet,
+    settingsSheet,
+    sessionToken: backend.authenticate_('Ivy', '0912').sessionToken,
+  };
+}
+
+function createObResponse(statusCode, body, headers = {}) {
+  return {
+    getResponseCode: () => statusCode,
+    getContentText: () => typeof body === 'string' ? body : JSON.stringify(body),
+    getAllHeaders: () => ({ ...headers }),
+    getHeaders: () => ({ ...headers }),
+  };
+}
+
 function createAccount(backend, teacherName, pin, options = {}) {
   const salt = options.salt || 'fixed-salt';
   return [
@@ -2879,6 +2923,246 @@ test('invoice schema exposes only the approved invoice statuses', () => {
     'PENDING', 'INVALID', 'ISSUING', 'ISSUED', 'FAILED', 'UNCERTAIN',
     'REFUND_REVIEW', 'REFUND_RESOLVED',
   ]);
+});
+
+test('invoice OB sync accepts only paid bank transfers at or after the Taipei cutoff', () => {
+  const backend = loadBackend();
+  const cutoffMs = Date.parse('2026-09-25T16:00:00.000Z');
+  const valid = {
+    purchasedAt: '2026-09-25T16:00:00.000Z',
+    paymentStatus: 'paid',
+    paymentMethod: 'Bank Transfer',
+  };
+
+  assert.equal(backend.isInvoiceEligiblePurchase_(valid, cutoffMs), true);
+  assert.equal(backend.isInvoiceEligiblePurchase_({
+    ...valid, purchasedAt: '2026-09-25T15:59:59.999Z',
+  }, cutoffMs), false);
+  assert.equal(backend.isInvoiceEligiblePurchase_({
+    ...valid, paymentStatus: 'awaiting_verification',
+  }, cutoffMs), false);
+  assert.equal(backend.isInvoiceEligiblePurchase_({
+    ...valid, paymentMethod: 'Cash',
+  }, cutoffMs), false);
+});
+
+test('invoice OB sync normalizes detail data and groups one payment into multiple items', () => {
+  const backend = loadBackend();
+  const first = backend.normalizeObUserPassForInvoice_({
+    id: 501,
+    purchasedAt: '2026-09-26T01:00:00Z',
+    paymentStatus: 'paid',
+    paymentMethod: 'Bank Transfer',
+    price: 3000,
+    user: { id: 10, firstName: '小', lastName: '明', email: 'MIN@example.com' },
+    pass: { id: 20, nameZhHant: '十堂課卡' },
+  }, { paymentReferenceId: 'ORDER-001' });
+  const second = backend.normalizeObUserPassForInvoice_({
+    id: 502,
+    purchasedAt: '2026-09-26T01:00:02Z',
+    paymentStatus: 'paid',
+    paymentMethod: 'Bank Transfer',
+    price: 1800,
+    user: { id: 10, firstName: '小', lastName: '明', email: 'MIN@example.com' },
+    pass: { id: 21, nameZhHant: '三堂課卡' },
+  }, { paymentReferenceId: 'ORDER-001' });
+
+  const groups = backend.groupInvoiceCandidates_([first, second]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].paymentReferenceId, 'ORDER-001');
+  assert.equal(groups[0].customerEmail, 'min@example.com');
+  assert.equal(groups[0].customerName, '小 明');
+  assert.equal(groups[0].salesAmount, 4800);
+  assert.deepEqual(Array.from(groups[0].items, (item) => ({
+    obPurchaseId: item.obPurchaseId,
+    itemName: item.itemName,
+    itemAmount: item.itemAmount,
+  })), [
+    { obPurchaseId: '501', itemName: '十堂課卡', itemAmount: 3000 },
+    { obPurchaseId: '502', itemName: '三堂課卡', itemAmount: 1800 },
+  ]);
+  assert.deepEqual(Array.from(backend.validateInvoiceCandidate_(groups[0]).errors), []);
+});
+
+test('invoice OB sync marks missing order email price and mismatched totals invalid', () => {
+  const backend = loadBackend();
+  const invalid = {
+    paymentReferenceId: '',
+    customerEmail: 'not-an-email',
+    customerName: '測試者',
+    salesAmount: 999,
+    purchasedAt: '2026-09-26T01:00:00Z',
+    items: [{
+      obPurchaseId: '601', itemName: '課卡', itemCount: 1, itemWord: '張',
+      itemPrice: null, itemAmount: null,
+    }],
+  };
+
+  const result = backend.validateInvoiceCandidate_(invalid);
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(Array.from(result.errors), [
+    '缺少付款參考編號', 'Email 格式不正確', '商品金額不完整', '發票總額與商品合計不一致',
+  ]);
+});
+
+test('invoice OB sync upsert deduplicates purchases and keeps one queue per payment reference', () => {
+  const { backend, spreadsheet, queueSheet, itemSheet } = createInvoiceSyncBackend();
+  const items = [
+    {
+      obPurchaseId: '701', paymentReferenceId: 'ORDER-007', purchasedAt: '2026-09-26T01:00:00Z',
+      paymentStatus: 'paid', paymentMethod: 'Bank Transfer', customerEmail: 'one@example.com',
+      customerName: 'One User', itemName: '十堂課卡', itemCount: 1, itemWord: '張',
+      itemPrice: 3000, itemAmount: 3000,
+    },
+    {
+      obPurchaseId: '702', paymentReferenceId: 'ORDER-007', purchasedAt: '2026-09-26T01:00:01Z',
+      paymentStatus: 'paid', paymentMethod: 'Bank Transfer', customerEmail: 'one@example.com',
+      customerName: 'One User', itemName: '三堂課卡', itemCount: 1, itemWord: '張',
+      itemPrice: 1800, itemAmount: 1800,
+    },
+  ];
+  const candidate = backend.groupInvoiceCandidates_(items)[0];
+
+  backend.upsertInvoiceCandidate_(spreadsheet, candidate, 'Ivy', { defaultMerchantProfile: 'primary' });
+  backend.upsertInvoiceCandidate_(spreadsheet, candidate, 'Ivy', { defaultMerchantProfile: 'secondary' });
+
+  assert.equal(queueSheet.values.length, 2);
+  assert.equal(itemSheet.values.length, 3);
+  const queue = queueSheet.values[1];
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('paymentReferenceId')], 'ORDER-007');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('merchantProfile')], 'primary');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('salesAmount')], 4800);
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], 'PENDING');
+  assert.deepEqual(
+    itemSheet.values.slice(1).map((row) => row[EXPECTED_INVOICE_ITEM_HEADERS.indexOf('itemSeq')]),
+    [1, 2],
+  );
+});
+
+test('invoice OB sync invalidates one payment reference when customer emails conflict across runs', () => {
+  const { backend, spreadsheet, queueSheet } = createInvoiceSyncBackend();
+  const base = {
+    paymentReferenceId: 'ORDER-CONFLICT', purchasedAt: '2026-09-26T01:00:00Z',
+    paymentStatus: 'paid', paymentMethod: 'Bank Transfer', customerName: 'One User',
+    itemName: '課卡', itemCount: 1, itemWord: '張', itemPrice: 1000, itemAmount: 1000,
+  };
+
+  backend.upsertInvoiceCandidate_(spreadsheet, backend.groupInvoiceCandidates_([{
+    ...base, obPurchaseId: '711', customerEmail: 'one@example.com',
+  }])[0], 'Ivy', { defaultMerchantProfile: 'primary' });
+  backend.upsertInvoiceCandidate_(spreadsheet, backend.groupInvoiceCandidates_([{
+    ...base, obPurchaseId: '712', customerEmail: 'other@example.com',
+  }])[0], 'Ivy', { defaultMerchantProfile: 'primary' });
+
+  assert.equal(
+    queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')],
+    'INVALID',
+  );
+  assert.match(
+    queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('errorMessage')],
+    /Email 不一致/,
+  );
+});
+
+test('invoice OB sync saves a 429 cursor and resumes without duplicating the completed purchase', () => {
+  const firstRun = createInvoiceSyncBackend();
+  const listRows = [
+    {
+      id: 801, purchasedAt: '2026-09-26T02:00:00Z', paymentStatus: 'paid',
+      paymentMethod: 'Bank Transfer', price: 2000,
+      user: { id: 80, firstName: '同', lastName: '學', email: 'student@example.com' },
+      pass: { id: 81, nameZhHant: '課卡 A' },
+    },
+    {
+      id: 802, purchasedAt: '2026-09-26T02:00:01Z', paymentStatus: 'paid',
+      paymentMethod: 'Bank Transfer', price: 1000,
+      user: { id: 80, firstName: '同', lastName: '學', email: 'student@example.com' },
+      pass: { id: 82, nameZhHant: '課卡 B' },
+    },
+  ];
+  const firstFetch = (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith('/user-passes')) return createObResponse(200, listRows);
+    if (parsed.pathname.endsWith('/801')) {
+      return createObResponse(200, { ...listRows[0], paymentReferenceId: 'ORDER-008' });
+    }
+    return createObResponse(429, { message: 'rate limited' }, { 'Retry-After': '3600' });
+  };
+
+  const paused = firstRun.backend.syncInvoicePurchases_(firstRun.sessionToken, { fetchImpl: firstFetch });
+
+  assert.equal(paused.status, 'paused');
+  assert.equal(paused.reason, 'rate_limited');
+  assert.equal(firstRun.queueSheet.values.length, 2);
+  assert.equal(firstRun.itemSheet.values.length, 2);
+  const cursorRow = firstRun.settingsSheet.values.find((row) => row[0] === 'invoiceSyncCursor');
+  assert.deepEqual(JSON.parse(cursorRow[1]), { start: 0, itemIndex: 1 });
+
+  const secondCalls = [];
+  const secondFetch = (url) => {
+    secondCalls.push(url);
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith('/user-passes')) return createObResponse(200, listRows);
+    return createObResponse(200, { ...listRows[1], paymentReferenceId: 'ORDER-008' });
+  };
+  const completed = firstRun.backend.resumeInvoiceSync_(firstRun.sessionToken, { fetchImpl: secondFetch });
+
+  assert.equal(completed.status, 'complete');
+  assert.equal(firstRun.queueSheet.values.length, 2);
+  assert.equal(firstRun.itemSheet.values.length, 3);
+  assert.equal(secondCalls.some((url) => url.endsWith('/801')), false);
+  assert.equal(secondCalls.some((url) => url.endsWith('/802')), true);
+  assert.deepEqual(
+    firstRun.itemSheet.values.slice(1).map((row) => row[EXPECTED_INVOICE_ITEM_HEADERS.indexOf('itemSeq')]),
+    [1, 2],
+  );
+  assert.equal(
+    firstRun.queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('salesAmount')],
+    3000,
+  );
+});
+
+test('invoice OB sync pauses on a plain-text 429 response instead of failing JSON parsing', () => {
+  const run = createInvoiceSyncBackend();
+  const rateLimited = () => ({
+    getResponseCode: () => 429,
+    getContentText: () => 'Too Many Requests',
+    getAllHeaders: () => ({ 'Retry-After': '3600' }),
+  });
+
+  const result = run.backend.syncInvoicePurchases_(run.sessionToken, { fetchImpl: rateLimited });
+
+  assert.equal(result.status, 'paused');
+  assert.equal(result.reason, 'rate_limited');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.cursor)), { start: 0, itemIndex: 0 });
+});
+
+test('invoice OB sync changes an issued purchase with an explicit refund signal to review only', () => {
+  const { backend, spreadsheet, queueSheet, itemSheet } = createInvoiceSyncBackend();
+  queueSheet.values.push([
+    'invoice-refund', 'ORDER-009', 'ISSUED', 'primary', 'personal', 'student@example.com',
+    '', '學生', '', 1200, '20260926001', 'AB12345678', '2026-09-26', '1234',
+    '', '', '2026-09-26T03:00:00Z', '', '', '', '', '2026-09-26 03:05:00',
+    '2026-09-26 03:00:00', '2026-09-26 03:05:00', 1,
+  ]);
+  itemSheet.values.push([
+    'item-refund', 'invoice-refund', '901', 1, '課卡', 1, '張', 1200, 1200,
+    'paid', 'Bank Transfer', '2026-09-26T03:00:00Z', '2026-09-26 03:00:00',
+  ]);
+
+  const changed = backend.markInvoiceRefundReviewForPurchase_(spreadsheet, {
+    id: 901, paymentStatus: 'refunded', refundedAt: '2026-09-26T04:00:00Z',
+  }, '系統同步');
+
+  assert.equal(changed, true);
+  assert.equal(queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], 'REFUND_REVIEW');
+  assert.equal(
+    queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('refundDetectedAt')],
+    '2026-09-26 12:00:00',
+  );
+  assert.equal(queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('ecpayInvoiceNo')], 'AB12345678');
 });
 
 test('legacy migration backfills only unique exact OB links and marks every unresolved active row', () => {

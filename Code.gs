@@ -268,6 +268,7 @@ var CONFIG = {
   LEAVE_SHEET: SHEETS.LEAVES,
   API_URL: 'https://api.omceanbooking.com/v1/calendar',
   API_BASE_URL: 'https://api.omceanbooking.com',
+  OB_USER_PASSES_API_URL: 'https://api.omceanbooking.com/v1/user-passes',
   CLASSES_API_URL: 'https://api.omceanbooking.com/v1/classes',
   CLASS_ROOMS_API_URL: 'https://api.omceanbooking.com/v1/class-rooms',
   INSTRUCTORS_API_URL: 'https://api.omceanbooking.com/v1/instructors',
@@ -330,7 +331,13 @@ var CONFIG = {
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
   PAYROLL_FINALIZED_STATUS: '管理員已確認',
-  PAYROLL_REVIEW_STATUS: '有異議'
+  PAYROLL_REVIEW_STATUS: '有異議',
+  INVOICE_SYNC_CUTOFF_ISO: '2026-09-25T16:00:00.000Z',
+  INVOICE_SYNC_DATE_FROM: '2026-09-26',
+  INVOICE_SYNC_CURSOR_SETTING: 'invoiceSyncCursor',
+  INVOICE_SYNC_LAST_AT_SETTING: 'invoiceLastSyncAt',
+  INVOICE_DEFAULT_MERCHANT_SETTING: 'invoiceDefaultMerchantProfile',
+  INVOICE_SYNC_MAX_REQUESTS: 90
 };
 
 var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin', 'invoice_admin'];
@@ -6925,6 +6932,548 @@ function ensureInvoiceSheets_(spreadsheet) {
     audit: ensureSupportingSheet_(ss, SHEETS.INVOICE_AUDIT, SHEET_HEADERS.INVOICE_AUDIT),
     settings: ensureSupportingSheet_(ss, SHEETS.INVOICE_SETTINGS, SHEET_HEADERS.INVOICE_SETTINGS)
   };
+}
+
+function isInvoiceEligiblePurchase_(purchaseValue, cutoffMsValue) {
+  var purchase = purchaseValue || {};
+  var purchasedAtMs = new Date(purchase.purchasedAt).getTime();
+  var cutoffMs = Number(cutoffMsValue);
+  return isFinite(purchasedAtMs) && isFinite(cutoffMs) && purchasedAtMs >= cutoffMs &&
+    cleanText_(purchase.paymentStatus).toLowerCase() === 'paid' &&
+    cleanText_(purchase.paymentMethod).toLowerCase() === 'bank transfer';
+}
+
+function normalizeObUserPassForInvoice_(listItemValue, detailValue) {
+  var listItem = listItemValue || {};
+  var detail = detailValue || {};
+  var user = detail.user || listItem.user || {};
+  var pass = detail.pass || listItem.pass || {};
+  var priceValue = detail.price != null ? detail.price : listItem.price;
+  var price = Number(priceValue);
+  if (!isFinite(price) || price < 0 || Math.floor(price) !== price) price = null;
+  var firstName = cleanText_(user.firstName);
+  var lastName = cleanText_(user.lastName);
+  return {
+    obPurchaseId: cleanText_(detail.id != null ? detail.id : listItem.id),
+    paymentReferenceId: cleanText_(detail.paymentReferenceId || listItem.paymentReferenceId),
+    purchasedAt: cleanText_(detail.purchasedAt || listItem.purchasedAt),
+    paymentStatus: cleanText_(detail.paymentStatus || listItem.paymentStatus).toLowerCase(),
+    paymentMethod: cleanText_(detail.paymentMethod || listItem.paymentMethod),
+    customerEmail: cleanText_(user.email).toLowerCase(),
+    customerName: [firstName, lastName].filter(Boolean).join(' '),
+    itemName: cleanText_(pass.nameZhHant || pass.nameEn),
+    itemCount: 1,
+    itemWord: '張',
+    itemPrice: price,
+    itemAmount: price,
+    refundSignal: detectInvoiceRefundSignal_(detail) || detectInvoiceRefundSignal_(listItem)
+  };
+}
+
+function groupInvoiceCandidates_(itemsValue) {
+  var groups = {};
+  var order = [];
+  (itemsValue || []).forEach(function(itemValue) {
+    var item = itemValue || {};
+    var paymentReferenceId = cleanText_(item.paymentReferenceId);
+    var key = paymentReferenceId || '__missing__:' + cleanText_(item.obPurchaseId);
+    if (!groups[key]) {
+      groups[key] = {
+        paymentReferenceId: paymentReferenceId,
+        customerEmail: cleanText_(item.customerEmail).toLowerCase(),
+        customerName: cleanText_(item.customerName),
+        customerEmails: [],
+        salesAmount: 0,
+        purchasedAt: cleanText_(item.purchasedAt),
+        items: []
+      };
+      order.push(key);
+    }
+    var group = groups[key];
+    var email = cleanText_(item.customerEmail).toLowerCase();
+    if (email && group.customerEmails.indexOf(email) === -1) group.customerEmails.push(email);
+    if (!group.customerEmail && email) group.customerEmail = email;
+    if (!group.customerName && cleanText_(item.customerName)) group.customerName = cleanText_(item.customerName);
+    if (!group.purchasedAt || (cleanText_(item.purchasedAt) && cleanText_(item.purchasedAt) < group.purchasedAt)) {
+      group.purchasedAt = cleanText_(item.purchasedAt);
+    }
+    group.items.push(item);
+    if (item.itemAmount != null && isFinite(Number(item.itemAmount))) {
+      group.salesAmount += Number(item.itemAmount);
+    }
+  });
+  return order.map(function(key) { return groups[key]; });
+}
+
+function validateInvoiceCandidate_(candidateValue) {
+  var candidate = candidateValue || {};
+  var errors = [];
+  var paymentReferenceId = cleanText_(candidate.paymentReferenceId);
+  var email = cleanText_(candidate.customerEmail).toLowerCase();
+  var items = Array.isArray(candidate.items) ? candidate.items : [];
+  if (!paymentReferenceId) errors.push('缺少付款參考編號');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('Email 格式不正確');
+  if ((candidate.customerEmails || []).length > 1) errors.push('同一付款編號的 Email 不一致');
+  if (!items.length) errors.push('缺少商品明細');
+  var itemAmountMissing = items.some(function(item) {
+    var amount = item && item.itemAmount;
+    return amount == null || !isFinite(Number(amount)) || Number(amount) < 0 || Math.floor(Number(amount)) !== Number(amount);
+  });
+  if (itemAmountMissing) errors.push('商品金額不完整');
+  var itemTotal = items.reduce(function(total, item) {
+    return total + (item && item.itemAmount != null && isFinite(Number(item.itemAmount)) ? Number(item.itemAmount) : 0);
+  }, 0);
+  if (!isFinite(Number(candidate.salesAmount)) || Number(candidate.salesAmount) !== itemTotal) {
+    errors.push('發票總額與商品合計不一致');
+  }
+  return { valid: errors.length === 0, errors: errors, itemTotal: itemTotal };
+}
+
+function getInvoiceSettingUnlocked_(settingsSheet, keyValue, fallbackValue) {
+  var key = cleanText_(keyValue);
+  var rows = settingsSheet.getDataRange().getValues();
+  for (var index = 1; index < rows.length; index++) {
+    if (cleanText_(rows[index][0]) === key) return rows[index][1];
+  }
+  return fallbackValue;
+}
+
+function setInvoiceSettingUnlocked_(settingsSheet, keyValue, value, actorValue) {
+  var key = cleanText_(keyValue);
+  var rows = settingsSheet.getDataRange().getValues();
+  var now = formatInvoiceTimestamp_(new Date());
+  for (var index = 1; index < rows.length; index++) {
+    if (cleanText_(rows[index][0]) !== key) continue;
+    settingsSheet.getRange(index + 1, 1, 1, SHEET_HEADERS.INVOICE_SETTINGS.length)
+      .setValues([[key, value, cleanText_(actorValue), now]]);
+    return index + 1;
+  }
+  var rowNumber = settingsSheet.getLastRow() + 1;
+  settingsSheet.getRange(rowNumber, 1, 1, SHEET_HEADERS.INVOICE_SETTINGS.length)
+    .setValues([[key, value, cleanText_(actorValue), now]]);
+  return rowNumber;
+}
+
+function formatInvoiceTimestamp_(value) {
+  var date = value instanceof Date ? value : new Date(value);
+  if (!isFinite(date.getTime())) date = new Date();
+  return Utilities.formatDate(date, getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+}
+
+function invoiceSheetRows_(sheet, headers) {
+  var values = sheet.getDataRange().getValues();
+  return values.slice(1).map(function(row, index) {
+    var item = { rowNumber: index + 2 };
+    headers.forEach(function(header, headerIndex) { item[header] = row[headerIndex]; });
+    return item;
+  });
+}
+
+function appendInvoiceObjectRow_(sheet, headers, value) {
+  var item = value || {};
+  var row = headers.map(function(header) {
+    return item[header] == null ? '' : item[header];
+  });
+  var rowNumber = sheet.getLastRow() + 1;
+  sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
+  return rowNumber;
+}
+
+function updateInvoiceObjectRow_(sheet, headers, rowNumber, patchValue) {
+  var row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  var patch = patchValue || {};
+  headers.forEach(function(header, index) {
+    if (Object.prototype.hasOwnProperty.call(patch, header)) row[index] = patch[header];
+  });
+  sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
+}
+
+function appendInvoiceAuditUnlocked_(auditSheet, eventValue) {
+  var event = eventValue || {};
+  return appendInvoiceObjectRow_(auditSheet, SHEET_HEADERS.INVOICE_AUDIT, {
+    auditId: Utilities.getUuid(),
+    invoiceId: cleanText_(event.invoiceId),
+    actor: cleanText_(event.actor),
+    action: cleanText_(event.action),
+    beforeJson: event.before ? JSON.stringify(event.before) : '',
+    afterJson: event.after ? JSON.stringify(event.after) : '',
+    result: cleanText_(event.result),
+    detail: cleanText_(event.detail),
+    createdAt: formatInvoiceTimestamp_(new Date())
+  });
+}
+
+function upsertInvoiceCandidate_(spreadsheet, candidateValue, actorValue, optionsValue) {
+  var candidate = candidateValue || {};
+  var options = optionsValue || {};
+  var sheets = ensureInvoiceSheets_(spreadsheet);
+  var validation = validateInvoiceCandidate_(candidate);
+  var queueRows = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE);
+  var itemRows = invoiceSheetRows_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS);
+  var paymentReferenceId = cleanText_(candidate.paymentReferenceId);
+  var existingQueue = queueRows.filter(function(row) {
+    return paymentReferenceId && cleanText_(row.paymentReferenceId) === paymentReferenceId;
+  })[0] || null;
+  if (!existingQueue && !paymentReferenceId) {
+    var linkedItem = itemRows.filter(function(row) {
+      return (candidate.items || []).some(function(item) {
+        return cleanText_(item.obPurchaseId) === cleanText_(row.obPurchaseId);
+      });
+    })[0];
+    if (linkedItem) {
+      existingQueue = queueRows.filter(function(row) {
+        return cleanText_(row.invoiceId) === cleanText_(linkedItem.invoiceId);
+      })[0] || null;
+    }
+  }
+
+  var invoiceId = existingQueue ? cleanText_(existingQueue.invoiceId) : 'invoice-' + Utilities.getUuid();
+  var existingStatus = existingQueue ? cleanText_(existingQueue.status) : '';
+  var mutable = !existingQueue || [INVOICE_STATUSES.PENDING, INVOICE_STATUSES.INVALID].indexOf(existingStatus) !== -1;
+  var existingPurchaseIds = {};
+  itemRows.forEach(function(row) { existingPurchaseIds[cleanText_(row.obPurchaseId)] = true; });
+  var newItems = (candidate.items || []).filter(function(item) {
+    return cleanText_(item.obPurchaseId) && !existingPurchaseIds[cleanText_(item.obPurchaseId)];
+  });
+
+  if (!mutable && newItems.length) {
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: invoiceId,
+      actor: actorValue,
+      action: 'SYNC_SKIPPED_LOCKED_INVOICE',
+      result: 'skipped',
+      detail: '既有發票狀態不可再加入商品：' + existingStatus
+    });
+    return { invoiceId: invoiceId, status: existingStatus, addedItems: 0, skipped: true };
+  }
+
+  var existingInvoiceItemCount = itemRows.filter(function(row) {
+    return cleanText_(row.invoiceId) === invoiceId;
+  }).length;
+  newItems.forEach(function(item, itemIndex) {
+    appendInvoiceObjectRow_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS, {
+      itemId: 'item-' + Utilities.getUuid(),
+      invoiceId: invoiceId,
+      obPurchaseId: cleanText_(item.obPurchaseId),
+      itemSeq: existingInvoiceItemCount + itemIndex + 1,
+      itemName: cleanText_(item.itemName),
+      itemCount: Number(item.itemCount) || 1,
+      itemWord: cleanText_(item.itemWord) || '張',
+      itemPrice: item.itemPrice == null ? '' : Number(item.itemPrice),
+      itemAmount: item.itemAmount == null ? '' : Number(item.itemAmount),
+      obPaymentStatus: cleanText_(item.paymentStatus),
+      obPaymentMethod: cleanText_(item.paymentMethod),
+      purchasedAt: cleanText_(item.purchasedAt),
+      createdAt: formatInvoiceTimestamp_(new Date())
+    });
+  });
+
+  var allInvoiceItems = invoiceSheetRows_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS).filter(function(row) {
+    return cleanText_(row.invoiceId) === invoiceId;
+  });
+  var total = allInvoiceItems.reduce(function(sum, item) {
+    return sum + (isFinite(Number(item.itemAmount)) ? Number(item.itemAmount) : 0);
+  }, 0);
+  var now = formatInvoiceTimestamp_(new Date());
+  var validationErrors = validation.errors.slice();
+  var existingEmail = existingQueue ? cleanText_(existingQueue.customerEmail).toLowerCase() : '';
+  var candidateEmail = cleanText_(candidate.customerEmail).toLowerCase();
+  if (existingEmail && candidateEmail && existingEmail !== candidateEmail) {
+    validationErrors.push('同一付款編號的 Email 不一致');
+  }
+  var status = validationErrors.length ? INVOICE_STATUSES.INVALID : INVOICE_STATUSES.PENDING;
+  var queuePatch = {
+    paymentReferenceId: paymentReferenceId,
+    status: status,
+    customerEmail: existingEmail || candidateEmail,
+    customerName: cleanText_(candidate.customerName),
+    salesAmount: total,
+    errorCode: validationErrors.length ? 'INVALID_INVOICE_DATA' : '',
+    errorMessage: validationErrors.join('；'),
+    purchasedAt: cleanText_(candidate.purchasedAt),
+    updatedAt: now,
+    version: existingQueue ? (Number(existingQueue.version) || 0) + 1 : 1
+  };
+  if (existingQueue) {
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, existingQueue.rowNumber, queuePatch);
+  } else {
+    queuePatch.invoiceId = invoiceId;
+    queuePatch.merchantProfile = cleanText_(options.defaultMerchantProfile) || 'primary';
+    queuePatch.invoiceKind = 'personal';
+    queuePatch.createdAt = now;
+    appendInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, queuePatch);
+  }
+  appendInvoiceAuditUnlocked_(sheets.audit, {
+    invoiceId: invoiceId,
+    actor: actorValue,
+    action: existingQueue ? 'SYNC_UPDATED' : 'SYNC_CREATED',
+    result: status,
+    after: { paymentReferenceId: paymentReferenceId, status: status, salesAmount: total },
+    detail: '新增商品明細 ' + newItems.length + ' 筆'
+  });
+  return { invoiceId: invoiceId, status: status, addedItems: newItems.length, skipped: false };
+}
+
+function detectInvoiceRefundSignal_(purchaseValue) {
+  var purchase = purchaseValue || {};
+  var status = cleanText_(purchase.paymentStatus).toLowerCase();
+  var refundStatus = cleanText_(purchase.refundStatus).toLowerCase();
+  return ['refunded', 'partially_refunded', 'refund'].indexOf(status) !== -1 ||
+    ['refunded', 'partially_refunded', 'completed'].indexOf(refundStatus) !== -1 ||
+    Boolean(cleanText_(purchase.refundedAt));
+}
+
+function markInvoiceRefundReviewForPurchase_(spreadsheet, purchaseValue, actorValue) {
+  var purchase = purchaseValue || {};
+  if (!detectInvoiceRefundSignal_(purchase)) return false;
+  var sheets = ensureInvoiceSheets_(spreadsheet);
+  var purchaseId = cleanText_(purchase.id || purchase.obPurchaseId);
+  var item = invoiceSheetRows_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS).filter(function(row) {
+    return cleanText_(row.obPurchaseId) === purchaseId;
+  })[0];
+  if (!item) return false;
+  var queue = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE).filter(function(row) {
+    return cleanText_(row.invoiceId) === cleanText_(item.invoiceId);
+  })[0];
+  if (!queue || cleanText_(queue.status) !== INVOICE_STATUSES.ISSUED) return false;
+  var detectedAt = formatInvoiceTimestamp_(purchase.refundedAt || new Date());
+  updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, queue.rowNumber, {
+    status: INVOICE_STATUSES.REFUND_REVIEW,
+    refundDetectedAt: detectedAt,
+    updatedAt: formatInvoiceTimestamp_(new Date()),
+    version: (Number(queue.version) || 0) + 1
+  });
+  appendInvoiceAuditUnlocked_(sheets.audit, {
+    invoiceId: queue.invoiceId,
+    actor: actorValue,
+    action: 'REFUND_DETECTED',
+    before: { status: INVOICE_STATUSES.ISSUED },
+    after: { status: INVOICE_STATUSES.REFUND_REVIEW },
+    result: 'review_required',
+    detail: 'OB 購買 ID：' + purchaseId
+  });
+  return true;
+}
+
+function buildObUserPassUrl_(pathSuffix, queryValue) {
+  var url = CONFIG.OB_USER_PASSES_API_URL + cleanText_(pathSuffix);
+  var query = queryValue || {};
+  var parts = Object.keys(query).filter(function(key) {
+    return query[key] != null && cleanText_(query[key]) !== '';
+  }).map(function(key) {
+    return encodeURIComponent(key) + '=' + encodeURIComponent(query[key]);
+  });
+  return parts.length ? url + '?' + parts.join('&') : url;
+}
+
+function fetchObUserPassResponse_(tokenValue, url, fetchImpl) {
+  var token = cleanText_(tokenValue);
+  if (!token) throw new Error('尚未設定 Omcean API 權杖。');
+  var fetcher = fetchImpl || function(fetchUrl, options) {
+    return UrlFetchApp.fetch(fetchUrl, options);
+  };
+  var response = fetcher(url, {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true
+  });
+  var responseCode = Number(response.getResponseCode());
+  var bodyText = response.getContentText() || '';
+  var body;
+  try {
+    body = bodyText ? JSON.parse(bodyText) : null;
+  } catch (error) {
+    var parseError = new Error('OB 購課 API 回傳無法解析的資料。');
+    parseError.statusCode = responseCode;
+    throw parseError;
+  }
+  if (responseCode !== 200) {
+    var requestError = new Error(
+      responseCode === 429 ? 'OB API 次數已達上限。' : '讀取 OB 購課資料失敗（HTTP ' + responseCode + '）。'
+    );
+    requestError.statusCode = responseCode;
+    var headers = typeof response.getAllHeaders === 'function' ? response.getAllHeaders() : {};
+    requestError.retryAfter = headers['Retry-After'] || headers['retry-after'] || '';
+    throw requestError;
+  }
+  return body;
+}
+
+function fetchObUserPassPage_(tokenValue, queryValue, fetchImpl) {
+  var query = queryValue || {};
+  var start = Math.max(0, Math.floor(Number(query.start) || 0));
+  var body = fetchObUserPassResponse_(tokenValue, buildObUserPassUrl_('', {
+    date_from: cleanText_(query.dateFrom || CONFIG.INVOICE_SYNC_DATE_FROM),
+    start: start
+  }), fetchImpl);
+  if (!Array.isArray(body)) throw new Error('OB 購課列表格式不正確。');
+  if (body.length > CONFIG.PAGE_SIZE) throw new Error('OB 購課列表單頁超過 100 筆。');
+  return body;
+}
+
+function fetchObUserPassDetail_(tokenValue, purchaseIdValue, fetchImpl) {
+  var purchaseId = cleanText_(purchaseIdValue);
+  if (!purchaseId) throw new Error('OB 購買 ID 不完整。');
+  var body = fetchObUserPassResponse_(
+    tokenValue,
+    buildObUserPassUrl_('/' + encodeURIComponent(purchaseId), {}),
+    fetchImpl
+  );
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error('OB 購課明細格式不正確。');
+  }
+  return body;
+}
+
+function parseInvoiceSyncCursor_(value) {
+  try {
+    var parsed = JSON.parse(cleanText_(value) || '{}');
+    return {
+      start: Math.max(0, Math.floor(Number(parsed.start) || 0)),
+      itemIndex: Math.max(0, Math.floor(Number(parsed.itemIndex) || 0))
+    };
+  } catch (error) {
+    return { start: 0, itemIndex: 0 };
+  }
+}
+
+function syncInvoicePurchases_(sessionToken, optionsValue) {
+  var session = requireCapability_(sessionToken, 'invoice_admin');
+  var options = optionsValue || {};
+  return withScriptLock_(function() {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = ensureInvoiceSheets_(spreadsheet);
+    var properties = PropertiesService.getScriptProperties();
+    var token = cleanText_(properties.getProperty(CONFIG.API_TOKEN_PROPERTY));
+    if (!token) throw new Error('尚未設定 Omcean API 權杖。');
+    var cursor = parseInvoiceSyncCursor_(
+      getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_SYNC_CURSOR_SETTING, '')
+    );
+    var maxRequests = Math.max(1, Math.min(
+      CONFIG.INVOICE_SYNC_MAX_REQUESTS,
+      Math.floor(Number(options.maxRequests) || CONFIG.INVOICE_SYNC_MAX_REQUESTS)
+    ));
+    var requestCount = 0;
+    var counters = { createdOrUpdated: 0, skipped: 0, refunds: 0 };
+    var actor = cleanText_(session.teacherName) || '系統同步';
+    var defaultMerchantProfile = cleanText_(
+      getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, 'primary')
+    ) || 'primary';
+
+    function pause(reason, start, itemIndex, error) {
+      var savedCursor = { start: start, itemIndex: itemIndex };
+      setInvoiceSettingUnlocked_(
+        sheets.settings,
+        CONFIG.INVOICE_SYNC_CURSOR_SETTING,
+        JSON.stringify(savedCursor),
+        actor
+      );
+      appendInvoiceAuditUnlocked_(sheets.audit, {
+        actor: actor,
+        action: 'SYNC_PAUSED',
+        result: reason,
+        detail: error && error.statusCode ? 'HTTP ' + error.statusCode : 'request budget'
+      });
+      return {
+        status: 'paused',
+        reason: reason,
+        cursor: savedCursor,
+        requestCount: requestCount,
+        counters: counters
+      };
+    }
+
+    while (requestCount < maxRequests) {
+      var page;
+      try {
+        page = fetchObUserPassPage_(token, {
+          dateFrom: CONFIG.INVOICE_SYNC_DATE_FROM,
+          start: cursor.start
+        }, options.fetchImpl);
+        requestCount += 1;
+      } catch (error) {
+        if (Number(error.statusCode) === 429) {
+          return pause('rate_limited', cursor.start, cursor.itemIndex, error);
+        }
+        throw error;
+      }
+
+      for (var itemIndex = cursor.itemIndex; itemIndex < page.length; itemIndex++) {
+        var listItem = page[itemIndex] || {};
+        if (detectInvoiceRefundSignal_(listItem)) {
+          if (markInvoiceRefundReviewForPurchase_(spreadsheet, listItem, actor)) counters.refunds += 1;
+          continue;
+        }
+        var purchaseId = cleanText_(listItem.id);
+        var existingItem = invoiceSheetRows_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS).some(function(row) {
+          return cleanText_(row.obPurchaseId) === purchaseId;
+        });
+        if (existingItem) {
+          counters.skipped += 1;
+          continue;
+        }
+        if (!isInvoiceEligiblePurchase_(listItem, new Date(CONFIG.INVOICE_SYNC_CUTOFF_ISO).getTime())) {
+          counters.skipped += 1;
+          continue;
+        }
+        if (requestCount >= maxRequests) return pause('request_budget', cursor.start, itemIndex, null);
+        var detail;
+        try {
+          detail = fetchObUserPassDetail_(token, purchaseId, options.fetchImpl);
+          requestCount += 1;
+        } catch (error) {
+          if (Number(error.statusCode) === 429) {
+            return pause('rate_limited', cursor.start, itemIndex, error);
+          }
+          throw error;
+        }
+        var normalized = normalizeObUserPassForInvoice_(listItem, detail);
+        if (normalized.refundSignal) {
+          if (markInvoiceRefundReviewForPurchase_(spreadsheet, detail, actor)) counters.refunds += 1;
+          continue;
+        }
+        var candidate = groupInvoiceCandidates_([normalized])[0];
+        upsertInvoiceCandidate_(spreadsheet, candidate, actor, {
+          defaultMerchantProfile: defaultMerchantProfile
+        });
+        counters.createdOrUpdated += 1;
+      }
+
+      if (page.length < CONFIG.PAGE_SIZE) {
+        setInvoiceSettingUnlocked_(
+          sheets.settings,
+          CONFIG.INVOICE_SYNC_CURSOR_SETTING,
+          JSON.stringify({ start: 0, itemIndex: 0 }),
+          actor
+        );
+        setInvoiceSettingUnlocked_(
+          sheets.settings,
+          CONFIG.INVOICE_SYNC_LAST_AT_SETTING,
+          formatInvoiceTimestamp_(new Date()),
+          actor
+        );
+        appendInvoiceAuditUnlocked_(sheets.audit, {
+          actor: actor,
+          action: 'SYNC_COMPLETED',
+          result: 'complete',
+          detail: JSON.stringify(counters)
+        });
+        return { status: 'complete', requestCount: requestCount, counters: counters };
+      }
+      cursor = { start: cursor.start + page.length, itemIndex: 0 };
+      setInvoiceSettingUnlocked_(
+        sheets.settings,
+        CONFIG.INVOICE_SYNC_CURSOR_SETTING,
+        JSON.stringify(cursor),
+        actor
+      );
+    }
+    return pause('request_budget', cursor.start, cursor.itemIndex, null);
+  });
+}
+
+function resumeInvoiceSync_(sessionToken, optionsValue) {
+  return syncInvoicePurchases_(sessionToken, optionsValue);
 }
 
 function ensureSheetHeaders_(sheet, expectedHeaders) {

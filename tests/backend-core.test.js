@@ -502,6 +502,77 @@ function createObResponse(statusCode, body, headers = {}) {
   };
 }
 
+function rowFromObject(headers, value) {
+  return headers.map((header) => value[header] == null ? '' : value[header]);
+}
+
+function createInvoiceIssueBackend(fetchHandler) {
+  const fixture = createInvoiceSyncBackend();
+  const gatewayCalls = [];
+  fixture.services.PropertiesService.getScriptProperties()
+    .setProperty('INVOICE_GATEWAY_URL', 'https://gateway.test/internal/ecpay/invoices/issue');
+  fixture.services.PropertiesService.getScriptProperties()
+    .setProperty('INVOICE_GATEWAY_SECRET', 'gas-to-gateway-secret-for-tests-123456');
+  const backend = loadBackend({
+    ...fixture.services,
+    SpreadsheetApp: { getActiveSpreadsheet() { return fixture.spreadsheet; } },
+    UrlFetchApp: {
+      fetch(url, options) {
+        gatewayCalls.push({ url, options });
+        return fetchHandler(url, options, backend);
+      },
+    },
+  });
+  return {
+    ...fixture,
+    backend,
+    gatewayCalls,
+    sessionToken: backend.authenticate_('Ivy', '0912').sessionToken,
+  };
+}
+
+function addInvoiceDraft(fixture, overrides = {}, itemOverrides = []) {
+  const invoiceId = overrides.invoiceId || `invoice-${fixture.queueSheet.values.length}`;
+  const draft = {
+    invoiceId,
+    paymentReferenceId: 'ORDER-ISSUE',
+    status: 'PENDING',
+    merchantProfile: 'primary',
+    invoiceKind: 'personal',
+    customerEmail: 'student@example.com',
+    customerIdentifier: '',
+    customerName: '學生',
+    customerAddress: '',
+    salesAmount: 3000,
+    relateNumber: '',
+    createdAt: '2026-09-26 00:00:00',
+    updatedAt: '2026-09-26 00:00:00',
+    version: 1,
+    ...overrides,
+  };
+  fixture.queueSheet.values.push(rowFromObject(EXPECTED_INVOICE_QUEUE_HEADERS, draft));
+  const items = itemOverrides.length ? itemOverrides : [{
+    itemId: `${invoiceId}-item-1`, invoiceId, obPurchaseId: 'purchase-issue-1', itemSeq: 1,
+    itemName: '十堂課卡', itemCount: 1, itemWord: '張', itemPrice: 3000, itemAmount: 3000,
+    obPaymentStatus: 'paid', obPaymentMethod: 'Bank Transfer',
+  }];
+  items.forEach((item) => fixture.itemSheet.values.push(rowFromObject(
+    EXPECTED_INVOICE_ITEM_HEADERS,
+    { invoiceId, ...item },
+  )));
+  return draft;
+}
+
+function createGatewayResponse(statusCode, data) {
+  return {
+    getResponseCode: () => statusCode,
+    getContentText: () => JSON.stringify({
+      status: data.outcome === 'issued' ? 'success' : 'error',
+      data,
+    }),
+  };
+}
+
 function createAccount(backend, teacherName, pin, options = {}) {
   const salt = options.salt || 'fixed-salt';
   return [
@@ -3163,6 +3234,218 @@ test('invoice OB sync changes an issued purchase with an explicit refund signal 
     '2026-09-26 12:00:00',
   );
   assert.equal(queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('ecpayInvoiceNo')], 'AB12345678');
+});
+
+test('ECPay payload builds one personal invoice with fixed tax flags and consecutive items', () => {
+  const backend = loadBackend();
+  const draft = {
+    invoiceKind: 'personal', customerEmail: 'student@example.com', customerIdentifier: '',
+    customerName: '學生', customerAddress: '', salesAmount: 4800, relateNumber: '20260926001',
+  };
+  const items = [
+    { itemSeq: 9, itemName: '十堂課卡', itemCount: 1, itemWord: '張', itemPrice: 3000, itemAmount: 3000 },
+    { itemSeq: 3, itemName: '三堂課卡', itemCount: 1, itemWord: '', itemPrice: 1800, itemAmount: 1800 },
+  ];
+
+  const payload = backend.buildEcpayInvoicePayload_(draft, items);
+
+  assert.equal(payload.CarrierType, '');
+  assert.equal(payload.CarrierNum, '');
+  assert.equal(payload.Print, '0');
+  assert.equal(payload.Donation, '0');
+  assert.equal(payload.TaxType, '1');
+  assert.equal(payload.InvType, '07');
+  assert.equal(payload.vat, '1');
+  assert.deepEqual(JSON.parse(JSON.stringify(payload.Items)), [
+    { ItemSeq: 1, ItemName: '十堂課卡', ItemCount: 1, ItemWord: '張', ItemPrice: 3000, ItemAmount: 3000 },
+    { ItemSeq: 2, ItemName: '三堂課卡', ItemCount: 1, ItemWord: '張', ItemPrice: 1800, ItemAmount: 1800 },
+  ]);
+});
+
+test('ECPay payload requires complete business identity and emits print notation', () => {
+  const backend = loadBackend();
+  const item = [{ itemName: '課卡', itemCount: 1, itemWord: '張', itemPrice: 1000, itemAmount: 1000 }];
+  const base = {
+    invoiceKind: 'business', customerEmail: 'company@example.com', customerIdentifier: '12345678',
+    customerName: '測試公司', customerAddress: '台北市測試路 1 號', salesAmount: 1000,
+    relateNumber: '20260926002',
+  };
+
+  assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerIdentifier: '' }, item), /統一編號/);
+  assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerName: '' }, item), /抬頭/);
+  assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerAddress: '' }, item), /地址/);
+
+  const payload = backend.buildEcpayInvoicePayload_(base, item);
+  assert.equal(payload.CustomerIdentifier, '12345678');
+  assert.equal(payload.CustomerName, '測試公司');
+  assert.equal(payload.CustomerAddr, '台北市測試路 1 號');
+  assert.equal(payload.CarrierType, '');
+  assert.equal(payload.Print, '1');
+});
+
+test('ECPay payload rejects fractional or mismatched item totals', () => {
+  const backend = loadBackend();
+  const draft = {
+    invoiceKind: 'personal', customerEmail: 'student@example.com', salesAmount: 1000,
+    relateNumber: '20260926003',
+  };
+
+  assert.throws(() => backend.buildEcpayInvoicePayload_(draft, [{
+    itemName: '課卡', itemCount: 1, itemPrice: 999.5, itemAmount: 1000,
+  }]), /整數/);
+  assert.throws(() => backend.buildEcpayInvoicePayload_(draft, [{
+    itemName: '課卡', itemCount: 1, itemPrice: 999, itemAmount: 999,
+  }]), /總額/);
+});
+
+test('invoice sequence increments independently by merchant profile and Taipei date', () => {
+  const fixture = createInvoiceSyncBackend();
+  const waitsBefore = fixture.services.__lockState.waits;
+  const releasesBefore = fixture.services.__lockState.releases;
+
+  const primaryOne = fixture.backend.allocateInvoiceRelateNumber_('primary', '2026-09-26');
+  const primaryTwo = fixture.backend.allocateInvoiceRelateNumber_('primary', '2026-09-26');
+  const secondaryOne = fixture.backend.allocateInvoiceRelateNumber_('secondary', '2026-09-26');
+  const nextDay = fixture.backend.allocateInvoiceRelateNumber_('primary', '2026-09-27');
+
+  assert.deepEqual([primaryOne, primaryTwo, secondaryOne, nextDay], [
+    '20260926001', '20260926002', '20260926001', '20260927001',
+  ]);
+  assert.equal(fixture.services.__lockState.waits - waitsBefore, 4);
+  assert.equal(fixture.services.__lockState.releases - releasesBefore, 4);
+});
+
+test('invoice issue maps issued rejected and unknown gateway outcomes to terminal review states', () => {
+  const cases = [
+    {
+      outcome: { outcome: 'issued', traceId: 'trace-issued', code: '1', message: 'OK', invoiceNo: 'AB12345678', invoiceDate: '2026-09-26 12:00:00', randomNumber: '1234' },
+      expectedStatus: 'ISSUED', expectedCode: '',
+    },
+    {
+      outcome: { outcome: 'rejected', traceId: 'trace-rejected', code: '10000001', message: '資料錯誤' },
+      expectedStatus: 'FAILED', expectedCode: '10000001',
+    },
+    {
+      outcome: { outcome: 'unknown', traceId: 'trace-unknown', code: 'NETWORK_ERROR', message: '無法確認' },
+      expectedStatus: 'UNCERTAIN', expectedCode: 'NETWORK_ERROR',
+    },
+  ];
+
+  for (const item of cases) {
+    const fixture = createInvoiceIssueBackend(() => createGatewayResponse(
+      item.outcome.outcome === 'issued' ? 200 : item.outcome.outcome === 'rejected' ? 422 : 502,
+      item.outcome,
+    ));
+    addInvoiceDraft(fixture, { invoiceId: `invoice-${item.expectedStatus}` });
+
+    const result = fixture.backend.issueInvoiceDraft_(fixture.sessionToken, `invoice-${item.expectedStatus}`);
+    const row = fixture.queueSheet.values[1];
+
+    assert.equal(result.status, item.expectedStatus);
+    assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], item.expectedStatus);
+    assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('errorCode')], item.expectedCode);
+    assert.match(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('relateNumber')], /^\d{11}$/);
+    assert.equal(fixture.gatewayCalls.length, 1);
+  }
+});
+
+test('invoice issue blocks issued uncertain and unconfirmed failed drafts before gateway access', () => {
+  for (const status of ['ISSUED', 'UNCERTAIN', 'FAILED']) {
+    const fixture = createInvoiceIssueBackend(() => {
+      throw new Error('gateway must not be called');
+    });
+    addInvoiceDraft(fixture, { invoiceId: `invoice-blocked-${status}`, status });
+
+    assert.throws(
+      () => fixture.backend.issueInvoiceDraft_(fixture.sessionToken, `invoice-blocked-${status}`),
+      /不可開立|狀態/,
+    );
+    assert.equal(fixture.gatewayCalls.length, 0);
+  }
+});
+
+test('invoice issue changes transport exceptions to uncertain and prevents recursive duplicate calls', () => {
+  let recursiveChecked = false;
+  let fixture;
+  fixture = createInvoiceIssueBackend((_url, _options, backend) => {
+    if (!recursiveChecked) {
+      recursiveChecked = true;
+      assert.throws(
+        () => backend.issueInvoiceDraft_(fixture.sessionToken, 'invoice-duplicate'),
+        /不可開立|狀態/,
+      );
+    }
+    throw new Error('timeout after send');
+  });
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-duplicate' });
+
+  const result = fixture.backend.issueInvoiceDraft_(fixture.sessionToken, 'invoice-duplicate');
+
+  assert.equal(result.status, 'UNCERTAIN');
+  assert.equal(fixture.gatewayCalls.length, 1);
+});
+
+test('invoice issue records missing gateway configuration as a reviewable failure instead of staying issuing', () => {
+  const fixture = createInvoiceIssueBackend(() => {
+    throw new Error('gateway must not be called');
+  });
+  fixture.services.__properties.delete('INVOICE_GATEWAY_URL');
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-no-gateway' });
+
+  const result = fixture.backend.issueInvoiceDraft_(fixture.sessionToken, 'invoice-no-gateway');
+
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.errorCode, 'GATEWAY_NOT_CONFIGURED');
+  assert.equal(
+    fixture.queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')],
+    'FAILED',
+  );
+  assert.equal(fixture.gatewayCalls.length, 0);
+});
+
+test('invoice issue signs the canonical gateway request without exposing merchant credentials', () => {
+  const fixture = createInvoiceIssueBackend(() => createGatewayResponse(422, {
+    outcome: 'rejected', traceId: 'trace-signature', code: 'TEST', message: '測試拒絕',
+  }));
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-signature' });
+
+  fixture.backend.issueInvoiceDraft_(fixture.sessionToken, 'invoice-signature');
+
+  const call = fixture.gatewayCalls[0];
+  assert.equal(call.url, 'https://gateway.test/internal/ecpay/invoices/issue');
+  assert.equal(call.options.method, 'post');
+  assert.equal(call.options.contentType, 'application/json');
+  assert.equal(call.options.headers['X-Sherry-Version'], 'v1');
+  assert.match(call.options.headers['X-Sherry-Timestamp'], /^\d{10}$/);
+  assert.match(call.options.headers['X-Sherry-Nonce'], /^[A-Za-z0-9_-]{16,128}$/);
+  assert.match(call.options.headers['X-Sherry-Signature'], /^[A-Za-z0-9_-]+$/);
+  assert.doesNotMatch(JSON.stringify(call), /HASH_KEY|HASH_IV|MERCHANT_ID/);
+});
+
+test('invoice batch isolates personal failures and refuses business invoices without gateway access', () => {
+  const fixture = createInvoiceIssueBackend(() => createGatewayResponse(200, {
+    outcome: 'issued', traceId: 'trace-batch', code: '1', message: 'OK',
+    invoiceNo: 'AB12345678', invoiceDate: '2026-09-26 12:00:00', randomNumber: '1234',
+  }));
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-batch-personal' });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-batch-business', invoiceKind: 'business',
+    customerIdentifier: '12345678', customerName: '測試公司', customerAddress: '台北市測試路 1 號',
+  });
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-batch-invalid', status: 'INVALID' });
+
+  const result = fixture.backend.issueInvoiceBatch_(fixture.sessionToken, [
+    'invoice-batch-personal', 'invoice-batch-business', 'invoice-batch-invalid',
+  ]);
+
+  assert.deepEqual(result.map((item) => [item.invoiceId, item.success]), [
+    ['invoice-batch-personal', true],
+    ['invoice-batch-business', false],
+    ['invoice-batch-invalid', false],
+  ]);
+  assert.match(result[1].error, /公司發票/);
+  assert.match(result[2].error, /狀態/);
+  assert.equal(fixture.gatewayCalls.length, 1);
 });
 
 test('legacy migration backfills only unique exact OB links and marks every unresolved active row', () => {

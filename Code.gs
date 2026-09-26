@@ -337,6 +337,9 @@ var CONFIG = {
   INVOICE_SYNC_CURSOR_SETTING: 'invoiceSyncCursor',
   INVOICE_SYNC_LAST_AT_SETTING: 'invoiceLastSyncAt',
   INVOICE_DEFAULT_MERCHANT_SETTING: 'invoiceDefaultMerchantProfile',
+  INVOICE_GATEWAY_URL_PROPERTY: 'INVOICE_GATEWAY_URL',
+  INVOICE_GATEWAY_SECRET_PROPERTY: 'INVOICE_GATEWAY_SECRET',
+  INVOICE_RELATE_SEQUENCE_PREFIX: 'invoiceRelateSequence',
   INVOICE_SYNC_MAX_REQUESTS: 90
 };
 
@@ -7474,6 +7477,347 @@ function syncInvoicePurchases_(sessionToken, optionsValue) {
 
 function resumeInvoiceSync_(sessionToken, optionsValue) {
   return syncInvoicePurchases_(sessionToken, optionsValue);
+}
+
+function requireInvoiceInteger_(value, label, minimum) {
+  var number = Number(value);
+  var minimumValue = minimum == null ? 0 : Number(minimum);
+  if (!isFinite(number) || Math.floor(number) !== number || number < minimumValue) {
+    throw new Error(cleanText_(label) + '必須是整數。');
+  }
+  return number;
+}
+
+function buildEcpayInvoiceItems_(itemsValue) {
+  var items = Array.isArray(itemsValue) ? itemsValue : [];
+  if (!items.length) throw new Error('發票缺少商品明細。');
+  return items.map(function(itemValue, index) {
+    var item = itemValue || {};
+    var name = cleanText_(item.itemName);
+    if (!name) throw new Error('發票商品名稱不完整。');
+    return {
+      ItemSeq: index + 1,
+      ItemName: name,
+      ItemCount: requireInvoiceInteger_(item.itemCount, '商品數量', 1),
+      ItemWord: cleanText_(item.itemWord) || '張',
+      ItemPrice: requireInvoiceInteger_(item.itemPrice, '商品單價', 0),
+      ItemAmount: requireInvoiceInteger_(item.itemAmount, '商品金額', 0)
+    };
+  });
+}
+
+function validateInvoiceForIssue_(draftValue, itemsValue) {
+  var draft = draftValue || {};
+  var email = cleanText_(draft.customerEmail).toLowerCase();
+  var relateNumber = cleanText_(draft.relateNumber);
+  var invoiceKind = cleanText_(draft.invoiceKind) || 'personal';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('發票 Email 格式不正確。');
+  }
+  if (!/^[A-Za-z0-9]{1,30}$/.test(relateNumber)) {
+    throw new Error('發票關聯編號不正確。');
+  }
+  if (['personal', 'business'].indexOf(invoiceKind) === -1) {
+    throw new Error('發票類型不正確。');
+  }
+  if (invoiceKind === 'business') {
+    if (!/^\d{8}$/.test(cleanText_(draft.customerIdentifier))) {
+      throw new Error('公司發票缺少正確的8碼統一編號。');
+    }
+    if (!cleanText_(draft.customerName)) throw new Error('公司發票缺少抬頭。');
+    if (!cleanText_(draft.customerAddress)) throw new Error('公司發票缺少地址。');
+  }
+  var salesAmount = requireInvoiceInteger_(draft.salesAmount, '發票總額', 0);
+  var items = buildEcpayInvoiceItems_(itemsValue);
+  var itemTotal = items.reduce(function(total, item) {
+    return total + item.ItemAmount;
+  }, 0);
+  if (itemTotal !== salesAmount) throw new Error('發票總額與商品合計不一致。');
+  return { invoiceKind: invoiceKind, email: email, salesAmount: salesAmount, items: items };
+}
+
+function buildEcpayInvoicePayload_(draftValue, itemsValue) {
+  var draft = draftValue || {};
+  var validation = validateInvoiceForIssue_(draft, itemsValue);
+  var isBusiness = validation.invoiceKind === 'business';
+  return {
+    RelateNumber: cleanText_(draft.relateNumber),
+    CustomerIdentifier: isBusiness ? cleanText_(draft.customerIdentifier) : '',
+    CustomerName: cleanText_(draft.customerName),
+    CustomerAddr: isBusiness ? cleanText_(draft.customerAddress) : '',
+    CustomerPhone: '',
+    CustomerEmail: validation.email,
+    Print: isBusiness ? '1' : '0',
+    Donation: '0',
+    LoveCode: '',
+    CarrierType: '',
+    CarrierNum: '',
+    TaxType: '1',
+    SalesAmount: validation.salesAmount,
+    InvoiceRemark: '',
+    InvType: '07',
+    vat: '1',
+    Items: validation.items
+  };
+}
+
+function canonicalJsonForInvoiceGateway_(value) {
+  return canonicalizeGatewayPayload_(value);
+}
+
+function signInvoiceGatewayRequest_(actionValue, payloadValue, timestampValue, nonceValue, secretValue) {
+  var timestamp = String(timestampValue);
+  var nonce = cleanText_(nonceValue);
+  var secret = String(secretValue == null ? '' : secretValue);
+  if (!/^\d{10}$/.test(timestamp)) throw new Error('內部發票請求時間不正確。');
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) throw new Error('內部發票請求編號不正確。');
+  if (secret.length < 32) throw new Error('發票開立閏道尚未完成設定。');
+  var bodyHash = sha256Base64Url_(canonicalJsonForInvoiceGateway_(payloadValue));
+  var signingInput = ['v1', cleanText_(actionValue), timestamp, nonce, bodyHash].join('\n');
+  return bytesToBase64Url_(Utilities.computeHmacSha256Signature(
+    signingInput,
+    secret,
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function safeInvoiceGatewayText_(value, fallbackValue, maxLength) {
+  var text = cleanText_(value).replace(/[\u0000-\u001f\u007f]/g, ' ');
+  return (text || cleanText_(fallbackValue)).slice(0, maxLength || 200);
+}
+
+function sanitizeInvoiceGatewayOutcome_(value) {
+  var source = value || {};
+  var outcome = ['issued', 'rejected', 'unknown'].indexOf(cleanText_(source.outcome)) !== -1
+    ? cleanText_(source.outcome)
+    : 'unknown';
+  var result = {
+    outcome: outcome,
+    traceId: safeInvoiceGatewayText_(source.traceId, '', 64),
+    code: safeInvoiceGatewayText_(source.code, outcome === 'unknown' ? 'UNKNOWN' : '', 40),
+    message: safeInvoiceGatewayText_(
+      source.message,
+      outcome === 'unknown'
+        ? '無法確認綠界處理結果。'
+        : outcome === 'rejected' ? '綠界拒絕開立。' : '',
+      200
+    )
+  };
+  if (outcome === 'issued') {
+    result.invoiceNo = safeInvoiceGatewayText_(source.invoiceNo, '', 10);
+    result.invoiceDate = safeInvoiceGatewayText_(source.invoiceDate, '', 20);
+    result.randomNumber = safeInvoiceGatewayText_(source.randomNumber, '', 4);
+    if (!result.invoiceNo) {
+      result.outcome = 'unknown';
+      result.code = 'MISSING_INVOICE_NO';
+      result.message = '綠界回傳成功，但缺少發票號碼。';
+    }
+  }
+  return result;
+}
+
+function callInvoiceGateway_(payloadValue, fetchImpl) {
+  var payload = payloadValue || {};
+  var properties = PropertiesService.getScriptProperties();
+  var url = cleanText_(properties.getProperty(CONFIG.INVOICE_GATEWAY_URL_PROPERTY));
+  var secret = String(properties.getProperty(CONFIG.INVOICE_GATEWAY_SECRET_PROPERTY) || '');
+  if (!/^https:\/\//.test(url) || secret.length < 32) {
+    return sanitizeInvoiceGatewayOutcome_({
+      outcome: 'rejected',
+      code: 'GATEWAY_NOT_CONFIGURED',
+      message: '發票開立閏道尚未完成設定。'
+    });
+  }
+  var timestamp = String(Math.floor(currentTimeMs_() / 1000));
+  var nonce = sha256Base64Url_(Utilities.getUuid() + ':' + timestamp + ':' + Math.random()).slice(0, 32);
+  var signature = signInvoiceGatewayRequest_(
+    'issueEcpayInvoice', payload, timestamp, nonce, secret
+  );
+  var fetcher = fetchImpl || function(fetchUrl, options) {
+    return UrlFetchApp.fetch(fetchUrl, options);
+  };
+  try {
+    var response = fetcher(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        'X-Sherry-Version': 'v1',
+        'X-Sherry-Timestamp': timestamp,
+        'X-Sherry-Nonce': nonce,
+        'X-Sherry-Signature': signature
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+      followRedirects: false
+    });
+    var body = JSON.parse(response.getContentText() || '{}');
+    return sanitizeInvoiceGatewayOutcome_(body && body.data);
+  } catch (error) {
+    return sanitizeInvoiceGatewayOutcome_({
+      outcome: 'unknown', code: 'NETWORK_ERROR', message: '無法確認開立結果。'
+    });
+  }
+}
+
+function allocateInvoiceRelateNumberUnlocked_(settingsSheet, merchantProfileValue, taipeiDateValue, actorValue) {
+  var merchantProfile = cleanText_(merchantProfileValue);
+  var taipeiDate = cleanText_(taipeiDateValue);
+  if (['primary', 'secondary'].indexOf(merchantProfile) === -1) {
+    throw new Error('開票帳號不正確。');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(taipeiDate)) throw new Error('開票日期不正確。');
+  var key = [CONFIG.INVOICE_RELATE_SEQUENCE_PREFIX, merchantProfile, taipeiDate].join(':');
+  var next = Math.floor(Number(getInvoiceSettingUnlocked_(settingsSheet, key, 0))) + 1;
+  if (!isFinite(next) || next < 1 || next > 999) throw new Error('當日發票編號已用完。');
+  setInvoiceSettingUnlocked_(settingsSheet, key, next, actorValue || '系統開票');
+  return taipeiDate.replace(/-/g, '') + String('000' + next).slice(-3);
+}
+
+function allocateInvoiceRelateNumber_(merchantProfileValue, taipeiDateValue) {
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    return allocateInvoiceRelateNumberUnlocked_(
+      sheets.settings, merchantProfileValue, taipeiDateValue, '系統開票'
+    );
+  });
+}
+
+function findUniqueInvoiceQueueRow_(queueSheet, invoiceIdValue) {
+  var invoiceId = cleanText_(invoiceIdValue);
+  var matches = invoiceSheetRows_(queueSheet, SHEET_HEADERS.INVOICE_QUEUE).filter(function(row) {
+    return cleanText_(row.invoiceId) === invoiceId;
+  });
+  if (!invoiceId || matches.length !== 1) throw new Error('找不到唯一的發票草稿。');
+  return matches[0];
+}
+
+function getInvoiceItemsForDraft_(itemsSheet, invoiceIdValue) {
+  var invoiceId = cleanText_(invoiceIdValue);
+  return invoiceSheetRows_(itemsSheet, SHEET_HEADERS.INVOICE_ITEMS)
+    .filter(function(row) { return cleanText_(row.invoiceId) === invoiceId; })
+    .sort(function(left, right) { return Number(left.itemSeq) - Number(right.itemSeq); });
+}
+
+function issueInvoiceDraft_(sessionToken, invoiceIdValue) {
+  var session = requireCapability_(sessionToken, 'invoice_admin');
+  var actor = cleanText_(session.teacherName);
+  var invoiceId = cleanText_(invoiceIdValue);
+  var prepared = withScriptLock_(function() {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = ensureInvoiceSheets_(spreadsheet);
+    var draft = findUniqueInvoiceQueueRow_(sheets.queue, invoiceId);
+    if (cleanText_(draft.status) !== INVOICE_STATUSES.PENDING) {
+      throw new Error('此發票狀態不可開立：' + cleanText_(draft.status));
+    }
+    var items = getInvoiceItemsForDraft_(sheets.items, invoiceId);
+    var merchantProfile = cleanText_(draft.merchantProfile);
+    var relateNumber = cleanText_(draft.relateNumber) || allocateInvoiceRelateNumberUnlocked_(
+      sheets.settings,
+      merchantProfile,
+      Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd'),
+      actor
+    );
+    var payloadDraft = {};
+    Object.keys(draft).forEach(function(key) { payloadDraft[key] = draft[key]; });
+    payloadDraft.relateNumber = relateNumber;
+    var invoicePayload = buildEcpayInvoicePayload_(payloadDraft, items);
+    var issuingVersion = (Number(draft.version) || 0) + 1;
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, draft.rowNumber, {
+      status: INVOICE_STATUSES.ISSUING,
+      relateNumber: relateNumber,
+      errorCode: '',
+      errorMessage: '',
+      updatedAt: formatInvoiceTimestamp_(new Date()),
+      version: issuingVersion
+    });
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: invoiceId,
+      actor: actor,
+      action: 'ISSUE_STARTED',
+      before: { status: draft.status, version: draft.version },
+      after: { status: INVOICE_STATUSES.ISSUING, version: issuingVersion, relateNumber: relateNumber },
+      result: 'issuing'
+    });
+    return {
+      invoiceId: invoiceId,
+      merchantProfile: merchantProfile,
+      version: issuingVersion,
+      request: { merchantProfile: merchantProfile, invoice: invoicePayload }
+    };
+  });
+
+  var gatewayResult = callInvoiceGateway_(prepared.request);
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    var current = findUniqueInvoiceQueueRow_(sheets.queue, invoiceId);
+    if (cleanText_(current.status) !== INVOICE_STATUSES.ISSUING ||
+        Number(current.version) !== Number(prepared.version)) {
+      throw new Error('發票草稿已被其他操作更新，請重新查詢。');
+    }
+    var status = gatewayResult.outcome === 'issued'
+      ? INVOICE_STATUSES.ISSUED
+      : gatewayResult.outcome === 'rejected'
+        ? INVOICE_STATUSES.FAILED
+        : INVOICE_STATUSES.UNCERTAIN;
+    var patch = {
+      status: status,
+      ecpayInvoiceNo: status === INVOICE_STATUSES.ISSUED ? cleanText_(gatewayResult.invoiceNo) : '',
+      ecpayInvoiceDate: status === INVOICE_STATUSES.ISSUED ? cleanText_(gatewayResult.invoiceDate) : '',
+      ecpayRandomNumber: status === INVOICE_STATUSES.ISSUED ? cleanText_(gatewayResult.randomNumber) : '',
+      errorCode: status === INVOICE_STATUSES.ISSUED ? '' : cleanText_(gatewayResult.code),
+      errorMessage: status === INVOICE_STATUSES.ISSUED ? '' : cleanText_(gatewayResult.message),
+      issuedAt: status === INVOICE_STATUSES.ISSUED ? formatInvoiceTimestamp_(new Date()) : '',
+      updatedAt: formatInvoiceTimestamp_(new Date()),
+      version: Number(current.version) + 1
+    };
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, current.rowNumber, patch);
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: invoiceId,
+      actor: actor,
+      action: 'ISSUE_FINISHED',
+      before: { status: current.status, version: current.version },
+      after: { status: status, version: patch.version },
+      result: gatewayResult.outcome,
+      detail: JSON.stringify({
+        traceId: cleanText_(gatewayResult.traceId),
+        code: cleanText_(gatewayResult.code),
+        message: cleanText_(gatewayResult.message)
+      })
+    });
+    return {
+      invoiceId: invoiceId,
+      status: status,
+      relateNumber: cleanText_(current.relateNumber),
+      traceId: cleanText_(gatewayResult.traceId),
+      errorCode: patch.errorCode,
+      errorMessage: patch.errorMessage
+    };
+  });
+}
+
+function issueInvoiceBatch_(sessionToken, invoiceIdsValue) {
+  requireCapability_(sessionToken, 'invoice_admin');
+  var ids = Array.isArray(invoiceIdsValue) ? invoiceIdsValue.map(cleanText_).filter(Boolean) : [];
+  if (!ids.length || ids.length > 50) throw new Error('批次開票筆數不正確。');
+  var seen = {};
+  ids.forEach(function(invoiceId) {
+    if (seen[invoiceId]) throw new Error('批次開票不可包含重複發票。');
+    seen[invoiceId] = true;
+  });
+  return ids.map(function(invoiceId) {
+    try {
+      var draft = withScriptLock_(function() {
+        var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+        return findUniqueInvoiceQueueRow_(sheets.queue, invoiceId);
+      });
+      if (cleanText_(draft.invoiceKind) === 'business') {
+        throw new Error('公司發票必須逐筆確認開立。');
+      }
+      return { invoiceId: invoiceId, success: true, result: issueInvoiceDraft_(sessionToken, invoiceId) };
+    } catch (error) {
+      return { invoiceId: invoiceId, success: false, error: getErrorMessage_(error) };
+    }
+  });
 }
 
 function ensureSheetHeaders_(sheet, expectedHeaders) {

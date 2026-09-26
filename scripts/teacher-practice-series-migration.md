@@ -17,7 +17,7 @@
 ## 正式執行前
 
 1. 核對現行 main 與正式 GAS 的最新來源，不能用這個工作樹覆蓋其他任務已部署的改動。
-2. migration preview/apply 已具管理權限、digest、rollback 與重試防重複測試；獨立 review 的五項問題已修正。正式啟用排程延伸前，必須先完成 Liz 舊系列停止接續／新系列建立，避免部署與補建之間的排程改到十月；無法保證順序時先加預設關閉的 rollout gate。
+2. migration preview/apply 已具管理權限、digest、rollback 與重試防重複測試；獨立 review 的五項問題已修正。排程延伸預設關閉；完成補建及讀回驗證後才將 Script Property `TEACHER_PRACTICE_AUTO_EXTENSION_ENABLED` 設為 `true`，避免部署與補建之間的排程改到 Liz 十月。
 3. 重新讀取正式資料及即時 OB；產出新增／沿用／跳過／歧義清單。CourseList 快照不等於即時可用性。
 4. 取得前端、GAS 部署及清單內正式資料修改的明確同意。
 5. 僅附加模式欄，保留原本所有索引。只依 ID 改指定列；保留原場次／參與者 ID、取消例外與停止狀態。

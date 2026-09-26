@@ -1607,8 +1607,23 @@ test('weekly waitlist does not treat a missing future day as published empty ava
   assert.deepEqual(f.bookingSheet.values.slice(1).map(r=>r[2]),['2026/10/03','2026/10/17']);
 });
 
+test('scheduled practice extension stays off until migration enables it', () => {
+  const services=createAuthServices();
+  const f=createPracticeBackend({services:{PropertiesService:services.PropertiesService},courseRows:[['2026/10/03','14:00','A－空環','Tako','one']]});
+  f.seriesSheet.values.push(['s','Liz 🌰','A',6,'14:00','15:00','2026/09/05','','啟用中','','','','waitlist']);
+  f.backend.currentTimeMs_=()=>new Date('2026-10-01T12:00:00+08:00').getTime();
+  f.backend.runScheduledPracticeReconciliation();
+  assert.equal(f.bookingSheet.values.length,1);
+  services.PropertiesService.getScriptProperties().setProperty('TEACHER_PRACTICE_AUTO_EXTENSION_ENABLED','true');
+  const result=f.backend.runScheduledPracticeReconciliation();
+  assert.equal(result.extension.created,1);
+  assert.equal(f.bookingSheet.values.length,2);
+});
+
 test('scheduled practice extension rejects empty live days despite a published snapshot', () => {
-  const f=createPracticeBackend({courseRows:[['2026/10/03','14:00','A－空環','Tako','one']]});
+  const services=createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('TEACHER_PRACTICE_AUTO_EXTENSION_ENABLED','true');
+  const f=createPracticeBackend({services:{PropertiesService:services.PropertiesService},courseRows:[['2026/10/03','14:00','A－空環','Tako','one']]});
   f.seriesSheet.values.push(['s','Liz 🌰','A',6,'14:00','15:00','2026/09/05','','啟用中','','','','waitlist']);
   f.backend.currentTimeMs_=()=>new Date('2026-10-01T12:00:00+08:00').getTime();
   f.backend.getPracticeCurrentObRowsForDayView_=()=>[];

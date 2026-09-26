@@ -7044,6 +7044,10 @@ function runScheduledPracticeReconciliation() {
     currentObRows: currentObRows
   });
   liveResult.extension = withScriptLock_(function() {
+    var properties = getScriptProperties_();
+    if (!properties || properties.getProperty('TEACHER_PRACTICE_AUTO_EXTENSION_ENABLED') !== 'true') {
+      return { created:0, skipped:0, affectedDates:[], rolloutPending:true };
+    }
     var records = getPracticeRecordsUnlocked_(SpreadsheetApp.getActiveSpreadsheet());
     return runStateTransitionUnlocked_([records.sheets.bookings, records.sheets.participants,
       records.sheets.exceptions, records.sheets.audit], function(appendAudits) {

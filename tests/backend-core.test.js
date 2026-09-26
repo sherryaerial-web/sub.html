@@ -3158,6 +3158,32 @@ test('invoice OB sync upsert deduplicates purchases and keeps one queue per paym
   );
 });
 
+test('invoice OB sync refuses an ambiguous duplicate payment reference without writing items', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-duplicate-a', paymentReferenceId: 'ORDER-DUPLICATE',
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-duplicate-b', paymentReferenceId: 'ORDER-DUPLICATE',
+  });
+  const beforeItemRows = fixture.itemSheet.values.length;
+  const candidate = fixture.backend.groupInvoiceCandidates_([{
+    obPurchaseId: 'duplicate-new-purchase', paymentReferenceId: 'ORDER-DUPLICATE',
+    purchasedAt: '2026-09-26T01:00:02Z', paymentStatus: 'paid',
+    paymentMethod: 'Bank Transfer', customerEmail: 'one@example.com',
+    customerName: 'One User', itemName: '課卡', itemCount: 1, itemWord: '張',
+    itemPrice: 1000, itemAmount: 1000,
+  }])[0];
+
+  assert.throws(
+    () => fixture.backend.upsertInvoiceCandidate_(fixture.spreadsheet, candidate, 'Ivy', {
+      defaultMerchantProfile: 'primary',
+    }),
+    /付款參考編號.*重複|重複.*付款參考編號/,
+  );
+  assert.equal(fixture.itemSheet.values.length, beforeItemRows);
+});
+
 test('invoice OB sync invalidates one payment reference when customer emails conflict across runs', () => {
   const { backend, spreadsheet, queueSheet } = createInvoiceSyncBackend();
   const base = {
@@ -3312,17 +3338,18 @@ test('ECPay payload requires complete business identity and emits print notation
   const backend = loadBackend();
   const item = [{ itemName: '課卡', itemCount: 1, itemWord: '張', itemPrice: 1000, itemAmount: 1000 }];
   const base = {
-    invoiceKind: 'business', customerEmail: 'company@example.com', customerIdentifier: '12345678',
+    invoiceKind: 'business', customerEmail: 'company@example.com', customerIdentifier: '04595252',
     customerName: '測試公司', customerAddress: '台北市測試路 1 號', salesAmount: 1000,
     relateNumber: '20260926002',
   };
 
   assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerIdentifier: '' }, item), /統一編號/);
+  assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerIdentifier: '12345678' }, item), /統一編號/);
   assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerName: '' }, item), /抬頭/);
   assert.throws(() => backend.buildEcpayInvoicePayload_({ ...base, customerAddress: '' }, item), /地址/);
 
   const payload = backend.buildEcpayInvoicePayload_(base, item);
-  assert.equal(payload.CustomerIdentifier, '12345678');
+  assert.equal(payload.CustomerIdentifier, '04595252');
   assert.equal(payload.CustomerName, '測試公司');
   assert.equal(payload.CustomerAddr, '台北市測試路 1 號');
   assert.equal(payload.CarrierType, '');
@@ -3536,14 +3563,14 @@ test('invoice admin action updates company data and merchant profile only with m
 
   const result = fixture.backend.updateInvoiceDraft_(session, {
     invoiceId: 'invoice-edit', version: 4, invoiceKind: 'business',
-    customerIdentifier: '12345678', customerName: '測試公司',
+    customerIdentifier: '04595252', customerName: '測試公司',
     customerAddress: '台北市測試路 1 號', merchantProfile: 'secondary',
   });
 
   assert.equal(result.version, 5);
   const row = fixture.queueSheet.values[1];
   assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('invoiceKind')], 'business');
-  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('customerIdentifier')], '12345678');
+  assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('customerIdentifier')], '04595252');
   assert.equal(row[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('merchantProfile')], 'secondary');
   assert.equal(fixture.auditSheet.values.at(-1)[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')], 'DRAFT_UPDATED');
 });
@@ -3595,6 +3622,47 @@ test('invoice scheduler installs one Taipei midnight trigger and reuses the prot
   const result = fixture.backend.runScheduledInvoiceSync();
   assert.deepEqual(JSON.parse(JSON.stringify(result)), { status: 'complete', requestCount: 0 });
   assert.equal(scheduledCall.actor, '系統排程');
+});
+
+test('invoice scheduler status does not trust a stale installed-at property after trigger deletion', () => {
+  const fixture = createInvoiceSchedulerBackend();
+
+  fixture.backend.installInvoiceSyncScheduler();
+  fixture.triggers.splice(0, fixture.triggers.length);
+
+  const status = fixture.backend.getInvoiceSchedulerStatus_();
+
+  assert.equal(status.installed, false);
+  assert.equal(status.triggerCount, 0);
+  assert.match(status.installedAt, /^\d{4}-\d{2}-\d{2}/);
+});
+
+test('stale issuing invoices become uncertain without retry while recent issuing invoices remain locked', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-stale-issuing', status: 'ISSUING', version: 3,
+    updatedAt: '2026-09-26 00:00:00',
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-recent-issuing', status: 'ISSUING', version: 8,
+    updatedAt: '2026-09-26 00:15:00',
+  });
+
+  const result = fixture.backend.recoverStaleIssuingInvoicesUnlocked_(
+    fixture.backend.ensureInvoiceSheets_(fixture.spreadsheet),
+    new Date('2026-09-26T00:20:00+08:00'),
+    'Ivy',
+  );
+
+  assert.equal(result.recovered, 1);
+  const stale = fixture.queueSheet.values[1];
+  const recent = fixture.queueSheet.values[2];
+  assert.equal(stale[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], 'UNCERTAIN');
+  assert.equal(stale[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('errorCode')], 'STALE_ISSUING');
+  assert.equal(stale[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('version')], 4);
+  assert.equal(recent[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], 'ISSUING');
+  assert.equal(recent[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('version')], 8);
+  assert.equal(fixture.auditSheet.values.at(-1)[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')], 'ISSUE_RECOVERED_UNCERTAIN');
 });
 
 test('invoice refund resolution is tracking only and never calls the issue gateway', () => {

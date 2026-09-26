@@ -127,6 +127,13 @@ test('internal invoice payload rejects invalid tax flags identity fields and amo
     { ...valid.invoice, SalesAmount: 2999 },
     { ...valid.invoice, CustomerIdentifier: '12345678', Print: '0' },
     { ...valid.invoice, CustomerIdentifier: '12345678', Print: '1', CustomerAddr: '' },
+    {
+      ...valid.invoice,
+      CustomerIdentifier: '12345678',
+      CustomerName: '測試公司',
+      CustomerAddr: '台北市測試路 1 號',
+      Print: '1',
+    },
   ];
 
   for (const invoice of invalidInvoices) {
@@ -135,6 +142,18 @@ test('internal invoice payload rejects invalid tax flags identity fields and amo
       /發票資料格式錯誤/,
     );
   }
+
+  const company = sanitizeInternalInvoicePayload({
+    merchantProfile: 'primary',
+    invoice: {
+      ...valid.invoice,
+      CustomerIdentifier: '04595252',
+      CustomerName: '測試公司',
+      CustomerAddr: '台北市測試路 1 號',
+      Print: '1',
+    },
+  });
+  assert.equal(company.invoice.CustomerIdentifier, '04595252');
 });
 
 function createMemoryStorage() {

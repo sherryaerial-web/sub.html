@@ -262,13 +262,14 @@ Worker 的本機測試、設定名稱與 smoke check 詳見 `cloudflare-gateway/
 - 商品名稱、數量、單價與發票金額由 OB 訂單明細核對；多張課卡會保留多品項，不以訂單總額冒充單價。
 - 兩組統編／綠界商店帳號由管理員人工切換；預設帳號只影響之後新同步的草稿，既有草稿保留原帳號與操作紀錄。
 - `UNCERTAIN` 表示綠界可能已收件但系統沒收到可判定結果，禁止直接重送，必須先到綠界查詢。
+- 若開立流程因平台中斷而停在 `ISSUING` 超過 10 分鐘，管理員開啟發票頁時會自動轉成 `UNCERTAIN` 並留下 audit，仍不得直接重送。
 - OB 退款只標示「退款待處理」；本系統不自動作廢或折讓，管理員在綠界人工處理後才回來留下結案備註。
 
 ### 受控 staging 驗證順序
 
 下列每一步都要**另行取得使用者明確允許**。完成本機測試不代表可部署、建立正式 Sheet、授權帳號、安裝排程或開立發票。
 
-1. **Cloudflare staging**：確認 `wrangler.toml` 的 staging `INVOICE_REQUEST_GUARD` Durable Object binding 與 `v1` migration；互動設定 `INVOICE_GATEWAY_SECRET` 及兩組 ECPay 測試 Merchant secrets，再部署 staging Worker。回復時重新部署部署前 Worker commit；保留 Durable Object 稽核資料，不直接刪 storage。
+1. **Cloudflare staging**：確認 `wrangler.toml` 的 staging `INVOICE_REQUEST_GUARD` Durable Object binding 與 `v1` migration；互動設定 `INVOICE_GATEWAY_SECRET` 及兩組 ECPay 測試 Merchant secrets，再部署 staging Worker；`GET /health` 必須同時回傳 `configured: true` 與 `invoiceConfigured: true`。回復時重新部署部署前 Worker commit；保留 Durable Object 稽核資料，不直接刪 storage。
 2. **GAS staging properties**：在綁定測試試算表的 staging GAS 設定 `INVOICE_GATEWAY_URL` 與同一份 `INVOICE_GATEWAY_SECRET`。回復時移除這兩個 staging properties 並切回部署前 GAS 版本。
 3. **測試帳號權限**：只在 staging `登入帳號` 的指定測試管理員 I 欄加入 `invoice_admin`。回復時依該帳號與欄位移除，不改其他 capability。
 4. **假 OB 資料**：只在測試試算表以假 OB 回應建立一筆可辨識的 `PENDING` 草稿，確認四張發票 Sheet 與既有 Sheet 列數。不得用正式 OB 訂單，也不得呼叫綠界 production。回復時只依該筆測試 `invoiceId`／`paymentReferenceId` 清理核准的測試列，不可清空整張表。

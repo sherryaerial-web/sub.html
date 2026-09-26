@@ -343,6 +343,7 @@ var CONFIG = {
   INVOICE_SCHEDULER_INSTALLED_PROPERTY: 'INVOICE_SYNC_SCHEDULER_INSTALLED_AT',
   INVOICE_SYNC_HOUR_SETTING: 'invoiceSyncHour',
   INVOICE_SYNC_TIMEZONE_SETTING: 'invoiceSyncTimezone',
+  INVOICE_ISSUING_STALE_MINUTES: 10,
   INVOICE_SYNC_MAX_REQUESTS: 90
 };
 
@@ -7117,9 +7118,13 @@ function upsertInvoiceCandidate_(spreadsheet, candidateValue, actorValue, option
   var queueRows = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE);
   var itemRows = invoiceSheetRows_(sheets.items, SHEET_HEADERS.INVOICE_ITEMS);
   var paymentReferenceId = cleanText_(candidate.paymentReferenceId);
-  var existingQueue = queueRows.filter(function(row) {
+  var paymentReferenceMatches = queueRows.filter(function(row) {
     return paymentReferenceId && cleanText_(row.paymentReferenceId) === paymentReferenceId;
-  })[0] || null;
+  });
+  if (paymentReferenceMatches.length > 1) {
+    throw new Error('同一付款參考編號重複出現在發票佇列，請先人工排除重複資料。');
+  }
+  var existingQueue = paymentReferenceMatches[0] || null;
   if (!existingQueue && !paymentReferenceId) {
     var linkedItem = itemRows.filter(function(row) {
       return (candidate.items || []).some(function(item) {
@@ -7513,6 +7518,19 @@ function buildEcpayInvoiceItems_(itemsValue) {
   });
 }
 
+function isValidTaiwanBusinessNumber_(value) {
+  var identifier = cleanText_(value);
+  if (!/^\d{8}$/.test(identifier) || /^0{8}$/.test(identifier)) return false;
+  var weights = [1, 2, 1, 2, 1, 2, 4, 1];
+  var sum = 0;
+  for (var index = 0; index < weights.length; index += 1) {
+    var product = Number(identifier.charAt(index)) * weights[index];
+    sum += Math.floor(product / 10) + (product % 10);
+  }
+  if (sum % 5 === 0) return true;
+  return identifier.charAt(6) === '7' && (sum - 1) % 5 === 0;
+}
+
 function validateInvoiceForIssue_(draftValue, itemsValue) {
   var draft = draftValue || {};
   var email = cleanText_(draft.customerEmail).toLowerCase();
@@ -7528,8 +7546,8 @@ function validateInvoiceForIssue_(draftValue, itemsValue) {
     throw new Error('發票類型不正確。');
   }
   if (invoiceKind === 'business') {
-    if (!/^\d{8}$/.test(cleanText_(draft.customerIdentifier))) {
-      throw new Error('公司發票缺少正確的8碼統一編號。');
+    if (!isValidTaiwanBusinessNumber_(draft.customerIdentifier)) {
+      throw new Error('公司發票缺少符合檢查碼的8碼統一編號。');
     }
     if (!cleanText_(draft.customerName)) throw new Error('公司發票缺少抬頭。');
     if (!cleanText_(draft.customerAddress)) throw new Error('公司發票缺少地址。');
@@ -7868,7 +7886,7 @@ function getInvoiceSchedulerStatus_() {
     : '';
   var triggers = getInvoiceSyncTriggers_();
   return {
-    installed: triggers.length === 1 || Boolean(installedAt),
+    installed: triggers.length === 1,
     triggerCount: triggers.length,
     installedAt: installedAt,
     scheduleText: '每日約 00:00',
@@ -7876,10 +7894,48 @@ function getInvoiceSchedulerStatus_() {
   };
 }
 
+function recoverStaleIssuingInvoicesUnlocked_(sheetsValue, nowValue, actorValue) {
+  var sheets = sheetsValue;
+  var now = nowValue instanceof Date ? nowValue : new Date(nowValue || new Date());
+  if (!isFinite(now.getTime())) now = new Date();
+  var cutoff = formatInvoiceTimestamp_(new Date(
+    now.getTime() - CONFIG.INVOICE_ISSUING_STALE_MINUTES * 60 * 1000
+  ));
+  var recovered = 0;
+  invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE).forEach(function(row) {
+    var updatedAt = cleanText_(row.updatedAt);
+    if (cleanText_(row.status) !== INVOICE_STATUSES.ISSUING ||
+        !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(updatedAt) ||
+        updatedAt > cutoff) {
+      return;
+    }
+    var nextVersion = (Number(row.version) || 0) + 1;
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, row.rowNumber, {
+      status: INVOICE_STATUSES.UNCERTAIN,
+      errorCode: 'STALE_ISSUING',
+      errorMessage: '開立程序中斷，結果不明；請先至綠界查詢，不可直接重送。',
+      updatedAt: formatInvoiceTimestamp_(now),
+      version: nextVersion
+    });
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: row.invoiceId,
+      actor: cleanText_(actorValue) || '系統復原',
+      action: 'ISSUE_RECOVERED_UNCERTAIN',
+      before: { status: row.status, version: row.version, updatedAt: updatedAt },
+      after: { status: INVOICE_STATUSES.UNCERTAIN, version: nextVersion },
+      result: 'manual_lookup_required',
+      detail: '開立中超過 ' + CONFIG.INVOICE_ISSUING_STALE_MINUTES + ' 分鐘'
+    });
+    recovered += 1;
+  });
+  return { recovered: recovered, cutoff: cutoff };
+}
+
 function getInvoiceAdminDashboard_(session) {
-  assertCapabilitySession_(session, 'invoice_admin');
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
   return withScriptLock_(function() {
     var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    recoverStaleIssuingInvoicesUnlocked_(sheets, new Date(), actor);
     var queue = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE)
       .map(publicInvoiceRow_)
       .sort(function(left, right) {
@@ -7945,7 +8001,9 @@ function updateInvoiceDraft_(session, updateValue) {
       ? cleanText_(update.customerAddress != null ? update.customerAddress : draft.customerAddress)
       : '';
     if (invoiceKind === 'business') {
-      if (!/^\d{8}$/.test(identifier)) throw new Error('公司發票缺少正確的8碼統一編號。');
+      if (!isValidTaiwanBusinessNumber_(identifier)) {
+        throw new Error('公司發票缺少符合檢查碼的8碼統一編號。');
+      }
       if (!name) throw new Error('公司發票缺少抬頭。');
       if (!address) throw new Error('公司發票缺少地址。');
     }

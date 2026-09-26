@@ -66,6 +66,18 @@ function copyInteger(value, minimum = 0) {
   return number;
 }
 
+function isValidTaiwanBusinessNumber(value) {
+  const identifier = String(value || '');
+  if (!/^\d{8}$/.test(identifier) || /^0{8}$/.test(identifier)) return false;
+  const weights = [1, 2, 1, 2, 1, 2, 4, 1];
+  const total = [...identifier].reduce((sum, character, index) => {
+    const product = Number(character) * weights[index];
+    return sum + Math.floor(product / 10) + (product % 10);
+  }, 0);
+  if (total % 5 === 0) return true;
+  return identifier[6] === '7' && (total - 1) % 5 === 0;
+}
+
 export function sanitizeInternalInvoicePayload(body) {
   const value = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const profile = copyString(value.merchantProfile, 20);
@@ -104,7 +116,8 @@ export function sanitizeInternalInvoicePayload(body) {
       ItemAmount: copyInteger(item && item.ItemAmount, 0),
     })),
   };
-  const identifierValid = invoice.CustomerIdentifier === '' || /^\d{8}$/.test(invoice.CustomerIdentifier);
+  const identifierValid = invoice.CustomerIdentifier === ''
+    || isValidTaiwanBusinessNumber(invoice.CustomerIdentifier);
   const businessFieldsValid = invoice.CustomerIdentifier === ''
     ? invoice.Print === '0'
     : invoice.Print === '1' && Boolean(invoice.CustomerName) && Boolean(invoice.CustomerAddr);

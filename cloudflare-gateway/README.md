@@ -69,7 +69,7 @@ npx wrangler deploy --env staging
 | 階段 | 經允許後才執行 | 驗證 | 回復 |
 |---|---|---|---|
 | Gateway secrets | 以上述互動指令設定 `INVOICE_GATEWAY_SECRET`、`ECPAY_PRIMARY_MERCHANT_ID`、`ECPAY_PRIMARY_HASH_KEY`、`ECPAY_PRIMARY_HASH_IV`、`ECPAY_SECONDARY_MERCHANT_ID`、`ECPAY_SECONDARY_HASH_KEY`、`ECPAY_SECONDARY_HASH_IV` | secret 名稱存在；終端、Git 與 log 沒有真值 | 依名稱刪除或輪替 staging secret，不碰 production |
-| Gateway staging | `npx wrangler deploy --env staging` | `/health` 正常；`POST /internal/ecpay/invoices/issue` 無簽章、過期簽章及重播 nonce 都被拒絕 | 重新部署部署前 commit；保留 Durable Object storage |
+| Gateway staging | `npx wrangler deploy --env staging` | `/health` 的 `configured` 與 `invoiceConfigured` 都是 `true`；`POST /internal/ecpay/invoices/issue` 無簽章、過期簽章及重播 nonce 都被拒絕 | 重新部署部署前 commit；保留 Durable Object storage |
 | GAS staging | 在測試 GAS Script Properties 設 `INVOICE_GATEWAY_URL`、`INVOICE_GATEWAY_SECRET` | URL 指向 staging internal route；shared secret 與 Worker 相同 | 移除兩個 staging properties，切回部署前 GAS version |
 | staging 管理員 | 只對測試帳號加入 `invoice_admin` | 其他管理員仍不可讀取或操作發票 | 只移除該測試帳號的 `invoice_admin` |
 | 假 OB 草稿 | 在測試試算表用假 OB 回應建立明確標記的單筆 queue | 只新增 `InvoiceQueue`、`InvoiceItems`、`InvoiceAudit`、`InvoiceSettings`；既有 Sheet 列數不變 | 只按測試 `invoiceId`／`paymentReferenceId` 清理已核准測試列，不清空整表 |
@@ -81,7 +81,7 @@ staging 完整通過後，production 的 secrets、Worker deploy、GAS deploy、
 
 部署後依序檢查：
 
-1. `GET /health` 回傳 `configured: true`。
+1. `GET /health` 回傳 `configured: true` 與 `invoiceConfigured: true`；前者代表既有公開 Gateway，後者才代表發票 secrets 與 replay guard 齊全。
 2. 非允許 Origin 回傳 403，且沒有 GAS 呼叫。
 3. 錯誤／過期 Turnstile、錯誤 action 或 hostname 都被拒絕。
 4. 同一路由超過頻率限制回傳 429。

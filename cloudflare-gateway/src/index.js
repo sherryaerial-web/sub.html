@@ -32,6 +32,24 @@ function isConfigured(env) {
   );
 }
 
+function isInvoiceConfigured(env) {
+  const guard = env.INVOICE_REQUEST_GUARD;
+  const environment = typeof env.ECPAY_ENVIRONMENT === 'string'
+    ? env.ECPAY_ENVIRONMENT.trim()
+    : '';
+  return Boolean(
+    typeof env.INVOICE_GATEWAY_SECRET === 'string' && env.INVOICE_GATEWAY_SECRET.length >= 32
+    && typeof env.ECPAY_PRIMARY_MERCHANT_ID === 'string' && env.ECPAY_PRIMARY_MERCHANT_ID.trim()
+    && typeof env.ECPAY_PRIMARY_HASH_KEY === 'string' && env.ECPAY_PRIMARY_HASH_KEY.length === 16
+    && typeof env.ECPAY_PRIMARY_HASH_IV === 'string' && env.ECPAY_PRIMARY_HASH_IV.length === 16
+    && typeof env.ECPAY_SECONDARY_MERCHANT_ID === 'string' && env.ECPAY_SECONDARY_MERCHANT_ID.trim()
+    && typeof env.ECPAY_SECONDARY_HASH_KEY === 'string' && env.ECPAY_SECONDARY_HASH_KEY.length === 16
+    && typeof env.ECPAY_SECONDARY_HASH_IV === 'string' && env.ECPAY_SECONDARY_HASH_IV.length === 16
+    && ['stage', 'production'].includes(environment)
+    && guard && typeof guard.idFromName === 'function' && typeof guard.get === 'function'
+  );
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -56,7 +74,10 @@ export default {
     if (route.action === 'health') {
       return jsonResponse({
         status: 'success',
-        data: { configured: isConfigured(env) },
+        data: {
+          configured: isConfigured(env),
+          invoiceConfigured: isInvoiceConfigured(env),
+        },
       }, isConfigured(env) ? 200 : 503);
     }
 

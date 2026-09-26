@@ -566,6 +566,15 @@ git commit -m "docs: add invoice integration operations runbook"
 - Review Focus 5：`ECPay payload builds one personal invoice with fixed tax flags and consecutive items` 與 `ECPay payload requires complete business identity and emits print notation`。輸入為個人多品項，以及缺統編／抬頭／地址的公司草稿；預期個人 `Print="0"`、連續 `ItemSeq`、合計相符，公司缺任一欄即拒絕且完整時 `Print="1"`；實際通過。
 - 目前停在 staging 部署核准點。尚未部署 Worker／GAS、未設定 secret／Script Properties、未建立正式 Sheet、未授予正式 capability、未安裝 trigger、未寫入正式 OB／Sheets，也未開立任何發票。
 
+### 完成前安全審查補強（2026-09-26）
+
+- 公司統編由「僅 8 碼」加強為台灣統一編號檢查碼驗證，GAS 與 Gateway 雙層拒絕無效統編；測試使用有效統編 `04595252`，並確認 `12345678` 被拒絕。
+- 同一付款參考編號若在 queue 出現多列，OB 同步會停止並要求人工排除，不會任選第一列寫入。
+- 真實 trigger 已不存在時，即使殘留舊安裝時間，工作台仍正確顯示「未安裝」。
+- `ISSUING` 超過 10 分鐘會在管理員讀取發票頁時安全轉為 `UNCERTAIN`、留下 audit 並要求先查綠界，不會自動重送。
+- Gateway `/health` 新增 `invoiceConfigured` 布林值，只有內部 shared secret、兩組 Merchant 設定、環境與 Durable Object replay guard 全部齊備時才為 `true`。
+- 補強後最終完整回歸：GAS／前端 773/773、Gateway 33/33；production 與 staging Wrangler dry-run 皆通過，仍未部署或寫入任何外部資料。
+
 ## 完成定義
 
 - 所有自動測試、Gateway dry-run 與五項 review focus 均通過。

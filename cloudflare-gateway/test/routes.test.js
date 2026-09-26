@@ -45,7 +45,33 @@ test('health reports configuration without contacting GAS', async () => {
   assert.equal(upstreamCalls, 0);
   assert.deepEqual(await response.json(), {
     status: 'success',
-    data: { configured: true },
+    data: { configured: true, invoiceConfigured: false },
+  });
+});
+
+test('health reports invoice readiness only when both merchants auth and replay guard are configured', async () => {
+  const response = await worker.fetch(new Request('https://gateway.test/health'), {
+    GAS_UPSTREAM_URL: 'https://script.google.com/macros/s/test/exec',
+    GAS_GATEWAY_SECRET: 'x'.repeat(32),
+    TURNSTILE_SECRET_KEY: 'turnstile-test',
+    INVOICE_GATEWAY_SECRET: 'i'.repeat(32),
+    ECPAY_PRIMARY_MERCHANT_ID: '2000132',
+    ECPAY_PRIMARY_HASH_KEY: '1234567890ABCDEF',
+    ECPAY_PRIMARY_HASH_IV: 'FEDCBA0987654321',
+    ECPAY_SECONDARY_MERCHANT_ID: '2000133',
+    ECPAY_SECONDARY_HASH_KEY: 'ABCDEF1234567890',
+    ECPAY_SECONDARY_HASH_IV: '0987654321FEDCBA',
+    ECPAY_ENVIRONMENT: 'stage',
+    INVOICE_REQUEST_GUARD: {
+      idFromName: () => ({ id: 'guard' }),
+      get: () => ({ fetch: async () => new Response('{}') }),
+    },
+  }, {});
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    status: 'success',
+    data: { configured: true, invoiceConfigured: true },
   });
 });
 

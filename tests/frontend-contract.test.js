@@ -362,7 +362,7 @@ test('keeps credential values out of every tracked production and documentation 
     encoding: 'utf8',
   }).split('\0').filter(Boolean).filter((file) => !file.startsWith('tests/'));
   const credentialPatterns = [
-    { type: 'Bearer token', pattern: /Bearer\s+[^\s'"<>\[\]]{20,}/i },
+    { type: 'Bearer token', pattern: /Bearer\s+(?!\$\{)[^\s'"<>\[\]]{20,}/i },
     { type: 'Google API key', pattern: /AIza[0-9A-Za-z_-]{20,}/ },
     { type: 'private key', pattern: /-----BEGIN (?:RSA )?PRIVATE KEY-----/ },
     { type: 'client secret', pattern: /client_secret\s*[:=]\s*['"][^'"]{12,}['"]/i },

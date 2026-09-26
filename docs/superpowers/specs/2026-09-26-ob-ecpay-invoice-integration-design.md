@@ -1,6 +1,6 @@
 # OB 購課與綠界電子發票整合設計
 
-日期：2026-09-26  
+日期：2026-09-26
 狀態：已確認
 實作位置：既有 Sherry Aerial 教室管理工作台（GitHub Pages 前端、Google Apps Script 後端、Google Sheets 資料儲存）及既有 Cloudflare Gateway
 

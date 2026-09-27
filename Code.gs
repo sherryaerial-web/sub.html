@@ -9630,7 +9630,8 @@ function buildCourseClosureSocialCopy_(targetDateValue, details) {
     var shortage = Number(rule.minimumEnrollment) - enrollmentCount;
     if (enrollmentCount <= 0 || shortage < 1) return null;
     if (shortage !== 1 && !(
-      shortage === 2 && getCoursePromotionType_(detail.courseName) === 'monthly-discount'
+      shortage === 2 && (Number(rule.minimumEnrollment) === 3 ||
+        getCoursePromotionType_(detail.courseName) === 'monthly-discount')
     )) return null;
     return { detail: detail, shortage: shortage };
   }).filter(function(candidate) {

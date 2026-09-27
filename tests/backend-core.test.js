@@ -10248,6 +10248,24 @@ test('22:30 community copy also lists discount courses two people short but neve
   ]);
 });
 
+test('22:30 community copy includes fixed-three-person teachers at one or two short without changing closure thresholds', () => {
+  const backend = loadBackend();
+  for (const teacherName of ['Jina', '小美', '卡拉', '卡拉 卡拉']) {
+    for (const enrollmentCount of [0, 1, 2, 3]) {
+      const detail = { calendarId: 'fixed-three', date: '2026/09/28', time: '19:45', courseName: 'B－原始瑜伽', teacherName, enrollmentCount, points: 3 };
+      const copy = backend.buildCourseClosureSocialCopy_('2026/09/28', [detail]);
+      const expected = enrollmentCount === 1
+        ? `明19:45晴光${teacherName}原始瑜伽缺二\n等到23:40`
+        : enrollmentCount === 2
+          ? `明19:45晴光${teacherName}原始瑜伽\n各缺一，等到23:40`
+          : '';
+      assert.equal(copy.content, expected, `${teacherName}: ${enrollmentCount} enrolled`);
+      assert.equal(backend.getCourseClosureRule_(detail, '22:30').eligible, enrollmentCount === 0);
+      assert.equal(backend.getCourseClosureRule_(detail, '23:40').eligible, enrollmentCount < 3);
+    }
+  }
+});
+
 test('stored community copy removes a private class generated before the exclusion rule', () => {
   const stored = {
     targetDate: '2026/09/22',

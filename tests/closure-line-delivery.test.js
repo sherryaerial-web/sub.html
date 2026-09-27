@@ -10,7 +10,7 @@ function fixture() {
   const calls = [];
   const c = { console, Date, JSON, Math, String, Number, Object, Array, RegExp, Error,
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props.get(k) || null, setProperty: (k,v) => props.set(k,v) }) },
-    Utilities: { getUuid: () => crypto.randomUUID(), computeHmacSha256Signature: (v,k) => [...crypto.createHmac('sha256',k).update(v).digest()], base64EncodeWebSafe: b => Buffer.from(b).toString('base64url'),
+    Utilities: { Charset: { UTF_8: 'UTF_8' }, getUuid: () => crypto.randomUUID(), computeHmacSha256Signature: (v,k) => [...crypto.createHmac('sha256',k).update(v).digest()], base64EncodeWebSafe: b => Buffer.from(b).toString('base64url'),
       formatDate: (date, _tz, pattern) => { const d = new Date(+date + 8 * 3600000).toISOString(); return pattern === 'HH:mm' ? d.slice(11,16) : pattern === 'yyyy/MM/dd' ? d.slice(0,10).replaceAll('-','/') : d.slice(0,10); } },
     Session: { getScriptTimeZone: () => 'Asia/Taipei' },
     LockService: { getScriptLock: () => ({ waitLock() { assert.equal(locked,false); locked=true; }, releaseLock() { locked=false; } }) },
@@ -63,6 +63,18 @@ test('GAS signature matches actual Worker verifier and does not expose secret in
   const {sign}=await import('../line-notifier/src/index.mjs');
   assert.equal(e.signature,await sign('d'.repeat(40),`${e.timestamp}\n${e.nonce}\n/closure\n${e.payload}`));
   assert.ok(!f.calls[0].payload.includes('d'.repeat(40)));
+});
+
+test('Chinese LINE copy reaches the gateway with explicitly UTF-8 signed payload', () => {
+  const f=fixture();
+  const hmac=f.c.Utilities.computeHmacSha256Signature;
+  f.c.Utilities.computeHmacSha256Signature=(value,key,encoding)=>{
+    if (encoding !== 'UTF_8') throw new Error('GAS signature requires explicit charset for Chinese payload');
+    return hmac(value,key);
+  };
+  f.c.queueCourseClosureLineCopySafely_(result());
+  assert.equal(f.calls.length,1);
+  assert.equal(JSON.parse(f.props.get('CLOSURE_LINE_PENDING')).status,'queued');
 });
 
 test('actual manual closure hooks after core and keeps result despite failed notification', () => {

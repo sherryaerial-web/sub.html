@@ -10347,7 +10347,7 @@ function drainCourseClosureLineCopySafely_() {
     var nonce = Utilities.getUuid();
     var payload = JSON.stringify(pending.payload);
     var envelope = { timestamp: timestamp, nonce: nonce, payload: payload,
-      signature: bytesToBase64Url_(Utilities.computeHmacSha256Signature(timestamp + '\n' + nonce + '\n/closure\n' + payload, secret)) };
+      signature: bytesToBase64Url_(Utilities.computeHmacSha256Signature(timestamp + '\n' + nonce + '\n/closure\n' + payload, secret, Utilities.Charset.UTF_8)) };
     var status = 'pending', reason = 'transport-error';
     try {
       var response = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json',

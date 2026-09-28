@@ -40,6 +40,17 @@ function fixture() {
 }
 const payload = { targetDate: '2026/09/27', stage: '22:30', content: '明10:30劍潭Melody空瑜缺二\n等到23:40', failedCount: 0 };
 
+test('delivery status uses delivery authentication and exposes only requested day metadata', async()=>{
+  const f=fixture(); await f.bind('ivy',users[0]);await f.bind('tako',users[1]);await f.request('/closure',payload);
+  const r=await f.request('/delivery-status',{targetDate:payload.targetDate});
+  assert.equal(r.status,200);const body=await r.json();assert.equal(body.deliveries.length,2);
+  assert.ok(body.deliveries.every(x=>x.status==='pending'&&!('user_id' in x)&&!('content' in x)));
+  assert.equal((await f.request('/delivery-status',{targetDate:'invalid'})).status,422);
+  assert.equal((await f.request('/delivery-status',{targetDate:payload.targetDate},{secret:'wrong-secret'})).status,401);
+  await drain(f.env,f.deps);
+  assert.ok((await (await f.request('/delivery-status',{targetDate:payload.targetDate})).json()).deliveries.every(x=>x.status==='accepted'));
+});
+
 test('two privately bound roles receive exact copy once, including concurrent drains', async () => {
   const f = fixture();
   await f.bind('ivy', users[0]); await f.bind('tako', users[1]);

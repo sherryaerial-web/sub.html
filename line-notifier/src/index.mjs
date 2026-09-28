@@ -61,7 +61,7 @@ export async function handle(request, env, deps = {}) {
   const now = (deps.now || Date.now)();
   const path = new URL(request.url).pathname;
   if (path === '/health' && request.method === 'GET') return json({ ok: true, service: 'closure-line-notifier', enabled: env.ENABLED === 'true' });
-  if (request.method !== 'POST' || !['/closure', '/line-binding', '/admin/code', '/admin/revoke', '/admin/status'].includes(path)) return json({ error: 'not_found' }, 404);
+  if (request.method !== 'POST' || !['/closure', '/delivery-status', '/line-binding', '/admin/code', '/admin/revoke', '/admin/status'].includes(path)) return json({ error: 'not_found' }, 404);
   const raw = await request.text();
   if (encoder.encode(raw).length > 32768) return json({ error: 'too_large' }, 413);
   if (!env.DB) return json({ error: 'not_configured' }, 503);
@@ -71,6 +71,11 @@ export async function handle(request, env, deps = {}) {
     if (!auth) return json({ error: 'unauthorized' }, 401);
     if (auth.replay) return json({ error: 'replay' }, 409);
     const p = auth.payload;
+    if (path === '/delivery-status') {
+      if (!/^\d{4}\/\d{2}\/\d{2}$/.test(p.targetDate || '')) return json({error:'invalid_date'},422);
+      const {results:deliveries}=await env.DB.prepare('SELECT role,status,attempts,last_error,accepted_at FROM outbox WHERE id IN (?,?)').bind(p.targetDate+'/22:30/ivy',p.targetDate+'/22:30/tako').all();
+      return json({enabled:env.ENABLED==='true',targetDate:p.targetDate,deliveries});
+    }
     if (path === '/admin/status') {
       const { results } = await env.DB.prepare('SELECT role, user_id IS NOT NULL AS bound, bound_at FROM recipients ORDER BY role').all();
       const { results: deliveries } = await env.DB.prepare('SELECT id,role,status,attempts,last_error,conflict_reason,conflict_at,accepted_at FROM outbox ORDER BY expires DESC LIMIT 20').all();

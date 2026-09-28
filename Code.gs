@@ -1197,6 +1197,7 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
     contents: { en: cleanText_(message.content) },
     url: cleanText_(message.url)
   };
+  if (message.idempotencyKey) payload.idempotency_key = cleanText_(message.idempotencyKey);
 
   try {
     var response = UrlFetchApp.fetch(CONFIG.ONESIGNAL_NOTIFICATIONS_URL, {
@@ -10372,6 +10373,12 @@ function queueCourseClosureLineCopySafely_(result) {
   try {
     var properties = getScriptProperties_();
     if (!properties || properties.getProperty('CLOSURE_LINE_ENABLED') !== 'true') return { skipped: true };
+    if (result && result.stage === '22:30' && result.socialCopy) {
+      properties.setProperty('CLOSURE_LINE_EXPECTATION', JSON.stringify({
+        targetDate: cleanText_(result.targetDate).replace(/-/g, '/'),
+        kind: Number(result.failedCount) > 0 ? 'blocked' : (String(result.socialCopy.content || '').trim() ? 'expected' : 'none')
+      }));
+    }
     if (!result || result.stage !== '22:30' || result.failedCount !== 0 || !result.socialCopy) return { skipped: true };
     var content = String(result.socialCopy.content || '');
     var targetDate = cleanText_(result.targetDate).replace(/-/g, '/');
@@ -10401,6 +10408,79 @@ function queueCourseClosureLineCopySafely_(result) {
     console.warn('LINE closure queue unavailable; closure result preserved.');
     return { failed: true, reason: 'line-queue-unavailable' };
   }
+}
+
+// Independent OneSignal/inbox warning; never re-executes closure or retries LINE.
+function monitorCourseClosureLineDeliverySafely_() {
+  try {
+    var now = currentTimeMs_();
+    var time = Utilities.formatDate(new Date(now), getTimeZone_(), 'HH:mm');
+    if (time < '22:30' || time > '23:59') return { skipped: true };
+    var properties = getScriptProperties_();
+    var date = getTomorrowDate_().replace(/-/g, '/');
+    var expectation = JSON.parse(properties.getProperty('CLOSURE_LINE_EXPECTATION') || 'null');
+    var pending = JSON.parse(properties.getProperty('CLOSURE_LINE_PENDING') || 'null');
+    var matching = pending && pending.payload && pending.payload.targetDate === date;
+    var reason = '', complete = false, immediate = false;
+    if (expectation && expectation.targetDate === date && expectation.kind === 'none' && !matching) return { skipped: true, reason: 'no-copy' };
+    if (properties.getProperty('CLOSURE_LINE_ENABLED') !== 'true') reason = 'LINE 推送未啟用';
+    else if (!matching) reason = '尚未取得今晚應發訊息，請確認關課結果';
+    else {
+      if (pending.status === 'failed' || pending.status === 'expired' || pending.conflictReason) {
+        reason = 'GAS 交付異常：' + (pending.conflictReason || pending.lastError || pending.status); immediate = true;
+      }
+      try {
+        var url = properties.getProperty('CLOSURE_LINE_URL') || '';
+        var secret = properties.getProperty('CLOSURE_LINE_SECRET') || '';
+        if (!/^https:\/\/[a-zA-Z0-9.-]+\/closure$/.test(url) || secret.length < 32) throw new Error('not-configured');
+        var path = '/delivery-status', nonce = Utilities.getUuid(), payload = JSON.stringify({ targetDate: date });
+        var envelope = { timestamp: now, nonce: nonce, payload: payload,
+          signature: bytesToBase64Url_(Utilities.computeHmacSha256Signature(now + '\n' + nonce + '\n' + path + '\n' + payload, secret, Utilities.Charset.UTF_8)) };
+        var response = UrlFetchApp.fetch(url.replace(/\/closure$/, path), { method: 'post', contentType: 'application/json', payload: JSON.stringify(envelope), muteHttpExceptions: true, followRedirects: false });
+        if (response.getResponseCode() !== 200) throw new Error('status-http-' + response.getResponseCode());
+        var report = JSON.parse(response.getContentText());
+        if (report.targetDate !== date || !Array.isArray(report.deliveries)) throw new Error('invalid-status');
+        var rows = report.deliveries;
+        complete = ['ivy', 'tako'].every(function(role) { return rows.some(function(r) { return r.role === role && r.status === 'accepted'; }); });
+        immediate = immediate || rows.some(function(r) { return ['failed', 'expired', 'revoked'].indexOf(r.status) !== -1; });
+        reason = report.enabled === false ? 'LINE 通知服務未啟用' : rows.map(function(r) { return r.role + '：' + r.status + (r.last_error ? '（' + r.last_error + '）' : ''); }).join('；');
+        if (!reason) reason = '通知服務尚無今晚的推送紀錄';
+      } catch (error) { reason = '無法核對 LINE 送達狀態：' + getErrorMessage_(error); }
+    }
+    if (!complete && !immediate && time < '22:35') return { skipped: true };
+    var kind = complete ? 'recovered' : 'alert';
+    var lease = Utilities.getUuid();
+    var state = withScriptLock_(function() {
+      var saved = JSON.parse(properties.getProperty('CLOSURE_LINE_ALERT_STATE') || 'null');
+      if (!saved || saved.targetDate !== date) saved = { targetDate: date };
+      if (complete && (!saved.alert || (!saved.alert.inbox && !saved.alert.push))) return null;
+      var item = saved[kind] || { attempts: 0, inbox: false, push: false, pushKey: Utilities.getUuid() };
+      if ((item.inbox && item.push) || item.attempts >= 3 || item.leaseUntil > now) return null;
+      item.attempts++; item.lease = lease; item.leaseUntil = now + 120000; saved[kind] = item;
+      properties.setProperty('CLOSURE_LINE_ALERT_STATE', JSON.stringify(saved)); return item;
+    });
+    if (!state) return { skipped: true };
+    var message = {
+      eventKey: 'closure_line_' + date.replace(/\D/g, '') + '_' + kind,
+      idempotencyKey: state.pushKey,
+      heading: complete ? 'LINE 關課訊息已恢復送出' : 'LINE 關課訊息尚未送達',
+      content: complete ? '你和 Tako 的關課訊息都已由 LINE 接受。' : reason + '。請到關課管理查看社群文字；不要重跑關課。',
+      url: buildAppViewUrl_('admin', 'closureManagement')
+    };
+    var names = ['冠蓉', 'Tako'];
+    if (!state.inbox) state.inbox = (persistInboxNotificationSafely_(names, message) || {}).saved === true;
+    if (!state.push) {
+      var push = sendPushNotificationSafely_(names, message) || {};
+      state.push = push.accepted === true && !!push.messageId;
+    }
+    withScriptLock_(function() {
+      var saved = JSON.parse(properties.getProperty('CLOSURE_LINE_ALERT_STATE') || 'null');
+      if (!saved || saved.targetDate !== date || !saved[kind] || saved[kind].lease !== lease) return;
+      state.leaseUntil = 0; saved[kind] = state;
+      properties.setProperty('CLOSURE_LINE_ALERT_STATE', JSON.stringify(saved));
+    });
+    return { kind: kind, inboxSaved: state.inbox, pushAccepted: state.push };
+  } catch (error) { console.warn('LINE app alert check unavailable.'); return { failed: true }; }
 }
 
 function drainCourseClosureLineCopySafely_() {
@@ -10475,6 +10555,7 @@ function executeNextDayClosures_(session, stageValue) {
 
 function runCourseClosureScheduler() {
   drainCourseClosureLineCopySafely_();
+  monitorCourseClosureLineDeliverySafely_();
   var now = new Date(currentTimeMs_());
   var dateKey = Utilities.formatDate(now, getTimeZone_(), 'yyyy-MM-dd');
   var time = Utilities.formatDate(now, getTimeZone_(), 'HH:mm');

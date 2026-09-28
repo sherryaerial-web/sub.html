@@ -22,6 +22,61 @@ function fixture() {
 }
 const result = () => ({ stage: '22:30', targetDate: '2026/09/27', failedCount: 0, socialCopy: { content: '明10:30空瑜缺二\n等到23:40' } });
 
+function alertFixture(){
+  const f=fixture();const notifications=[],inbox=[];
+  f.c.getTomorrowDate_=()=> '2026/09/27';
+  f.c.persistInboxNotificationSafely_=(names,msg)=>{inbox.push({names:[...names],...msg});return {saved:true};};
+  f.c.sendPushNotificationSafely_=(names,msg)=>{notifications.push({names:[...names],...msg});return {accepted:true,messageId:'push-id'};};
+  f.c.buildAppViewUrl_=()=> 'https://app.example/';
+  f.status=rows=>{f.c.UrlFetchApp.fetch=()=>({getResponseCode:()=>200,getContentText:()=>JSON.stringify({enabled:true,targetDate:'2026/09/27',deliveries:rows})});};
+  return {...f,notifications,inbox};
+}
+test('LINE failures notify only Ivy and Tako once, recovery once, without re-sending LINE',()=>{
+  const f=alertFixture();f.c.queueCourseClosureLineCopySafely_(result());
+  f.status([{role:'ivy',status:'failed',last_error:'line_http_404'},{role:'tako',status:'accepted'}]);
+  f.c.monitorCourseClosureLineDeliverySafely_();f.c.monitorCourseClosureLineDeliverySafely_();
+  assert.equal(f.notifications.length,1);assert.deepEqual(f.notifications[0].names,['冠蓉','Tako']);assert.match(f.notifications[0].content,/ivy.*failed/);
+  f.status(['ivy','tako'].map(role=>({role,status:'accepted'})));
+  f.c.monitorCourseClosureLineDeliverySafely_();f.c.monitorCourseClosureLineDeliverySafely_();
+  assert.equal(f.notifications.length,2);assert.match(f.notifications[1].heading,/恢復/);assert.equal(f.inbox.length,2);
+});
+test('22:35 missing result alerts but explicit no-copy nights do not',()=>{
+  const f=alertFixture();f.c.monitorCourseClosureLineDeliverySafely_();assert.equal(f.notifications.length,0);
+  f.time(START+60000);f.c.monitorCourseClosureLineDeliverySafely_();assert.equal(f.notifications.length,1);
+  const empty=alertFixture();empty.c.queueCourseClosureLineCopySafely_({...result(),socialCopy:{content:''}});
+  empty.time(START+60000);empty.c.monitorCourseClosureLineDeliverySafely_();assert.equal(empty.notifications.length,0);
+});
+test('gateway unreachable and late pending trigger app alert, not before deadline',()=>{
+  const f=alertFixture();f.c.queueCourseClosureLineCopySafely_(result());f.status([{role:'ivy',status:'pending'}]);
+  f.c.monitorCourseClosureLineDeliverySafely_();assert.equal(f.notifications.length,0);
+  f.time(START+60000);f.c.UrlFetchApp.fetch=()=>{throw Error('offline');};
+  f.c.monitorCourseClosureLineDeliverySafely_();assert.equal(f.notifications.length,1);
+});
+test('App push retry does not duplicate inbox and remains bounded',()=>{
+  const f=alertFixture();f.time(START+60000);let tries=0;
+  f.c.sendPushNotificationSafely_=()=>{tries++;return {accepted:false};};
+  for(let i=0;i<6;i++)f.c.monitorCourseClosureLineDeliverySafely_();
+  assert.equal(tries,3);assert.equal(f.inbox.length,1);
+});
+test('manual delivery recovery supersedes stale GAS handoff failure',()=>{
+  const f=alertFixture();f.c.queueCourseClosureLineCopySafely_(result());
+  const p=JSON.parse(f.props.get('CLOSURE_LINE_PENDING'));p.status='failed';f.props.set('CLOSURE_LINE_PENDING',JSON.stringify(p));
+  f.status([]);f.c.monitorCourseClosureLineDeliverySafely_();assert.equal(f.notifications.length,1);
+  f.status(['ivy','tako'].map(role=>({role,status:'accepted'})));f.c.monitorCourseClosureLineDeliverySafely_();
+  assert.equal(f.notifications.length,2);assert.match(f.notifications[1].heading,/恢復/);
+});
+test('unknown App push outcome retries with same provider idempotency key',()=>{
+  const f=alertFixture();f.time(START+60000);
+  f.props.set('ONESIGNAL_APP_ID','test-app');f.props.set('ONESIGNAL_REST_API_KEY','test-key');
+  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../Code.gs'),'utf8'), f.c);
+  f.c.currentTimeMs_=()=>START+60000;f.c.getTomorrowDate_=()=> '2026/09/27';
+  f.c.persistInboxNotificationSafely_=()=>({saved:true});
+  f.c.getPushExternalId_=name=>'teacher-'+name;
+  const keys=[];f.c.UrlFetchApp.fetch=(_url,opts)=>{keys.push(JSON.parse(opts.payload).idempotency_key);throw Error('timeout');};
+  f.c.monitorCourseClosureLineDeliverySafely_();f.c.monitorCourseClosureLineDeliverySafely_();
+  assert.equal(keys.length,2);assert.match(keys[0],/^[a-f0-9-]{36}$/);assert.equal(keys[0],keys[1]);
+});
+
 test('LINE queue defaults off and ignores empty/second-round/failed results', () => {
   const f = fixture(); f.props.delete('CLOSURE_LINE_ENABLED');
   f.c.queueCourseClosureLineCopySafely_(result());

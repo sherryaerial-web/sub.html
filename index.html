@@ -1269,6 +1269,7 @@
     .practice-block.practice { border-left-color: #6f858d; background: #edf3f4; }
     .practice-block.student-practice { border-left-color: #829ca4; background: #f1f5f5; cursor: default; }
     .practice-block.waitlist { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; }
+    .practice-block.series-reservation { border-left-color: #a48a66; border-style: dashed; background: #faf6ed; cursor: default; }
     .practice-block.is-mine { border-color: #c79689; border-left-color: #a96f61; background: #f7e9e5; box-shadow: 0 5px 14px rgba(123, 84, 74, .10); }
     .practice-block.is-past { opacity: .5; filter: saturate(.45); box-shadow: none; }
     .practice-block.course.is-waitlist-selected { border-color: #a96f61; background: #f4e2dd; box-shadow: 0 0 0 2px rgba(169, 111, 97, .14); }
@@ -4683,7 +4684,7 @@
         : block.type === "practice" || block.type === "waitlist"
         ? (block.type === "waitlist" ? `${block.creatorName}的候補練習` : `${block.creatorName}的自主練習`)
         : (block.label || "已有行程");
-      const meta = isStudentPractice
+      const meta = block.type === "series-reservation" ? block.status : isStudentPractice
         ? (studentNames || "學生登記已占用")
         : block.type === "course"
         ? `原課程：${block.teacherName || ""}｜${selected ? "已選候補，可跨日期繼續選" : "點選加入候補清單"}`
@@ -4692,7 +4693,7 @@
           : `${names || block.creatorName}｜${block.seriesId ? "每週循環" : "單次"}`;
       const className = `practice-block ${escapeHtml(block.type)}${block.isMine ? " is-mine" : ""}${block.isPast ? " is-past" : ""}${selected ? " is-waitlist-selected" : ""}`;
       const content = `<span class="practice-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span><span class="practice-block-title">${escapeHtml(title)}</span><span class="practice-block-meta">${escapeHtml(meta)}</span>`;
-      if (isStudentPractice) return `<div class="${className}">${content}</div>`;
+      if (isStudentPractice || block.type === "series-reservation") return `<div class="${className}">${content}</div>`;
       return `<button class="${className}" type="button" data-practice-block="${escapeHtml(block.id)}"${block.type === "course" ? ` aria-pressed="${selected}"` : ""}>${content}</button>`;
     }
 
@@ -4715,7 +4716,7 @@
 
     function getPracticeEditorSlotState(startMinutes, duration, excludeBookingId = "", roomName = practiceState.room) {
       const conflicts = getPracticeSlotConflicts(startMinutes, duration, excludeBookingId, roomName);
-      const hardConflict = conflicts.find((block) => block.type === "rental" || block.type === "practice");
+      const hardConflict = conflicts.find((block) => block.type === "rental" || block.type === "practice" || block.type === "series-reservation");
       if (hardConflict) return { kind: "blocked", conflict: hardConflict, course: null, courses: [] };
       const courses = conflicts.filter((block, index, all) => block.type === "course" &&
         all.findIndex((candidate) => candidate.type === "course" && candidate.calendarId === block.calendarId) === index);

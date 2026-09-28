@@ -7,6 +7,17 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
+test('projected practice reservation is read-only and blocks the booking editor', () => {
+  const runtime = createFrontendRuntime();
+  const block = { id: 'reserved-1', type: 'series-reservation', seriesId: 's1', creatorName: 'Tako',
+    startTime: '12:00', endTime: '14:00', status: '候補循環預留，待課表確認', participants: [] };
+  const card = runtime.context.practiceBlockHtml(block);
+  assert.match(card, /候補循環預留，待課表確認/);
+  assert.doesNotMatch(card, /data-practice-block|<button/);
+  runtime.context.getPracticeSelectedRoom = () => ({ blocks: [block] });
+  assert.equal(runtime.context.getPracticeEditorSlotState(12 * 60, 60).kind, 'blocked');
+});
+
 test('completed special course keeps its nonblocking turnover reminder visible', () => {
   const runtime = createFrontendRuntime();
   const card = runtime.context.renderAdminItem({

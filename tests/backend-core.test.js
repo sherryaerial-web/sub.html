@@ -11024,6 +11024,94 @@ test('practice structure is isolated and preserves formal course rows across rer
   );
 });
 
+test('future series reservations roll three months forward without creating bookings or promoting waitlists', () => {
+  const backend = loadBackend();
+  backend.currentTimeMs_ = () => Date.parse('2026-09-28T04:00:00Z');
+  const records = { series: [
+    { seriesId: 'ordinary', creatorName: 'Tako', room: 'C', startDate: '2026/09/07', startTime: '12:00', endTime: '14:00', status: '啟用中', mode: 'ordinary' },
+    { seriesId: 'waiting', creatorName: '蜜莉', room: 'A', startDate: '2026/09/07', startTime: '15:00', endTime: '16:00', status: '啟用中', mode: 'waitlist' },
+  ], bookings: [], participants: [], exceptions: [] };
+  const before = JSON.stringify(records);
+  const day = backend.buildPracticeDayView_(records, [], '2026/11/02');
+  const block = day.rooms[2].blocks[0];
+  assert.equal(block.type, 'series-reservation');
+  assert.equal(block.seriesId, 'ordinary');
+  assert.equal(block.status, '循環預留，待課表確認');
+  assert.equal(day.rooms[0].blocks[0].reservationMode, 'waitlist');
+  assert.match(day.rooms[0].blocks[0].status, /候補/);
+  assert.equal(JSON.stringify(records), before);
+  assert.equal(backend.buildPracticeDayView_(records, [], '2027/01/04').rooms[2].blocks.length, 0);
+  backend.currentTimeMs_ = () => Date.parse('2026-10-28T04:00:00Z');
+  assert.equal(backend.buildPracticeDayView_(records, [], '2027/01/04').rooms[2].blocks.length, 1);
+  const request = { room: 'C', date: '2026/11/02', startTime: '12:30', endTime: '13:30', includeSeriesReservations: true };
+  assert.throws(() => backend.assertPracticeIntervalAvailable_(request, records, []), /循環預留/);
+  assert.equal(backend.findPracticeConflictsUnlocked_({ ...request, includeSeriesReservations: false }, records, []).length, 0);
+  records.exceptions.push({ seriesId: 'ordinary', date: '2026/11/02' });
+  assert.equal(backend.buildPracticeDayView_(records, [], '2026/11/02').rooms[2].blocks.length, 0);
+});
+
+test('new practice and edits cannot bypass an unmaterialized recurring reservation', () => {
+  const f = createPracticeBackend();
+  f.backend.currentTimeMs_ = () => Date.parse('2026-09-28T04:00:00Z');
+  f.seriesSheet.values.push(['reserved', 'Tako', 'C', 1, '12:00', '14:00', '2026/11/02', '', '啟用中', '', '', 'Tako', 'ordinary']);
+  const before = JSON.stringify(f.seriesSheet.values);
+  assert.throws(() => f.backend.createPracticeBooking_(f.teacher('蜜莉'), {
+    date: '2026/11/02', room: 'C', startTime: '12:30', endTime: '13:30', recurrence: 'once',
+  }), /循環預留/);
+  assert.throws(() => f.backend.createPracticeBooking_(f.teacher('蜜莉'), {
+    date: '2026/10/26', room: 'C', startTime: '12:30', endTime: '13:30', recurrence: 'weekly',
+  }), /循環預留/);
+  assert.equal(JSON.stringify(f.seriesSheet.values), before);
+  const single = f.backend.createPracticeBooking_(f.teacher('蜜莉'), {
+    date: '2026/11/02', room: 'C', startTime: '16:00', endTime: '17:00', recurrence: 'once',
+  });
+  assert.throws(() => f.backend.updatePracticeBooking_(f.teacher('蜜莉'), {
+    bookingId: single.bookingId, date: '2026/11/02', room: 'C', startTime: '12:30', endTime: '13:30', scope: 'once',
+  }), /循環預留/);
+});
+
+test('reservation projections honor stopped cancelled replaced and materialized occurrences while keeping existing conflicts', () => {
+  const b = loadBackend();
+  b.currentTimeMs_ = () => Date.parse('2026-09-28T04:00:00Z');
+  const s = { seriesId: 's', creatorName: 'Tako', room: 'C', startDate: '2026/09/07', startTime: '12:00', endTime: '14:00', status: '啟用中', mode: 'waitlist' };
+  const r = { series: [s], bookings: [], participants: [], exceptions: [] };
+  const project = () => b.getPracticeSeriesReservations_(r, '2026/11/02');
+  s.stopDate = '2026/11/02';
+  assert.equal(project().length, 0);
+  s.stopDate = '';
+  r.bookings.push({ bookingId: 'cancelled', seriesId: 's', date: '2026/11/02', status: '已取消' });
+  assert.equal(project().length, 0);
+  r.bookings = [];
+  r.series.push({ ...s, seriesId: 'replacement', startDate: '2026/10/05' });
+  assert.deepEqual(Array.from(project(), x => x.seriesId), ['replacement']);
+  r.series.pop();
+  r.bookings.push({ bookingId: 'existing', date: '2026/11/02', room: 'C', startTime: '12:30', endTime: '13:30', creatorName: '蜜莉', status: '已成立' });
+  const before = JSON.stringify(r);
+  const blocks = b.buildPracticeDayView_(r, [], '2026/11/02').rooms[2].blocks;
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks.find(x => x.type === 'series-reservation').hasConflict, true);
+  assert.equal(JSON.stringify(r), before);
+  assert.equal(b.getPracticeSeriesReservations_(r, '2026/11/03').length, 0);
+  assert.equal(b.findPracticeConflictsUnlocked_({ room: 'C', date: '2026/11/09', startTime: '14:15', endTime: '15:15', includeSeriesReservations: true }, r, []).length, 0);
+  assert.equal(b.findPracticeConflictsUnlocked_({ room: 'C', date: '2026/11/09', startTime: '14:10', endTime: '15:10', includeSeriesReservations: true }, r, []).length, 1);
+  b.currentTimeMs_ = () => Date.parse('2026-11-30T04:00:00Z');
+  assert.equal(b.getPracticeReservationHorizon_(), '2027/02/28');
+});
+
+test('joining future practice cannot extend projected hours into a later reservation', () => {
+  const f = createPracticeBackend();
+  f.backend.currentTimeMs_ = () => Date.parse('2026-09-28T04:00:00Z');
+  const booked = f.backend.createPracticeBooking_(f.teacher('蜜莉'), {
+    date: '2026/10/05', room: 'C', startTime: '12:00', endTime: '14:00', recurrence: 'weekly',
+  });
+  f.seriesSheet.values.push(['other', 'Tako', 'C', 1, '15:00', '17:00', '2026/11/02', '', '啟用中', '', '', 'Tako', 'ordinary']);
+  const before = JSON.stringify(f.participantSheet.values);
+  assert.throws(() => f.backend.joinPracticeBooking_(f.teacher('Liz'), {
+    bookingId: booked.bookingId, startTime: '13:00', endTime: '16:00', scope: 'future',
+  }), /循環預留/);
+  assert.equal(JSON.stringify(f.participantSheet.values), before);
+});
+
 test('practice day view separates OB classes rentals and shared practice by room', () => {
   const backend = loadBackend();
   const day = backend.buildPracticeDayView_(
@@ -14167,6 +14255,18 @@ function createStudentPracticeSubmissionFixture(options = {}) {
   }
   return { backend, spreadsheet };
 }
+
+test('student registration rejects a teachers future reservation before writing participant data', () => {
+  const { backend, spreadsheet } = createStudentPracticeSubmissionFixture();
+  backend.currentTimeMs_ = () => Date.parse('2026-09-28T04:00:00Z');
+  backend.getPracticeRecordsUnlocked_ = () => ({
+    series: [{ seriesId: 's', creatorName: 'Tako', room: 'C', startDate: '2026/09/07', startTime: '12:00', endTime: '14:00', status: '啟用中', mode: 'waitlist' }],
+    bookings: [], participants: [], exceptions: [],
+  });
+  assert.throws(() => backend.submitStudentPractice_({ appName: '學生甲', email: 'student@example.com',
+    date: '2026/11/02', room: 'C', startTime: '12:00', durationMinutes: 60 }), /無法登記/);
+  assert.equal(spreadsheet.getSheetByName('學生自主練習參與者').values.length, 1);
+});
 
 test('student practice receipt recovers a committed registration without another OB call or notification', () => {
   const { backend, spreadsheet } = createStudentPracticeSubmissionFixture();

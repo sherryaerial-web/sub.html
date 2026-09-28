@@ -3196,7 +3196,7 @@ function submitStudentPractice_(inputValue) {
         throw new Error('目前無法即時確認 OB 課表，請稍後再試。');
       }
       var teacherRecords = getPracticeRecordsUnlocked_(ss);
-      var conflicts = findPracticeConflictsUnlocked_({ room: room, interval: interval }, teacherRecords, courseRows);
+      var conflicts = findPracticeConflictsUnlocked_({ room: room, interval: interval, includeSeriesReservations: true }, teacherRecords, courseRows);
       if (conflicts.length) throw new Error('這個時段已無法登記，請重新選擇。');
       var studentConflict = records.groups.filter(function(group) {
         if ([STUDENT_PRACTICE_STATUS.ACTIVE, STUDENT_PRACTICE_STATUS.PENDING_QUALIFICATION].indexOf(group.status) === -1 ||
@@ -3421,7 +3421,7 @@ function getPublicStudentPracticeAvailability_(dateValue) {
       return {
         room: room.room,
         blockers: room.blocks.filter(function(block) {
-          return ['course', 'rental', 'practice'].indexOf(block.type) !== -1;
+          return ['course', 'rental', 'practice', 'series-reservation'].indexOf(block.type) !== -1;
         }).map(function(block) {
           return { type: block.type, startTime: block.startTime, endTime: block.endTime };
         }),
@@ -3940,6 +3940,50 @@ function moveStudentPracticeParticipant_(session, inputValue) {
   return result;
 }
 
+function getPracticeReservationHorizon_() {
+  var today = Utilities.formatDate(new Date(currentTimeMs_()), 'Asia/Taipei', 'yyyy/MM/dd');
+  var parts = today.split('/').map(Number);
+  var endMonth = new Date(Date.UTC(parts[0], parts[1] - 1 + 3, 1));
+  var lastDay = new Date(Date.UTC(endMonth.getUTCFullYear(), endMonth.getUTCMonth() + 1, 0)).getUTCDate();
+  return Utilities.formatDate(new Date(Date.UTC(endMonth.getUTCFullYear(), endMonth.getUTCMonth(), Math.min(parts[2], lastDay))), 'Asia/Taipei', 'yyyy/MM/dd');
+}
+
+// Read-only projections: never turn unpublished dates into confirmed bookings.
+function getPracticeSeriesReservations_(recordsValue, dateValue, limitToDisplayHorizon) {
+  var records = recordsValue || {};
+  var date = cleanText_(dateValue).replace(/-/g, '/');
+  var today = Utilities.formatDate(new Date(currentTimeMs_()), 'Asia/Taipei', 'yyyy/MM/dd');
+  var through = getPracticeReservationHorizon_();
+  if (date < today || (limitToDisplayHorizon !== false && date > through)) return [];
+  var bookings = records.bookings || [];
+  return (records.series || []).filter(function(series) {
+    if (series.status !== '啟用中' || date < series.startDate || (series.stopDate && date >= series.stopDate)) return false;
+    var delta = parsePracticeDateTime_(date, '00:00') - parsePracticeDateTime_(series.startDate, '00:00');
+    if (delta % (7 * 86400000) !== 0) return false;
+    if (bookings.some(function(b) { return b.seriesId === series.seriesId && b.date === date; }) ||
+        (records.exceptions || []).some(function(e) { return e.seriesId === series.seriesId && e.date === date; })) return false;
+    return !(records.series || []).some(function(other) {
+      return other.seriesId !== series.seriesId && other.creatorName === series.creatorName && other.room === series.room &&
+        other.startDate > series.startDate && other.startDate <= date &&
+        (parsePracticeDateTime_(other.startDate, '00:00') - parsePracticeDateTime_(series.startDate, '00:00')) % (7 * 86400000) === 0 &&
+        other.startTime < series.endTime && other.endTime > series.startTime;
+    });
+  }).map(function(series) {
+    var members = getPracticeSeriesMembers_(Object.assign({}, records, { bookings: bookings }), series, date);
+    var startTime = members.map(function(p) { return p.startTime; }).sort()[0];
+    var endTime = members.map(function(p) { return p.endTime; }).sort().pop();
+    return {
+      id: 'series-reservation:' + series.seriesId + ':' + date,
+      type: 'series-reservation', seriesId: series.seriesId, date: date, room: series.room,
+      startTime: startTime, endTime: endTime, creatorName: series.creatorName,
+      reservationMode: series.mode === 'waitlist' ? 'waitlist' : 'ordinary',
+      status: series.mode === 'waitlist' ? '候補循環預留，待課表確認' : '循環預留，待課表確認',
+      label: series.creatorName + '的循環預留', participants: members,
+      interval: normalizePracticeInterval_(date, startTime, endTime)
+    };
+  });
+}
+
 function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, studentGroupsValue) {
   var records = recordsValue || {};
   var date = cleanText_(dateValue).replace(/-/g, '/');
@@ -4064,6 +4108,13 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
   return {
     date: date,
     rooms: ['A', 'B', 'C', 'D'].map(function(room) {
+      getPracticeSeriesReservations_(records, date).filter(function(block) { return block.room === room; }).forEach(function(block) {
+        block.hasConflict = roomsByName[room].blocks.some(function(existing) {
+          return practiceIntervalsConflict_(block.interval, existing.interval, 15);
+        });
+        if (block.hasConflict) block.status += '（有行程重疊，待核對）';
+        roomsByName[room].blocks.push(block);
+      });
       roomsByName[room].blocks.sort(function(left, right) {
         return [left.startTime, left.endTime, left.type, left.id].join('|')
           .localeCompare([right.startTime, right.endTime, right.type, right.id].join('|'));
@@ -4074,7 +4125,7 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
 }
 
 function getPracticeDayViewCacheKey_(dateValue) {
-  return 'practice_day_view_v2_' + cleanText_(dateValue).replace(/\D/g, '');
+  return 'practice_day_view_v3_' + cleanText_(dateValue).replace(/\D/g, '');
 }
 
 function invalidatePracticeDayViewCache_(dateValues) {
@@ -4579,6 +4630,15 @@ function findPracticeConflictsUnlocked_(requestValue, recordsValue, courseRowsVa
   var excludeCalendarId = cleanText_(request.excludeCalendarId);
   var conflicts = [];
 
+  if (request.includeSeriesReservations === true) {
+    getPracticeSeriesReservations_(recordsValue, interval.date, false).forEach(function(block) {
+      if (block.room !== room || block.seriesId === request.excludeSeriesId) return;
+      if (!practiceIntervalsConflict_(interval, block.interval, 15)) return;
+      conflicts.push({ type: 'series-reservation', id: block.id,
+        label: block.creatorName + '的' + block.status, interval: block.interval });
+    });
+  }
+
   (courseRowsValue || []).forEach(function(row) {
     var date = formatMyDate(row && row[0]);
     var startTime = formatMyTime(row && row[1]);
@@ -4623,9 +4683,12 @@ function findPracticeConflictsUnlocked_(requestValue, recordsValue, courseRowsVa
 }
 
 function assertPracticeIntervalAvailable_(request, records, courseRows) {
-  var conflicts = findPracticeConflictsUnlocked_(request, records, courseRows);
+  var conflicts = findPracticeConflictsUnlocked_(Object.assign({ includeSeriesReservations: true }, request), records, courseRows);
   if (!conflicts.length) return [];
   var conflict = conflicts[0];
+  if (conflict.type === 'series-reservation') {
+    throw new Error('這個時段已有' + conflict.label + '，請改選時段或聯絡管理員核對。');
+  }
   if (conflict.type === 'practice') {
     throw new Error('這個時段已有' + conflict.label + '，請改用「加入一起練習」。');
   }
@@ -4633,6 +4696,19 @@ function assertPracticeIntervalAvailable_(request, records, courseRows) {
     (conflict.type === 'rental' ? '場地租借' : '正式課程') +
     '與自主練習的前後 15 分鐘緩衝衝突。'
   );
+}
+
+function assertWeeklyPracticeReservationsAvailable_(room, interval, records, excludeSeriesId) {
+  var cursor = parsePracticeDateTime_(interval.date, '00:00').getTime();
+  var end = Math.max(cursor, parsePracticeDateTime_(getPracticeReservationHorizon_(), '00:00').getTime());
+  for (; cursor <= end; cursor += 7 * 86400000) {
+    var date = Utilities.formatDate(new Date(cursor), 'Asia/Taipei', 'yyyy/MM/dd');
+    var requested = normalizePracticeInterval_(date, interval.startTime, interval.endTime);
+    var reserved = getPracticeSeriesReservations_(records, date, false).filter(function(block) {
+      return block.room === room && block.seriesId !== excludeSeriesId && practiceIntervalsConflict_(requested, block.interval, 15);
+    })[0];
+    if (reserved) throw new Error(date + ' 已有' + reserved.creatorName + '的循環預留，請改選時段或聯絡管理員核對。');
+  }
 }
 
 function getPracticeParticipantBounds_(participantsValue) {
@@ -5510,6 +5586,7 @@ function createPracticeBooking_(session, inputValue) {
       throw new Error('目前無法即時核對 OB 課表，請稍後再登記自主練習。');
     }
     assertPracticeIntervalAvailable_({ room: room, interval: interval }, records, courseRows);
+    if (recurrence === 'weekly') assertWeeklyPracticeReservationsAvailable_(room, interval, records);
     var businessSheets = [
       records.sheets.series,
       records.sheets.bookings,
@@ -5659,7 +5736,8 @@ function createPracticeWaitlist_(session, inputValue) {
     }
     var conflicts = findPracticeConflictsUnlocked_({
       room: room,
-      interval: interval
+      interval: interval,
+      includeSeriesReservations: true
     }, records, courseRows);
     var selectedCourseConflict = conflicts.some(function(conflict) {
       return conflict.type === 'course' && conflict.id === calendarId;
@@ -5668,7 +5746,7 @@ function createPracticeWaitlist_(session, inputValue) {
       throw new Error('候補時間必須與所選正課或前後 15 分鐘緩衝衝突。');
     }
     var hardConflict = conflicts.filter(function(conflict) {
-      return conflict.type === 'rental' || conflict.type === 'practice';
+      return conflict.type === 'rental' || conflict.type === 'practice' || conflict.type === 'series-reservation';
     })[0];
     if (hardConflict) {
       throw new Error('這個候補時段另有衝突：' + hardConflict.label + '。');
@@ -5679,6 +5757,7 @@ function createPracticeWaitlist_(session, inputValue) {
     var waitlistCalendarIds = serializePracticeWaitlistCalendarIds_(linkedCalendarIds);
 
     if (weekly) {
+      assertWeeklyPracticeReservationsAvailable_(room, interval, records);
       return runStateTransitionUnlocked_([records.sheets.series, records.sheets.bookings,
         records.sheets.participants, records.sheets.exceptions, records.sheets.audit], function(appendAudits) {
         var seriesId = Utilities.getUuid();
@@ -5771,6 +5850,7 @@ function joinPracticeBooking_(session, inputValue) {
 
     var now = getTimestamp_();
     var joinFuture = cleanText_(input.scope) === 'future' && !!booking.seriesId;
+    if (joinFuture) assertWeeklyPracticeReservationsAvailable_(booking.room, interval, records, booking.seriesId);
     var targetBookings = joinFuture
       ? records.bookings.filter(function(item) {
           return item.seriesId === booking.seriesId && item.date >= booking.date &&
@@ -6128,8 +6208,13 @@ function updatePracticeBooking_(session, inputValue) {
       var conflicts = findPracticeConflictsUnlocked_({
         room: room,
         interval: targetInterval,
-        excludeBookingIds: targetIds
+        excludeBookingIds: targetIds,
+        includeSeriesReservations: true,
+        excludeSeriesId: targetBooking.seriesId
       }, records, courseRows);
+      var reservationConflict = conflicts.filter(function(item) { return item.type === 'series-reservation'; })[0];
+      if (reservationConflict) throw new Error('這個時段已有' + reservationConflict.label + '，請改選時段或聯絡管理員核對。');
+      if (updateFuture) assertWeeklyPracticeReservationsAvailable_(room, targetInterval, records, targetBooking.seriesId);
       var rentalConflict = conflicts.filter(function(item) { return item.type === 'rental'; })[0];
       if (rentalConflict) {
         throw new Error('場地租借與自主練習的前後 15 分鐘緩衝衝突。');

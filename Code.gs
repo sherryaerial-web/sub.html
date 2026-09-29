@@ -9206,6 +9206,15 @@ function doPost(e) {
       previewRaffleImport: function() {
         return previewRaffleImport_(session, parameters.campaignId);
       },
+      confirmRaffleImport: function() {
+        return confirmRaffleImport_(session, parseJsonObject_(parameters.operation, '抽獎匯入'));
+      },
+      mutateRaffleClaim: function() {
+        return mutateRaffleClaim_(session, parseJsonObject_(parameters.operation, '領獎操作'));
+      },
+      getRaffleAudit: function() {
+        return getRaffleAudit_(session, parameters.claimId);
+      },
       getInvoiceAdminDashboard: function() {
         return getInvoiceAdminDashboard_(session);
       },
@@ -20779,7 +20788,7 @@ function readRaffleTable_(spreadsheet, name, optional) {
   return rows && columns ? sheet.getRange(1, 1, rows, columns).getDisplayValues() : [];
 }
 
-function readRaffleClaims_() {
+function readRaffleSeedClaims_() {
   var rows = readRaffleTable_(SpreadsheetApp.getActiveSpreadsheet(), 'RaffleClaims', true);
   if (!rows.length) return [];
   var keys = ['id', 'campaignId', 'email', 'studentName', 'prizeId', 'prizeName', 'venue', 'quantity', 'claimedQuantity', 'status', 'claimedAt', 'claimedBy', 'sourceFingerprint'];
@@ -20804,7 +20813,7 @@ function filterRaffleTeacherClaims_(claims, query) {
     return { id: c.id, campaignId: c.campaignId, studentKey: raffleHash_(email), studentName: c.studentName,
       maskedEmail: email.slice(0, 1) + '•••' + (at >= 0 ? email.slice(at) : ''), prizeName: c.prizeName,
       venue: c.venue, quantity: c.quantity, claimedQuantity: c.claimedQuantity, status: c.status,
-      claimedAt: c.claimedAt || '', claimedBy: c.claimedBy || '' };
+      claimedAt: c.claimedAt || '', claimedBy: c.claimedBy || '', version: Number(c.version) || 0 };
   });
 }
 
@@ -20812,9 +20821,15 @@ function getRaffleWorkspace_(session, query) {
   getSessionTeacherName_(session);
   query = query || {};
   if (query.mode === 'admin') assertCapabilitySession_(session, 'raffle_admin');
+  if (query.mode === 'fulfillment') assertRafflePreparer_(session);
   var config = getRaffleConfiguration_();
   var result = { enabled: config.enabled, readOnly: true, campaigns: config.campaigns.map(function(c) { return { id: c.id, name: c.name }; }), claims: [] };
-  if (!config.enabled || !config.campaigns.length || cleanText_(query.query).length < 2) return result;
+  if (!config.enabled) return result;
+  result.readOnly = PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true';
+  var caps = getSessionManagementCapabilities_(session);
+  result.canPrepare = caps.indexOf('raffle_admin') >= 0 || caps.indexOf('raffle_fulfillment') >= 0;
+  result.canCorrect = caps.indexOf('raffle_admin') >= 0;
+  if (!config.campaigns.length || cleanText_(query.query).length < 2) return result;
   if (query.campaignId && !config.campaigns.some(function(c) { return c.id === query.campaignId; })) throw new Error('找不到已設定的抽獎活動。');
   var ids = config.campaigns.map(function(c) { return c.id; });
   result.claims = filterRaffleTeacherClaims_(readRaffleClaims_().filter(function(c) {
@@ -20830,11 +20845,162 @@ function previewRaffleImport_(session, campaignId) {
   if (!config.enabled) throw new Error('抽獎工作台尚未啟用。');
   var campaign = config.campaigns.filter(function(c) { return c.id === campaignId; })[0];
   if (!campaign) throw new Error('找不到已設定的抽獎活動。');
-  var source = SpreadsheetApp.openById(campaign.sourceSpreadsheetId);
-  var preview = buildRaffleImportPreview_(campaign, readRaffleTable_(source, '抽獎名單', false), readRaffleTable_(source, '獎項設定', false), readRaffleClaims_());
+  var plan = raffleImportPlan_(campaign);
+  var preview = plan.preview;
   // Fingerprints belong only in the server merge plan; verification codes never leave source.
-  return { readOnly: true, campaignId: campaign.id, additionCount: preview.additions.length,
+  return { readOnly: PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true',
+    previewToken: plan.token, batchCount: Math.min(25, preview.additions.length), campaignId: campaign.id, additionCount: preview.additions.length,
     additions: preview.additions.slice(0, 100).map(function(c) { return { studentName: c.studentName, prizeName: c.prizeName, venue: c.venue, status: c.status }; }),
     duplicates: preview.duplicates, pendingSelection: preview.pendingSelection,
     conflictCount: preview.conflicts.length, conflicts: preview.conflicts.slice(0, 100), errorCount: preview.errors.length, errors: preview.errors.slice(0, 100) };
+}
+
+function assertRafflePreparer_(session) {
+  var caps = getSessionManagementCapabilities_(session);
+  if (caps.indexOf('raffle_admin') < 0 && caps.indexOf('raffle_fulfillment') < 0) throw new Error('需要抽獎備貨權限。');
+}
+
+function raffleImportPlan_(campaign) {
+  var source = SpreadsheetApp.openById(campaign.sourceSpreadsheetId);
+  var rows = readRaffleTable_(source, '抽獎名單', false), prizes = readRaffleTable_(source, '獎項設定', false);
+  var claims = readRaffleClaims_();
+  return { preview: buildRaffleImportPreview_(campaign, rows, prizes, claims),
+    token: raffleHash_(JSON.stringify([campaign, rows, prizes, claims])) };
+}
+
+function readRaffleState_() {
+  var claims = Object.create(null), events = [], requests = Object.create(null);
+  readRaffleSeedClaims_().forEach(function(c) {
+    if (claims[c.id]) throw new Error('領獎紀錄 ID 重複。');
+    c.version = 0; claims[c.id] = c;
+  });
+  var rows = readRaffleTable_(SpreadsheetApp.getActiveSpreadsheet(), 'RaffleJournal', true);
+  if (rows.length) {
+    if (JSON.stringify(rows[0]) !== JSON.stringify(['requestId', 'requestHash', 'createdAt', 'eventJson'])) throw new Error('領獎日誌欄位不符，停止操作。');
+    rows.slice(1).forEach(function(row) {
+      var event;
+      try { event = JSON.parse(row[3]); } catch (e) { throw new Error('領獎日誌內容損壞，停止操作。'); }
+      if (!/^[A-Za-z0-9_-]{12,100}$/.test(row[0]) || !/^[a-f0-9]{64}$/.test(row[1]) || requests[row[0]] || !event || !Array.isArray(event.changes) || event.changes.length > 25 || !event.actor || !event.result) throw new Error('領獎日誌重複或不完整，停止操作。');
+      event.changes.forEach(function(change) {
+        var c = change.claim, prior = c && claims[c.id];
+        if (!c || !c.id || !c.campaignId || !c.email || !c.prizeId || !Number.isInteger(c.quantity) || c.quantity < 1 || !Number.isInteger(c.claimedQuantity) || c.claimedQuantity < 0 || c.claimedQuantity > c.quantity || ['waiting','ready','partial','claimed','digital','cancelled'].indexOf(c.status) < 0 || !Number.isInteger(c.version) || c.version !== (prior ? prior.version + 1 : 1) || change.beforeVersion !== (prior ? prior.version : null)) throw new Error('領獎日誌版本或資料不完整，停止操作。');
+        claims[c.id] = c;
+      });
+      var item = { requestId: row[0], requestHash: row[1], createdAt: row[2], event: event };
+      events.push(item); requests[row[0]] = item;
+    });
+  }
+  return { claims: Object.keys(claims).map(function(id) { return claims[id]; }), events: events, requests: requests };
+}
+
+function readRaffleClaims_() { return readRaffleState_().claims; }
+
+function raffleWriteContext_(session, operation, action) {
+  var actor = getSessionTeacherName_(session), config = getRaffleConfiguration_();
+  if (!config.enabled || PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true') throw new Error('抽獎寫入尚未啟用。');
+  if (!operation || !/^[A-Za-z0-9_-]{12,100}$/.test(operation.requestId || '')) throw new Error('操作識別碼無效，請重新整理。');
+  return { actor: actor, config: config, requestId: operation.requestId,
+    requestHash: raffleHash_(JSON.stringify([actor, action, operation])) };
+}
+
+function rafflePriorResult_(state, context) {
+  var prior = state.requests[context.requestId];
+  if (!prior) return null;
+  if (prior.requestHash !== context.requestHash) throw new Error('操作識別碼已被不同內容使用，請重新核對。');
+  return prior.event.result;
+}
+
+function appendRaffleEvent_(state, context, event) {
+  if (state.events.length >= 5000) throw new Error('領獎日誌已達安全容量，請先聯絡管理員封存。');
+  var json = JSON.stringify(event);
+  if (json.length > 45000) throw new Error('本次資料過長，停止寫入。');
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getSheetByName('RaffleJournal');
+  if (!sheet) {
+    sheet = ss.insertSheet('RaffleJournal');
+  }
+  if (!sheet.getLastRow()) {
+    sheet.getRange(1, 1, 1, 4).setValues([['requestId', 'requestHash', 'createdAt', 'eventJson']]);
+  }
+  var target = sheet.getLastRow() + 1;
+  if (target > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), target - sheet.getMaxRows());
+  // One row owns both resulting state and audit. No source Sheet is ever written.
+  sheet.getRange(target, 1, 1, 4).setValues([[context.requestId, context.requestHash, new Date().toISOString(), json]]);
+  return event.result;
+}
+
+function confirmRaffleImport_(session, operation) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  return withScriptLock_(function() {
+    var context = raffleWriteContext_(session, operation, 'import'), state = readRaffleState_();
+    var prior = rafflePriorResult_(state, context);
+    if (prior) return prior;
+    var campaign = context.config.campaigns.filter(function(c) { return c.id === operation.campaignId; })[0];
+    if (!campaign) throw new Error('找不到抽獎活動。');
+    var plan = raffleImportPlan_(campaign);
+    if (!operation.previewToken || plan.token !== operation.previewToken) throw new Error('來源或領獎資料已變更，請重新預覽。');
+    if (plan.preview.errors.length || plan.preview.conflicts.length) throw new Error('仍有來源異常或衝突，請修正後再匯入。');
+    var additions = plan.preview.additions.slice(0, 25);
+    var event = { actor: context.actor, action: 'import', reason: '',
+      changes: additions.map(function(c) { c.version = 1; return { beforeVersion: null, claim: c }; }),
+      result: { imported: additions.length, remaining: plan.preview.additions.length - additions.length } };
+    return appendRaffleEvent_(state, context, event);
+  });
+}
+
+function applyRaffleClaimMutation_(claim, session, operation, campaign, now) {
+  var c = Object.assign({}, claim), qty = Number(operation.quantity), action = operation.action;
+  if (action === 'prepare') {
+    assertRafflePreparer_(session);
+    if (c.status !== 'waiting') throw new Error('此筆不是待備貨，請重新核對。');
+    if (!c.venue || operation.venue !== c.venue) throw new Error('領取館別不一致，不能標記到館。');
+    c.status = 'ready';
+  } else if (action === 'collect') {
+    if (campaign.pickupDeadline && (!Number.isFinite(Date.parse(campaign.pickupDeadline)) || Date.parse(now) > Date.parse(campaign.pickupDeadline))) throw new Error('已超過領取截止時間或期限設定有誤，請聯絡管理員。');
+    if (['ready', 'partial'].indexOf(c.status) < 0) throw new Error('尚未備貨或不是可領取的實體獎品。');
+    if (!c.venue || operation.venue !== c.venue) throw new Error('領取館別不一致，請核對實際所在館別。');
+    if (!Number.isInteger(qty) || qty < 1 || qty > c.quantity - c.claimedQuantity) throw new Error('領取數量超出剩餘數量。');
+    c.claimedQuantity += qty; c.status = c.claimedQuantity === c.quantity ? 'claimed' : 'partial';
+    c.claimedAt = now; c.claimedBy = getSessionTeacherName_(session);
+  } else if (action === 'correct') {
+    assertCapabilitySession_(session, 'raffle_admin');
+    if (!cleanText_(operation.reason) || cleanText_(operation.reason).length > 300) throw new Error('請填寫 1 至 300 字的更正理由。');
+    if (['ready','partial','claimed'].indexOf(c.status) < 0 || !Number.isInteger(qty) || qty < 0 || qty >= c.claimedQuantity) throw new Error('僅能更正誤領，請輸入較少的已領數量。');
+    c.claimedQuantity = qty; c.status = qty ? 'partial' : 'ready';
+    if (!qty) { c.claimedAt = ''; c.claimedBy = ''; }
+  } else throw new Error('不支援的領獎操作。');
+  c.version = (Number(claim.version) || 0) + 1;
+  return c;
+}
+
+function mutateRaffleClaim_(session, operation) {
+  getSessionTeacherName_(session);
+  if (operation && operation.action === 'prepare') assertRafflePreparer_(session);
+  if (operation && operation.action === 'correct') assertCapabilitySession_(session, 'raffle_admin');
+  return withScriptLock_(function() {
+    var context = raffleWriteContext_(session, operation, 'claim'), state = readRaffleState_();
+    var prior = rafflePriorResult_(state, context);
+    if (prior) return prior;
+    var claim = state.claims.filter(function(c) { return c.id === operation.claimId; })[0];
+    if (!claim) throw new Error('找不到領獎紀錄。');
+    var campaign = context.config.campaigns.filter(function(c) { return c.id === claim.campaignId; })[0];
+    if (!campaign) throw new Error('此活動未開放。');
+    if (!Number.isInteger(operation.version) || operation.version !== claim.version) throw new Error('領獎資料版本已更新，請重新查詢。');
+    var updated = applyRaffleClaimMutation_(claim, session, operation, campaign, new Date().toISOString());
+    return appendRaffleEvent_(state, context, { actor: context.actor, action: operation.action,
+      reason: cleanText_(operation.reason), changes: [{ beforeVersion: claim.version, claim: updated }],
+      result: { claimId: updated.id, version: updated.version, status: updated.status, claimedQuantity: updated.claimedQuantity } });
+  });
+}
+
+function getRaffleAudit_(session, claimId) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  var config = getRaffleConfiguration_();
+  if (!config.enabled) throw new Error('抽獎工作台尚未啟用。');
+  var state = readRaffleState_(), claim = state.claims.filter(function(c) { return c.id === claimId; })[0];
+  if (!claim || !config.campaigns.some(function(c) { return c.id === claim.campaignId; })) throw new Error('找不到領獎紀錄。');
+  return { events: state.events.filter(function(item) { return item.event.changes.some(function(change) { return change.claim.id === claimId; }); }).map(function(item) {
+    var changed = item.event.changes.filter(function(change) { return change.claim.id === claimId; })[0].claim;
+    return { actor: item.event.actor, action: item.event.action, at: item.createdAt, reason: item.event.reason,
+      version: changed.version, status: changed.status, claimedQuantity: changed.claimedQuantity };
+  }) };
 }

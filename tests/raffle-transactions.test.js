@@ -5,9 +5,9 @@ const headers=['OB email名稱','OB名字','驗證碼','中獎等級','最終選
 const row=['a@example.com','小花','code1','A','提袋','晴光','choose_venue','2027-01-01'];
 function setup(count=1){
  const props=new Map([['RAFFLE_ENABLED','true'],['RAFFLE_WRITES_ENABLED','true'],['RAFFLE_CAMPAIGNS_JSON',JSON.stringify([campaign])]]);
- let locked=false,writes=0,failAfterWrite=false;
+ let locked=false,writes=0,failAfterWrite=false,buffered=false,failFlush=false;const pendingWrites=[];
  const tables=new Map();
- function sheet(rows){return{rows,getLastRow:()=>rows.length,getLastColumn:()=>Math.max(0,...rows.map(r=>r.length)),getMaxRows:()=>10000,getRange:(r,c,n=1,m=1)=>({getDisplayValues:()=>Array.from({length:n},(_,i)=>Array.from({length:m},(_,j)=>String(rows[r-1+i]?.[c-1+j]??''))),setValues:values=>{assert.ok(locked,'writes require lock');writes++;values.forEach((line,i)=>{rows[r-1+i] ||= [];line.forEach((v,j)=>{rows[r-1+i][c-1+j]=v;});});if(failAfterWrite&&r>1){failAfterWrite=false;throw Error('transport timeout');}}})};}
+ function sheet(rows){return{rows,getLastRow:()=>rows.length,getLastColumn:()=>Math.max(0,...rows.map(r=>r.length)),getMaxRows:()=>10000,getRange:(r,c,n=1,m=1)=>({getDisplayValues:()=>Array.from({length:n},(_,i)=>Array.from({length:m},(_,j)=>String(rows[r-1+i]?.[c-1+j]??''))),setValues:values=>{assert.ok(locked,'writes require lock');writes++;const apply=()=>values.forEach((line,i)=>{rows[r-1+i] ||= [];line.forEach((v,j)=>{rows[r-1+i][c-1+j]=v;});});if(buffered)pendingWrites.push(apply);else apply();if(failAfterWrite&&r>1){failAfterWrite=false;throw Error('transport timeout');}}})};}
  const sourceRows=[headers,...Array.from({length:count},(_,i)=>row.map((v,j)=>j===2?'code'+i:v))];
  const source={getSheetByName:name=>sheet(name==='抽獎名單'?sourceRows:[['獎項ID','獎項等級','獎品名稱','領獎方式'],['p1','A','提袋','choose_venue']])};
  const book={getSheetByName:name=>tables.get(name)||null,insertSheet:name=>{assert.ok(locked);assert.ok(!tables.has(name));const s=sheet([]);tables.set(name,s);return s;}};
@@ -15,10 +15,10 @@ function setup(count=1){
   Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,s)=>[...crypto.createHash('sha256').update(s).digest()]},
   PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k)||null})},
   LockService:{getScriptLock:()=>({waitLock:()=>{assert.equal(locked,false);locked=true;},releaseLock:()=>{locked=false;}})},
-  SpreadsheetApp:{getActiveSpreadsheet:()=>book,openById:id=>{assert.equal(id,campaign.sourceSpreadsheetId);return source;}}};
+  SpreadsheetApp:{flush:()=>{assert.ok(locked,'flush must hold lock');pendingWrites.splice(0).forEach(fn=>fn());if(failFlush){failFlush=false;throw Error('flush uncertain');}},getActiveSpreadsheet:()=>book,openById:id=>{assert.equal(id,campaign.sourceSpreadsheetId);return source;}}};
  vm.createContext(c);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../Code.gs'),'utf8'),c);
  const importNow=(requestId='request-import-0001')=>{const p=c.previewRaffleImport_(admin,'future');return c.confirmRaffleImport_(admin,{campaignId:'future',previewToken:p.previewToken,requestId});};
- return{c,props,tables,sourceRows,importNow,writes:()=>writes,setFail:()=>{failAfterWrite=true;}};
+ return{c,props,tables,sourceRows,importNow,writes:()=>writes,setFail:()=>{failAfterWrite=true;},setBuffered:()=>{buffered=true;},setFlushFail:()=>{failFlush=true;}};
 }
 test('confirmed import appends journal, preserves source, caps batch and reimport is safe',()=>{
  const s=setup(27),before=JSON.stringify(s.sourceRows);const p=s.c.previewRaffleImport_(admin,'future');assert.equal(p.batchCount,25);
@@ -79,4 +79,27 @@ test('empty journal left by interrupted initialization is repaired without treat
 test('duplicate journal request fails closed, and preparation does not grant admin audit',()=>{
  const s=setup();s.importNow();assert.throws(()=>s.c.getRaffleAudit_(prep,s.c.readRaffleClaims_()[0].id),/權限/);
  const rows=s.tables.get('RaffleJournal').rows;rows.push(rows[1].slice());assert.throws(()=>s.c.readRaffleClaims_(),/重複/);
+});
+test('buffered Sheets writes commit while holding the lock, so next collector sees the new version',()=>{
+ const s=setup();s.importNow();s.setBuffered();const claim=s.c.readRaffleClaims_()[0];
+ const req={claimId:claim.id,version:1,action:'collect',quantity:1,venue:'晴光',requestId:'request-collect-0001'};
+ s.c.mutateRaffleClaim_(teacher,req);assert.equal(s.c.readRaffleClaims_()[0].status,'claimed');
+ assert.throws(()=>s.c.mutateRaffleClaim_({...teacher,teacherName:'另一位'},{...req,requestId:'request-collect-0002'}),/版本/);
+});
+test('uncertain flush never reports success and retry resolves the original request',()=>{
+ const s=setup();s.importNow();s.setBuffered();s.setFlushFail();const claim=s.c.readRaffleClaims_()[0];
+ const req={claimId:claim.id,version:1,action:'collect',quantity:1,venue:'晴光',requestId:'request-collect-0001'};
+ assert.throws(()=>s.c.mutateRaffleClaim_(teacher,req),/flush uncertain/);
+ assert.equal(s.c.mutateRaffleClaim_(teacher,req).status,'claimed');assert.equal(s.tables.get('RaffleJournal').rows.length,3);
+});
+test('valid JSON with missing claim changes cannot roll back a collected prize',()=>{
+ const s=setup();s.importNow();const claim=s.c.readRaffleClaims_()[0];
+ s.c.mutateRaffleClaim_(teacher,{claimId:claim.id,version:1,action:'collect',quantity:1,venue:'晴光',requestId:'request-collect-0001'});
+ const rows=s.tables.get('RaffleJournal').rows,event=JSON.parse(rows[2][3]);event.changes=[];rows[2][3]=JSON.stringify(event);
+ assert.throws(()=>s.c.readRaffleClaims_(),/日誌/);
+});
+test('journal checks result counts, actor and state consistency',()=>{
+ for(const change of [e=>{e.result.imported=0;},e=>{e.changes[0].claim.status='claimed';},e=>{e.actor='';}]){
+   const s=setup();s.importNow();const rows=s.tables.get('RaffleJournal').rows,event=JSON.parse(rows[1][3]);change(event);rows[1][3]=JSON.stringify(event);assert.throws(()=>s.c.readRaffleClaims_(),/日誌/);
+ }
 });

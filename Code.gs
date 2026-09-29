@@ -20687,7 +20687,7 @@ function assertHeaders_(sheet, expectedHeaders) {
   });
 }
 
-// Raffle phase one is read-only. These readers never create sheets or change inventory.
+// Raffle readers never create sheets or change inventory; writes require a separate explicit gate.
 function raffleHash_(value) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8)
     .map(function(b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
@@ -20881,9 +20881,23 @@ function readRaffleState_() {
       var event;
       try { event = JSON.parse(row[3]); } catch (e) { throw new Error('領獎日誌內容損壞，停止操作。'); }
       if (!/^[A-Za-z0-9_-]{12,100}$/.test(row[0]) || !/^[a-f0-9]{64}$/.test(row[1]) || requests[row[0]] || !event || !Array.isArray(event.changes) || event.changes.length > 25 || !event.actor || !event.result) throw new Error('領獎日誌重複或不完整，停止操作。');
+      if (!Number.isFinite(Date.parse(row[2])) || typeof event.actor !== 'string' || !event.actor.trim() || typeof event.reason !== 'string' || ['import','prepare','collect','correct'].indexOf(event.action) < 0) throw new Error('領獎日誌稽核欄位不完整。');
+      if (event.action === 'import') {
+        if (event.result.imported !== event.changes.length || !Number.isInteger(event.result.remaining) || event.result.remaining < 0) throw new Error('領獎日誌匯入筆數不一致。');
+      } else if (event.changes.length !== 1) throw new Error('領獎日誌缺少單筆異動，停止操作。');
       event.changes.forEach(function(change) {
-        var c = change.claim, prior = c && claims[c.id];
+        var c = change && change.claim, prior = c && claims[c.id];
         if (!c || !c.id || !c.campaignId || !c.email || !c.prizeId || !Number.isInteger(c.quantity) || c.quantity < 1 || !Number.isInteger(c.claimedQuantity) || c.claimedQuantity < 0 || c.claimedQuantity > c.quantity || ['waiting','ready','partial','claimed','digital','cancelled'].indexOf(c.status) < 0 || !Number.isInteger(c.version) || c.version !== (prior ? prior.version + 1 : 1) || change.beforeVersion !== (prior ? prior.version : null)) throw new Error('領獎日誌版本或資料不完整，停止操作。');
+        if ((['waiting','ready','digital'].indexOf(c.status) >= 0 && c.claimedQuantity !== 0) || (c.status === 'partial' && !(c.claimedQuantity > 0 && c.claimedQuantity < c.quantity)) || (c.status === 'claimed' && c.claimedQuantity !== c.quantity)) throw new Error('領獎日誌狀態與數量不一致。');
+        if (event.action === 'import') {
+          if (prior || ['waiting','ready','digital'].indexOf(c.status) < 0) throw new Error('領獎日誌重複匯入或初始狀態不符。');
+        } else {
+          if (!prior || ['id','campaignId','email','studentName','prizeId','prizeName','venue','quantity','sourceFingerprint'].some(function(k) { return c[k] !== prior[k]; })) throw new Error('領獎日誌基本資料被變更。');
+          if (event.result.claimId !== c.id || event.result.version !== c.version || event.result.status !== c.status || event.result.claimedQuantity !== c.claimedQuantity) throw new Error('領獎日誌結果與異動不一致。');
+          if (event.action === 'prepare' && (prior.status !== 'waiting' || c.status !== 'ready' || !c.venue)) throw new Error('領獎日誌到館狀態不符。');
+          if (event.action === 'collect' && (['ready','partial'].indexOf(prior.status) < 0 || ['partial','claimed'].indexOf(c.status) < 0 || c.claimedQuantity <= prior.claimedQuantity || !c.venue || c.claimedBy !== event.actor || !Number.isFinite(Date.parse(c.claimedAt)))) throw new Error('領獎日誌領取異動不符。');
+          if (event.action === 'correct' && (!event.reason.trim() || ['ready','partial','claimed'].indexOf(prior.status) < 0 || ['ready','partial'].indexOf(c.status) < 0 || c.claimedQuantity >= prior.claimedQuantity)) throw new Error('領獎日誌更正異動不符。');
+        }
         claims[c.id] = c;
       });
       var item = { requestId: row[0], requestHash: row[1], createdAt: row[2], event: event };
@@ -20915,16 +20929,20 @@ function appendRaffleEvent_(state, context, event) {
   var json = JSON.stringify(event);
   if (json.length > 45000) throw new Error('本次資料過長，停止寫入。');
   var ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getSheetByName('RaffleJournal');
-  if (!sheet) {
-    sheet = ss.insertSheet('RaffleJournal');
+  try {
+    if (!sheet) sheet = ss.insertSheet('RaffleJournal');
+    if (!sheet.getLastRow()) {
+      sheet.getRange(1, 1, 1, 4).setValues([['requestId', 'requestHash', 'createdAt', 'eventJson']]);
+    }
+    var target = Math.max(2, sheet.getLastRow() + 1);
+    if (target > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), target - sheet.getMaxRows());
+    // One row owns both resulting state and audit. No source Sheet is ever written.
+    sheet.getRange(target, 1, 1, 4).setValues([[context.requestId, context.requestHash, new Date().toISOString(), json]]);
+  } finally {
+    // Commit buffered changes while the caller still owns the script lock.
+    // A failure here remains uncertain; the caller must retry the same request ID.
+    SpreadsheetApp.flush();
   }
-  if (!sheet.getLastRow()) {
-    sheet.getRange(1, 1, 1, 4).setValues([['requestId', 'requestHash', 'createdAt', 'eventJson']]);
-  }
-  var target = sheet.getLastRow() + 1;
-  if (target > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), target - sheet.getMaxRows());
-  // One row owns both resulting state and audit. No source Sheet is ever written.
-  sheet.getRange(target, 1, 1, 4).setValues([[context.requestId, context.requestHash, new Date().toISOString(), json]]);
   return event.result;
 }
 

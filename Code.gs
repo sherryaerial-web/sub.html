@@ -9206,6 +9206,9 @@ function doPost(e) {
       previewRaffleImport: function() {
         return previewRaffleImport_(session, parameters.campaignId);
       },
+      previewRaffleInvitations: function() {
+        return previewRaffleInvitations_(session, parameters.campaignId);
+      },
       confirmRaffleImport: function() {
         return confirmRaffleImport_(session, parseJsonObject_(parameters.operation, '抽獎匯入'));
       },
@@ -20891,6 +20894,20 @@ function getRaffleWorkspace_(session, query) {
   }), query.query);
   result.limit = 50;
   return result;
+}
+
+function previewRaffleInvitations_(session, campaignId) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  var config = getRaffleConfiguration_();
+  if (!config.enabled) throw new Error('抽獎工作台尚未啟用。');
+  var campaign = config.campaigns.filter(function(c) { return c.id === campaignId; })[0];
+  if (!campaign) throw new Error('找不到已設定的抽獎活動。');
+  var rows = readRaffleTable_(SpreadsheetApp.openById(campaign.sourceSpreadsheetId), '抽獎名單', false);
+  // Source-only content preview, NOT a send plan: durable mail records are not
+  // connected yet. Never reuse this endpoint's output to queue or send mail.
+  var plan = buildRaffleInvitationPreview_(campaign, rows, []);
+  return {dryRun: true, deliveryChecked: false, candidateCount: plan.jobs.length, skipped: plan.skipped,
+    previews: plan.jobs.slice(0, 20).map(function(job) { return {email: job.email, subject: job.subject, body: job.body}; })};
 }
 
 function previewRaffleImport_(session, campaignId) {

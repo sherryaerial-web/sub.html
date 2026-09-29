@@ -55,3 +55,19 @@ test('truncated or sparse required legacy status cells cannot be treated as not 
  for(const broken of [row().slice(0,4),sparse])
   assert.throws(()=>c.buildRaffleInvitationPreview_(campaign,[headers,broken],[]),/資料列/);
 });
+test('mail preview authorization and configured campaign gates run before any source read',()=>{
+ const c=load();c.PropertiesService={getScriptProperties:()=>({getProperty:()=>null})};
+ const admin={teacherName:'管理',managementCapabilities:['raffle_admin']};
+ assert.throws(()=>c.previewRaffleInvitations_({teacherName:'老師',managementCapabilities:[]},'future'),/權限/);
+ assert.throws(()=>c.previewRaffleInvitations_(admin,'future'),/啟用/);
+ c.PropertiesService={getScriptProperties:()=>({getProperty:key=>key==='RAFFLE_ENABLED'?'true':JSON.stringify([campaign])})};
+ assert.throws(()=>c.previewRaffleInvitations_(admin,'unknown'),/活動/);
+});
+test('source preview is bounded and explicitly not checked against durable mail records',()=>{
+ const c=load(), rows=[headers,...Array.from({length:21},(_,i)=>row('code-'+i,'student'+i+'@example.com'))];
+ c.PropertiesService={getScriptProperties:()=>({getProperty:key=>key==='RAFFLE_ENABLED'?'true':JSON.stringify([campaign])})};
+ c.SpreadsheetApp={openById:id=>{assert.equal(id,campaign.sourceSpreadsheetId);return{getSheetByName:name=>{assert.equal(name,'抽獎名單');return{getLastRow:()=>rows.length,getLastColumn:()=>7,getRange:()=>({getDisplayValues:()=>rows})};}};}};
+ const p=c.previewRaffleInvitations_({teacherName:'管理',managementCapabilities:['raffle_admin']},'future');
+ assert.equal(p.dryRun,true);assert.equal(p.deliveryChecked,false);assert.equal(p.candidateCount,21);assert.equal(p.previews.length,20);assert.equal(p.skipped,0);
+ assert.match(p.previews[0].body,/驗證碼/);assert.equal(p.previews[0].qualificationIds,undefined);assert.equal(p.previews[0].id,undefined);
+});

@@ -7,6 +7,12 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('mail preview warns delivery history is unchecked and escapes body without send controls',()=>{
+  const html=load().renderMailPreview({dryRun:true,deliveryChecked:false,candidateCount:21,skipped:2,previews:[{email:'<unsafe>',subject:'邀請',body:'<script>bad()</script>\ncode'}]});
+ assert.match(html,/尚未核對寄信紀錄/);assert.match(html,/21/);assert.match(html,/&lt;script&gt;/);
+  assert.ok(!html.includes('<script>'));assert.ok(!html.includes('<button'));
+  assert.throws(()=>load().renderMailPreview({}),/完整/);
+});
 test('teacher cards group by student identity, never by display name', () => {
   const html = load().renderClaims([
     { studentKey: 'a', studentName: '同名', maskedEmail: 'a•••@example.com', prizeName: '提袋', status: 'ready', quantity: 1, claimedQuantity: 0 },

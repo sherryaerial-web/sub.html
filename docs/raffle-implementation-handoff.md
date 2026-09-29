@@ -28,7 +28,7 @@
 
 ## 待做（先別上線）
 
-2026-09-29 追加停點：`buildRaffleInvitationPreview_` 已加入內部純預覽規劃器，尚未接 API／畫面。按 Email 合併資格、每資格穩定 ID、來源已寄／已用過濾、保留 queued/sending/sent/uncertain 的資格不再排入。傳入的 reservations 必須由未來持久化寄信紀錄讀出，不能把空陣列當正式預設。這不是已上線的防重複寄信；寄信佇列、權限入口、預覽 UI、配額與真正發送仍未完成。未新增 MailApp 呼叫或任何正式寫入。
+2026-09-29 追加停點：已接管理員「預覽邀請信（不寄出）」UI 與 `previewRaffleInvitations` 唯讀權限入口。活動須在 Script Properties 配置 `websiteUrl`（HTTPS）；缺漏會提示錯誤。畫面最多 20 封，依來源表合併 Email 並排除來源已寄／已使用等資格。固定顯示「尚未核對寄信紀錄」，回傳 `deliveryChecked:false`，不能拿此結果排程寄信。底層 `buildRaffleInvitationPreview_` 支援每資格 queued/sending/sent/uncertain 保留，但真正發送時 reservations 必須來自持久化寄信紀錄，不得沿用此純內容預覽的空陣列。寄信佇列、配額、到館通知與真正發送仍未完成。未新增 MailApp 呼叫或任何正式寫入。
 
 1. 活動設定 UI、草稿／啟用流程及以獎品／館別彙總備貨；目前授權備貨人員可由「我的 → 獎品備貨／到館」查學生、逐筆操作。
 2. 管理員更正目前僅能調低誤領數量，不能改獎品或館別；來源異動仍會阻擋匯入，需另設明確處理流程。
@@ -38,7 +38,10 @@
 
 ## 已驗證
 
+- 預覽 UI 最終版：`node --test tests/*.test.js` 884/884，`node --check raffle.js`、`git diff --check` 通過。30% 額度停工，僅本機保存。
+
 - 邀請信內部預覽追加 7 項測試通過；最終全套 881/881 通過。獨立 review 的缺漏資料列誤認未寄問題已以 RED→GREEN 修正。此追加沒有 UI 改動，未重跑瀏覽器檢查。
+- 後續預覽 UI：追加管理權限／停用／活動閘門、來源候選與 20 封上限、文字跳脫、缺漏回應不可誤顯示零封。離線瀏覽器測試手機 390px／桌面 1280px 長網址換行、預覽、活動切換忽略舊回應、錯誤顯示通過；假資料截圖 `/private/tmp/raffle-preview/mail-mobile.png`。獨立 review 未發現重要問題；正式資料與寄信仍未驗證。
 
 - `node --test tests/*.test.js`：最終 874/874 通過；含 review 後加入的 buffered write、flush 不確定、日誌部分毀損、結果／狀態一致性回歸測試。
 - `node --check raffle.js`、`git diff --check` 通過。

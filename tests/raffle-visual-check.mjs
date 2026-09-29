@@ -61,6 +61,40 @@ try {
  await page.screenshot({path:'/private/tmp/raffle-preview/admin-mobile.png',fullPage:true});
  await page.evaluate(()=>{
    clearRaffleWorkspace();
+   window.mailCalls=[];
+   window.mailMode='normal';
+   callApi=async(action,params)=>{
+     if(action==='getRaffleWorkspace') return {enabled:true,readOnly:true,campaigns:[{id:'future',name:'2027 新年活動'}],claims:[]};
+     window.mailCalls.push({action,params});
+     if(action!=='previewRaffleInvitations') throw Error('Unexpected mail action');
+     if(window.mailMode==='pending') return new Promise(resolve=>{window.finishMailPreview=resolve;});
+     if(window.mailMode==='error') throw Error('活動網址尚未設定');
+     return {dryRun:true,deliveryChecked:false,candidateCount:1,skipped:2,previews:[{email:'student@example.com',subject:'新活動｜抽獎邀請',body:'您好：\nhttps://example.com/'+ 'long'.repeat(40)+'\n驗證碼：ABC\n<script>bad()</script>'}]};
+   };
+   renderRaffleWorkspace('admin');
+ });
+ await page.locator('[data-raffle-mail-preview]').click();
+ await page.getByText('邀請信預覽 · 不會寄出',{exact:true}).waitFor();
+ assert.match(await page.locator('[data-raffle-result]').textContent(),/尚未核對寄信紀錄/);
+ assert.equal(await page.locator('[data-raffle-result] button').count(),0);
+ assert.equal(await page.locator('[data-raffle-result] script').count(),0);
+ for(const [name,width,height] of [['mail-mobile',390,844],['mail-desktop',1280,1000]]) {
+   await page.setViewportSize({width,height});
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   await page.screenshot({path:`/private/tmp/raffle-preview/${name}.png`,fullPage:true});
+ }
+ assert.equal(await page.evaluate(()=>window.mailCalls[0].action),'previewRaffleInvitations');
+ await page.evaluate(()=>{window.mailMode='pending';});
+ await page.locator('[data-raffle-mail-preview]').click();
+ await page.locator('[data-raffle-campaign]').dispatchEvent('change');
+ await page.evaluate(()=>window.finishMailPreview({previews:[{email:'stale@example.com',subject:'stale',body:'stale'}]}));
+ assert.doesNotMatch(await page.locator('[data-raffle-result]').textContent(),/stale@example.com/);
+ await page.evaluate(()=>{window.mailMode='error';});
+ await page.locator('[data-raffle-mail-preview]').click();
+ await page.getByText('活動網址尚未設定',{exact:true}).waitFor();
+ await page.setViewportSize({width:390,height:844});
+ await page.evaluate(()=>{
+   clearRaffleWorkspace();
    window.writeCalls=[];
    window.writableFixture={enabled:true,readOnly:false,canPrepare:true,canCorrect:true,campaigns:[{id:'future',name:'新活動'}],claims:[{id:'claim-a',version:1,studentKey:'a',studentName:'同名學生',maskedEmail:'a•••@example.com',campaignId:'future',prizeName:'提袋',venue:'晴光',status:'ready',quantity:1,claimedQuantity:0}]};
    callApi=async(action,params)=>{

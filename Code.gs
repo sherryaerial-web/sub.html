@@ -20693,6 +20693,60 @@ function raffleHash_(value) {
     .map(function(b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
 }
 
+// Internal dry-run only. A future sender must load durable reservations under lock;
+// this planner is deliberately not exposed as an API and never calls MailApp.
+function buildRaffleInvitationPreview_(campaign, sourceRows, reservations) {
+  if (!campaign || !/^[a-zA-Z0-9_-]{1,80}$/.test(campaign.id || '') ||
+      !cleanText_(campaign.name) || /[\r\n]/.test(campaign.name) ||
+      !/^[a-zA-Z0-9_-]{16,}$/.test(campaign.sourceSpreadsheetId || '') ||
+      !/^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:[/?#][^\s]*)?$/.test(campaign.websiteUrl || '')) {
+    throw new Error('抽獎活動名稱、來源或 HTTPS 網址設定有誤。');
+  }
+  if (campaign.sourceSpreadsheetId === '19TDX3I5qwmObpQR55LhIGlxeSY_g2GyG6MJHF6VFNtY') throw new Error('歷史活動不得產生新邀請。');
+  if (!Array.isArray(reservations)) throw new Error('缺少寄信紀錄，不能判斷是否已寄。');
+  var reserved = Object.create(null);
+  reservations.forEach(function(record) {
+    if (!record || !/^raffle_invite_[a-f0-9]{64}$/.test(record.qualificationId || '') ||
+        ['queued', 'sending', 'sent', 'uncertain'].indexOf(record.status) < 0 || reserved[record.qualificationId]) {
+      throw new Error('寄信紀錄不完整或重複，請先核對。');
+    }
+    reserved[record.qualificationId] = true;
+  });
+  var fields = ['OB email名稱', 'OB名字', '驗證碼', 'API購課ID', '是否已使用(Yes/空白)', '寄送e-mail(Yes/空格)', '寄送日期'];
+  var col = raffleColumns_(sourceRows, fields), seen = Object.create(null), groups = Object.create(null), skipped = 0;
+  if (sourceRows.length > 5001) throw new Error('抽獎名單超過安全上限。');
+  sourceRows.slice(1).forEach(function(row) {
+    if (!Array.isArray(row)) throw new Error('抽獎名單資料列格式有誤。');
+    if (!row.some(function(value) { return cleanText_(value); })) return;
+    if (fields.some(function(field) { return typeof row[col[field]] !== 'string'; })) throw new Error('抽獎名單資料列不完整，請核對寄送狀態。');
+    var code = cleanText_(row[col['驗證碼']]);
+    if (!code || /[\r\n]/.test(code)) throw new Error('驗證碼缺漏或格式有誤。');
+    if (seen[code]) throw new Error('驗證碼重複，停止寄信預覽。');
+    seen[code] = true;
+    // Qualification identity deliberately excludes Email: editing a recipient cannot
+    // make a potentially sent qualification eligible again.
+    var identity = 'raffle_invite_' + raffleHash_(JSON.stringify([campaign.id, campaign.sourceSpreadsheetId, code]));
+    if (reserved[identity] || !cleanText_(row[col['API購課ID']]) ||
+        cleanText_(row[col['是否已使用(Yes/空白)']]) || cleanText_(row[col['寄送e-mail(Yes/空格)']]) || cleanText_(row[col['寄送日期']])) {
+      skipped++; return;
+    }
+    var email = cleanText_(row[col['OB email名稱']]).toLowerCase();
+    if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(email)) throw new Error('收件 Email 格式有誤，停止寄信預覽。');
+    if (!groups[email]) groups[email] = [];
+    groups[email].push({id: identity, code: code});
+  });
+  var jobs = Object.keys(groups).sort().map(function(email) {
+    var entries = groups[email].sort(function(a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+    var ids = entries.map(function(entry) { return entry.id; });
+    return {id: 'raffle_mail_' + raffleHash_(JSON.stringify([campaign.id, email, 'invitation', ids])),
+      email: email, qualificationIds: ids, subject: campaign.name + '｜抽獎邀請',
+      body: '您好：\n\n您有 ' + entries.length + ' 筆抽獎資格，請至以下活動網站參加：\n' + campaign.websiteUrl +
+        '\n\n驗證碼：\n' + entries.map(function(entry) { return entry.code; }).join('\n') +
+        '\n\n請勿將驗證碼轉傳他人。\nSherry Aerial Studio'};
+  });
+  return {dryRun: true, jobs: jobs, skipped: skipped};
+}
+
 function raffleColumns_(rows, required) {
   if (!Array.isArray(rows) || !rows.length) throw new Error('缺少抽獎資料欄位。');
   var columns = Object.create(null);

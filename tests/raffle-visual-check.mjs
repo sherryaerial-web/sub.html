@@ -26,14 +26,14 @@ try {
  });
  await page.locator('[data-raffle-query]').waitFor();
  await page.locator('[data-raffle-query]').fill('林');
- await page.locator('.raffle-search button[type=submit]').click();
+ await page.getByRole('button',{name:'查詢學生',exact:true}).click();
  assert.equal(await page.evaluate(()=>window.raffleCalls.length),1);
  await page.evaluate(()=> {window.raffleFixture.claims=[
    {studentKey:'a',studentName:'同名學生',maskedEmail:'a•••@example.com',campaignId:'future',prizeName:'教室現貨・小提袋',venue:'晴光館',status:'ready',quantity:1,claimedQuantity:0},
    {studentKey:'b',studentName:'同名學生',maskedEmail:'b•••@example.com',campaignId:'future',prizeName:'訂製腳架',venue:'劍潭館',status:'waiting',quantity:1,claimedQuantity:0}
  ];});
  await page.locator('[data-raffle-query]').fill('同名');
- await page.locator('.raffle-search button[type=submit]').click();
+ await page.getByRole('button',{name:'查詢學生',exact:true}).click();
  await page.locator('[data-raffle-student]').first().waitFor();
  assert.equal(await page.locator('[data-raffle-student]').count(),2);
  assert.equal(await page.locator('[data-raffle-preview]').count(),0);
@@ -59,7 +59,52 @@ try {
  await page.locator('[data-raffle-preview]').click();
  await page.getByText('核對結果 · 尚未匯入').waitFor();
  await page.screenshot({path:'/private/tmp/raffle-preview/admin-mobile.png',fullPage:true});
+ await page.evaluate(()=>{
+   clearRaffleWorkspace();
+   window.writeCalls=[];
+   window.writableFixture={enabled:true,readOnly:false,canPrepare:true,canCorrect:true,campaigns:[{id:'future',name:'新活動'}],claims:[{id:'claim-a',version:1,studentKey:'a',studentName:'同名學生',maskedEmail:'a•••@example.com',campaignId:'future',prizeName:'提袋',venue:'晴光',status:'ready',quantity:1,claimedQuantity:0}]};
+   callApi=async(action,params)=>{
+     if(action==='getRaffleWorkspace') return window.writableFixture;
+     if(action==='previewRaffleImport') return {readOnly:false,previewToken:'token',campaignId:'future',batchCount:1,additionCount:1,duplicates:0,conflictCount:0,errorCount:0,additions:[]};
+     if(action==='confirmRaffleImport'){window.writeCalls.push({action,...params});return{imported:1,remaining:0};}
+     if(action==='mutateRaffleClaim') {
+       window.writeCalls.push({action,...params});
+       window.writableFixture.claims[0]={...window.writableFixture.claims[0],status:'claimed',claimedQuantity:1,version:2};
+       if(window.writeCalls.filter(c=>c.action==='mutateRaffleClaim').length===1) throw Error('模擬結果逾時');
+       return {claimId:'claim-a',status:'claimed',version:2,claimedQuantity:1};
+     }
+     if(action==='getRaffleAudit') return {events:[{actor:'老師',action:'collect',at:'2027-01-01',reason:'',claimedQuantity:1}]};
+     throw Error('unexpected action');
+   };
+   renderRaffleWorkspace('admin');
+ });
+ await page.locator('[data-raffle-query]').fill('同名');
+ await page.getByRole('button',{name:'查詢學生',exact:true}).click();
+ await page.locator('[data-raffle-action=collect]').click();
+ await page.locator('[data-raffle-cancel]').click();
+ assert.equal(await page.evaluate(()=>window.writeCalls.length),0);
+ await page.locator('[data-raffle-action=collect]').click();
+ await page.locator('[data-raffle-venue]').selectOption('wrong-venue');
+ await page.locator('[data-raffle-save]').click();
+ assert.equal(await page.evaluate(()=>window.writeCalls.length),0);
+ await page.locator('[data-raffle-venue]').selectOption('晴光');
+ await page.locator('[data-raffle-save]').click();
+ await page.getByText('模擬結果逾時',{exact:false}).waitFor();
+ assert.equal(await page.locator('[data-raffle-quantity]').isDisabled(),true);
+ await page.screenshot({path:'/private/tmp/raffle-preview/retry-mobile.png'});
+ await page.locator('[data-raffle-save]').click();
+ await page.getByText('這一筆已更新，已保留操作紀錄。').waitFor();
+ assert.equal(await page.locator('[data-raffle-action=collect]').count(),0);
+ const calls=await page.evaluate(()=>window.writeCalls);assert.equal(calls.length,2);assert.deepEqual(calls[0].operation,calls[1].operation);
+ await page.locator('[data-raffle-action=audit]').click();
+ await page.getByText('2027-01-01｜老師｜已領 1 件').waitFor();
+ await page.locator('[data-raffle-cancel]').click();
+ await page.locator('[data-raffle-preview]').click();
+ await page.locator('[data-raffle-confirm-import]').click();
+ await page.locator('[data-raffle-save]').click();
+ await page.getByText('已匯入 1 筆，剩餘 0 筆；沒有寄信。').waitFor();
+ assert.equal(await page.evaluate(()=>window.writeCalls.filter(c=>c.action==='confirmRaffleImport').length),1);
  await page.evaluate(()=>clearSession());
  assert.equal(await page.locator('[data-raffle-result]').count(),0);
- console.log('PASS: teacher/admin, disabled, minimum query, same-name grouping, errors, stale response, logout and mobile/desktop layout');
+ console.log('PASS: teacher/admin, disabled, minimum query, same-name grouping, cancellation, venue, same-ID uncertain retry, confirmed import, audit, stale response, logout and mobile/desktop layout');
 } finally { await browser.close(); }

@@ -25,3 +25,17 @@ test('preview makes no claim that data was written and displays error totals', (
   assert.match(html, /尚未匯入/); assert.match(html, /來源異動/); assert.match(html, /&lt;invalid&gt;/);
   assert.ok(!html.includes('<button'));
 });
+test('write controls are per claim and constrained by readiness and capabilities', () => {
+ const rows=[{id:'one',studentKey:'a',studentName:'甲',status:'ready',quantity:2,claimedQuantity:1},{id:'two',studentKey:'a',studentName:'甲',status:'waiting',quantity:1,claimedQuantity:0},{id:'three',studentKey:'a',studentName:'甲',status:'digital',quantity:1,claimedQuantity:0}];
+ const api=load(), teacher=api.renderClaims(rows,[],{readOnly:false});
+ assert.equal((teacher.match(/data-raffle-action="collect"/g)||[]).length,1);assert.ok(!teacher.includes('data-raffle-action="prepare"'));
+ const admin=api.renderClaims(rows,[],{readOnly:false,canPrepare:true,canCorrect:true});
+ assert.equal((admin.match(/data-raffle-action="prepare"/g)||[]).length,1);assert.equal((admin.match(/data-raffle-action="correct"/g)||[]).length,1);
+ assert.ok(!api.renderClaims(rows,[],{readOnly:true,canPrepare:true}).includes('data-raffle-action="collect"'));
+});
+test('import confirmation is absent when disabled or preview has unresolved conflicts',()=>{
+ const api=load(), data={readOnly:false,additionCount:2,batchCount:2,previewToken:'token',errorCount:0,conflictCount:0};
+ assert.match(api.renderPreview(data),/data-raffle-confirm-import/);
+ assert.ok(!api.renderPreview({...data,readOnly:true}).includes('data-raffle-confirm-import'));
+ assert.ok(!api.renderPreview({...data,conflictCount:1}).includes('data-raffle-confirm-import'));
+});

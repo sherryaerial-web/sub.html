@@ -2064,6 +2064,7 @@
     }
     .raffle-search { display: grid; gap: 14px; }
     .raffle-search label { display: grid; gap: 6px; font-size: 14px; }
+    [data-raffle-dialog-body] { display: grid; gap: 12px; overflow-wrap: anywhere; }
     .raffle-student { margin-top: 12px; overflow-wrap: anywhere; }
     .raffle-student h3 { margin: 0 0 6px; }
     .raffle-prize { border-top: 1px solid var(--line, #ddd4ca); padding: 14px 0 4px; margin-top: 10px; overflow-wrap: anywhere; }
@@ -2329,6 +2330,7 @@
             <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 45 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
             <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>領獎查詢</strong><small>以學生姓名或 Email 核對獎品</small></span><i data-lucide="chevron-right"></i></button>
+            <button type="button" data-view="view-raffle" data-capability="raffle_fulfillment" hidden><span class="account-menu-icon"><i data-lucide="package-check"></i></span><span><strong>獎品備貨／到館</strong><small>查詢學生後逐筆確認到館</small></span><i data-lucide="chevron-right"></i></button>
           </div>
           <button id="account-logout" class="account-logout" type="button"><i data-lucide="log-out"></i>登出這個帳號</button>
         </section>

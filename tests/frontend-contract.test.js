@@ -7,6 +7,12 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
+test('raffle deep links resolve to their own workspace rather than course administration', () => {
+  const runtime = createFrontendRuntime();
+  assert.equal(runtime.context.getInitialAppRoute('?view=raffle').viewId, 'view-raffle');
+  assert.equal(runtime.context.getInitialAppRoute('?view=admin&tab=raffle').adminTab, 'raffle');
+});
+
 test('projected practice reservation is read-only and blocks the booking editor', () => {
   const runtime = createFrontendRuntime();
   const block = { id: 'reserved-1', type: 'series-reservation', seriesId: 's1', creatorName: 'Tako',
@@ -4138,9 +4144,9 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
   assert.match(html, /function\s+refreshIcons\s*\(/);
 });
 
-test('keeps the sixteen capability-scoped admin tabs accessible and exposes their queue counts', () => {
+test('keeps the capability-scoped admin tabs accessible and exposes their queue counts', () => {
   const adminTabs = html.match(/<div class=["']admin-tabs["'][^>]*>[\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
-  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 16);
+  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 17);
   assert.match(adminTabs, /data-admin-tab=["']monthlyDiscount["']/);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
@@ -4264,7 +4270,7 @@ test('admin workspace groups legacy tools behind a task-first home without chang
 
   const legacyTabMarkup = html.match(/<div[^>]*id=["']admin-subtabs["'][\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
   const legacyTabs = legacyTabMarkup.match(/data-admin-tab=["'][^"']+["']/g) || [];
-  assert.equal(new Set(legacyTabs).size, 16);
+  assert.equal(new Set(legacyTabs).size, 17);
   ['admin-sync', 'admin-reconcile', 'admin-leave-pause', 'admin-export-all', 'admin-act-as'].forEach((id) => {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   });

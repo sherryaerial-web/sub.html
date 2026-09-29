@@ -2062,6 +2062,12 @@
       [data-shell-mode="teacher"] .teacher-schedule-row { grid-template-columns: 50px minmax(0, 1fr); }
       [data-shell-mode="teacher"] .teacher-status-pill { grid-column: 2; justify-self: start; }
     }
+    .raffle-search { display: grid; gap: 14px; }
+    .raffle-search label { display: grid; gap: 6px; font-size: 14px; }
+    .raffle-student { margin-top: 12px; overflow-wrap: anywhere; }
+    .raffle-student h3 { margin: 0 0 6px; }
+    .raffle-prize { border-top: 1px solid var(--line, #ddd4ca); padding: 14px 0 4px; margin-top: 10px; overflow-wrap: anywhere; }
+    .raffle-prize .status-pill { margin-left: 10px; }
   </style>
 </head>
 <body>
@@ -2322,8 +2328,14 @@
             <button type="button" data-view="view-payroll"><span class="account-menu-icon"><i data-lucide="receipt-text"></i></span><span><strong>我的薪資</strong><small>核對明細與確認薪資</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 45 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
             <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
+            <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>領獎查詢</strong><small>以學生姓名或 Email 核對獎品</small></span><i data-lucide="chevron-right"></i></button>
           </div>
           <button id="account-logout" class="account-logout" type="button"><i data-lucide="log-out"></i>登出這個帳號</button>
+        </section>
+
+        <section id="view-raffle" class="view">
+          <div class="view-header"><div><span class="eyebrow">Raffle</span><h2 class="section-heading">領獎查詢</h2><p class="section-copy">先找學生，再核對活動、獎品與領取館別。</p></div></div>
+          <div id="raffle-teacher-root"></div>
         </section>
 
         <section id="view-admin" class="view">
@@ -2339,6 +2351,7 @@
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="operations" data-capability="course_admin"><i data-lucide="list-todo"></i>每月營運</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="invoices" data-capability="invoice_admin"><i data-lucide="receipt-text"></i>發票</button>
+              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="raffle" data-capability="raffle_admin"><i data-lucide="gift"></i>抽獎・領獎</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="tools" data-capability="course_admin"><i data-lucide="wrench"></i>更多工具</button>
             </nav>
             <div class="admin-main">
@@ -2380,6 +2393,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資<span class="admin-tab-count" data-admin-count="payroll">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip" data-capability="vvip_admin"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="raffle" data-capability="raffle_admin">抽獎結果核對</button>
                 </div>
                 <div id="admin-tab-content" class="admin-tab-content"><div class="state">載入中...</div></div>
               </div>
@@ -2563,6 +2577,7 @@
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script src="assets/xlsx.full.min.js"></script>
   <script src="assets/jszip.min.js"></script>
+  <script src="raffle.js"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -2605,6 +2620,8 @@
     let myLeavesRecordMonth = "";
     let mySubsRecordMonth = "";
     const myPayrollSnapshotHtml = new Map();
+    let raffleCleanup = null;
+    let raffleMountedRoot = null;
     const ADMIN_TAB_SECTIONS = {
       pendingInvitations: "courses",
       missingObCancellations: "courses",
@@ -2621,7 +2638,8 @@
       monthlyDiscount: "operations",
       vvip: "operations",
       notifications: "notifications",
-      invoices: "invoices"
+      invoices: "invoices",
+      raffle: "raffle"
     };
     const ADMIN_SECTION_DEFAULT_TABS = {
       courses: "pendingInvitations",
@@ -2629,7 +2647,8 @@
       payroll: "payroll",
       operations: "closureManagement",
       notifications: "notifications",
-      invoices: "invoices"
+      invoices: "invoices",
+      raffle: "raffle"
     };
     let activeAdminSection = "dashboard";
     let activeAdminTab = "pendingInvitations";
@@ -2659,6 +2678,7 @@
       "view-payroll": "我的薪資",
       "view-inbox": "訊息",
       "view-account": "我的",
+      "view-raffle": "領獎查詢",
       "view-admin": "管理工作台"
     };
 
@@ -3981,6 +4001,7 @@
     }
 
     function resetTeacherViewSnapshots() {
+      clearRaffleWorkspace();
       globalCourseList = [];
       teacherHomeDashboard = null;
       teacherHomeSelectedDate = "";
@@ -4036,12 +4057,13 @@
         payroll: "view-payroll",
         inbox: "view-inbox",
         account: "view-account",
+        raffle: "view-raffle",
         admin: "view-admin"
       };
       const allowedAdminTabs = new Set([
         "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
         "delayClosures", "closureManagement", "monthlyDiscount", "changeRequests", "exceptions", "completed",
-        "payroll", "vvip", "notifications", "practice", "invoices"
+        "payroll", "vvip", "notifications", "practice", "invoices", "raffle"
       ]);
       const viewId = viewMap[params.get("view")] || "";
       const requestedTab = params.get("tab") || "";
@@ -4066,6 +4088,7 @@
           "view-practice": "practice",
           "view-payroll": "account",
           "view-inbox": "account",
+          "view-raffle": "account",
           "view-account": "account"
         })[viewId] || "";
 
@@ -4297,7 +4320,8 @@
       if (targetView === "view-admin" && route.adminTab) {
         const tabCapability = route.adminTab === "payroll" ? "payroll_admin"
           : route.adminTab === "vvip" ? "vvip_admin"
-          : route.adminTab === "invoices" ? "invoice_admin" : "course_admin";
+          : route.adminTab === "invoices" ? "invoice_admin"
+          : route.adminTab === "raffle" ? "raffle_admin" : "course_admin";
         if (authState.managementCapabilities.includes(tabCapability)) {
           activeAdminTab = route.adminTab;
           activeAdminSection = ADMIN_TAB_SECTIONS[route.adminTab] || "courses";
@@ -4317,6 +4341,7 @@
     }
 
     function clearSession() {
+      clearRaffleWorkspace();
       logoutPushIdentity();
       clearSavedSession();
       authState.sessionToken = "";
@@ -4443,6 +4468,7 @@
       if (viewId === "view-admin" && !authState.managementCapabilities.length) {
         return setNotice("需要管理權限。", "error");
       }
+      clearRaffleWorkspace();
       activeViewId = viewId;
       byId("app-shell").dataset.shellMode = viewId === "view-admin" ? "admin" : "teacher";
       clearNotice();
@@ -4451,7 +4477,7 @@
       });
       const desktopDestination = viewId === "view-myleaves" ? "view-leave"
         : viewId === "view-mysubs" ? "view-claim"
-          : ["view-payroll", "view-inbox"].includes(viewId) ? "view-account" : viewId;
+          : ["view-payroll", "view-inbox", "view-raffle"].includes(viewId) ? "view-account" : viewId;
       document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
         const active = button.dataset.view === desktopDestination;
         button.classList.toggle("active", active);
@@ -4469,6 +4495,7 @@
       if (viewId === "view-practice") loadPracticeDay(practiceState.date || getTaipeiToday());
       if (viewId === "view-payroll") fetchMyPayroll();
       if (viewId === "view-inbox") fetchNotificationInbox();
+      if (viewId === "view-raffle") renderRaffleWorkspace("teacher");
       if (viewId === "view-admin") {
         fetchAdminDashboard();
         if (["dashboard", "operations"].includes(activeAdminSection)) fetchNotificationAdminDashboard();
@@ -7390,6 +7417,7 @@
     }
 
     async function fetchAdminDashboard(rethrow = false) {
+      if (activeAdminTab === "raffle") return renderAdminDashboard();
       if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       if (activeAdminTab === "notifications") return fetchNotificationAdminDashboard(rethrow);
@@ -8140,7 +8168,28 @@
       }
     }
 
+    function clearRaffleWorkspace() {
+      if (raffleCleanup) raffleCleanup();
+      raffleCleanup = null;
+      raffleMountedRoot = null;
+    }
+
+    function renderRaffleWorkspace(mode) {
+      const root = byId(mode === "admin" ? "admin-tab-content" : "raffle-teacher-root");
+      if (raffleMountedRoot === root && root.querySelector("[data-raffle-workspace]")) return;
+      clearRaffleWorkspace();
+      if (!authState.sessionToken) { root.innerHTML = '<div class="state">請先登入。</div>'; return; }
+      if (mode === "admin" && !authState.managementCapabilities.includes("raffle_admin")) {
+        root.innerHTML = '<div class="state error">目前帳號沒有抽獎管理權限。</div>'; return;
+      }
+      if (!window.SherryRaffle) { root.innerHTML = '<div class="state error">領獎功能載入失敗，請重新整理。</div>'; return; }
+      root.innerHTML = '<div data-raffle-workspace></div>';
+      raffleMountedRoot = root;
+      raffleCleanup = window.SherryRaffle.mount(root.firstElementChild, { api: callApi, mode });
+    }
+
     function renderAdminTab(fromDashboard = false) {
+      if (activeAdminTab !== "raffle") clearRaffleWorkspace();
       // Older deep links and internal refresh paths set only activeAdminTab.
       // Keep those paths working while the new management home controls its
       // own section explicitly through renderAdminDashboard().
@@ -8155,6 +8204,8 @@
         renderAdminTools();
       } else if (activeAdminSection === "operations" && activeAdminTab === "operationsOverview") {
         renderAdminOperationsOverview();
+      } else if (activeAdminTab === "raffle") {
+        renderRaffleWorkspace("admin");
       } else if (activeAdminTab === "vvip") {
         renderVvipAdminTab();
       } else if (activeAdminTab === "payroll") {

@@ -349,7 +349,7 @@ var CONFIG = {
   INVOICE_SYNC_MAX_REQUESTS: 90
 };
 
-var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin', 'invoice_admin'];
+var MANAGEMENT_CAPABILITIES = ['course_admin', 'payroll_admin', 'vvip_admin', 'invoice_admin', 'raffle_admin', 'raffle_fulfillment'];
 
 var SUPPLEMENTAL_TEACHER_CAPABILITIES = {
   'Vivi': ['鞦韆'],
@@ -875,7 +875,7 @@ function initializeFirstAdmin_(teacherName, pin) {
     var salt = createRandomToken_();
     var pinHash = hashPin_(pinText, salt);
     sheet.getRange(2, 1, 1, SHEET_HEADERS.ACCOUNTS.length).setValues([[
-      teacher, salt, pinHash, '是', '管理員', 0, '', '', MANAGEMENT_CAPABILITIES.join(',')
+      teacher, salt, pinHash, '是', '管理員', 0, '', '', MANAGEMENT_CAPABILITIES.filter(function(c) { return c.indexOf('raffle_') !== 0; }).join(',')
     ]]);
     return { teacherName: teacher, role: '管理員', active: true };
   });
@@ -9200,6 +9200,12 @@ function doPost(e) {
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
       },
+      getRaffleWorkspace: function() {
+        return getRaffleWorkspace_(session, { mode: parameters.mode, query: parameters.query, campaignId: parameters.campaignId });
+      },
+      previewRaffleImport: function() {
+        return previewRaffleImport_(session, parameters.campaignId);
+      },
       getInvoiceAdminDashboard: function() {
         return getInvoiceAdminDashboard_(session);
       },
@@ -13539,7 +13545,7 @@ function getSessionManagementCapabilities_(session) {
   }
   var account = findAccount_(teacher);
   if (account) return getAccountManagementCapabilities_(account);
-  return isAdminRole_(session.role) ? MANAGEMENT_CAPABILITIES.slice() : [];
+  return isAdminRole_(session.role) ? MANAGEMENT_CAPABILITIES.filter(function(c) { return c.indexOf('raffle_') !== 0; }) : [];
 }
 
 function assertCapabilitySession_(session, capability) {
@@ -20670,4 +20676,165 @@ function assertHeaders_(sheet, expectedHeaders) {
       );
     }
   });
+}
+
+// Raffle phase one is read-only. These readers never create sheets or change inventory.
+function raffleHash_(value) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8)
+    .map(function(b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+
+function raffleColumns_(rows, required) {
+  if (!Array.isArray(rows) || !rows.length) throw new Error('缺少抽獎資料欄位。');
+  var columns = Object.create(null);
+  rows[0].forEach(function(value, i) {
+    var name = cleanText_(value);
+    if (!name) return;
+    if (columns[name] !== undefined) throw new Error('抽獎欄位重複：' + name);
+    columns[name] = i;
+  });
+  required.forEach(function(name) {
+    if (columns[name] === undefined) throw new Error('缺少抽獎欄位：' + name);
+  });
+  return columns;
+}
+
+function buildRaffleImportPreview_(campaign, sourceRows, prizeRows, existingClaims) {
+  var fields = ['OB email名稱', 'OB名字', '驗證碼', '中獎等級', '最終選擇獎品', '領取館別', '領獎方式', '確認時間'];
+  var col = raffleColumns_(sourceRows, fields);
+  var pc = raffleColumns_(prizeRows, ['獎項ID', '獎項等級', '獎品名稱', '領獎方式']);
+  var result = { additions: [], duplicates: 0, conflicts: [], errors: [], pendingSelection: 0 };
+  var codeCounts = Object.create(null), existing = Object.create(null), prizeIds = Object.create(null);
+  sourceRows.slice(1).forEach(function(r) {
+    var code = cleanText_(r[col['驗證碼']]);
+    if (code) codeCounts[code] = (codeCounts[code] || 0) + 1;
+  });
+  prizeRows.slice(1).forEach(function(r) {
+    var id = cleanText_(r[pc['獎項ID']]);
+    if (id) prizeIds[id] = (prizeIds[id] || 0) + 1;
+  });
+  (existingClaims || []).forEach(function(claim) {
+    if (claim.campaignId !== campaign.id) return;
+    if (existing[claim.id]) throw new Error('領獎紀錄 ID 重複，請先人工核對。');
+    existing[claim.id] = claim;
+  });
+  sourceRows.slice(1).forEach(function(r, index) {
+    if (!r.some(function(v) { return cleanText_(v); })) return;
+    function value(name) { return cleanText_(r[col[name]]); }
+    function error(message) { result.errors.push({ row: index + 2, message: message }); }
+    var code = value('驗證碼'), email = value('OB email名稱').toLowerCase();
+    if (!code || codeCounts[code] !== 1) return error('驗證資格缺漏或重複，未匯入。');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !value('OB名字')) return error('學生姓名或 Email 不完整。');
+    if (!value('最終選擇獎品')) { result.pendingSelection++; return; }
+    var matches = prizeRows.slice(1).filter(function(p) {
+      return cleanText_(p[pc['獎項等級']]) === value('中獎等級') && cleanText_(p[pc['獎品名稱']]) === value('最終選擇獎品');
+    });
+    if (matches.length !== 1) return error('獎項無法唯一對應，請核對獎項 ID 與名稱。');
+    var prizeId = cleanText_(matches[0][pc['獎項ID']]);
+    var method = cleanText_(matches[0][pc['領獎方式']]);
+    if (!prizeId || prizeIds[prizeId] !== 1) return error('獎項 ID 缺漏或重複。');
+    if (['choose_venue', 'show_code', 'manual_contact'].indexOf(method) < 0 || method !== value('領獎方式')) return error('領獎方式不一致，請先核對。');
+    if (!value('確認時間') || (method === 'choose_venue' && !value('領取館別'))) return error('尚未確認領獎資訊或館別。');
+    var id = 'raffle_' + raffleHash_(JSON.stringify([campaign.id, campaign.sourceSpreadsheetId, code]));
+    var fingerprint = raffleHash_(JSON.stringify([email, value('OB名字'), prizeId, value('最終選擇獎品'), value('領取館別'), method, 1]));
+    if (existing[id]) {
+      if (existing[id].sourceFingerprint === fingerprint) result.duplicates++;
+      else result.conflicts.push({ row: index + 2, id: id, message: '來源已變更；保留原領獎紀錄，請人工核對。' });
+      return;
+    }
+    var ready = (campaign.readyPrizeVenues || []).some(function(p) { return p.prizeId === prizeId && p.venue === value('領取館別'); });
+    result.additions.push({ id: id, campaignId: campaign.id, email: email, studentName: value('OB名字'),
+      prizeId: prizeId, prizeName: value('最終選擇獎品'), venue: value('領取館別'), quantity: 1, claimedQuantity: 0,
+      status: method === 'show_code' ? 'digital' : (method === 'choose_venue' && ready ? 'ready' : 'waiting'),
+      sourceFingerprint: fingerprint });
+  });
+  return result;
+}
+
+function getRaffleConfiguration_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('RAFFLE_ENABLED') !== 'true') return { enabled: false, campaigns: [] };
+  var campaigns;
+  try { campaigns = JSON.parse(props.getProperty('RAFFLE_CAMPAIGNS_JSON') || '[]'); }
+  catch (e) { throw new Error('抽獎活動設定格式有誤，請聯絡管理員。'); }
+  if (!Array.isArray(campaigns) || campaigns.length > 10) throw new Error('抽獎活動設定格式或數量有誤。');
+  var ids = Object.create(null);
+  campaigns.forEach(function(c) {
+    if (!c || !/^[a-zA-Z0-9_-]{1,80}$/.test(c.id || '') || !cleanText_(c.name) || !/^[a-zA-Z0-9_-]{16,}$/.test(c.sourceSpreadsheetId || '') || ids[c.id]) throw new Error('抽獎活動設定缺漏或重複。');
+    if (c.sourceSpreadsheetId === '19TDX3I5qwmObpQR55LhIGlxeSY_g2GyG6MJHF6VFNtY') throw new Error('歷史活動不得匯入新的領獎工作台。');
+    ids[c.id] = true;
+    if (c.readyPrizeVenues != null && (!Array.isArray(c.readyPrizeVenues) || c.readyPrizeVenues.some(function(p) { return !p || !cleanText_(p.prizeId) || !cleanText_(p.venue); }))) throw new Error('抽獎現貨館別設定有誤。');
+  });
+  return { enabled: true, campaigns: campaigns };
+}
+
+function readRaffleTable_(spreadsheet, name, optional) {
+  var sheet = spreadsheet.getSheetByName(name);
+  if (!sheet) {
+    if (optional) return [];
+    throw new Error('找不到抽獎資料表：' + name);
+  }
+  var rows = sheet.getLastRow(), columns = sheet.getLastColumn();
+  if (rows > 5001 || columns > 40) throw new Error('抽獎資料超過安全讀取範圍，請分批處理。');
+  return rows && columns ? sheet.getRange(1, 1, rows, columns).getDisplayValues() : [];
+}
+
+function readRaffleClaims_() {
+  var rows = readRaffleTable_(SpreadsheetApp.getActiveSpreadsheet(), 'RaffleClaims', true);
+  if (!rows.length) return [];
+  var keys = ['id', 'campaignId', 'email', 'studentName', 'prizeId', 'prizeName', 'venue', 'quantity', 'claimedQuantity', 'status', 'claimedAt', 'claimedBy', 'sourceFingerprint'];
+  var col = raffleColumns_(rows, keys);
+  return rows.slice(1).filter(function(r) { return r.some(function(v) { return cleanText_(v); }); }).map(function(r) {
+    var claim = {};
+    keys.forEach(function(k) { claim[k] = cleanText_(r[col[k]]); });
+    claim.email = claim.email.toLowerCase();
+    claim.quantity = Number(claim.quantity); claim.claimedQuantity = Number(claim.claimedQuantity);
+    if (!claim.id || !claim.campaignId || !claim.email || !Number.isInteger(claim.quantity) || claim.quantity < 1 || !Number.isInteger(claim.claimedQuantity) || claim.claimedQuantity < 0 || claim.claimedQuantity > claim.quantity || ['waiting', 'ready', 'partial', 'claimed', 'digital', 'cancelled'].indexOf(claim.status) < 0) throw new Error('領獎資料不完整，請管理員核對。');
+    return claim;
+  });
+}
+
+function filterRaffleTeacherClaims_(claims, query) {
+  var term = cleanText_(query).toLowerCase();
+  if (term.length < 2 || term.length > 100) return [];
+  return claims.filter(function(c) {
+    return cleanText_(c.studentName).toLowerCase().indexOf(term) >= 0 || cleanText_(c.email).toLowerCase() === term;
+  }).slice(0, 50).map(function(c) {
+    var email = cleanText_(c.email).toLowerCase(), at = email.indexOf('@');
+    return { id: c.id, campaignId: c.campaignId, studentKey: raffleHash_(email), studentName: c.studentName,
+      maskedEmail: email.slice(0, 1) + '•••' + (at >= 0 ? email.slice(at) : ''), prizeName: c.prizeName,
+      venue: c.venue, quantity: c.quantity, claimedQuantity: c.claimedQuantity, status: c.status,
+      claimedAt: c.claimedAt || '', claimedBy: c.claimedBy || '' };
+  });
+}
+
+function getRaffleWorkspace_(session, query) {
+  getSessionTeacherName_(session);
+  query = query || {};
+  if (query.mode === 'admin') assertCapabilitySession_(session, 'raffle_admin');
+  var config = getRaffleConfiguration_();
+  var result = { enabled: config.enabled, readOnly: true, campaigns: config.campaigns.map(function(c) { return { id: c.id, name: c.name }; }), claims: [] };
+  if (!config.enabled || !config.campaigns.length || cleanText_(query.query).length < 2) return result;
+  if (query.campaignId && !config.campaigns.some(function(c) { return c.id === query.campaignId; })) throw new Error('找不到已設定的抽獎活動。');
+  var ids = config.campaigns.map(function(c) { return c.id; });
+  result.claims = filterRaffleTeacherClaims_(readRaffleClaims_().filter(function(c) {
+    return ids.indexOf(c.campaignId) >= 0 && (!query.campaignId || c.campaignId === query.campaignId);
+  }), query.query);
+  result.limit = 50;
+  return result;
+}
+
+function previewRaffleImport_(session, campaignId) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  var config = getRaffleConfiguration_();
+  if (!config.enabled) throw new Error('抽獎工作台尚未啟用。');
+  var campaign = config.campaigns.filter(function(c) { return c.id === campaignId; })[0];
+  if (!campaign) throw new Error('找不到已設定的抽獎活動。');
+  var source = SpreadsheetApp.openById(campaign.sourceSpreadsheetId);
+  var preview = buildRaffleImportPreview_(campaign, readRaffleTable_(source, '抽獎名單', false), readRaffleTable_(source, '獎項設定', false), readRaffleClaims_());
+  // Fingerprints belong only in the server merge plan; verification codes never leave source.
+  return { readOnly: true, campaignId: campaign.id, additionCount: preview.additions.length,
+    additions: preview.additions.slice(0, 100).map(function(c) { return { studentName: c.studentName, prizeName: c.prizeName, venue: c.venue, status: c.status }; }),
+    duplicates: preview.duplicates, pendingSelection: preview.pendingSelection,
+    conflictCount: preview.conflicts.length, conflicts: preview.conflicts.slice(0, 100), errorCount: preview.errors.length, errors: preview.errors.slice(0, 100) };
 }

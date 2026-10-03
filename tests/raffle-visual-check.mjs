@@ -164,6 +164,40 @@ try {
  await page.locator('[data-raffle-save]').click();
  await page.getByText('已匯入 1 筆，剩餘 0 筆；沒有寄信。').waitFor();
  assert.equal(await page.evaluate(()=>window.writeCalls.filter(c=>c.action==='confirmRaffleImport').length),1);
+ await page.evaluate(()=>{
+   clearRaffleWorkspace();window.sendCalls=[];window.reconcileCalls=[];window.sendMode='normal';
+   callApi=async(action,params)=>{
+     if(action==='getRaffleWorkspace')return{enabled:true,readOnly:false,campaigns:[{id:'future',name:'新活動'}],claims:[]};
+     if(action==='previewRaffleMailSend'){
+       const preview={dryRun:true,sendEnabled:true,quota:2,batchCount:1,previewToken:'send-token',previews:[{email:'student@example.com',subject:'邀請信',body:'https://example.com/'+ 'long'.repeat(40)+'\nCODE 測試內容'}]};
+       if(window.sendMode==='pending')return new Promise(resolve=>{window.finishSendPreview=()=>resolve(preview);});
+       return preview;
+     }
+     if(action==='sendRaffleMailBatch'){window.sendCalls.push(params.operation);if(window.sendCalls.length===1)throw Error('寄送結果逾時');return{attemptId:params.operation.requestId,total:1,sent:0,pendingReview:1,closed:0};}
+     if(action==='getRaffleMailRecords')return{canReconcile:true,total:60,reviewCount:window.reconcileCalls.length?0:1,offset:params.offset || 0,hasMore:!params.offset,records:[{id:'job-one',email:params.offset?'page2@example.com':'student@example.com',qualificationCount:1,status:window.reconcileCalls.length?'sent':'uncertain',createdAt:'2026-10-03',actor:'店長'}]};
+     if(action==='reconcileRaffleMail'){window.reconcileCalls.push(params.operation);return{jobId:'job-one',status:'sent'};}
+     throw Error('Unexpected send action '+action);
+   };renderRaffleWorkspace('admin');
+ });
+ await page.locator('[data-raffle-mail-send]').click();
+ for(const [name,width,height] of [['mail-send-mobile',390,844],['mail-send-desktop',1280,1000]]){
+   await page.setViewportSize({width,height});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   await page.screenshot({path:`/private/tmp/raffle-preview/${name}.png`,fullPage:true});
+ }
+ await page.locator('[data-raffle-confirm-send]').click();
+ await page.locator('[data-raffle-cancel]').click();assert.equal(await page.evaluate(()=>window.sendCalls.length),0);
+ await page.locator('[data-raffle-confirm-send]').click();await page.locator('[data-raffle-save]').click();
+ await page.getByText('寄送結果逾時',{exact:false}).waitFor();await page.locator('[data-raffle-save]').click();
+ await page.getByText('本批 1 封：已送出／核對 0 封，待確認 1 封。',{exact:false}).waitFor();
+ const sends=await page.evaluate(()=>window.sendCalls);assert.equal(sends.length,2);assert.deepEqual(sends[0],sends[1]);
+ await page.locator('[data-raffle-reconcile]').click();await page.locator('[data-raffle-save]').click();assert.equal(await page.evaluate(()=>window.reconcileCalls.length),0);
+ await page.locator('[data-raffle-mail-status]').selectOption('sent');await page.locator('[data-raffle-mail-reason]').fill('已向收件人確認收到');await page.locator('[data-raffle-save]').click();
+ await page.getByText('已保存核對結論與理由，沒有重寄。').waitFor();assert.equal(await page.locator('[data-raffle-reconcile]').count(),0);
+ await page.locator('[data-raffle-mail-page="50"]').click();await page.getByText('page2@example.com',{exact:true}).waitFor();
+ await page.locator('[data-raffle-mail-page="0"]').click();await page.locator('[data-raffle-result]').getByText('student@example.com',{exact:true}).waitFor();
+ await page.evaluate(()=>{window.sendMode='pending';});await page.locator('[data-raffle-mail-send]').click();
+ await page.locator('[data-raffle-campaign]').dispatchEvent('change');await page.evaluate(()=>window.finishSendPreview());
+ assert.equal(await page.locator('[data-raffle-confirm-send]').count(),0);
  await page.evaluate(()=>clearSession());
  assert.equal(await page.locator('[data-raffle-result]').count(),0);
  console.log('PASS: teacher/admin, disabled, minimum query, same-name grouping, cancellation, venue, same-ID uncertain retry, confirmed import, audit, stale response, logout and mobile/desktop layout');

@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto'),path=require('node:path');
+const admin={teacherName:'店長',managementCapabilities:['raffle_admin']};
+const campaign={id:'future',name:'新活動',sourceSpreadsheetId:'future-source-1234567890',websiteUrl:'https://example.com/raffle'};
+function setup(count=1){
+ const props=new Map(Object.entries({RAFFLE_ENABLED:'true',RAFFLE_WRITES_ENABLED:'true',RAFFLE_MAIL_QUEUE_ENABLED:'true',RAFFLE_MAIL_SEND_ENABLED:'true',RAFFLE_MAIL_HANDOFF_JSON:JSON.stringify({future:campaign.sourceSpreadsheetId}),RAFFLE_CAMPAIGNS_JSON:JSON.stringify([campaign])}));
+ const rows=[['OB email名稱','OB名字','驗證碼','API購課ID','是否已使用(Yes/空白)','寄送e-mail(Yes/空格)','寄送日期'],...Array.from({length:count},(_,i)=>['student'+i+'@example.com','學生','CODE-'+i,'purchase-'+i,'','',''])];
+ const tables=new Map(),pending=[],mails=[];let locked=false,writes=0,quota=100,fault='',flushes=0,failAt=0;
+ const sheet=data=>({data,getLastRow:()=>data.length,getLastColumn:()=>Math.max(0,...data.map(r=>r.length)),getMaxRows:()=>10000,getRange:(r,c,n=1,m=1)=>({getDisplayValues:()=>Array.from({length:n},(_,i)=>Array.from({length:m},(_,j)=>String(data[r-1+i]?.[c-1+j]??''))),setValues:values=>{assert.ok(locked);writes++;pending.push(()=>values.forEach((line,i)=>{data[r-1+i]||=[];line.forEach((v,j)=>{data[r-1+i][c-1+j]=v;});}));}})});
+ const book={getSheetByName:n=>tables.get(n)||null,insertSheet:n=>{assert.ok(locked);assert.equal(n,'RaffleMailJournal');const s=sheet([]);tables.set(n,s);return s;}};
+ const c={Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,s)=>[...crypto.createHash('sha256').update(s).digest()]},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k)||null})},LockService:{getScriptLock:()=>({waitLock:()=>{assert.equal(locked,false);locked=true;},releaseLock:()=>{assert.equal(pending.length,0);locked=false;}})},SpreadsheetApp:{getActiveSpreadsheet:()=>book,openById:id=>{assert.equal(id,campaign.sourceSpreadsheetId);return{getSheetByName:n=>{assert.equal(n,'抽獎名單');return sheet(rows);}};},flush:()=>{assert.ok(locked);flushes++;if(flushes===failAt&&fault==='before'){pending.splice(0);throw Error('flush failed');}pending.splice(0).forEach(f=>f());if(flushes===failAt&&fault==='after')throw Error('flush uncertain');}},MailApp:{getRemainingDailyQuota:()=>quota,sendEmail:message=>{assert.ok(locked);assert.equal(pending.length,0);const s=c.readRaffleMailState_();assert.ok(s.jobs.some(j=>j.email===message.to&&j.status==='sending'));mails.push(message);if(fault==='transport')throw Error('mail uncertain');}}};
+ vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'../../Code.gs'),'utf8'),c);
+ const queue=()=>c.confirmRaffleInvitations_(admin,{campaignId:'future',previewToken:c.previewRaffleInvitations_(admin,'future').previewToken,requestId:'request-queue-'+String(tables.get('RaffleMailJournal')?.data.length||0).padStart(5,'0')});
+ const operation=()=>({campaignId:'future',previewToken:c.previewRaffleMailSend_(admin,'future').previewToken,requestId:'request-send-00001'});
+ return{c,props,rows,tables,mails,queue,operation,writes:()=>writes,setQuota:n=>{quota=n;},fault:(kind,offset=1)=>{fault=kind;failAt=flushes+offset;}};
+}
+module.exports={setup,admin,campaign};

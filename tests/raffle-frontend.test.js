@@ -7,6 +7,21 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('actual send preview requires full payload, explicit gate and enough quota',()=>{
+ const api=load(),p={dryRun:true,sendEnabled:true,quota:2,batchCount:2,previewToken:'token',previews:[{email:'a@example.com',subject:'test',body:'<unsafe>'},{email:'b@example.com',subject:'test',body:'two'}]};
+ assert.match(api.renderMailSendPreview(p),/data-raffle-confirm-send/);assert.match(api.renderMailSendPreview(p),/&lt;unsafe&gt;/);
+ for(const bad of [{...p,sendEnabled:false},{...p,quota:1},{...p,quota:null}]) assert.ok(!api.renderMailSendPreview(bad).includes('data-raffle-confirm-send'));
+ assert.throws(()=>api.renderMailSendPreview({}),/完整/);
+});
+test('mail record statuses distinguish acceptance from delivery and offer review only for uncertain attempts',()=>{
+ const api=load(),data={canReconcile:true,total:5,records:['queued','sending','sent','uncertain','closed'].map((status,i)=>({id:'job'+i,email:'a@example.com',status,qualificationCount:1,actor:'店長',createdAt:'today',reason:'<核對理由>'}))};
+ const html=api.renderMailRecords(data);assert.match(html,/不代表收件人已收到/);assert.match(html,/寄送結果待確認/);assert.match(html,/結案（不重寄）/);assert.match(html,/&lt;核對理由&gt;/);assert.equal((html.match(/data-raffle-reconcile=/g)||[]).length,2);
+ assert.ok(!api.renderMailRecords({...data,canReconcile:false}).includes('data-raffle-reconcile='));
+});
+test('mail records can navigate beyond fifty jobs',()=>{
+ const api=load();assert.match(api.renderMailRecords({total:60,reviewCount:5,offset:0,hasMore:true,records:[]}),/data-raffle-mail-page="50"/);
+ assert.match(api.renderMailRecords({total:60,reviewCount:5,offset:50,hasMore:false,records:[]}),/data-raffle-mail-page="0"/);
+});
 test('mail preview warns delivery history is unchecked and escapes body without send controls',()=>{
   const html=load().renderMailPreview({dryRun:true,deliveryChecked:false,candidateCount:21,skipped:2,previews:[{email:'<unsafe>',subject:'邀請',body:'<script>bad()</script>\ncode'}]});
  assert.match(html,/尚未核對寄信紀錄/);assert.match(html,/21/);assert.match(html,/&lt;script&gt;/);

@@ -1,4 +1,29 @@
-# 抽獎整合進度（2026-09-29）
+# 抽獎整合進度（2026-10-03）
+
+## 最新：邀請信寄送流程已在本機完成，未正式部署
+
+- 管理員：預覽邀請信 → 確認排入待寄 → 寄送前確認內容及配額 → 二次確認真正寄出（最多 5 封）。匯入、預覽和排入待寄皆不寄信。
+- 新 API：`previewRaffleMailSend`、`sendRaffleMailBatch`、`reconcileRaffleMail`。仍需獨立 `raffle_admin`，不授予新權限。
+- 正式寄送須 `RAFFLE_ENABLED`、`RAFFLE_WRITES_ENABLED`、`RAFFLE_MAIL_SEND_ENABLED` 同時為字串 `true`，另需 `RAFFLE_MAIL_HANDOFF_JSON` 以活動 ID 對應精確來源表 ID，表示已人工核對舊寄信程式／觸發器停止；不能拿此設定當成自動停用舊 sender。這次沒有設定正式值。
+- 日誌增加 `send-start`、`send-result`、`reconcile` 事件，既有 queued 記錄仍可讀；每次先在持鎖期間寫入整批 sending 並 flush，才呼叫 MailApp。全部配額不足即零寄送。來源資格、寄送欄位、Email、信件內容或活動網址變動均阻擋。
+- Google 回傳成功後才記 `sent`，不宣稱收件匣已收到。MailApp 例外記 `uncertain` 並停止本批；中斷或結果寫入失敗保留 `sending`／`uncertain`，同 requestId 只讀結果，不續寄。其餘批內尚未呼叫 MailApp 者亦保守保留，需人工核對。
+- 人工核對必填理由，可確認已寄或結案不重寄；不解除資格保留。尚未提供取消 queued／修改待寄內容／解除保留再寄功能。來源異動造成阻擋時不要手改日誌。
+- 寄信紀錄优先列待核對，支援每頁 50 筆及上／下一頁；更新時間、操作者和理由可查。避免較早失敗批次被新排入工作淹沒。
+- 本次沒有增加觸發器、推送 main、部署正式 GAS、寫正式 Sheets、建活動或寄給學生。正式來源契約、舊 sender 交接及整合 GAS 測試仍是發布前條件。
+
+### 唯一已做的真實寄信測試（獨立專案）
+
+使用者批准後，2026-10-03 15:29（台北）獨立單封測試寄至 `m605330912@icloud.com`；執行紀錄 accepted，使用者已回覆收到。專案 `1NhnaZzmNrsHC9Wzf_jTrfsBM-JiO5-dhby_GyzoVD4rcY-dof92gDdRJ`，不是正式教室 GAS，沒有 Web App／排程／Sheet 寫入。來源 `scripts/raffle-mail-smoke.gs`、4 項測試。不得清除單次保護或重建專案重寄。這只證明該帳號的單封傳送，不代表正式整合 sender 已上線。
+
+### 仍未完成的產品範圍
+
+活動設定介面／草稿啟用、按獎品館別彙總備貨、可領取通知、過期撤銷管理與來源衝突處理，以及實際未來活動的正式串接驗證；不能把本次邀請信功能完成說成整套抽獎已全部完成。
+
+### 本輪驗證
+
+全套 Node 測試 911/911 通過；寄信／前端相關 42 項通過，GAS／JS 語法與 diff 檢查通過。离線 Chrome 手機390px／桌面1280px：取消不呼叫 sender、逾時沿用 requestId、待確認提示、人工核對理由、紀錄翻頁、舊回應及登出清除通過。獨立 review 找到「舊待核對工作被最近50筆隱藏」，已以60封案例 RED→GREEN 修正為待核對優先且可翻頁。沒有正式資料測試。
+
+以下為此前階段紀錄，寄信狀態以本節為準。
 
 ## 已完成、尚未部署
 

@@ -7,6 +7,13 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('ready notification previews distinguish pickup from invitations and retain gates',()=>{
+ const api=load(),data={kind:'ready',dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:false,previewToken:'token',batchCount:1,candidateCount:1,skipped:2,previews:[{email:'a@example.com',subject:'獎品可領取通知',body:'<提袋>｜晴光'}]};
+ const html=api.renderMailPreview(data);assert.match(html,/可領取通知預覽/);assert.match(html,/未備妥/);assert.ok(!html.includes('多個驗證碼'));assert.match(html,/&lt;提袋&gt;/);assert.match(html,/data-raffle-confirm-mail/);
+ assert.ok(!api.renderMailPreview({...data,readOnly:true}).includes('data-raffle-confirm-mail'));
+ const send=api.renderMailSendPreview({...data,quota:3,sendEnabled:true});assert.match(send,/可領取通知.*寄送前確認/);
+ const records=api.renderMailRecords({total:2,records:[{id:'a',kind:'ready',status:'sent',qualificationCount:2},{id:'b',kind:'invitation',status:'queued',qualificationCount:1}]});assert.match(records,/可領取通知/);assert.match(records,/2 筆獎品/);assert.match(records,/抽獎邀請/);
+});
 test('campaign settings expose blank drafts, escape names and keep active settings read only',()=>{
  const api=load(),data={readOnly:false,operationalEnabled:false,campaigns:[{campaign:{id:'old',name:'<舊>',sourceSpreadsheetId:'source'},status:'active',version:0}]};
  const html=api.renderCampaignSettings(data);assert.match(html,/&lt;舊&gt;/);assert.match(html,/新增活動草稿/);assert.match(html,/尚未開放/);assert.ok(!html.includes('data-settings-edit="old"'));assert.ok(!api.renderCampaignSettings({...data,readOnly:true}).includes('data-settings-new'));

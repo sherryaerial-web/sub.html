@@ -114,7 +114,7 @@ try {
  const queueCalls=await page.evaluate(()=>window.queueCalls);assert.equal(queueCalls.length,2);assert.deepEqual(queueCalls[0],queueCalls[1]);
  assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
  await page.locator('[data-raffle-mail-records]').click();
- await page.getByText('待寄（尚未寄出）｜1 筆資格',{exact:true}).waitFor();
+ await page.getByText('抽獎邀請｜待寄（尚未寄出）｜1 筆資格',{exact:true}).waitFor();
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.screenshot({path:'/private/tmp/raffle-preview/mail-queue-mobile.png',fullPage:true});

@@ -11,6 +11,6 @@ function setup(count=1){
  vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'../../Code.gs'),'utf8'),c);
  const queue=()=>c.confirmRaffleInvitations_(admin,{campaignId:'future',previewToken:c.previewRaffleInvitations_(admin,'future').previewToken,requestId:'request-queue-'+String(tables.get('RaffleMailJournal')?.data.length||0).padStart(5,'0')});
  const operation=()=>({campaignId:'future',previewToken:c.previewRaffleMailSend_(admin,'future').previewToken,requestId:'request-send-00001'});
- return{c,props,rows,tables,mails,queue,operation,writes:()=>writes,setQuota:n=>{quota=n;},fault:(kind,offset=1)=>{fault=kind;failAt=flushes+offset;}};
+ return{c,props,rows,tables,mails,queue,operation,sheet,writes:()=>writes,setQuota:n=>{quota=n;},fault:(kind,offset=1)=>{fault=kind;failAt=flushes+offset;}};
 }
 module.exports={setup,admin,campaign};

@@ -10022,6 +10022,86 @@ test('payroll dashboard recognizes month cells stored as Google Sheets dates', (
   ]);
 });
 
+test('zero-dollar payroll is published without confirmation and excluded from pending metrics', () => {
+  const lines = createSheetFixture('薪資明細', [
+    EXPECTED_PAYROLL_LINE_HEADERS,
+    ['2026-09', 'cal-zero:老師零', 'version-zero', 'cal-zero', '老師零', '2026/09/01', '10:00', '場地租借', '場地租借', 0, '', '場地租借', '場地租借不計鐘點費', 0, 0, '', '草稿', 'now'],
+    ['2026-09', 'cal-paid:老師甲', 'version-zero', 'cal-paid', '老師甲', '2026/09/02', '11:00', '空環', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '草稿', 'now'],
+  ]);
+  const summaries = createSheetFixture('薪資結算', [
+    EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    ['2026-09', '老師零', 0, 0, 0, 0, 0, 0, 'version-zero', '草稿', '', 'now', 0, '', '', ''],
+    ['2026-09', '老師甲', 900, 0, 0, 0, 900, 1200, 'version-zero', '草稿', '', 'now', 0, '', '', ''],
+  ]);
+  const snapshot = createSheetFixture('薪資同步快照', [
+    EXPECTED_PAYROLL_SNAPSHOT_HEADERS,
+    ['version-zero', '2026-09', 'cal-zero', '2026/09/01', '10:00', '場地租借', '["老師零"]', 0, 0, '', 0, 'A', '晴光', 'now', '完成'],
+  ]);
+  const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
+  const audit = createSheetFixture('操作紀錄', [['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因']]);
+  const rules = createSheetFixture('薪項設定', [EXPECTED_PAYROLL_RULE_HEADERS]);
+  const source = createSheetFixture('薪資來源資料', [EXPECTED_PAYROLL_SOURCE_HEADERS]);
+  const payment = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([lines, summaries, snapshot, disputes, audit, rules, source, payment]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  const ivy = { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['payroll_admin'] };
+  const zeroTeacher = { teacherName: '老師零', role: '老師', managementCapabilities: [] };
+
+  backend.publishPayroll_(ivy, '2026-09', 'version-zero');
+
+  assert.equal(summaries.values[1][9], '無需確認');
+  assert.equal(summaries.values[2][9], '待確認');
+  assert.equal(lines.values[1][16], '無需確認');
+  assert.equal(lines.values[2][16], '待確認');
+  const dashboard = backend.getPayrollAdminDashboard_(ivy, '2026-09');
+  assert.equal(dashboard.metrics.pendingConfirmations, 1);
+  assert.equal(dashboard.summaries.find((item) => item.teacherName === '老師零').status, '無需確認');
+  assert.throws(
+    () => backend.confirmPayroll_(zeroTeacher, '2026-09', 'version-zero'),
+    /零元薪資無需確認/
+  );
+});
+
+test('legacy zero-dollar payroll reads as no-confirmation and adjustments restore the correct review state', () => {
+  const lines = createSheetFixture('薪資明細', [
+    EXPECTED_PAYROLL_LINE_HEADERS,
+    ['2026-09', 'cal-zero:老師零', 'version-legacy', 'cal-zero', '老師零', '2026/09/01', '10:00', '場地租借', '場地租借', 0, '', '場地租借', '場地租借不計鐘點費', 0, 0, '', '待確認', 'now'],
+  ]);
+  const summaries = createSheetFixture('薪資結算', [
+    EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    ['2026-09', '老師零', 0, 0, 0, 0, 0, 0, 'version-legacy', '待確認', '', 'now', 0, '', '', ''],
+  ]);
+  const snapshot = createSheetFixture('薪資同步快照', [EXPECTED_PAYROLL_SNAPSHOT_HEADERS]);
+  const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
+  const audit = createSheetFixture('操作紀錄', [['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因']]);
+  const rules = createSheetFixture('薪項設定', [EXPECTED_PAYROLL_RULE_HEADERS]);
+  const source = createSheetFixture('薪資來源資料', [EXPECTED_PAYROLL_SOURCE_HEADERS]);
+  const payment = createSheetFixture('薪資付款設定', [EXPECTED_PAYROLL_PAYMENT_HEADERS]);
+  const spreadsheet = createSpreadsheetFixture([lines, summaries, snapshot, disputes, audit, rules, source, payment]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  const ivy = { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['payroll_admin'] };
+  const zeroTeacher = { teacherName: '老師零', role: '老師', managementCapabilities: [] };
+
+  const dashboard = backend.getPayrollAdminDashboard_(ivy, '2026-09');
+  assert.equal(dashboard.metrics.pendingConfirmations, 0);
+  assert.equal(dashboard.summaries[0].status, '無需確認');
+  assert.equal(backend.getMyPayroll_(zeroTeacher, '2026-09').summary.status, '無需確認');
+
+  const paid = backend.adjustPayrollSummary_(ivy, {
+    month: '2026-09', version: 'version-legacy', teacherName: '老師零', adjustment: 500, reason: '補發薪資',
+  });
+  assert.equal(paid.totalSalary, 500);
+  assert.equal(paid.status, '待確認');
+  assert.equal(summaries.values[1][9], '待確認');
+
+  const zeroAgain = backend.adjustPayrollSummary_(ivy, {
+    month: '2026-09', version: 'version-legacy', teacherName: '老師零', adjustment: 0, reason: '取消補發',
+  });
+  assert.equal(zeroAgain.totalSalary, 0);
+  assert.equal(zeroAgain.status, '無需確認');
+  assert.equal(summaries.values[1][9], '無需確認');
+});
+
 test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {
   const augustSheetDate = new Date('2026-08-01T00:00:00+08:00');
   const lines = createSheetFixture('薪資明細', [

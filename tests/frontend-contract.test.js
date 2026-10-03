@@ -3878,6 +3878,27 @@ test('payroll admin chooses one of the latest twenty-four months from a select',
   assert.doesNotMatch(rendered, /<input id="payroll-admin-month"/);
 });
 
+test('payroll statuses use distinct colors and zero-dollar salaries need no confirmation', () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext(`payrollDashboard = {
+    month: '2026-09', version: 'payroll-v1', lines: [], disputes: [],
+    summaries: [
+      { teacherName: '待確認老師', status: '待確認', version: 'payroll-v1', subtotal: 1000, bonusAmount: 0, fixedAdjustment: 0, adminAdjustment: 0, totalSalary: 1000 },
+      { teacherName: '已確認老師', status: '已確認', version: 'payroll-v1', subtotal: 1000, bonusAmount: 0, fixedAdjustment: 0, adminAdjustment: 0, totalSalary: 1000 },
+      { teacherName: '零元老師', status: '無需確認', version: 'payroll-v1', subtotal: 0, bonusAmount: 0, fixedAdjustment: 0, adminAdjustment: 0, totalSalary: 0 }
+    ],
+    metrics: { teachers: 3, totalSalary: 2000, pendingConfirmations: 1, teacherConfirmed: 1, finalized: 0, openDisputes: 0, errors: 0 }
+  }`, context);
+
+  context.renderPayrollAdminTab();
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /class="status-pill payroll-status-pending">待確認/);
+  assert.match(rendered, /class="status-pill payroll-status-confirmed">已確認/);
+  assert.match(rendered, /class="status-pill payroll-status-neutral">無需確認/);
+  assert.match(html, /\.status-pill\.payroll-status-pending\s*\{[^}]*background:\s*#f6e8dc[^}]*color:\s*#855f45/s);
+  assert.match(html, /\.status-pill\.payroll-status-confirmed\s*\{[^}]*background:\s*#e4eee6[^}]*color:\s*#4f6d58/s);
+});
+
 test('course admin can pause leave registration separately from substitute claims', () => {
   assert.match(html, /callPostApi\(["']pauseLeaves["']/);
   const adminHeaderStart = html.indexOf('id="view-admin"');

@@ -332,6 +332,7 @@ var CONFIG = {
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
+  PAYROLL_NO_CONFIRM_STATUS: '無需確認',
   PAYROLL_FINALIZED_STATUS: '管理員已確認',
   PAYROLL_REVIEW_STATUS: '有異議',
   INVOICE_SYNC_CUTOFF_ISO: '2026-09-25T16:00:00.000Z',
@@ -12782,25 +12783,31 @@ function publishPayroll_(session, monthValue, versionValue) {
     var lineValues = lineSheet.getDataRange().getValues();
     var summaryRows = [];
     var lineRows = [];
+    var publishedStatusByTeacher = {};
     summaryValues.slice(1).forEach(function(row, index) {
       if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[8]) === version && cleanText_(row[9]) === CONFIG.PAYROLL_DRAFT_STATUS) {
-        summaryRows.push(index + 2);
+        var teacher = cleanText_(row[1]);
+        var status = Number(row[6]) === 0 ? CONFIG.PAYROLL_NO_CONFIRM_STATUS : CONFIG.PAYROLL_PUBLISHED_STATUS;
+        summaryRows.push({ rowNumber: index + 2, teacher: teacher, status: status });
+        publishedStatusByTeacher[teacher] = status;
       }
     });
     lineValues.slice(1).forEach(function(row, index) {
       if (normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[2]) === version && cleanText_(row[16]) === CONFIG.PAYROLL_DRAFT_STATUS) {
-        lineRows.push(index + 2);
+        lineRows.push({ rowNumber: index + 2, teacher: cleanText_(row[4]) });
       }
     });
     if (!summaryRows.length || !lineRows.length) throw new Error('找不到可發布的薪資草稿，或此版本已發布。');
     var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
-    summaryRows.forEach(function(rowNumber) {
-      summarySheet.getRange(rowNumber, 10).setValue(CONFIG.PAYROLL_PUBLISHED_STATUS);
-      summarySheet.getRange(rowNumber, 11).setValue('');
-      summarySheet.getRange(rowNumber, 12).setValue(now);
+    summaryRows.forEach(function(item) {
+      summarySheet.getRange(item.rowNumber, 10).setValue(item.status);
+      summarySheet.getRange(item.rowNumber, 11).setValue('');
+      summarySheet.getRange(item.rowNumber, 12).setValue(now);
     });
-    lineRows.forEach(function(rowNumber) {
-      lineSheet.getRange(rowNumber, 17).setValue(CONFIG.PAYROLL_PUBLISHED_STATUS);
+    lineRows.forEach(function(item) {
+      lineSheet.getRange(item.rowNumber, 17).setValue(
+        publishedStatusByTeacher[item.teacher] || CONFIG.PAYROLL_PUBLISHED_STATUS
+      );
     });
     appendAuditEventsUnlocked_(requireSheet_(ss, SHEETS.AUDIT), [{
       actor: actor, action: '薪資發布', targetId: month, before: CONFIG.PAYROLL_DRAFT_STATUS,
@@ -12822,11 +12829,16 @@ function getPayrollLineObject_(row) {
 }
 
 function getPayrollSummaryObject_(row) {
+  var totalSalary = Number(row[6]) || 0;
+  var status = cleanText_(row[9]);
+  if (totalSalary === 0 && status !== CONFIG.PAYROLL_DRAFT_STATUS && status !== CONFIG.PAYROLL_REVIEW_STATUS) {
+    status = CONFIG.PAYROLL_NO_CONFIRM_STATUS;
+  }
   return {
     month: normalizePayrollMonthValue_(row[0]), teacherName: cleanText_(row[1]), subtotal: Number(row[2]) || 0,
     bonusRate: Number(row[3]) || 0, bonusAmount: Number(row[4]) || 0,
-    fixedAdjustment: Number(row[5]) || 0, totalSalary: Number(row[6]) || 0,
-    profit: Number(row[7]) || 0, version: cleanText_(row[8]), status: cleanText_(row[9]),
+    fixedAdjustment: Number(row[5]) || 0, totalSalary: totalSalary,
+    profit: Number(row[7]) || 0, version: cleanText_(row[8]), status: status,
     confirmedAt: cleanText_(row[10]), updatedAt: cleanText_(row[11]),
     adminAdjustment: Number(row[12]) || 0, adjustmentReason: cleanText_(row[13]),
     adminConfirmedAt: cleanText_(row[14]), adminConfirmedBy: cleanText_(row[15])
@@ -12882,6 +12894,9 @@ function confirmPayroll_(session, monthValue, versionValue) {
         if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('薪資異議尚未處理，暫時不能確認。');
         if (status === CONFIG.PAYROLL_DRAFT_STATUS) throw new Error('薪資尚未發布。');
         if (status === CONFIG.PAYROLL_FINALIZED_STATUS) throw new Error('薪資已完成管理員確認。');
+        if (Number(row[6]) === 0 || status === CONFIG.PAYROLL_NO_CONFIRM_STATUS) {
+          throw new Error('零元薪資無需確認。');
+        }
         var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
         sheet.getRange(index + 1, 10).setValue(CONFIG.PAYROLL_CONFIRMED_STATUS);
         sheet.getRange(index + 1, 11).setValue(now);
@@ -12975,7 +12990,10 @@ function resolvePayrollDispute_(session, payload) {
         if (normalizePayrollMonthValue_(summaries[summaryIndex][0]) === month &&
             cleanText_(summaries[summaryIndex][1]) === teacher &&
             cleanText_(summaries[summaryIndex][9]) === CONFIG.PAYROLL_REVIEW_STATUS) {
-          summarySheet.getRange(summaryIndex + 1, 10).setValue(CONFIG.PAYROLL_PUBLISHED_STATUS);
+          var resolvedStatus = Number(summaries[summaryIndex][6]) === 0
+            ? CONFIG.PAYROLL_NO_CONFIRM_STATUS
+            : CONFIG.PAYROLL_PUBLISHED_STATUS;
+          summarySheet.getRange(summaryIndex + 1, 10).setValue(resolvedStatus);
           summarySheet.getRange(summaryIndex + 1, 11).setValue('');
           summarySheet.getRange(summaryIndex + 1, 12).setValue(now);
           break;
@@ -13016,11 +13034,11 @@ function adjustPayrollSummary_(session, payload) {
       if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('請先處理這位老師尚未完成的薪資異議。');
       while (row.length < SHEET_HEADERS.PAYROLL_SUMMARIES.length) row.push('');
       var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
-      var nextStatus = status === CONFIG.PAYROLL_DRAFT_STATUS
-        ? CONFIG.PAYROLL_DRAFT_STATUS
-        : CONFIG.PAYROLL_PUBLISHED_STATUS;
       row[6] = (Number(row[2]) || 0) + (Number(row[4]) || 0) +
         (Number(row[5]) || 0) + adjustment;
+      var nextStatus = status === CONFIG.PAYROLL_DRAFT_STATUS
+        ? CONFIG.PAYROLL_DRAFT_STATUS
+        : (Number(row[6]) === 0 ? CONFIG.PAYROLL_NO_CONFIRM_STATUS : CONFIG.PAYROLL_PUBLISHED_STATUS);
       row[9] = nextStatus;
       row[10] = '';
       row[11] = now;

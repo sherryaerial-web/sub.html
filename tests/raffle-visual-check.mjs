@@ -92,6 +92,32 @@ try {
  await page.evaluate(()=>{window.mailMode='error';});
  await page.locator('[data-raffle-mail-preview]').click();
  await page.getByText('活動網址尚未設定',{exact:true}).waitFor();
+ await page.evaluate(()=>{
+   clearRaffleWorkspace();window.queueCalls=[];window.queued=false;
+   callApi=async(action,params)=>{
+     if(action==='getRaffleWorkspace') return {enabled:true,readOnly:false,campaigns:[{id:'future',name:'新活動'}],claims:[]};
+     if(action==='previewRaffleInvitations') return {dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:false,previewToken:'queue-token',batchCount:window.queued?0:1,candidateCount:window.queued?0:1,skipped:window.queued?1:0,previews:window.queued?[]:[{email:'student@example.com',subject:'邀請',body:'驗證碼 ABC'}]};
+     if(action==='confirmRaffleInvitations'){window.queueCalls.push(params.operation);window.queued=true;if(window.queueCalls.length===1)throw Error('排入結果逾時');return{queued:1,remaining:0};}
+     if(action==='getRaffleMailRecords') return {total:1,records:[{email:'student@example.com',status:'queued',qualificationCount:1,actor:'店長',createdAt:'2026-10-03'}]};
+     throw Error('Unexpected queue action');
+   };renderRaffleWorkspace('admin');
+ });
+ await page.locator('[data-raffle-mail-preview]').click();
+ await page.locator('[data-raffle-confirm-mail]').click();
+ await page.locator('[data-raffle-cancel]').click();
+ assert.equal(await page.evaluate(()=>window.queueCalls.length),0);
+ await page.locator('[data-raffle-confirm-mail]').click();
+ await page.locator('[data-raffle-save]').click();
+ await page.getByText('排入結果逾時',{exact:false}).waitFor();
+ await page.locator('[data-raffle-save]').click();
+ await page.getByText('已排入待寄 1 封，尚未寄出；可到寄信紀錄查看。',{exact:true}).waitFor();
+ const queueCalls=await page.evaluate(()=>window.queueCalls);assert.equal(queueCalls.length,2);assert.deepEqual(queueCalls[0],queueCalls[1]);
+ assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
+ await page.locator('[data-raffle-mail-records]').click();
+ await page.getByText('待寄（尚未寄出）｜1 筆資格',{exact:true}).waitFor();
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await page.screenshot({path:'/private/tmp/raffle-preview/mail-queue-mobile.png',fullPage:true});
  await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>{
    clearRaffleWorkspace();

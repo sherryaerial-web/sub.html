@@ -28,15 +28,21 @@
 
 ## 待做（先別上線）
 
+2026-10-03 續作：本機已完成待寄佇列。管理員預覽會核對來源寄送欄位及本系統保留資格，`deliveryChecked:true` 僅代表此兩者，**不是郵件供應商已送達核對**。確認前 5 封後才追加 `RaffleMailJournal`（`requestId,requestHash,createdAt,payloadHash,eventJson`），不寫來源、不改庫存、不寄信。`RAFFLE_MAIL_QUEUE_ENABLED`、`RAFFLE_WRITES_ENABLED`、`RAFFLE_ENABLED` 必須同時為 true；正式均未設定。每資格只保留一次，requestId 重試回傳原結果；來源／活動／保留狀態變更需重做預覽。JSON >45000 字元或日誌5000筆停止。寄信紀錄 UI 顯示最近50封元資料，不顯示驗證碼；每筆狀態僅 queued。尚無發送 worker、配額檢查、取消待寄或送出／不確定狀態轉移，不要手改日誌解除保留。這些仍須後續實作。
+
+目前工作區改為 `/Users/ivy/Documents/2026 B 周年慶/substitute-v2-safari-fix-work/.worktrees/raffle-mail-20261003`、分支 `feature/raffle-mail-20261003`；舊 `/private/tmp/sherry-weekly-release-20260927` 的 .git 已消失但檔案保留，從已核對的 6ee2662 接續。主 checkout 的其他修改未動。
+
 2026-09-29 追加停點：已接管理員「預覽邀請信（不寄出）」UI 與 `previewRaffleInvitations` 唯讀權限入口。活動須在 Script Properties 配置 `websiteUrl`（HTTPS）；缺漏會提示錯誤。畫面最多 20 封，依來源表合併 Email 並排除來源已寄／已使用等資格。固定顯示「尚未核對寄信紀錄」，回傳 `deliveryChecked:false`，不能拿此結果排程寄信。底層 `buildRaffleInvitationPreview_` 支援每資格 queued/sending/sent/uncertain 保留，但真正發送時 reservations 必須來自持久化寄信紀錄，不得沿用此純內容預覽的空陣列。寄信佇列、配額、到館通知與真正發送仍未完成。未新增 MailApp 呼叫或任何正式寫入。
 
 1. 活動設定 UI、草稿／啟用流程及以獎品／館別彙總備貨；目前授權備貨人員可由「我的 → 獎品備貨／到館」查學生、逐筆操作。
 2. 管理員更正目前僅能調低誤領數量，不能改獎品或館別；來源異動仍會阻擋匯入，需另設明確處理流程。
 3. 過期／撤銷狀態的管理流程尚未完成；已有期限檢查，不能宣稱完整活動生命週期已完成。
-4. 驗證碼／可領取信件預覽與確認、配額、穩定寄信工作 ID、未知寄送結果不可直接重試。
+4. 驗證碼邀請信已可預覽／確認排入待寄；後續仍需可領取通知、配額、正式送出前狀態、未知寄送結果人工核對（不可直接重試）。待寄不能誤當已寄。
 5. 核對未來活動的實際來源表與正式 GAS；確認舊寄信觸發器關閉，再另取正式部署及寄信許可。
 
 ## 已驗證
+
+- 2026-10-03 待寄佇列：全套 893/893 通過，語法／diff 通過；離線 Chrome 確認取消不寫入、逾時重試同 requestId、紀錄狀態與390px排版通過。獨立 review PASS，未見重要缺陷。非阻擋待補：有效雜湊的不同批次重複資格 replay 專用測試，目前已檢查保護分支，既有重複列測試先命中 requestId 防重。正式GAS/Sheets行為未驗證，不能以 mock 取代。
 
 - 預覽 UI 最終版：`node --test tests/*.test.js` 884/884，`node --check raffle.js`、`git diff --check` 通過。30% 額度停工，僅本機保存。
 

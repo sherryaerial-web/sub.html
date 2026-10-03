@@ -13,6 +13,14 @@ test('mail preview warns delivery history is unchecked and escapes body without 
   assert.ok(!html.includes('<script>'));assert.ok(!html.includes('<button'));
   assert.throws(()=>load().renderMailPreview({}),/完整/);
 });
+test('queue action requires checked history and enabled gate; records never imply queued means sent',()=>{
+ const api=load(),data={dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:false,previewToken:'token',batchCount:2,candidateCount:2,skipped:0,previews:[]};
+ assert.match(api.renderMailPreview(data),/data-raffle-confirm-mail/);
+ assert.ok(!api.renderMailPreview({...data,readOnly:true}).includes('data-raffle-confirm-mail'));
+ assert.ok(!api.renderMailPreview({...data,deliveryChecked:false}).includes('data-raffle-confirm-mail'));
+ const html=api.renderMailRecords({total:1,records:[{email:'<script>',status:'queued',qualificationCount:2,actor:'店長',createdAt:'2026-10-03'}]});
+ assert.match(html,/待寄（尚未寄出）/);assert.match(html,/&lt;script&gt;/);assert.ok(!html.includes('<script>'));
+});
 test('teacher cards group by student identity, never by display name', () => {
   const html = load().renderClaims([
     { studentKey: 'a', studentName: '同名', maskedEmail: 'a•••@example.com', prizeName: '提袋', status: 'ready', quantity: 1, claimedQuantity: 0 },

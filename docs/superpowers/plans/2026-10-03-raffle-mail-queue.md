@@ -24,14 +24,14 @@
 ### Task 1: Journal and protected API
 **Files:** Code.gs, tests/raffle-mail-queue.test.js, existing preview tests.
 **Interfaces:** readRaffleMailState_()=>{jobs,reservations,events,requests}; raffleInvitationPlan_(campaign,state)=>{preview,token}; confirmRaffleInvitations_(session,{campaignId,previewToken,requestId})=>{queued,remaining}; getRaffleMailRecords_(session,campaignId)=>{records,total}, last50 metadata only. previewRaffleInvitations_ deliveryChecked true (local reservations + source flags), sendEnabled false, readOnly based gates, previewToken,batchCount min5.
-- [ ] RED tests unauthorized/gates/no writes, queue5/remainder, fresh reread suppression, source immutable, stale source/config/journal, duplicate IDs/payload corruption, timeout/flush same request, different actor/payload rejects, metadata privacy.
-- [ ] Implement strict journal replay, one-row append with flush under lock, authenticated handlers and preview update.
-- [ ] Run focused tests, syntax/diff checks; commit backend.
+- [x] RED tests unauthorized/gates/no writes, queue5/remainder, fresh reread suppression, source immutable, stale source/config/journal, duplicate IDs/payload corruption, timeout/flush same request, different actor/payload rejects, metadata privacy.
+- [x] Implement strict journal replay, one-row append with flush under lock, authenticated handlers and preview update.
+- [x] Run focused tests, syntax/diff checks; commit backend.
 
 ### Task 2: Admin queue confirmation and records
 **Files:** raffle.js, tests/raffle-frontend.test.js, tests/raffle-visual-check.mjs, handoff.
 **Interfaces:** same protected endpoints; queue modal preserves requestId on uncertainty. No send button. List only metadata, not codes.
-- [ ] RED rendering tests gates/checked warning/no send and record escaping.
-- [ ] Implement queue confirmation and records tab/button using existing dialog lifecycle.
-- [ ] Offline browser cancel/no write, queue same-ID timeout retry, records, long text at390/1280.
-- [ ] Whole Node suite and independent final review; fix material issues once, save handoff/local commit.
+- [x] RED rendering tests gates/checked warning/no send and record escaping.
+- [x] Implement queue confirmation and records tab/button using existing dialog lifecycle.
+- [x] Offline browser cancel/no write, queue same-ID timeout retry, records, long text at390/1280.
+- [x] Whole Node suite and independent final review; fix material issues once, save handoff/local commit.

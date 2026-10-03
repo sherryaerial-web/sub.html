@@ -1,5 +1,23 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {setup,admin,campaign}=require('./helpers/raffle-mail-fixture');
+test('queued closure is audited, never sends or releases qualifications, and retry is idempotent',()=>{
+ const s=setup(2);s.queue();const jobs=s.c.readRaffleMailState_().jobs,source=JSON.stringify(s.rows),op={campaignId:'future',jobId:jobs[0].id,reason:'資料變更，停止此封',requestId:'close-queued-0001'};
+ s.c.SpreadsheetApp.openById=()=>assert.fail('closure must not need source access');
+ assert.equal(s.c.closeRaffleQueuedMail_(admin,op).status,'closed');const writes=s.writes();assert.equal(s.c.closeRaffleQueuedMail_(admin,op).status,'closed');assert.equal(s.writes(),writes);assert.equal(s.mails.length,0);assert.equal(JSON.stringify(s.rows),source);
+ const state=s.c.readRaffleMailState_();assert.equal(state.jobs[0].status,'closed');assert.equal(state.jobs[1].status,'queued');assert.equal(state.reservations.length,2);const record=s.c.getRaffleMailRecords_(admin,'future').records.find(j=>j.id===jobs[0].id);assert.equal(record.closedBeforeSend,true);assert.equal(record.reason,op.reason);assert.equal(record.updatedBy,'店長');
+});
+test('queued closure rejects permissions, missing reasons, sent attempts and cross-campaign jobs',()=>{
+ const s=setup();s.queue();const job=s.c.readRaffleMailState_().jobs[0],op={campaignId:'future',jobId:job.id,reason:'停止寄送',requestId:'close-queued-0001'},before=s.writes();
+ for(const reason of ['', ' ', 'x'.repeat(301)])assert.throws(()=>s.c.closeRaffleQueuedMail_(admin,{...op,reason}),/理由/);
+ assert.throws(()=>s.c.closeRaffleQueuedMail_({teacherName:'老師',managementCapabilities:[]},op),/權限/);
+ s.props.delete('RAFFLE_WRITES_ENABLED');assert.throws(()=>s.c.closeRaffleQueuedMail_(admin,op),/啟用/);s.props.set('RAFFLE_WRITES_ENABLED','true');assert.equal(s.writes(),before);
+ s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([campaign,{...campaign,id:'other'}]));assert.throws(()=>s.c.closeRaffleQueuedMail_(admin,{...op,campaignId:'other'}),/待寄|狀態/);
+ s.fault('transport');s.c.sendRaffleMailBatch_(admin,s.operation());assert.throws(()=>s.c.closeRaffleQueuedMail_(admin,op),/待寄|狀態/);assert.equal(s.c.readRaffleMailState_().jobs[0].status,'uncertain');
+});
+test('uncertain queued closure flush preserves same request and invalid transitions fail closed',()=>{
+ const s=setup();s.queue();const op={campaignId:'future',jobId:s.c.readRaffleMailState_().jobs[0].id,reason:'停止此封',requestId:'close-queued-0001'};s.fault('after');assert.throws(()=>s.c.closeRaffleQueuedMail_(admin,op),/uncertain/);assert.equal(s.c.closeRaffleQueuedMail_(admin,op).status,'closed');assert.throws(()=>s.c.closeRaffleQueuedMail_(admin,{...op,reason:'不同內容'}),/識別/);
+ const row=s.tables.get('RaffleMailJournal').data.at(-1),e=JSON.parse(row[4]);e.result.status='sent';row[4]=JSON.stringify(e);row[3]=s.c.raffleHash_(row[4]);assert.throws(()=>s.c.readRaffleMailState_(),/紀錄/);assert.equal(s.mails.length,0);
+});
 test('sending reserves before delivery, sends only reviewed batch and never repeats request',()=>{
  const s=setup(7),source=JSON.stringify(s.rows);s.queue();s.queue();const p=s.c.previewRaffleMailSend_(admin,'future');assert.equal(p.batchCount,5);assert.equal(p.quota,100);assert.equal(s.mails.length,0);
  const op=s.operation(),r=s.c.sendRaffleMailBatch_(admin,op);assert.equal(r.sent,5);assert.equal(r.pendingReview,0);assert.equal(r.total,5);assert.equal(s.mails.length,5);assert.deepEqual(Object.keys(s.mails[0]).sort(),['body','name','subject','to']);assert.match(s.mails[0].body,/CODE-0/);

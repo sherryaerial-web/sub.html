@@ -60,3 +60,8 @@ test('invitation and pickup jobs coexist without cross-delivery or cross-reserva
 test('manual closure of uncertain ready notice never releases prize identity',()=>{
  const s=setup(1);s.queueReady();s.fault('transport');s.c.sendRaffleReadyMailBatch_(admin,s.sendOp());const job=s.c.readRaffleMailState_().jobs[0];s.c.reconcileRaffleMail_(admin,{campaignId:'future',jobId:job.id,status:'closed',reason:'確認不重寄',requestId:'ready-review-0001'});assert.equal(s.c.previewRaffleReadyNotifications_(admin,'future').candidateCount,0);assert.equal(s.mails.length,1);
 });
+test('closing obsolete queued ready notice unblocks next job without re-queuing closed prize',()=>{
+ const s=setup();s.queueReady();s.seeds[1][8]=1;s.seeds[1][9]='claimed';assert.throws(()=>s.sendOp(),/不符/);
+ const job=s.c.readRaffleMailState_().jobs[0];s.c.closeRaffleQueuedMail_(admin,{campaignId:'future',jobId:job.id,reason:'學生已領取，停止通知',requestId:'ready-close-0001'});
+ assert.equal(s.c.previewRaffleReadyMailSend_(admin,'future').batchCount,1);assert.equal(s.c.sendRaffleReadyMailBatch_(admin,s.sendOp()).sent,1);assert.equal(s.mails[0].to,'student1@example.com');s.seeds[1][8]=0;s.seeds[1][9]='ready';assert.equal(s.c.previewRaffleReadyNotifications_(admin,'future').candidateCount,0);
+});

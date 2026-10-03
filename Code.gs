@@ -9235,6 +9235,9 @@ function doPost(e) {
       reconcileRaffleMail: function() {
         return reconcileRaffleMail_(session, parseJsonObject_(parameters.operation, '寄信結果核對'));
       },
+      closeRaffleQueuedMail: function() {
+        return closeRaffleQueuedMail_(session, parseJsonObject_(parameters.operation, '停止待寄'));
+      },
       confirmRaffleImport: function() {
         return confirmRaffleImport_(session, parseJsonObject_(parameters.operation, '抽獎匯入'));
       },
@@ -21230,6 +21233,11 @@ function readRaffleMailState_() {
       jobIds[job.id] = Object.assign({}, job, {actor: event.actor, createdAt: row[2]});
       state.jobs.push(jobIds[job.id]);
       });
+    } else if (event.action === 'close-queued') {
+      var closing = jobIds[event.jobId];
+      if (!closing || closing.campaignId !== event.campaignId || closing.status !== 'queued' || closing.attemptId || typeof event.reason !== 'string' || !event.reason.trim() || event.reason.length > 300 || !event.result || event.result.jobId !== closing.id || event.result.status !== 'closed' || event.result.closedBeforeSend !== true) fail();
+      closing.status = 'closed'; closing.closedBeforeSend = true; closing.reason = event.reason;
+      closing.updatedAt = row[2]; closing.updatedBy = event.actor;
     } else if (event.action === 'send-start') {
       if (!Array.isArray(event.jobIds) || !event.jobIds.length || event.jobIds.length > 5 || new Set(event.jobIds).size !== event.jobIds.length) fail();
       event.jobIds.forEach(function(id) {
@@ -21292,9 +21300,10 @@ function getRaffleMailRecords_(session, campaignId, offsetValue) {
   var review = jobs.filter(function(job) { return ['sending','uncertain'].indexOf(job.status) >= 0; });
   var ordered = review.concat(jobs.filter(function(job) { return ['sending','uncertain'].indexOf(job.status) < 0; }).reverse());
   return {total: jobs.length, reviewCount: review.length, offset: offset, hasMore: offset + 50 < jobs.length,
+    canCloseQueued: PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') === 'true',
     canReconcile: PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') === 'true', records: ordered.slice(offset, offset + 50).map(function(job) {
     return {id: job.id, kind:job.kind || 'invitation', email: job.email, status: job.status, qualificationCount: job.qualificationIds.length, actor: job.actor, createdAt: job.createdAt,
-      updatedAt: job.updatedAt || '', updatedBy: job.updatedBy || '', reason: job.reason || ''};
+      updatedAt: job.updatedAt || '', updatedBy: job.updatedBy || '', reason: job.reason || '', closedBeforeSend:job.closedBeforeSend === true};
   })};
 }
 
@@ -21388,6 +21397,22 @@ function sendRaffleMailBatch_(session, operation, kind) {
       if (status === 'uncertain') break;
     }
     return raffleMailAttemptResult_(readRaffleMailState_(), context.requestId);
+  });
+}
+
+function closeRaffleQueuedMail_(session, operation) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  return withScriptLock_(function() {
+    var context = raffleWriteContext_(session, operation, 'close-queued-mail');
+    raffleMailCampaign_(operation.campaignId);
+    var state = readRaffleMailState_(), prior = rafflePriorResult_(state, context);
+    if (prior) return prior;
+    if (typeof operation.reason !== 'string' || !operation.reason.trim() || operation.reason.length > 300) throw new Error('請填寫停止待寄理由（最多 300 字）。');
+    var job = state.jobs.filter(function(j) { return j.id === operation.jobId && j.campaignId === operation.campaignId; })[0];
+    if (!job || job.status !== 'queued' || job.attemptId) throw new Error('這封已非待寄狀態，請重新讀取紀錄；已開始寄送者須人工核對。');
+    var event = {action:'close-queued',actor:context.actor,campaignId:job.campaignId,jobId:job.id,reason:operation.reason.trim(),result:{jobId:job.id,status:'closed',closedBeforeSend:true}};
+    appendRaffleMailEvent_(state,context,event);
+    return event.result;
   });
 }
 

@@ -41,5 +41,19 @@ try {
  await page.evaluate(()=>{readyMode='pending';});await page.locator('[data-raffle-ready-preview]').click();await page.locator('[data-raffle-campaign]').dispatchEvent('change');await page.evaluate(()=>finishReady());assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
  await page.locator('[data-raffle-ready-preview]').click();await page.evaluate(()=>{clearSession();finishReady();});assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
  await page.evaluate(()=>{authState.sessionToken='teacher';authState.teacherName='老師';authState.managementCapabilities=[];document.getElementById('app-shell').hidden=false;document.getElementById('auth-shell').hidden=true;switchView('view-raffle');});await page.locator('[data-raffle-query]').waitFor();assert.equal(await page.locator('[data-raffle-ready-preview]').count(),0);assert.equal(await page.locator('[data-raffle-ready-send]').count(),0);
- console.log('PASS ready notices: preview no write, separate API purpose, queue/send cancel and same-ID retry, record labels, wrong-kind rejection, stale replies/logout, teacher controls hidden, mobile/desktop');
+ await page.evaluate(()=>{
+  const host=document.createElement('main');document.body.replaceChildren(host);window.closeWrites=[];window.closeFail=true;window.closeDone=false;
+  SherryRaffle.mount(host,{mode:'admin',api:async(action,params)=>{
+   if(action==='getRaffleWorkspace')return{enabled:true,readOnly:false,campaigns:[{id:'fixture',name:'測試活動'}],claims:[]};
+   if(action==='getRaffleMailRecords')return{total:1,canCloseQueued:true,records:[{id:'queued-job',kind:'ready',email:'fixture@example.com',qualificationCount:2,status:closeDone?'closed':'queued',closedBeforeSend:closeDone,reason:closeDone?'已領取，停止通知':''}]};
+   if(action==='closeRaffleQueuedMail'){closeWrites.push(params.operation);if(closeFail){closeFail=false;throw Error('測試寫入結果不確定');}closeDone=true;return{jobId:'queued-job',status:'closed',closedBeforeSend:true};}
+   throw Error('unexpected closure API '+action);
+  }});
+ });
+ await page.locator('[data-raffle-mail-records]').click();await page.locator('[data-raffle-close-queued]').click();await page.locator('[data-raffle-cancel]').click();assert.equal(await page.evaluate(()=>closeWrites.length),0);
+ await page.locator('[data-raffle-close-queued]').click();await page.locator('[data-raffle-save]').click();assert.equal(await page.evaluate(()=>closeWrites.length),0);
+ await page.locator('[data-raffle-mail-reason]').fill('已領取，停止通知');
+ await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await page.screenshot({path:'/private/tmp/raffle-preview/close-queued-mobile.png',fullPage:true});
+ await page.locator('[data-raffle-save]').click();await page.getByText('測試寫入結果不確定',{exact:false}).waitFor();await page.locator('[data-raffle-save]').click();await page.getByText('可領取通知｜停止待寄（未寄出，不重排）｜2 筆獎品',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>closeWrites[0].requestId===closeWrites[1].requestId),true);assert.equal(await page.locator('[data-raffle-close-queued]').count(),0);
+ console.log('PASS ready notices and queued closure: no send on close, reason required, cancellation, same-ID retry, separate purpose, record labels, wrong-kind rejection, stale replies/logout, teacher controls hidden, mobile/desktop');
 }finally{await browser.close();}

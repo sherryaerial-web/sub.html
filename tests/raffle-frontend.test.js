@@ -7,6 +7,9 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('queued closure controls exclude started mail and clearly label never-sent closure',()=>{
+ const api=load(),data={total:3,canCloseQueued:true,records:[{id:'a',status:'queued'},{id:'b',status:'sending'},{id:'c',status:'closed',closedBeforeSend:true}]};const html=api.renderMailRecords(data);assert.equal((html.match(/data-raffle-close-queued=/g)||[]).length,1);assert.match(html,/未寄出，不重排/);assert.ok(!api.renderMailRecords({...data,canCloseQueued:false}).includes('data-raffle-close-queued='));
+});
 test('ready notification previews distinguish pickup from invitations and retain gates',()=>{
  const api=load(),data={kind:'ready',dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:false,previewToken:'token',batchCount:1,candidateCount:1,skipped:2,previews:[{email:'a@example.com',subject:'獎品可領取通知',body:'<提袋>｜晴光'}]};
  const html=api.renderMailPreview(data);assert.match(html,/可領取通知預覽/);assert.match(html,/未備妥/);assert.ok(!html.includes('多個驗證碼'));assert.match(html,/&lt;提袋&gt;/);assert.match(html,/data-raffle-confirm-mail/);

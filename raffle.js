@@ -60,7 +60,7 @@
     const labels = {queued:'待寄（尚未寄出）',sending:'寄送已保留／結果待確認',sent:'已送出／已核對',uncertain:'寄送結果待確認',closed:'結案（不重寄）'};
     const offset = Number.isInteger(data.offset) ? data.offset : 0;
     const pages = `<div class="admin-item-actions">${offset > 0 ? `<button type="button" class="compact-button" data-raffle-mail-page="${Math.max(0,offset-50)}">上一頁</button>` : ''}${data.hasMore === true ? `<button type="button" class="compact-button" data-raffle-mail-page="${offset+50}">下一頁</button>` : ''}</div>`;
-    return `<div class="admin-control"><h3>寄信紀錄</h3><p class="state">待寄不等於已寄出；Google 接受寄送不代表收件人已收到。結果待確認時不會自動重寄，請先核對執行紀錄或向收件人確認。</p><p>共 ${escape(data.total)} 封，待核對 ${escape(data.reviewCount || 0)} 封。待核對優先顯示，每頁最多 50 封，第 ${Math.floor(offset/50)+1} 頁。</p>${data.records.map(item => `<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>${escape(item.email)}</strong><p>${item.kind === 'ready' ? '可領取通知' : '抽獎邀請'}｜${escape(labels[item.status] || '狀態待核對')}｜${escape(item.qualificationCount)} 筆${item.kind === 'ready' ? '獎品' : '資格'}</p><p>${escape(item.createdAt)}｜${escape(item.actor)}</p>${item.updatedAt ? `<p>更新：${escape(item.updatedAt)}｜${escape(item.updatedBy)}</p>` : ''}${item.reason ? `<p>核對理由：${escape(item.reason)}</p>` : ''}${data.canReconcile === true && ['sending','uncertain'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-reconcile="${escape(item.id)}">人工核對結果（不重寄）</button>` : ''}</article>`).join('') || '<p>本頁沒有寄信紀錄。</p>'}${pages}</div>`;
+    return `<div class="admin-control"><h3>寄信紀錄</h3><p class="state">待寄不等於已寄出；Google 接受寄送不代表收件人已收到。結果待確認時不會自動重寄，請先核對執行紀錄或向收件人確認。</p><p>共 ${escape(data.total)} 封，待核對 ${escape(data.reviewCount || 0)} 封。待核對優先顯示，每頁最多 50 封，第 ${Math.floor(offset/50)+1} 頁。</p>${data.records.map(item => `<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>${escape(item.email)}</strong><p>${item.kind === 'ready' ? '可領取通知' : '抽獎邀請'}｜${escape(item.closedBeforeSend ? '停止待寄（未寄出，不重排）' : labels[item.status] || '狀態待核對')}｜${escape(item.qualificationCount)} 筆${item.kind === 'ready' ? '獎品' : '資格'}</p><p>${escape(item.createdAt)}｜${escape(item.actor)}</p>${item.updatedAt ? `<p>更新：${escape(item.updatedAt)}｜${escape(item.updatedBy)}</p>` : ''}${item.reason ? `<p>核對理由：${escape(item.reason)}</p>` : ''}${data.canCloseQueued === true && item.status === 'queued' ? `<button type="button" class="compact-button" data-raffle-close-queued="${escape(item.id)}">停止這封待寄（不重排）</button>` : ''}${data.canReconcile === true && ['sending','uncertain'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-reconcile="${escape(item.id)}">人工核對結果（不重寄）</button>` : ''}</article>`).join('') || '<p>本頁沒有寄信紀錄。</p>'}${pages}</div>`;
   }
   function renderMailSendPreview(data) {
     if (!data || data.dryRun !== true || typeof data.sendEnabled !== 'boolean' || !Number.isInteger(data.batchCount) || data.batchCount < 0 || data.batchCount > 5 || !Array.isArray(data.previews) || data.previews.length !== data.batchCount || !data.previewToken) throw Error('未收到完整寄送預覽。');
@@ -235,8 +235,9 @@
         const mailButton = event.target.closest('[data-raffle-confirm-mail]');
         const sendButton = event.target.closest('[data-raffle-confirm-send]');
         const reconcileButton = event.target.closest('[data-raffle-reconcile]');
+        const closeQueuedButton = event.target.closest('[data-raffle-close-queued]');
         const button = event.target.closest('[data-raffle-action]');
-        if (!importButton && !mailButton && !sendButton && !reconcileButton && !button) return;
+        if (!importButton && !mailButton && !sendButton && !reconcileButton && !closeQueuedButton && !button) return;
         if (busy) return;
         pending = null;
         node('[data-raffle-operation-error]').textContent = '';
@@ -246,6 +247,11 @@
           if (!sendPlan || sendPlan.sendEnabled !== true || !sendPlan.batchCount) return;
           selected = {action:'send',preview:sendPlan};
           node('[data-raffle-dialog-body]').innerHTML = `<h3>確定現在寄出 ${escape(sendPlan.batchCount)} 封？</h3><p>用途：${sendPlan.kind === 'ready' ? '可領取通知' : '抽獎邀請'}。這次確認會真的寄信。若結果不明會停止，不會自動重寄；請至寄信紀錄核對。</p>${sendPlan.previews.map(item=>`<p style="overflow-wrap:anywhere">${escape(item.email)}</p>`).join('')}`;
+        } else if (closeQueuedButton) {
+          const record=mailRecordsData?.records.find(item=>item.id===closeQueuedButton.dataset.raffleCloseQueued);
+          if(!record || mailRecordsData.canCloseQueued!==true || record.status!=='queued')return;
+          selected={action:'closeQueued',record,campaignId:mailRecordsData.campaignId};
+          node('[data-raffle-dialog-body]').innerHTML=`<h3>停止這封待寄？</h3><p style="overflow-wrap:anywhere">${escape(record.email)}</p><p>用途：${record.kind==='ready'?'可領取通知':'抽獎邀請'}，涵蓋 ${escape(record.qualificationCount)} 筆${record.kind==='ready'?'獎品':'資格'}。</p><p>這是停止整封信，不是只取消其中一件。涵蓋的項目都不會自動重新排入；不代表已寄出，也不會取消學生的抽獎資格或領獎紀錄。</p><label>停止理由<textarea data-raffle-mail-reason class="text-input" maxlength="300" required></textarea></label>`;
         } else if (reconcileButton) {
           const record = mailRecordsData?.records.find(item=>item.id === reconcileButton.dataset.raffleReconcile);
           if (!record || mailRecordsData.canReconcile !== true || !['sending','uncertain'].includes(record.status)) return;
@@ -254,7 +260,7 @@
         } else if (mailButton) {
           if (!mailPlan || mailPlan.readOnly !== false || !mailPlan.deliveryChecked || mailPlan.sendEnabled !== false) return;
           selected = {action:'queue',preview:mailPlan};
-          node('[data-raffle-dialog-body]').innerHTML = `<h3>確認前 ${escape(mailPlan.batchCount)} 封排入待寄？</h3><p>用途：${mailPlan.kind === 'ready' ? '可領取通知' : '抽獎邀請'}。只保存待寄紀錄，不會寄信。後續發送仍須另行啟用；目前不能在此取消待寄。</p>${mailPlan.previews.slice(0,mailPlan.batchCount).map(item=>`<p style="overflow-wrap:anywhere">${escape(item.email)}</p>`).join('')}`;
+          node('[data-raffle-dialog-body]').innerHTML = `<h3>確認前 ${escape(mailPlan.batchCount)} 封排入待寄？</h3><p>用途：${mailPlan.kind === 'ready' ? '可領取通知' : '抽獎邀請'}。只保存待寄紀錄，不會寄信。後續發送仍須另行啟用；可至寄信紀錄停止整封待寄，停止後不會自動重排。</p>${mailPlan.previews.slice(0,mailPlan.batchCount).map(item=>`<p style="overflow-wrap:anywhere">${escape(item.email)}</p>`).join('')}`;
         } else if (importButton) {
           if (!preview || preview.readOnly !== false) return;
           selected = { action: 'import', preview };
@@ -287,10 +293,11 @@
         if (!pending) {
           const operation = ['import','queue','send'].includes(selected.action)
             ? {campaignId:selected.preview.campaignId,previewToken:selected.preview.previewToken,requestId:requestId()}
-            : selected.action === 'reconcile' ? {campaignId:selected.campaignId,jobId:selected.record.id,status:node('[data-raffle-mail-status]').value,reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
+            : ['reconcile','closeQueued'].includes(selected.action) ? {campaignId:selected.campaignId,jobId:selected.record.id,...(selected.action==='reconcile'?{status:node('[data-raffle-mail-status]').value}:{}),reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
             : {claimId:selected.claim.id,version:selected.claim.version,action:selected.action,venue:node('[data-raffle-venue]')?.value || '',quantity:node('[data-raffle-quantity]') ? Number(node('[data-raffle-quantity]').value) : undefined,reason:node('[data-raffle-reason]')?.value.trim() || '',requestId:requestId()};
           if (selected.action !== 'import' && ['collect','prepare'].includes(selected.action) && operation.venue !== selected.claim.venue) { node('[data-raffle-operation-error]').textContent = '館別不一致，請勿交付。'; return; }
-          pending = {action:({send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
+          if(selected.action==='closeQueued'&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫停止理由。';return;}
+          pending = {action:({send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
           if(selected.preview?.kind === 'ready' && ['send','queue'].includes(selected.action))pending.action=selected.action === 'send' ? 'sendRaffleReadyMailBatch' : 'confirmRaffleReadyNotifications';
         }
         busy = true;
@@ -299,6 +306,10 @@
         try {
           const response = await options.api(pending.action, {operation:pending.operation});
           if (disposed) return;
+          if(selected.action==='closeQueued'){
+            if(!response || response.jobId!==selected.record.id || response.status!=='closed' || response.closedBeforeSend!==true)throw Error('未收到完整停止待寄結果。');
+            node('[data-raffle-notice]').textContent='已停止這封待寄並保留理由；沒有寄信，也不會自動重新排入。';pending=null;dialog.close();await read('mailRecords');return;
+          }
           if (!response || (selected.action === 'send' ? !response.attemptId || !Number.isInteger(response.sent) || !Number.isInteger(response.pendingReview) || !Number.isInteger(response.total) : selected.action === 'reconcile' ? response.jobId !== selected.record.id || !['sent','closed'].includes(response.status) : selected.action === 'queue' ? !Number.isInteger(response.queued) : selected.action === 'import' ? !Number.isInteger(response.imported) : !response.claimId)) throw Error('沒有收到完整確認結果。');
           const imported = selected.action === 'import';
           const queued = selected.action === 'queue';

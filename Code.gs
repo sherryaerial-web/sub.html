@@ -192,7 +192,8 @@ var SHEET_HEADERS = {
     'customerEmail', 'customerIdentifier', 'customerName', 'customerAddress', 'salesAmount',
     'relateNumber', 'ecpayInvoiceNo', 'ecpayInvoiceDate', 'ecpayRandomNumber',
     'errorCode', 'errorMessage', 'purchasedAt', 'refundDetectedAt', 'refundResolvedAt',
-    'refundResolvedBy', 'refundNote', 'issuedAt', 'createdAt', 'updatedAt', 'version'
+    'refundResolvedBy', 'refundNote', 'issuedAt', 'createdAt', 'updatedAt', 'version',
+    'sourceType', 'externalIssueNote', 'externalIssuedBy'
   ],
   INVOICE_ITEMS: [
     'itemId', 'invoiceId', 'obPurchaseId', 'itemSeq', 'itemName', 'itemCount', 'itemWord',
@@ -212,7 +213,8 @@ var INVOICE_STATUSES = {
   FAILED: 'FAILED',
   UNCERTAIN: 'UNCERTAIN',
   REFUND_REVIEW: 'REFUND_REVIEW',
-  REFUND_RESOLVED: 'REFUND_RESOLVED'
+  REFUND_RESOLVED: 'REFUND_RESOLVED',
+  EXTERNAL_ISSUED: 'EXTERNAL_ISSUED'
 };
 
 var DEFAULT_ADMIN_MANAGEMENT_CAPABILITIES = [
@@ -7661,15 +7663,16 @@ function upsertInvoiceCandidate_(spreadsheet, candidateValue, actorValue, option
     queuePatch.merchantProfile = cleanText_(options.defaultMerchantProfile) || 'primary';
     queuePatch.invoiceKind = 'personal';
     queuePatch.createdAt = now;
+    queuePatch.sourceType = cleanText_(options.sourceType) || 'OB';
     appendInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, queuePatch);
   }
   appendInvoiceAuditUnlocked_(sheets.audit, {
     invoiceId: invoiceId,
     actor: actorValue,
-    action: existingQueue ? 'SYNC_UPDATED' : 'SYNC_CREATED',
+    action: cleanText_(options.auditAction) || (existingQueue ? 'SYNC_UPDATED' : 'SYNC_CREATED'),
     result: status,
     after: { paymentReferenceId: paymentReferenceId, status: status, salesAmount: total },
-    detail: '新增商品明細 ' + newItems.length + ' 筆'
+    detail: cleanText_(options.auditDetail) || ('新增商品明細 ' + newItems.length + ' 筆')
   });
   return { invoiceId: invoiceId, status: status, addedItems: newItems.length, skipped: false };
 }
@@ -7695,7 +7698,8 @@ function markInvoiceRefundReviewForPurchase_(spreadsheet, purchaseValue, actorVa
   var queue = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE).filter(function(row) {
     return cleanText_(row.invoiceId) === cleanText_(item.invoiceId);
   })[0];
-  if (!queue || cleanText_(queue.status) !== INVOICE_STATUSES.ISSUED) return false;
+  if (!queue || [INVOICE_STATUSES.ISSUED, INVOICE_STATUSES.EXTERNAL_ISSUED]
+    .indexOf(cleanText_(queue.status)) === -1) return false;
   var detectedAt = formatInvoiceTimestamp_(purchase.refundedAt || new Date());
   updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, queue.rowNumber, {
     status: INVOICE_STATUSES.REFUND_REVIEW,
@@ -7707,7 +7711,7 @@ function markInvoiceRefundReviewForPurchase_(spreadsheet, purchaseValue, actorVa
     invoiceId: queue.invoiceId,
     actor: actorValue,
     action: 'REFUND_DETECTED',
-    before: { status: INVOICE_STATUSES.ISSUED },
+    before: { status: cleanText_(queue.status) },
     after: { status: INVOICE_STATUSES.REFUND_REVIEW },
     result: 'review_required',
     detail: 'OB 購買 ID：' + purchaseId
@@ -8424,6 +8428,132 @@ function normalizeInvoiceMerchantProfile_(value) {
   return profile;
 }
 
+function createManualInvoice_(session, manualValue) {
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
+  var manual = manualValue || {};
+  var customReference = cleanText_(manual.customReference);
+  var customerEmail = cleanText_(manual.customerEmail).toLowerCase();
+  var customerName = cleanText_(manual.customerName);
+  var itemName = cleanText_(manual.itemName);
+  var itemCount = Number(manual.itemCount);
+  var itemPrice = Number(manual.itemPrice);
+  if (!customReference || customReference.length > 50) {
+    throw new Error('請填寫 50 字內的自訂編號。');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
+    throw new Error('Email 格式不正確。');
+  }
+  if (!itemName || itemName.length > 100) throw new Error('請填寫 100 字內的商品名稱。');
+  if (!isFinite(itemCount) || Math.floor(itemCount) !== itemCount || itemCount < 1 || itemCount > 999) {
+    throw new Error('商品數量必須是 1 到 999 的整數。');
+  }
+  if (!isFinite(itemPrice) || Math.floor(itemPrice) !== itemPrice || itemPrice < 1) {
+    throw new Error('商品單價必須是大於 0 的整數。');
+  }
+  var merchantProfileInput = cleanText_(manual.merchantProfile);
+  return withScriptLock_(function() {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = ensureInvoiceSheets_(spreadsheet);
+    var merchantProfile = normalizeInvoiceMerchantProfile_(merchantProfileInput || cleanText_(
+      getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, 'primary')
+    ) || 'primary');
+    var duplicate = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE).some(function(row) {
+      return cleanText_(row.paymentReferenceId).toLowerCase() === customReference.toLowerCase();
+    });
+    if (duplicate) throw new Error('這個自訂編號已存在，請換一個不重複的編號。');
+    var now = formatInvoiceTimestamp_(new Date());
+    var result = upsertInvoiceCandidate_(spreadsheet, {
+      paymentReferenceId: customReference,
+      customerEmail: customerEmail,
+      customerName: customerName,
+      salesAmount: itemCount * itemPrice,
+      purchasedAt: now,
+      items: [{
+        obPurchaseId: 'MANUAL:' + customReference,
+        paymentStatus: 'paid',
+        paymentMethod: 'Manual Bank Transfer',
+        itemName: itemName,
+        itemCount: itemCount,
+        itemWord: cleanText_(manual.itemWord) || '項',
+        itemPrice: itemPrice,
+        itemAmount: itemCount * itemPrice,
+        purchasedAt: now
+      }]
+    }, actor, {
+      defaultMerchantProfile: merchantProfile,
+      sourceType: 'MANUAL',
+      auditAction: 'MANUAL_CREATED',
+      auditDetail: '管理員新增手動發票草稿'
+    });
+    var created = findUniqueInvoiceQueueRow_(sheets.queue, result.invoiceId);
+    return {
+      invoiceId: cleanText_(created.invoiceId),
+      status: cleanText_(created.status),
+      version: Number(created.version) || 0,
+      paymentReferenceId: cleanText_(created.paymentReferenceId)
+    };
+  });
+}
+
+function markInvoiceExternallyIssued_(session, confirmationValue) {
+  var actor = assertCapabilitySession_(session, 'invoice_admin');
+  var confirmation = confirmationValue || {};
+  var note = cleanText_(confirmation.note);
+  if (!note) throw new Error('請填寫已在綠界開立的確認備註。');
+  if (note.length > 500) throw new Error('確認備註不可超過 500 字。');
+  return withScriptLock_(function() {
+    var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
+    var draft = findUniqueInvoiceQueueRow_(sheets.queue, confirmation.invoiceId);
+    if (Number(confirmation.version) !== Number(draft.version)) {
+      throw new Error('發票草稿版本已更新，請重新載入。');
+    }
+    var allowedStatuses = [
+      INVOICE_STATUSES.PENDING,
+      INVOICE_STATUSES.INVALID,
+      INVOICE_STATUSES.FAILED,
+      INVOICE_STATUSES.UNCERTAIN
+    ];
+    if (allowedStatuses.indexOf(cleanText_(draft.status)) === -1) {
+      throw new Error('此發票狀態不可標記為已在綠界開立。');
+    }
+    var now = formatInvoiceTimestamp_(new Date());
+    var nextVersion = (Number(draft.version) || 0) + 1;
+    var invoiceNo = cleanText_(confirmation.invoiceNo);
+    var invoiceDate = cleanText_(confirmation.invoiceDate);
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, draft.rowNumber, {
+      status: INVOICE_STATUSES.EXTERNAL_ISSUED,
+      ecpayInvoiceNo: invoiceNo,
+      ecpayInvoiceDate: invoiceDate,
+      errorCode: '',
+      errorMessage: '',
+      issuedAt: now,
+      externalIssueNote: note,
+      externalIssuedBy: actor,
+      updatedAt: now,
+      version: nextVersion
+    });
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: draft.invoiceId,
+      actor: actor,
+      action: 'EXTERNAL_ISSUE_CONFIRMED',
+      before: { status: draft.status, version: draft.version },
+      after: {
+        status: INVOICE_STATUSES.EXTERNAL_ISSUED,
+        version: nextVersion,
+        invoiceNo: invoiceNo,
+        invoiceDate: invoiceDate
+      },
+      result: 'marked_issued',
+      detail: note
+    });
+    return {
+      invoiceId: cleanText_(draft.invoiceId),
+      status: INVOICE_STATUSES.EXTERNAL_ISSUED,
+      version: nextVersion
+    };
+  });
+}
+
 function updateInvoiceDraft_(session, updateValue) {
   var actor = assertCapabilitySession_(session, 'invoice_admin');
   var update = updateValue || {};
@@ -9077,6 +9207,18 @@ function doPost(e) {
         return updateInvoiceDraft_(
           session,
           parseJsonObject_(parameters.invoice, '發票草稿')
+        );
+      },
+      createManualInvoice: function() {
+        return createManualInvoice_(
+          session,
+          parseJsonObject_(parameters.invoice, '手動發票')
+        );
+      },
+      markInvoiceExternallyIssued: function() {
+        return markInvoiceExternallyIssued_(
+          session,
+          parseJsonObject_(parameters.confirmation, '綠界開立確認')
         );
       },
       setDefaultInvoiceMerchant: function() {

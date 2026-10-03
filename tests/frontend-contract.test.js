@@ -5263,8 +5263,33 @@ test('invoice admin workbench is capability-gated and exposes the required workf
   assert.match(html, /統一編號/);
   assert.match(html, /公司抬頭/);
   assert.match(html, /公司地址/);
+  assert.match(html, /新增手動發票/);
+  assert.match(html, /已在綠界開立/);
+  assert.match(html, /createManualInvoice/);
+  assert.match(html, /markInvoiceExternallyIssued/);
   assert.doesNotMatch(html, /invoice-[^"']*(?:carrier|love-code)|發票載具|愛心碼/i);
   assert.doesNotMatch(html, /INVOICE_GATEWAY_SECRET|ECPAY_(?:HASH|MERCHANT)|自訂 Gateway URL/);
+});
+
+test('invoice admin treats externally issued records as issued and keeps them out of batch', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__invoiceDashboard = {
+    queue: [{
+      invoiceId: 'external-1', status: 'EXTERNAL_ISSUED', invoiceKind: 'personal',
+      merchantProfile: 'primary', customerEmail: 'student@example.com', customerName: '學生甲',
+      paymentReferenceId: '20261003001', salesAmount: 600, version: 2,
+      sourceType: 'MANUAL', externalIssueNote: '已由 Tako 於綠界開立',
+    }],
+    items: [{ invoiceId: 'external-1', itemName: '課卡延期費用', itemCount: 2, itemPrice: 300, itemAmount: 600 }],
+    audit: [], settings: {}, scheduler: {},
+  };
+
+  vm.runInContext('invoiceDashboard = __invoiceDashboard; activeInvoiceTab = "issued"; renderInvoiceAdminTab();', context);
+  const markup = getElement('admin-tab-content').innerHTML;
+
+  assert.match(markup, /已在綠界開立/);
+  assert.match(markup, /已由 Tako 於綠界開立/);
+  assert.doesNotMatch(markup, /invoice-batch-checkbox/);
 });
 
 test('invoice admin batch collects only complete personal pending drafts', () => {

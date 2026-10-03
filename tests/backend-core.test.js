@@ -210,6 +210,7 @@ const EXPECTED_INVOICE_QUEUE_HEADERS = [
   'relateNumber', 'ecpayInvoiceNo', 'ecpayInvoiceDate', 'ecpayRandomNumber',
   'errorCode', 'errorMessage', 'purchasedAt', 'refundDetectedAt', 'refundResolvedAt',
   'refundResolvedBy', 'refundNote', 'issuedAt', 'createdAt', 'updatedAt', 'version',
+  'sourceType', 'externalIssueNote', 'externalIssuedBy',
 ];
 const EXPECTED_INVOICE_ITEM_HEADERS = [
   'itemId', 'invoiceId', 'obPurchaseId', 'itemSeq', 'itemName', 'itemCount', 'itemWord',
@@ -3248,8 +3249,107 @@ test('invoice schema exposes only the approved invoice statuses', () => {
 
   assert.deepEqual(Array.from(Object.values(backend.INVOICE_STATUSES)), [
     'PENDING', 'INVALID', 'ISSUING', 'ISSUED', 'FAILED', 'UNCERTAIN',
-    'REFUND_REVIEW', 'REFUND_RESOLVED',
+    'REFUND_REVIEW', 'REFUND_RESOLVED', 'EXTERNAL_ISSUED',
   ]);
+});
+
+test('invoice admin can create one manual paid-transfer draft without calling ECPay', () => {
+  const fixture = createInvoiceSyncBackend();
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+
+  const result = fixture.backend.createManualInvoice_(session, {
+    customReference: '20261003001',
+    customerEmail: 'student@example.com',
+    customerName: '學生甲',
+    itemName: '課卡延期費用',
+    itemCount: 2,
+    itemPrice: 300,
+    merchantProfile: 'secondary',
+  });
+
+  assert.equal(result.status, 'PENDING');
+  assert.equal(fixture.queueSheet.values.length, 2);
+  assert.equal(fixture.itemSheet.values.length, 2);
+  const queue = fixture.queueSheet.values[1];
+  const item = fixture.itemSheet.values[1];
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('paymentReferenceId')], '20261003001');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('merchantProfile')], 'secondary');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('salesAmount')], 600);
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('sourceType')], 'MANUAL');
+  assert.equal(item[EXPECTED_INVOICE_ITEM_HEADERS.indexOf('obPurchaseId')], 'MANUAL:20261003001');
+  assert.equal(item[EXPECTED_INVOICE_ITEM_HEADERS.indexOf('itemName')], '課卡延期費用');
+  assert.equal(fixture.auditSheet.values.at(-1)[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')], 'MANUAL_CREATED');
+});
+
+test('manual invoice rejects duplicate references and incomplete item data without partial writes', () => {
+  const fixture = createInvoiceSyncBackend();
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+  fixture.backend.createManualInvoice_(session, {
+    customReference: 'MANUAL-001', customerEmail: 'student@example.com',
+    itemName: '護腰', itemCount: 1, itemPrice: 800, merchantProfile: 'primary',
+  });
+  const rowsBefore = {
+    queue: fixture.queueSheet.values.length,
+    items: fixture.itemSheet.values.length,
+    audit: fixture.auditSheet.values.length,
+  };
+
+  assert.throws(() => fixture.backend.createManualInvoice_(session, {
+    customReference: 'manual-001', customerEmail: 'other@example.com',
+    itemName: '護肘', itemCount: 1, itemPrice: 500, merchantProfile: 'primary',
+  }), /自訂編號.*已存在|已存在.*自訂編號/);
+  assert.throws(() => fixture.backend.createManualInvoice_(session, {
+    customReference: 'MANUAL-002', customerEmail: 'bad-email',
+    itemName: '', itemCount: 0, itemPrice: -1, merchantProfile: 'primary',
+  }), /Email|商品|數量|單價/);
+  assert.deepEqual({
+    queue: fixture.queueSheet.values.length,
+    items: fixture.itemSheet.values.length,
+    audit: fixture.auditSheet.values.length,
+  }, rowsBefore);
+});
+
+test('invoice admin can mark a draft as already issued externally without deleting its source rows', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-external', paymentReferenceId: 'ORDER-EXTERNAL',
+    status: 'PENDING', version: 3,
+  });
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+  const itemRowsBefore = fixture.itemSheet.values.length;
+
+  const result = fixture.backend.markInvoiceExternallyIssued_(session, {
+    invoiceId: 'invoice-external', version: 3,
+    note: '9/30 已由 Tako 於綠界開立',
+    invoiceNo: 'AB12345678', invoiceDate: '2026-09-30',
+  });
+
+  assert.equal(result.status, 'EXTERNAL_ISSUED');
+  assert.equal(result.version, 4);
+  assert.equal(fixture.itemSheet.values.length, itemRowsBefore);
+  const queue = fixture.queueSheet.values[1];
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')], 'EXTERNAL_ISSUED');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('ecpayInvoiceNo')], 'AB12345678');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('externalIssueNote')], '9/30 已由 Tako 於綠界開立');
+  assert.equal(queue[EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('externalIssuedBy')], 'Ivy');
+  assert.equal(fixture.auditSheet.values.at(-1)[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')], 'EXTERNAL_ISSUE_CONFIRMED');
+});
+
+test('external-issued marker requires matching version and a reason', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, { invoiceId: 'invoice-external-guard', status: 'PENDING', version: 2 });
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+
+  assert.throws(() => fixture.backend.markInvoiceExternallyIssued_(session, {
+    invoiceId: 'invoice-external-guard', version: 1, note: '已開立',
+  }), /版本|更新/);
+  assert.throws(() => fixture.backend.markInvoiceExternallyIssued_(session, {
+    invoiceId: 'invoice-external-guard', version: 2, note: '',
+  }), /備註|原因/);
+  assert.equal(
+    fixture.queueSheet.values[1][EXPECTED_INVOICE_QUEUE_HEADERS.indexOf('status')],
+    'PENDING',
+  );
 });
 
 test('invoice OB sync accepts only paid bank transfers at or after the Taipei cutoff', () => {
@@ -3737,6 +3837,8 @@ test('invoice admin actions reject accounts without invoice capability at the se
   const calls = [
     () => fixture.backend.getInvoiceAdminDashboard_(teacherSession),
     () => fixture.backend.updateInvoiceDraft_(teacherSession, { invoiceId: 'missing', version: 1 }),
+    () => fixture.backend.createManualInvoice_(teacherSession, {}),
+    () => fixture.backend.markInvoiceExternallyIssued_(teacherSession, {}),
     () => fixture.backend.setDefaultInvoiceMerchant_(teacherSession, 'secondary'),
     () => fixture.backend.resolveInvoiceRefund_(teacherSession, { invoiceId: 'missing', version: 1 }),
   ];
@@ -3745,6 +3847,8 @@ test('invoice admin actions reject accounts without invoice capability at the se
   const actions = [
     ['getInvoiceAdminDashboard', {}],
     ['updateInvoiceDraft', { invoice: JSON.stringify({ invoiceId: 'missing', version: 1 }) }],
+    ['createManualInvoice', { invoice: JSON.stringify({}) }],
+    ['markInvoiceExternallyIssued', { confirmation: JSON.stringify({}) }],
     ['setDefaultInvoiceMerchant', { merchantProfile: 'secondary' }],
     ['resolveInvoiceRefund', { refund: JSON.stringify({ invoiceId: 'missing', version: 1 }) }],
     ['syncInvoicePurchases', {}],

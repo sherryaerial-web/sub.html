@@ -866,7 +866,9 @@
     .invoice-batch-bar { position: sticky; bottom: 12px; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: rgba(255, 253, 249, .97); box-shadow: var(--shadow-md); }
     .invoice-confirm-list { display: grid; gap: 10px; max-height: 56vh; overflow-y: auto; overscroll-behavior: contain; }
     .invoice-confirm-card { padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); }
-    #invoice-issue-dialog { width: min(calc(100% - 28px), 620px); }
+    #invoice-issue-dialog,
+    #invoice-manual-dialog,
+    #invoice-external-dialog { width: min(calc(100% - 28px), 620px); }
     .ob-cancellation-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; }
     .ob-cancellation-checkbox { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--sea-700); }
     .vvip-course-view { display: grid; gap: 16px; margin-top: 14px; }
@@ -1614,8 +1616,12 @@
       .invoice-field.full { grid-column: auto; }
       .invoice-batch-bar { bottom: calc(76px + env(safe-area-inset-bottom)); align-items: stretch; flex-direction: column; }
       .invoice-batch-bar button { width: 100%; justify-content: center; }
-      #invoice-issue-dialog { width: 100%; max-width: none; max-height: 88dvh; margin: auto 0 0; border-radius: 18px 18px 0 0; }
-      #invoice-issue-dialog .dialog-body { max-height: 88dvh; overflow-y: auto; padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
+      #invoice-issue-dialog,
+      #invoice-manual-dialog,
+      #invoice-external-dialog { width: 100%; max-width: none; max-height: 88dvh; margin: auto 0 0; border-radius: 18px 18px 0 0; }
+      #invoice-issue-dialog .dialog-body,
+      #invoice-manual-dialog .dialog-body,
+      #invoice-external-dialog .dialog-body { max-height: 88dvh; overflow-y: auto; padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
       .inbox-header { align-items: stretch; }
       .inbox-header .compact-button { width: 100%; }
       .inbox-message { grid-template-columns: auto minmax(0, 1fr); }
@@ -2465,6 +2471,43 @@
     </div>
   </dialog>
 
+  <dialog id="invoice-manual-dialog" aria-labelledby="invoice-manual-title" aria-describedby="invoice-manual-copy">
+    <form id="invoice-manual-form" class="dialog-body">
+      <h3 id="invoice-manual-title">新增手動發票</h3>
+      <p id="invoice-manual-copy" class="section-copy">適用於未經 OB 的匯款，例如課卡延期、商品或師資班。儲存後只會進入待開立，不會立刻呼叫綠界。</p>
+      <div class="invoice-fields">
+        <label class="invoice-field"><span>自訂編號</span><input id="invoice-manual-reference" class="text-input" type="text" maxlength="50" placeholder="例如 20261003001" required></label>
+        <label class="invoice-field"><span>收件 Email</span><input id="invoice-manual-email" class="text-input" type="email" required></label>
+        <label class="invoice-field"><span>客戶名稱（選填）</span><input id="invoice-manual-name" class="text-input" type="text" maxlength="100"></label>
+        <label class="invoice-field"><span>開票帳號</span><select id="invoice-manual-merchant" class="admin-select"><option value="primary">主要帳號</option><option value="secondary">次要帳號</option></select></label>
+        <label class="invoice-field full"><span>商品名稱</span><input id="invoice-manual-item-name" class="text-input" type="text" maxlength="100" placeholder="例如 課卡延期費用" required></label>
+        <label class="invoice-field"><span>數量</span><input id="invoice-manual-item-count" class="text-input" type="number" min="1" max="999" step="1" value="1" required></label>
+        <label class="invoice-field"><span>單價</span><input id="invoice-manual-item-price" class="text-input" type="number" min="1" step="1" inputmode="numeric" required></label>
+      </div>
+      <div class="dialog-actions">
+        <button id="invoice-manual-cancel" class="compact-button" type="button"><i data-lucide="arrow-left"></i>取消</button>
+        <button id="invoice-manual-confirm" class="primary-button" type="submit"><i data-lucide="save"></i>建立待開立草稿</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="invoice-external-dialog" aria-labelledby="invoice-external-title" aria-describedby="invoice-external-copy">
+    <form id="invoice-external-form" class="dialog-body">
+      <h3 id="invoice-external-title">確認已在綠界開立</h3>
+      <p id="invoice-external-copy" class="section-copy">這只會把工作台紀錄改為已開立並保留稽核，不會再次呼叫綠界，也不會刪除原始訂單。</p>
+      <div id="invoice-external-summary" class="invoice-confirm-list"></div>
+      <div class="invoice-fields">
+        <label class="invoice-field"><span>綠界發票號碼（選填）</span><input id="invoice-external-number" class="text-input" type="text" maxlength="30"></label>
+        <label class="invoice-field"><span>開立日期（選填）</span><input id="invoice-external-date" class="text-input" type="date"></label>
+        <label class="invoice-field full"><span>確認備註</span><textarea id="invoice-external-note" class="text-input" maxlength="500" placeholder="例如 9/30 已由 Tako 於綠界開立" required></textarea></label>
+      </div>
+      <div class="dialog-actions">
+        <button id="invoice-external-cancel" class="compact-button" type="button"><i data-lucide="arrow-left"></i>取消</button>
+        <button id="invoice-external-confirm" class="primary-button" type="submit"><i data-lucide="check"></i>標記為已在綠界開立</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="practice-dialog" aria-labelledby="practice-dialog-title">
     <form id="practice-form" class="dialog-body">
       <h3 id="practice-dialog-title" tabindex="-1" autofocus>登記自主練習</h3>
@@ -2594,6 +2637,7 @@
     let notificationScheduleEditorOpen = false;
     let activeInvoiceTab = "pending";
     let invoiceIssueDialogState = null;
+    let invoiceExternalDialogState = null;
     let requestDialogState = null;
     let notificationPreviewState = null;
     let pushSdk = null;
@@ -4309,6 +4353,7 @@
       invoiceDashboard = null;
       activeInvoiceTab = "pending";
       invoiceIssueDialogState = null;
+      invoiceExternalDialogState = null;
       activeViewId = "";
       pushIdentityExternalId = "";
       pushSessionTeacherName = "";
@@ -7773,11 +7818,11 @@
       const labels = {
         PENDING: "待開立", INVALID: "資料異常", ISSUING: "開立中", ISSUED: "已開立",
         FAILED: "開立失敗", UNCERTAIN: "結果待確認", REFUND_REVIEW: "退款待處理",
-        REFUND_RESOLVED: "退款已處理",
+        REFUND_RESOLVED: "退款已處理", EXTERNAL_ISSUED: "已在綠界開立",
       };
       const className = ["INVALID", "FAILED"].includes(status) ? "is-error"
         : ["UNCERTAIN", "REFUND_REVIEW"].includes(status) ? "is-warning"
-        : ["ISSUED", "REFUND_RESOLVED"].includes(status) ? "is-success" : "";
+        : ["ISSUED", "REFUND_RESOLVED", "EXTERNAL_ISSUED"].includes(status) ? "is-success" : "";
       return { label: labels[status] || status || "未知狀態", className };
     }
 
@@ -7820,12 +7865,17 @@
       } else if (status === "REFUND_REVIEW") {
         actions = `<input class="text-input" type="text" placeholder="填寫已在綠界完成的退款／折讓處理" data-invoice-refund-note="${escapeHtml(invoice.invoiceId)}"><button class="primary-button inline-button" type="button" data-admin-action="resolve-invoice-refund" data-invoice-id="${escapeHtml(invoice.invoiceId)}" data-version="${escapeHtml(invoice.version || 0)}"><i data-lucide="check"></i>完成退款追蹤</button>`;
       }
+      if (["PENDING", "INVALID", "FAILED", "UNCERTAIN"].includes(status)) {
+        actions += `<button class="compact-button" type="button" data-admin-action="mark-invoice-external" data-invoice-id="${escapeHtml(invoice.invoiceId)}"><i data-lucide="badge-check"></i>已在綠界開立</button>`;
+      }
+      const sourceLabel = String(invoice.sourceType) === "MANUAL" ? "手動建立" : "OB 同步";
       return `<article class="invoice-card" data-invoice-card="${escapeHtml(invoice.invoiceId)}">
-        <div class="invoice-card-head"><div class="invoice-card-title"><strong>${escapeHtml(customerLabel)}</strong><div class="item-meta">付款參考編號：${escapeHtml(invoice.paymentReferenceId || "—")}｜購買時間：${escapeHtml(invoice.purchasedAt || "—")}</div><div class="item-meta">${escapeHtml(invoiceMerchantLabel(invoice.merchantProfile))}｜總額 ${escapeHtml(formatMoney(invoice.salesAmount || 0))}${invoice.ecpayInvoiceNo ? `｜發票號碼 ${escapeHtml(invoice.ecpayInvoiceNo)}` : ""}</div></div><span class="invoice-status ${presentation.className}">${escapeHtml(presentation.label)}</span></div>
+        <div class="invoice-card-head"><div class="invoice-card-title"><strong>${escapeHtml(customerLabel)}</strong><div class="item-meta">付款參考編號：${escapeHtml(invoice.paymentReferenceId || "—")}｜${escapeHtml(sourceLabel)}｜購買時間：${escapeHtml(invoice.purchasedAt || "—")}</div><div class="item-meta">${escapeHtml(invoiceMerchantLabel(invoice.merchantProfile))}｜總額 ${escapeHtml(formatMoney(invoice.salesAmount || 0))}${invoice.ecpayInvoiceNo ? `｜發票號碼 ${escapeHtml(invoice.ecpayInvoiceNo)}` : ""}</div></div><span class="invoice-status ${presentation.className}">${escapeHtml(presentation.label)}</span></div>
         ${renderInvoiceItems(invoice.invoiceId)}
         ${editableFields}
         ${errorText ? `<div class="invoice-error-note">${escapeHtml(errorText)}</div>` : ""}
         ${status === "UNCERTAIN" ? '<div class="invoice-warning-note">開立結果不明，請先至綠界查詢，確認是否已產生發票後再處理；此處不提供直接重試。</div>' : ""}
+        ${status === "EXTERNAL_ISSUED" && invoice.externalIssueNote ? `<div class="invoice-warning-note">確認備註：${escapeHtml(invoice.externalIssueNote)}${invoice.externalIssuedBy ? `｜${escapeHtml(invoice.externalIssuedBy)}` : ""}</div>` : ""}
         ${actions ? `<div class="admin-item-actions">${actions}</div>` : ""}
       </article>`;
     }
@@ -7848,7 +7898,7 @@
       const definitions = [
         ["pending", "待開立", ["PENDING"]],
         ["invalid", "資料異常", ["INVALID", "FAILED", "UNCERTAIN"]],
-        ["issued", "已開立", ["ISSUED", "REFUND_RESOLVED"]],
+        ["issued", "已開立", ["ISSUED", "EXTERNAL_ISSUED", "REFUND_RESOLVED"]],
         ["refunds", "退款待處理", ["REFUND_REVIEW"]],
         ["audit", "操作紀錄", []],
       ];
@@ -7863,6 +7913,7 @@
           <div class="invoice-toolbar-actions">
             <label class="invoice-profile-field"><span>預設開票帳號（僅影響之後同步）</span><select id="invoice-default-merchant" class="admin-select"><option value="primary" ${String(settings.defaultMerchantProfile) === "secondary" ? "" : "selected"}>主要帳號</option><option value="secondary" ${String(settings.defaultMerchantProfile) === "secondary" ? "selected" : ""}>次要帳號</option></select></label>
             <button class="compact-button" type="button" data-admin-action="set-invoice-default-merchant"><i data-lucide="save"></i>儲存預設帳號</button>
+            <button class="compact-button" type="button" data-admin-action="open-manual-invoice"><i data-lucide="file-plus-2"></i>新增手動發票</button>
             <button class="compact-button" type="button" data-admin-action="sync-invoice-ob"><i data-lucide="refresh-cw"></i>立即同步 OB</button>
             ${scheduler.installed ? "" : '<button class="compact-button" type="button" data-admin-action="install-invoice-scheduler"><i data-lucide="clock"></i>安裝每日排程</button>'}
           </div>
@@ -7921,6 +7972,88 @@
       const dialog = byId("invoice-issue-dialog");
       if (dialog.close) dialog.close();
       else dialog.hidden = true;
+    }
+
+    function openManualInvoiceDialog() {
+      byId("invoice-manual-form").reset();
+      byId("invoice-manual-item-count").value = "1";
+      byId("invoice-manual-merchant").value = String(invoiceDashboard?.settings?.defaultMerchantProfile) === "secondary" ? "secondary" : "primary";
+      const dialog = byId("invoice-manual-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+      byId("invoice-manual-reference").focus();
+      refreshIcons();
+    }
+
+    function closeManualInvoiceDialog() {
+      const dialog = byId("invoice-manual-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+    }
+
+    async function submitManualInvoice(event) {
+      event.preventDefault();
+      const button = byId("invoice-manual-confirm");
+      setButtonBusy(button, true, "建立中...");
+      try {
+        await callPostApi("createManualInvoice", { invoice: {
+          customReference: byId("invoice-manual-reference").value.trim(),
+          customerEmail: byId("invoice-manual-email").value.trim(),
+          customerName: byId("invoice-manual-name").value.trim(),
+          merchantProfile: byId("invoice-manual-merchant").value,
+          itemName: byId("invoice-manual-item-name").value.trim(),
+          itemCount: Number(byId("invoice-manual-item-count").value),
+          itemPrice: Number(byId("invoice-manual-item-price").value),
+        } });
+        closeManualInvoiceDialog();
+        activeInvoiceTab = "pending";
+        setNotice("手動發票草稿已建立，尚未呼叫綠界；確認資料後再勾選批次開立。");
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
+    function openExternalInvoiceDialog(invoiceId) {
+      const invoice = ((invoiceDashboard && invoiceDashboard.queue) || []).find((item) => String(item.invoiceId) === String(invoiceId));
+      if (!invoice) throw new Error("找不到這筆發票草稿。");
+      invoiceExternalDialogState = { invoiceId: String(invoice.invoiceId), version: Number(invoice.version) };
+      byId("invoice-external-form").reset();
+      byId("invoice-external-summary").innerHTML = `<article class="invoice-confirm-card"><strong>${escapeHtml(invoice.customerName || invoice.customerEmail || "未提供客戶資料")}</strong><div class="item-meta">付款參考編號：${escapeHtml(invoice.paymentReferenceId || "—")}｜總額：${escapeHtml(formatMoney(invoice.salesAmount || 0))}</div>${renderInvoiceItems(invoice.invoiceId)}</article>`;
+      const dialog = byId("invoice-external-dialog");
+      if (dialog.showModal) dialog.showModal();
+      else dialog.hidden = false;
+      byId("invoice-external-note").focus();
+      refreshIcons();
+    }
+
+    function closeExternalInvoiceDialog() {
+      invoiceExternalDialogState = null;
+      const dialog = byId("invoice-external-dialog");
+      if (dialog.close) dialog.close();
+      else dialog.hidden = true;
+    }
+
+    async function submitExternalInvoice(event) {
+      event.preventDefault();
+      if (!invoiceExternalDialogState) return;
+      const button = byId("invoice-external-confirm");
+      setButtonBusy(button, true, "儲存中...");
+      try {
+        await callPostApi("markInvoiceExternallyIssued", { confirmation: {
+          invoiceId: invoiceExternalDialogState.invoiceId,
+          version: invoiceExternalDialogState.version,
+          invoiceNo: byId("invoice-external-number").value.trim(),
+          invoiceDate: byId("invoice-external-date").value,
+          note: byId("invoice-external-note").value.trim(),
+        } });
+        closeExternalInvoiceDialog();
+        activeInvoiceTab = "issued";
+        setNotice("已標記為在綠界開立；原始訂單與操作紀錄均已保留。");
+        await fetchInvoiceAdminDashboard(true);
+      } finally {
+        setButtonBusy(button, false, "");
+      }
     }
 
     function summarizeInvoiceIssueResults(results) {
@@ -9091,6 +9224,14 @@ https://sherryaerial-web.github.io/sub.html/
     byId("invoice-issue-confirm").addEventListener("click", async () => {
       try { await confirmInvoiceIssue(); } catch (error) { setNotice(error.message, "error"); }
     });
+    byId("invoice-manual-form").addEventListener("submit", async (event) => {
+      try { await submitManualInvoice(event); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("invoice-manual-cancel").addEventListener("click", closeManualInvoiceDialog);
+    byId("invoice-external-form").addEventListener("submit", async (event) => {
+      try { await submitExternalInvoice(event); } catch (error) { setNotice(error.message, "error"); }
+    });
+    byId("invoice-external-cancel").addEventListener("click", closeExternalInvoiceDialog);
     byId("my-leaves-month-search").addEventListener("click", async () => {
       const month = byId("my-leaves-month").value;
       if (!month) {
@@ -9176,6 +9317,14 @@ https://sherryaerial-web.github.io/sub.html/
         }
         if (action === "sync-invoice-ob") {
           await syncInvoicePurchases(button);
+          return;
+        }
+        if (action === "open-manual-invoice") {
+          openManualInvoiceDialog();
+          return;
+        }
+        if (action === "mark-invoice-external") {
+          openExternalInvoiceDialog(button.dataset.invoiceId);
           return;
         }
         if (action === "set-invoice-default-merchant") {

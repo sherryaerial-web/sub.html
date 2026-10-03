@@ -3,6 +3,28 @@ const admin={teacherName:'店長',managementCapabilities:['raffle_admin']}, teac
 const campaign={id:'future',name:'新活動',sourceSpreadsheetId:'future-source-1234567890',readyPrizeVenues:[{prizeId:'p1',venue:'晴光'}]};
 const headers=['OB email名稱','OB名字','驗證碼','中獎等級','最終選擇獎品','領取館別','領獎方式','確認時間'];
 const row=['a@example.com','小花','code1','A','提袋','晴光','choose_venue','2027-01-01'];
+test('source acceptance cannot create mixed names in an existing fulfillment group',()=>{
+ for(const delivered of [false,true]){
+  const s=setup(2);s.importNow();const claims=s.c.readRaffleClaims_();
+  if(delivered)s.c.mutateRaffleClaim_(teacher,{claimId:claims[0].id,version:1,action:'collect',venue:'晴光',quantity:1,requestId:'request-delivered-001'});
+  s.sourceRows[1][4]='新版提袋';s.sourceRows[2][4]='新版提袋';s.sourcePrizes[1][2]='新版提袋';
+  const p=s.c.previewRaffleImport_(admin,'future'),conflict=p.conflicts.find(c=>c.id===claims[1].id),n=s.writes();
+  assert.equal(conflict.resolvable,false);assert.match(conflict.message,/名稱/);
+  assert.throws(()=>s.c.resolveRaffleConflict_(admin,{campaignId:'future',claimId:claims[1].id,version:1,previewToken:p.previewToken,reason:'來源改名',requestId:'request-rename-0001'}),/名稱/);
+  assert.equal(s.writes(),n);assert.equal(s.c.getRaffleFulfillment_(prep,{campaignId:'future'}).totalGroups,1);
+ }
+});
+test('different venue or prize ID does not falsely block a source rename',()=>{
+ for(const kind of ['venue','prize']){
+  const s=setup(2);s.importNow();const target=s.c.readRaffleClaims_()[1];
+  s.sourceRows[2][4]='新版提袋';
+  if(kind==='venue'){s.sourceRows[1][4]='新版提袋';s.sourcePrizes[1][2]='新版提袋';s.sourceRows[2][5]='劍潭';}
+  else s.sourcePrizes.push(['p2','A','新版提袋','choose_venue']);
+  const p=s.c.previewRaffleImport_(admin,'future');assert.equal(p.conflicts.find(c=>c.id===target.id).resolvable,true);
+  s.c.resolveRaffleConflict_(admin,{campaignId:'future',claimId:target.id,version:1,previewToken:p.previewToken,reason:'獨立群組變更',requestId:'request-rename-0001'});
+  assert.equal(s.c.getRaffleFulfillment_(prep,{campaignId:'future'}).totalGroups,2);
+ }
+});
 test('source conflict compares masked details and explicitly accepts same student unclaimed venue with audit',()=>{
  const s=setup();s.importNow();const old=s.c.readRaffleClaims_()[0];s.sourceRows[1][5]='劍潭';
  const p=s.c.previewRaffleImport_(admin,'future'),conflict=p.conflicts[0];
@@ -67,7 +89,8 @@ function setup(count=1){
  const tables=new Map();
  function sheet(rows){return{rows,getLastRow:()=>rows.length,getLastColumn:()=>Math.max(0,...rows.map(r=>r.length)),getMaxRows:()=>10000,getRange:(r,c,n=1,m=1)=>({getDisplayValues:()=>Array.from({length:n},(_,i)=>Array.from({length:m},(_,j)=>String(rows[r-1+i]?.[c-1+j]??''))),setValues:values=>{assert.ok(locked,'writes require lock');writes++;const apply=()=>values.forEach((line,i)=>{rows[r-1+i] ||= [];line.forEach((v,j)=>{rows[r-1+i][c-1+j]=v;});});if(buffered)pendingWrites.push(apply);else apply();if(failAfterWrite&&r>1){failAfterWrite=false;throw Error('transport timeout');}}})};}
  const sourceRows=[headers,...Array.from({length:count},(_,i)=>row.map((v,j)=>j===2?'code'+i:v))];
- const source={getSheetByName:name=>sheet(name==='抽獎名單'?sourceRows:[['獎項ID','獎項等級','獎品名稱','領獎方式'],['p1','A','提袋','choose_venue']])};
+ const sourcePrizes=[['獎項ID','獎項等級','獎品名稱','領獎方式'],['p1','A','提袋','choose_venue']];
+ const source={getSheetByName:name=>sheet(name==='抽獎名單'?sourceRows:sourcePrizes)};
  const book={getSheetByName:name=>tables.get(name)||null,insertSheet:name=>{assert.ok(locked);assert.ok(!tables.has(name));const s=sheet([]);tables.set(name,s);return s;}};
  const c={console,Date,Math,JSON,Number,String,Array,Object,Set,Error,RegExp,
   Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,s)=>[...crypto.createHash('sha256').update(s).digest()]},
@@ -76,7 +99,7 @@ function setup(count=1){
   SpreadsheetApp:{flush:()=>{assert.ok(locked,'flush must hold lock');pendingWrites.splice(0).forEach(fn=>fn());if(failFlush){failFlush=false;throw Error('flush uncertain');}},getActiveSpreadsheet:()=>book,openById:id=>{assert.equal(id,campaign.sourceSpreadsheetId);return source;}}};
  vm.createContext(c);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../Code.gs'),'utf8'),c);
  const importNow=(requestId='request-import-0001')=>{const p=c.previewRaffleImport_(admin,'future');return c.confirmRaffleImport_(admin,{campaignId:'future',previewToken:p.previewToken,requestId});};
- return{c,props,tables,sourceRows,importNow,writes:()=>writes,setFail:()=>{failAfterWrite=true;},setBuffered:()=>{buffered=true;},setFlushFail:()=>{failFlush=true;}};
+ return{c,props,tables,sourceRows,sourcePrizes,importNow,writes:()=>writes,setFail:()=>{failAfterWrite=true;},setBuffered:()=>{buffered=true;},setFlushFail:()=>{failFlush=true;}};
 }
 test('confirmed import appends journal, preserves source, caps batch and reimport is safe',()=>{
  const s=setup(27),before=JSON.stringify(s.sourceRows);const p=s.c.previewRaffleImport_(admin,'future');assert.equal(p.batchCount,25);

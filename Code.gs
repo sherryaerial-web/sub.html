@@ -20844,6 +20844,11 @@ function buildRaffleImportPreview_(campaign, sourceRows, prizeRows, existingClai
       if (existing[id].sourceFingerprint === fingerprint) result.duplicates++;
       else {
         var reason = raffleSourceConflictReason_(existing[id],candidate);
+        if (!reason && Object.keys(existing).some(function(otherId) {
+          var other = existing[otherId];
+          return otherId !== id && other.prizeId === candidate.prizeId && other.venue === candidate.venue && other.status !== 'digital' &&
+            (other.status !== 'cancelled' || other.claimedQuantity > 0) && other.prizeName !== candidate.prizeName;
+        })) reason = '同館別的同一獎品 ID 已有不同名稱紀錄，不能單筆套用改名；請先核對來源獎項設定，保留既有交付歷史。';
         result.conflicts.push({row:index+2,id:id,message:reason || '來源已變更；請逐筆核對原紀錄與來源現況。',resolvable:!reason,before:existing[id],after:candidate});
       }
       return;

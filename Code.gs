@@ -9217,6 +9217,8 @@ function doPost(e) {
       previewRaffleImport: function() {
         return previewRaffleImport_(session, parameters.campaignId);
       },
+      previewRaffleObSync: function() { return previewRaffleObSync_(session, parameters.campaignId); },
+      confirmRaffleObSync: function() { return confirmRaffleObSync_(session, parseJsonObject_(parameters.operation, 'OB 購課同步')); },
       previewRaffleInvitations: function() {
         return previewRaffleInvitations_(session, parameters.campaignId);
       },
@@ -20934,7 +20936,216 @@ function normalizeRaffleCampaign_(c) {
     if (seen[key]) throw new Error('現貨館別設定重複。');
     seen[key] = true; return {prizeId:p.prizeId.trim(), venue:p.venue.trim()};
   });
-  return {id:c.id, name:c.name.trim(), sourceSpreadsheetId:c.sourceSpreadsheetId, websiteUrl:c.websiteUrl, pickupDeadline:deadline, readyPrizeVenues:mappings};
+  var normalized = {id:c.id, name:c.name.trim(), sourceSpreadsheetId:c.sourceSpreadsheetId, websiteUrl:c.websiteUrl, pickupDeadline:deadline, readyPrizeVenues:mappings};
+  // Omit absent optional rules to preserve existing campaign journal hashes.
+  if (c.obSync != null) normalized.obSync = normalizeRaffleObRules_(c.obSync);
+  return normalized;
+}
+
+function normalizeRaffleObRules_(rules) {
+  function date(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        !isFinite(Date.parse(value + 'T00:00:00Z')) || new Date(value + 'T00:00:00Z').toISOString().slice(0,10) !== value) throw Error('購課期間日期格式有誤。');
+    return value;
+  }
+  if (!rules || typeof rules !== 'object') throw Error('請設定 OB 購課期間與課卡 ID。');
+  var from = date(rules.dateFrom), to = date(rules.dateTo);
+  if (from > to || Date.parse(to) - Date.parse(from) > 366 * 86400000) throw Error('購課期間須依序且不超過一年。');
+  if (!Array.isArray(rules.passIds) || rules.passIds.length > 50) throw Error('請設定符合資格的 OB 課卡 ID。');
+  var seen = Object.create(null), ids = rules.passIds.map(function(id) {
+    if (typeof id !== 'string' || !/^[1-9]\d{0,15}$/.test(id) || seen[id]) throw Error('OB 課卡 ID 必須為不重複的正整數。');
+    seen[id] = true; return id;
+  });
+  var result = {dateFrom:from,dateTo:to,passIds:ids};
+  if (rules.fixedGifts != null) {
+    if (!Array.isArray(rules.fixedGifts) || rules.fixedGifts.length > 50) throw Error('固定贈品設定超過上限。');
+    var giftKeys = Object.create(null);
+    result.fixedGifts = rules.fixedGifts.map(function(g) {
+      if (!g || typeof g.passId !== 'string' || !/^[1-9]\d{0,15}$/.test(g.passId) ||
+          typeof g.prizeId !== 'string' || typeof g.venue !== 'string' || !g.prizeId.trim() || !g.venue.trim() ||
+          g.prizeId.length > 100 || g.venue.length > 100 || /[\r\n]/.test(g.prizeId+g.venue)) throw Error('固定贈品請填課卡 ID、獎品 ID 與領取館別。');
+      var key = JSON.stringify([g.passId,g.prizeId.trim()]);
+      if (giftKeys[key]) throw Error('同課卡的固定贈品設定重複。');
+      giftKeys[key] = true;
+      return {passId:g.passId,prizeId:g.prizeId.trim(),venue:g.venue.trim()};
+    });
+  }
+  if (!ids.length && !(result.fixedGifts || []).length) throw Error('至少設定一張抽獎課卡或固定贈品課卡。');
+  return result;
+}
+
+function raffleFixedGiftCatalog_(rules, prizes) {
+  var col = raffleColumns_(prizes,['獎項ID','獎品名稱','領獎方式']);
+  return (rules.fixedGifts || []).map(function(g) {
+    var matches = prizes.slice(1).filter(function(r) { return cleanText_(r[col['獎項ID']]) === g.prizeId; });
+    if (matches.length !== 1 || !cleanText_(matches[0][col['獎品名稱']]) || cleanText_(matches[0][col['領獎方式']]) !== 'choose_venue') throw Error('固定贈品必須唯一對應實體獎品，請核對獎品設定。');
+    return {passId:g.passId,prizeId:g.prizeId,venue:g.venue,prizeName:cleanText_(matches[0][col['獎品名稱']])};
+  });
+}
+
+function raffleFixedGiftClaim_(campaign, purchase, gift) {
+  var source = {purchaseId:purchase.id,passId:purchase.passId,price:purchase.price,purchasedAt:purchase.purchasedAt,sourceSpreadsheetId:campaign.sourceSpreadsheetId};
+  var claim = {id:'gift_'+raffleHash_(JSON.stringify([campaign.id,campaign.sourceSpreadsheetId,purchase.id,gift.prizeId])),
+    campaignId:campaign.id,email:purchase.email,studentName:purchase.name,prizeId:gift.prizeId,prizeName:gift.prizeName,venue:gift.venue,
+    quantity:1,claimedQuantity:0,status:(campaign.readyPrizeVenues || []).some(function(p) {return p.prizeId === gift.prizeId && p.venue === gift.venue;})?'ready':'waiting',giftSource:source};
+  claim.sourceFingerprint = raffleHash_(JSON.stringify([claim.campaignId,claim.email,claim.studentName,claim.prizeId,claim.prizeName,claim.venue,claim.quantity,source]));
+  return claim;
+}
+
+function assertRaffleFixedGiftClaim_(claim) {
+  var s = claim.giftSource;
+  if (!s || !/^[1-9]\d{0,15}$/.test(s.purchaseId || '') || !/^[1-9]\d{0,15}$/.test(s.passId || '') || typeof s.price !== 'number' || !isFinite(s.price) || s.price <= 0 ||
+      !Number.isFinite(Date.parse(s.purchasedAt)) || !/^[A-Za-z0-9_-]{16,160}$/.test(s.sourceSpreadsheetId || '') || claim.quantity !== 1 || !claim.venue || !claim.prizeName ||
+      claim.id !== 'gift_'+raffleHash_(JSON.stringify([claim.campaignId,s.sourceSpreadsheetId,s.purchaseId,claim.prizeId])) ||
+      claim.sourceFingerprint !== raffleHash_(JSON.stringify([claim.campaignId,claim.email,claim.studentName,claim.prizeId,claim.prizeName,claim.venue,claim.quantity,s]))) throw Error('固定贈品來源紀錄不符，停止操作。');
+}
+
+function raffleObSyncCampaign_(session, campaignId, write) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('RAFFLE_OB_SYNC_ENABLED') !== 'true') throw Error('OB 購課同步尚未啟用。');
+  var campaign = raffleMailCampaign_(campaignId);
+  normalizeRaffleCampaign_(campaign);
+  if (!campaign.obSync) throw Error('請先設定此活動的 OB 購課期間與課卡 ID。');
+  normalizeRaffleObRules_(campaign.obSync);
+  // A different GAS project's lock cannot protect this source. Require explicit single-writer handoff.
+  if (props.getProperty('RAFFLE_OB_SYNC_HANDOFF_' + campaign.id) !== 'confirmed') throw Error('尚未確認舊購課同步已停用交接，不可操作。');
+  if (write && props.getProperty('RAFFLE_WRITES_ENABLED') !== 'true') throw Error('抽獎寫入尚未啟用。');
+  return campaign;
+}
+
+function raffleObSource_(campaign) {
+  var sheet = SpreadsheetApp.openById(campaign.sourceSpreadsheetId).getSheetByName('抽獎名單');
+  if (!sheet || !sheet.getLastRow() || sheet.getLastRow() > 5001 || sheet.getLastColumn() > 100) throw Error('抽獎名單不存在或超過安全容量。');
+  var rows = sheet.getRange(1,1,sheet.getLastRow(),sheet.getLastColumn()).getDisplayValues();
+  var required = ['OB email名稱','OB名字','驗證碼','是否已使用(Yes/空白)','寄送e-mail(Yes/空格)','寄送日期',
+    'API購課ID','API購買時間','API課卡ID','API課卡名稱','API點數','API付款狀態','API付款方式','API付款參考編號','API使用者ID','API同步時間','同步來源'];
+  var col = raffleColumns_(rows, required), ids = Object.create(null), codes = Object.create(null);
+  rows.slice(1).forEach(function(row) {
+    var id = cleanText_(row[col['API購課ID']]), code = cleanText_(row[col['驗證碼']]).toUpperCase();
+    if ((id && ids[id]) || (code && codes[code])) throw Error('抽獎名單有重複購課 ID 或驗證碼，請先核對。');
+    if (id) ids[id] = true;
+    if (code) codes[code] = true;
+  });
+  return {sheet:sheet,rows:rows,col:col,ids:ids,codes:codes};
+}
+
+function raffleObSyncPlan_(campaign) {
+  var rules = normalizeRaffleObRules_(campaign.obSync), source = raffleObSource_(campaign);
+  var giftRules = rules.fixedGifts || [], giftState = giftRules.length ? readRaffleState_() : null;
+  var prizes = giftRules.length ? readRaffleTable_(SpreadsheetApp.openById(campaign.sourceSpreadsheetId),'獎項設定') : [];
+  var gifts = giftRules.length ? raffleFixedGiftCatalog_(rules,prizes) : [], giftIds = Object.create(null);
+  if (giftState) giftState.claims.forEach(function(c) { giftIds[c.id] = true; });
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  var purchases = [], seen = Object.create(null), complete = false;
+  var queryEnd = new Date(Date.parse(rules.dateTo+'T00:00:00Z')+86400000).toISOString().slice(0,10)+' 00:00:00';
+  for (var pageIndex = 0; pageIndex < 20; pageIndex++) {
+    var page = fetchObUserPassResponse_(token, buildObUserPassUrl_('', {
+      payment_status:'paid',date_from:rules.dateFrom+' 00:00:00',date_to:queryEnd,start:pageIndex*100
+    }));
+    if (!Array.isArray(page) || page.length > 100) throw Error('OB 購課列表格式不正確。');
+    page.forEach(function(item) {
+      if (!item || !/^[1-9]\d{0,15}$/.test(cleanText_(item.id))) throw Error('OB 購課 ID 缺漏或格式錯誤。');
+      var id = cleanText_(item.id);
+      if (seen[id]) throw Error('OB 分頁資料重複，請重新同步。');
+      seen[id] = true; purchases.push(item);
+    });
+    if (page.length < 100) { complete = true; break; }
+  }
+  if (!complete) throw Error('OB 資料超過單次 2000 筆安全範圍，尚未寫入；請縮小活動期間或聯絡管理員。');
+  var from = Date.parse(rules.dateFrom+'T00:00:00+08:00'), to = Date.parse(rules.dateTo+'T00:00:00+08:00')+86400000;
+  var candidates = [], skipped = 0, existing = 0, excludedZeroPrice = 0, reviewPurchases = [];
+  purchases.forEach(function(p) {
+    var time = cleanText_(p.purchasedAt);
+    // OB may return local Taiwan timestamps without an offset.
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(time)) time = time.replace(' ','T')+'+08:00';
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(time) || !isFinite(Date.parse(time))) throw Error('OB 購買時間無法核對，停止同步。');
+    var ms = Date.parse(time), passId = cleanText_(p.pass && p.pass.id);
+    var matchingGifts = gifts.filter(function(g) {return g.passId === passId;}), draw = rules.passIds.indexOf(passId) >= 0;
+    if (p.paymentStatus !== 'paid' || ms < from || ms >= to || (!draw && !matchingGifts.length)) { skipped++; return; }
+    var price = p.price;
+    if ((typeof price === 'number' && price === 0) || (typeof price === 'string' && /^0+(?:\.0+)?$/.test(price.trim())) || cleanText_(p.paymentMethod).toLowerCase() === 'free') {
+      excludedZeroPrice++; skipped++; return;
+    }
+    if (!((typeof price === 'number' || (typeof price === 'string' && /^\d+(?:\.\d+)?$/.test(price.trim()))) && isFinite(Number(price)) && Number(price) > 0)) {
+      reviewPurchases.push({purchaseId:cleanText_(p.id),reason:'付款金額缺漏或異常，待人工核對；不自動發放資格。'}); skipped++; return;
+    }
+    var email = cleanText_(p.user && p.user.email).toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw Error('購課 ID '+cleanText_(p.id)+' 缺少有效 Email，請先核對。');
+    var name = [cleanText_(p.user && p.user.lastName),cleanText_(p.user && p.user.firstName)].filter(Boolean).join(' ');
+    if (!name) throw Error('購課 ID '+cleanText_(p.id)+' 缺少學生姓名。');
+    var candidate = {id:cleanText_(p.id),email:email,name:name,purchasedAt:time,passId:passId,price:Number(price),
+      passName:cleanText_(p.pass.nameZhHant || p.pass.nameEn),visits:p.visits == null ? '' : String(p.visits),
+      paymentMethod:cleanText_(p.paymentMethod),paymentReferenceId:cleanText_(p.paymentReferenceId),userId:cleanText_(p.user.id)};
+    if (draw) {
+      if (source.ids[candidate.id]) existing++;
+      else candidates.push(Object.assign({kind:'raffle'},candidate));
+    }
+    matchingGifts.forEach(function(g) {
+      var claim = raffleFixedGiftClaim_(campaign,candidate,g);
+      if (giftIds[claim.id]) { existing++; return; }
+      candidates.push(Object.assign({kind:'gift',claim:claim},candidate));
+    });
+  });
+  candidates.sort(function(a,b){return a.id.localeCompare(b.id);});
+  return {source:source,giftState:giftState,candidates:candidates,fetched:purchases.length,skipped:skipped,existing:existing,excludedZeroPrice:excludedZeroPrice,reviewPurchases:reviewPurchases,
+    previewToken:raffleHash_(JSON.stringify([campaign,source.rows,candidates,skipped,existing,excludedZeroPrice,reviewPurchases,prizes,giftState && giftState.events]))};
+}
+
+function previewRaffleObSync_(session, campaignId) {
+  var campaign = raffleObSyncCampaign_(session,campaignId,false), plan = raffleObSyncPlan_(campaign);
+  return {campaignId:campaign.id,dryRun:true,readOnly:PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true',
+    dateFrom:campaign.obSync.dateFrom,dateTo:campaign.obSync.dateTo,passIds:campaign.obSync.passIds,
+    fetched:plan.fetched,newCount:plan.candidates.length,raffleCount:plan.candidates.filter(function(p){return p.kind === 'raffle';}).length,giftCount:plan.candidates.filter(function(p){return p.kind === 'gift';}).length,
+    gifts:plan.candidates.filter(function(p){return p.kind === 'gift';}).slice(0,100).map(function(p){return {purchaseId:p.id,studentName:p.name,prizeName:p.claim.prizeName,venue:p.claim.venue};}),
+    existing:plan.existing,skipped:plan.skipped,excludedZeroPrice:plan.excludedZeroPrice,needsReview:plan.reviewPurchases.length,reviewPurchases:plan.reviewPurchases,batchCount:Math.min(25,plan.candidates.length),previewToken:plan.previewToken};
+}
+
+function confirmRaffleObSync_(session, operation) {
+  var campaign = raffleObSyncCampaign_(session,operation && operation.campaignId,true);
+  return withScriptLock_(function() {
+    var context = raffleWriteContext_(session,operation,'ob-sync');
+    campaign = raffleObSyncCampaign_(session,operation.campaignId,true);
+    var plan = raffleObSyncPlan_(campaign), source = plan.source;
+    if (plan.giftState && plan.giftState.requests[context.requestId]) throw Error('操作識別碼已使用，請重新預覽。');
+    if (!operation.previewToken || operation.previewToken !== plan.previewToken) throw Error('OB 或抽獎名單已變更；請重新預覽，已同步的購課不會重複新增。');
+    var batch = plan.candidates.slice(0,25), at = new Date().toISOString();
+    if (!batch.length) throw Error('目前沒有新增的購課資格。');
+    if (source.rows.length + batch.filter(function(p){return p.kind === 'raffle';}).length > 5001) throw Error('抽獎名單超過安全容量。');
+    var rows = batch.filter(function(p){return p.kind === 'raffle';}).map(function(p) {
+      var code;
+      for (var attempt=0;attempt<200;attempt++) {
+        code = Utilities.getUuid().replace(/-/g,'').slice(0,8).toUpperCase();
+        if (!source.codes[code]) break;
+      }
+      if (source.codes[code]) throw Error('無法產生唯一驗證碼。');
+      source.codes[code] = true;
+      var values = {'OB email名稱':p.email,'OB名字':p.name,'驗證碼':code,'API購課ID':p.id,'API購買時間':p.purchasedAt,
+        'API課卡ID':p.passId,'API課卡名稱':p.passName,'API點數':p.visits,'API付款狀態':'paid','API付款方式':p.paymentMethod,
+        'API付款參考編號':p.paymentReferenceId,'API使用者ID':p.userId,'API同步時間':at,'同步來源':'app-ob:'+campaign.id};
+      var row = source.rows[0].map(function(){return '';});
+      Object.keys(values).forEach(function(key) { var value = String(values[key]); row[source.col[key]] = /^[=+@\-]/.test(value) ? "'"+value : value; });
+      return row;
+    });
+    // Re-read immediately before append; never rewrite existing rows or source inventory.
+    var fresh = raffleObSource_(campaign);
+    if (JSON.stringify(fresh.rows) !== JSON.stringify(source.rows)) throw Error('抽獎名單已變更，請重新預覽。');
+    var end = source.rows.length+rows.length;
+    if (end > source.sheet.getMaxRows()) source.sheet.insertRowsAfter(source.sheet.getMaxRows(),end-source.sheet.getMaxRows());
+    if (rows.length) {
+      try { source.sheet.getRange(source.rows.length+1,1,rows.length,source.rows[0].length).setValues(rows); }
+      finally { SpreadsheetApp.flush(); }
+    }
+    var giftBatch = batch.filter(function(p){return p.kind === 'gift';});
+    if (giftBatch.length) {
+      // Same purchase can have both rewards. Each side has its own stable identity;
+      // after a partial append, a fresh preview includes only the missing side.
+      appendRaffleEvent_(plan.giftState,context,{actor:context.actor,action:'import',reason:'OB 購課固定贈品',
+        changes:giftBatch.map(function(p){return {beforeVersion:null,claim:Object.assign({},p.claim,{version:1})};}),
+        result:{imported:giftBatch.length,remaining:plan.candidates.length-batch.length}});
+    }
+    return {campaignId:campaign.id,inserted:batch.length,raffleInserted:rows.length,giftInserted:giftBatch.length,remaining:plan.candidates.length-batch.length,mailSent:false};
+  });
 }
 
 function readRaffleCampaignState_() {
@@ -21029,6 +21240,7 @@ function raffleCampaignActivationPreview_(state, id) {
     ids[pid] = true; names[key] = true;
   });
   if (!Object.keys(ids).length || c.readyPrizeVenues.some(function(p) { return !ids[p.prizeId]; })) throw new Error('現貨設定對應的獎品不存在。');
+  if (c.obSync && (c.obSync.fixedGifts || []).length) raffleFixedGiftCatalog_(normalizeRaffleObRules_(c.obSync),prizes);
   return {canActivate:true, campaignId:c.id, version:item.version, sourceRows:rows.slice(1).filter(function(row) { return row.some(function(v) { return cleanText_(v); }); }).length,
     prizeCount:Object.keys(ids).length, previewToken:raffleHash_(JSON.stringify([state.seedHash,item,rows,prizes]))};
 }
@@ -21246,6 +21458,13 @@ function raffleReadyNotificationPlan_(campaign, state, selectedIds) {
   var source = buildRaffleImportPreview_(campaign, rows, prizes, []), current = Object.create(null);
   if (source.errors.length || source.conflicts.length) throw new Error('來源領獎資料有誤，停止通知；請先核對。');
   source.additions.forEach(function(c) { current[c.id] = c; });
+  claims.forEach(function(c) {
+    if (c.giftSource) {
+      assertRaffleFixedGiftClaim_(c);
+      if (c.giftSource.sourceSpreadsheetId !== campaign.sourceSpreadsheetId) throw Error('固定贈品來源活動不符。');
+      current[c.id] = c;
+    }
+  });
   var reserved = state.readyReservations.filter(function(r) { return !selectedIds || !selectedIds[r.qualificationId]; });
   var covered = Object.create(null); reserved.forEach(function(r) { covered[r.qualificationId] = true; });
   var candidates = claims.filter(function(c) { return !selectedIds || selectedIds[raffleReadyIdentity_(campaign,c)]; });
@@ -21723,6 +21942,10 @@ function readRaffleState_() {
       } else if (event.changes.length !== 1) throw new Error('領獎日誌缺少單筆異動，停止操作。');
       event.changes.forEach(function(change) {
         var c = change && change.claim, prior = c && claims[c.id];
+        if (c && (c.giftSource || /^gift_/.test(c.id || ''))) {
+          assertRaffleFixedGiftClaim_(c);
+          if (prior && JSON.stringify(prior.giftSource) !== JSON.stringify(c.giftSource)) throw Error('固定贈品來源不可變更。');
+        } else if (prior && prior.giftSource) throw Error('固定贈品來源不可移除。');
         if (!c || !c.id || !c.campaignId || !c.email || !c.prizeId || !Number.isInteger(c.quantity) || c.quantity < 1 || !Number.isInteger(c.claimedQuantity) || c.claimedQuantity < 0 || c.claimedQuantity > c.quantity || ['waiting','ready','partial','claimed','digital','cancelled'].indexOf(c.status) < 0 || !Number.isInteger(c.version) || c.version !== (prior ? prior.version + 1 : 1) || change.beforeVersion !== (prior ? prior.version : null)) throw new Error('領獎日誌版本或資料不完整，停止操作。');
         if ((['waiting','ready','digital'].indexOf(c.status) >= 0 && c.claimedQuantity !== 0) || (c.status === 'partial' && !(c.claimedQuantity > 0 && c.claimedQuantity < c.quantity)) || (c.status === 'claimed' && c.claimedQuantity !== c.quantity)) throw new Error('領獎日誌狀態與數量不一致。');
         if (event.action === 'import') {
@@ -21861,6 +22084,11 @@ function mutateRaffleClaim_(session, operation) {
       var source = SpreadsheetApp.openById(campaign.sourceSpreadsheetId);
       var preview = buildRaffleImportPreview_(campaign, readRaffleTable_(source,'抽獎名單'), readRaffleTable_(source,'獎項設定'), []);
       var candidate = preview.additions.filter(function(c) { return c.id === claim.id; })[0];
+      if (claim.giftSource) {
+        assertRaffleFixedGiftClaim_(claim);
+        if (claim.giftSource.sourceSpreadsheetId !== campaign.sourceSpreadsheetId) throw Error('固定贈品來源活動不符。');
+        candidate = Object.assign({},claim,{status:'waiting'});
+      }
       if (preview.errors.length || preview.conflicts.length || !candidate || ['waiting','ready'].indexOf(candidate.status) < 0 ||
           ['campaignId','email','studentName','prizeId','prizeName','venue','quantity','sourceFingerprint'].some(function(k) { return candidate[k] !== claim[k]; })) throw new Error('來源已變更或無法核對，不可恢復；請先確認原始資料。');
       if (state.claims.some(function(other) {

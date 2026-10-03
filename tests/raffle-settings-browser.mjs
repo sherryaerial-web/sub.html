@@ -33,10 +33,14 @@ try {
  await page.locator('[data-raffle-settings]').click();await page.locator('[data-settings-new]').click();
  for(const [key,value] of Object.entries({id:'fixture',name:'本機測試活動',sourceSpreadsheetId:'fixture-source-1234567890',websiteUrl:'https://example.com/raffle'}))await page.locator(`[data-settings-form] [name="${key}"]`).fill(value);
  assert.equal(await page.evaluate(()=>settingsWrites.length),0);
+ await page.locator('[name="obDateFrom"]').fill('2027-01-01');await page.locator('[name="obDateTo"]').fill('2027-01-31');await page.locator('[name="obPassIds"]').fill('123,456');
+ await page.locator('[name="fixedGifts"]').fill('123｜gift1｜晴光');
+ assert.equal(await page.locator('[name="fixedGifts"]').evaluate(e=>!!(e.compareDocumentPosition(e.form.querySelector('[type="submit"]'))&Node.DOCUMENT_POSITION_FOLLOWING)),true);
  await page.evaluate(()=>{settingsFail=true;});await page.getByRole('button',{name:'儲存草稿（不啟用）',exact:true}).click();await page.locator('[data-settings-retry]').waitFor();
  assert.equal(await page.locator('[data-settings-form] [name="name"]').isDisabled(),true);
  await page.locator('[data-settings-retry]').click();await page.getByText('草稿已儲存，尚未啟用。',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>settingsWrites[0].op.requestId===settingsWrites[1].op.requestId),true);
+ assert.deepEqual(await page.evaluate(()=>settingsWrites[1].op.campaign.obSync),{dateFrom:'2027-01-01',dateTo:'2027-01-31',passIds:['123','456'],fixedGifts:[{passId:'123',prizeId:'gift1',venue:'晴光'}]});
  await page.locator('[name="name"]').fill('未存變更');await page.locator('[data-settings-preview]').click();await page.getByText('請先儲存變更，再核對來源。',{exact:true}).waitFor();
  await page.locator('[name="name"]').fill('本機測試活動');await page.locator('[data-settings-preview]').click();await page.locator('[data-settings-activate]').waitFor();
  await fs.mkdir('/private/tmp/raffle-preview',{recursive:true});

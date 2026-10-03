@@ -31,14 +31,14 @@
   }
   function renderPreview(data) {
     const issues = data.errors || [];
-    return `<div class="admin-control"><h3>核對結果 · 尚未匯入</h3>
+    return `<div class="admin-control"><h3>核對結果 · 尚未同步</h3>
       <p>可新增 ${escape(data.additionCount || 0)} 筆 · 已存在 ${escape(data.duplicates || 0)} 筆 · 未選獎品 ${escape(data.pendingSelection || 0)} 筆</p>
       <p>需核對 ${escape(data.conflictCount || 0)} 筆 · 格式錯誤 ${escape(data.errorCount || 0)} 筆</p>
       <p class="item-meta">以下最多顯示 100 筆新增及各 100 筆問題。本次沒有寫入資料、扣庫存或寄信。</p>
       ${issues.map(issue => `<p class="state error">第 ${escape(issue.row)} 列：${escape(issue.message)}</p>`).join('')}
       ${(data.conflicts || []).map(issue=>`<div class="raffle-prize"><p class="state error">第 ${escape(issue.row)} 列：${escape(issue.message)}</p>${renderSourceComparison(issue)}${data.readOnly === false && data.previewToken && issue.resolvable === true ? `<button type="button" class="compact-button" data-raffle-resolve="${escape(issue.id)}">核對並套用此筆來源變更</button>` : ''}</div>`).join('')}
       ${(data.additions || []).map(item => `<div class="raffle-prize"><strong>${escape(item.studentName)}</strong><p>${escape(item.prizeName)}｜${escape(item.venue || '—')}｜${escape(status(item.status))}</p></div>`).join('')}
-      ${data.readOnly === false && data.previewToken && data.batchCount > 0 && !data.errorCount && !data.conflictCount ? `<button type="button" class="compact-button" data-raffle-confirm-import>確認匯入前 ${escape(data.batchCount)} 筆（不寄信）</button>` : ''}
+      ${data.readOnly === false && data.previewToken && data.batchCount > 0 && !data.errorCount && !data.conflictCount ? `<button type="button" class="compact-button" data-raffle-confirm-import>確認同步前 ${escape(data.batchCount)} 筆（不寄信）</button>` : ''}
     </div>`;
   }
   function renderSourceComparison(issue) {
@@ -53,7 +53,7 @@
        !valid(data.claims,['total',...claimKeys,...unitKeys]) || claimKeys.reduce((n,k)=>n+data.claims[k],0)!==data.claims.total ||
        !['invitation','ready'].every(kind=>valid(data.mail?.[kind],['total','review',...mailKeys]) && mailKeys.reduce((n,k)=>n+data.mail[kind][k],0)===data.mail[kind].total && data.mail[kind].review===data.mail[kind].sending+data.mail[kind].uncertain)) throw Error('未收到完整活動總覽，請重新讀取；不能視為零筆。');
     const c=data.claims;
-    return `<section class="admin-control"><h3>${escape(data.campaignName)}｜活動總覽</h3><p class="item-meta">讀取時間：${escape(data.asOf)}</p><p>只統計本系統已匯入的紀錄，未核對來源是否有新增或異動；不是來源庫存，也不代表可以直接寄送。</p><p>已匯入 ${escape(c.total)} 筆領獎紀錄 · 已交付 ${escape(c.deliveredUnits)} 件 · 尚未交付 ${escape(c.pendingUnits)} 件（含過期，不含電子／撤銷剩餘）</p>${c.blockedRecords ? `<p class="state error">${escape(c.blockedRecords)} 筆／${escape(c.blockedUnits)} 件已過期或期限需核對，不能直接交付；仍計入下方原狀態。</p>` : ''}</section>
+    return `<section class="admin-control"><h3>${escape(data.campaignName)}｜活動總覽</h3><p class="item-meta">讀取時間：${escape(data.asOf)}</p><p>只統計本系統已同步的紀錄，未核對來源是否有新增或異動；不是來源庫存，也不代表可以直接寄送。</p><p>已同步 ${escape(c.total)} 筆領獎紀錄 · 已交付 ${escape(c.deliveredUnits)} 件 · 尚未交付 ${escape(c.pendingUnits)} 件（含過期，不含電子／撤銷剩餘）</p>${c.blockedRecords ? `<p class="state error">${escape(c.blockedRecords)} 筆／${escape(c.blockedUnits)} 件已過期或期限需核對，不能直接交付；仍計入下方原狀態。</p>` : ''}</section>
       <section class="admin-control"><h3>領獎處理</h3>${claimKeys.map(k=>`<p>${escape(status(k))}：${escape(c[k])} 筆</p>`).join('')}<p class="item-meta">「部分領取」獨立計數；撤銷前已交付的件數仍保留。</p></section>
       ${[['invitation','抽獎邀請'],['ready','領獎通知']].map(([kind,label])=>{const m=data.mail[kind];return `<section class="admin-control"><h3>${label}｜共 ${escape(m.total)} 封</h3>${m.review ? `<p class="state error">${escape(m.review)} 封寄送中／結果待確認，請至「寄信紀錄」核對，勿自行重寄。</p>`:''}<p>待寄 ${escape(m.queued)} 封 · 已寄出 ${escape(m.sent)} 封 · 已停止／結案 ${escape(m.closed)} 封</p><p class="item-meta">已寄出不代表學生已收到；停止／結案不會自動重新排入。詳細核對依寄信紀錄為準。</p></section>`;}).join('')}`;
   }
@@ -61,7 +61,7 @@
     if (!data || !data.totals || !data.excluded || !Array.isArray(data.groups) || !Array.isArray(data.claims) || !Number.isInteger(data.offset)) throw Error('未收到完整備貨清單。');
     const groupId = data.group?.id || '';
     const pages = `<div class="admin-item-actions">${data.offset > 0 ? `<button type="button" class="compact-button" data-raffle-fulfillment-page="${Math.max(0,data.offset-50)}" data-group-id="${escape(groupId)}">上一頁</button>` : ''}${data.hasMore ? `<button type="button" class="compact-button" data-raffle-fulfillment-page="${data.offset+50}" data-group-id="${escape(groupId)}">下一頁</button>` : ''}</div>`;
-    const heading = `<div class="admin-control"><h3>獎品／館別備貨清單</h3><p>待備貨 ${escape(data.totals.waiting)} 件 · 已備妥未領 ${escape(data.totals.ready)} 件 · 已領取 ${escape(data.totals.claimed)} 件</p><p class="item-meta">以上是本活動已匯入的領獎需求，不是來源庫存。電子獎 ${escape(data.excluded.digital)} 筆、已取消 ${escape(data.excluded.cancelled)} 筆不再備貨；取消前已交付的數量仍保留於已領取統計。</p>${data.pickupBlocked ? '<p class="state error">已超過領取截止時間或期限設定有誤，請管理員核對；不可直接交付。</p>' : ''}<p class="item-meta">每頁最多 50 ${data.group ? '筆學生紀錄' : '組'}，第 ${Math.floor(data.offset/50)+1} 頁。</p></div>`;
+    const heading = `<div class="admin-control"><h3>獎品／館別備貨清單</h3><p>待備貨 ${escape(data.totals.waiting)} 件 · 已備妥未領 ${escape(data.totals.ready)} 件 · 已領取 ${escape(data.totals.claimed)} 件</p><p class="item-meta">以上是本活動已同步的領獎需求，不是來源庫存。電子獎 ${escape(data.excluded.digital)} 筆、已取消 ${escape(data.excluded.cancelled)} 筆不再備貨；取消前已交付的數量仍保留於已領取統計。</p>${data.pickupBlocked ? '<p class="state error">已超過領取截止時間或期限設定有誤，請管理員核對；不可直接交付。</p>' : ''}<p class="item-meta">每頁最多 50 ${data.group ? '筆學生紀錄' : '組'}，第 ${Math.floor(data.offset/50)+1} 頁。</p></div>`;
     if (data.group) return heading + `<div class="admin-control"><button type="button" class="compact-button" data-raffle-fulfillment-group="">返回備貨總覽</button><h3>${escape(data.group.prizeName)}｜${escape(data.group.venue || '待確認館別')}</h3><p>共 ${escape(data.totalClaims)} 筆；請逐筆核對實際到館的獎品，沒有整組一次標記。</p></div>` + renderClaims(data.claims,campaigns,data) + pages;
     return heading + (data.groups.map(g=>`<article class="admin-control"><h3>${escape(g.prizeName)}｜${escape(g.venue || '待確認館別')}</h3><p>待備貨 ${escape(g.waiting)} 件 · 已備妥未領 ${escape(g.ready)} 件 · 已領取 ${escape(g.claimed)} 件</p><p class="item-meta">${escape(g.claimCount)} 筆領獎紀錄</p><button type="button" class="compact-button" data-raffle-fulfillment-group="${escape(g.id)}">查看學生／逐筆到館</button></article>`).join('') || '<div class="state">目前沒有實體獎品備貨紀錄。</div>') + pages;
   }
@@ -105,11 +105,17 @@
       current=item || {campaign:{id:'',name:'',sourceSpreadsheetId:'',websiteUrl:'',pickupDeadline:'',readyPrizeVenues:[]},version:0,status:'draft'};
       const c=current.campaign;activation=null;pending=null;
       node('[data-settings-editor]').innerHTML=`<form class="admin-control" data-settings-form><h4>${c.id?'編輯草稿':'新增活動草稿'}</h4>${[['id','活動代碼（英數、-、_）'],['name','活動名稱'],['sourceSpreadsheetId','來源 Google 試算表 ID'],['websiteUrl','學生抽獎網址（HTTPS）'],['pickupDeadline','領獎截止時間（可留空，例：2027-01-31T22:00+08:00）']].map(([key,label])=>`<label style="display:block">${label}<input style="width:100%;box-sizing:border-box" name="${key}" value="${escape(c[key]||'')}" ${key==='id'&&c.id?'readonly':''} ${key!=='pickupDeadline'?'required':''}></label>`).join('')}<label style="display:block">教室現貨（可留空；每行：獎項ID｜館別）<textarea style="width:100%;box-sizing:border-box" name="readyPrizeVenues" rows="3">${escape((c.readyPrizeVenues||[]).map(p=>p.prizeId+'｜'+p.venue).join('\n'))}</textarea></label><p class="item-meta">請填未來活動資料；本次不搬舊活動。館別需與來源表「領取館別」完全一致。</p><button class="compact-button" type="submit">儲存草稿（不啟用）</button>${current.version>0?'<button class="compact-button" type="button" data-settings-preview>核對來源並預覽啟用</button>':''}<div data-settings-activation></div></form>`;
+      const ob=c.obSync||{};
+      node('[data-settings-form]').insertAdjacentHTML('beforeend',`<label style="display:block">買指定課卡直接送（每行：OB課卡ID｜獎項ID｜領取館別）<textarea style="width:100%;box-sizing:border-box" name="fixedGifts" rows="3">${escape((ob.fixedGifts||[]).map(g=>[g.passId,g.prizeId,g.venue].join('｜')).join('\n'))}</textarea></label><p class="item-meta">每筆符合資格的購課，固定送每項贈品各 1 件，學生不能選。可同時給抽獎機會；只送贈品時，抽獎課卡 ID 留空。0 元／免費課卡不符合購課活動資格；金額缺漏不自動發放。贈品不扣抽獎池庫存，請另備活動贈品。</p>`);
+      node('[data-settings-form]').insertAdjacentHTML('beforeend',`<fieldset style="margin-top:16px"><legend>OB 購課資格（未使用可全部留空）</legend><p>使用台灣日期、已付款及課卡 ID 判定，每筆購課一次抽獎。啟用前須確認舊同步已停用交接。</p><label style="display:block">購課開始日<input type="date" name="obDateFrom" value="${escape(ob.dateFrom||'')}"></label><label style="display:block">購課結束日（含當日）<input type="date" name="obDateTo" value="${escape(ob.dateTo||'')}"></label><label style="display:block">符合資格的 OB 課卡 ID（逗號分隔）<input name="obPassIds" value="${escape((ob.passIds||[]).join(','))}" placeholder="請填 OB 實際課卡 ID，不是點數"></label></fieldset>`);
+      const settingsForm=node('[data-settings-form]'),saveButton=settingsForm.querySelector('[type="submit"]');
+      const giftLabel=settingsForm.elements.namedItem('fixedGifts').parentElement,giftNote=giftLabel.nextElementSibling;
+      [settingsForm.querySelector('fieldset'),giftLabel,giftNote].forEach(el=>settingsForm.insertBefore(el,saveButton));
       if(current.status==='paused') {
         const form=node('[data-settings-form]');form.querySelector('h4').textContent='修改暫停中的活動';
         form.elements.namedItem('sourceSpreadsheetId').readOnly=true;
         form.querySelector('[type="submit"]').textContent='儲存修改（保持暫停）';
-        form.insertAdjacentHTML('afterbegin','<label style="display:block">修改／恢復原因<input name="maintenanceReason" maxlength="300" required></label><p>現貨設定不會回頭改動已匯入的領獎狀態；已排入的信件若內容不同，寄送前核對會阻擋。</p>');
+        form.insertAdjacentHTML('afterbegin','<label style="display:block">修改／恢復原因<input name="maintenanceReason" maxlength="300" required></label><p>現貨設定不會回頭改動已同步的領獎狀態；已排入的信件若內容不同，寄送前核對會阻擋。</p>');
       }
       node('[data-settings-form]').querySelectorAll('input,textarea').forEach(el=>{el.classList.add('text-input');});
       node('[data-settings-form]').querySelectorAll('label').forEach(el=>{el.style.marginBottom='12px';});
@@ -118,7 +124,15 @@
     function campaignFromForm() {
       const form=node('[data-settings-form]'), c={};
       ['id','name','sourceSpreadsheetId','websiteUrl','pickupDeadline'].forEach(k=>{c[k]=form.elements.namedItem(k).value.trim();});
-      c.readyPrizeVenues=form.elements.namedItem('readyPrizeVenues').value.split('\n').filter(l=>l.trim()).map(line=>{const parts=line.split('｜');if(parts.length!==2)throw Error('現貨請每行填「獎項ID｜館別」。');return{prizeId:parts[0].trim(),venue:parts[1].trim()};});return c;
+      const dateFrom=form.elements.namedItem('obDateFrom').value,dateTo=form.elements.namedItem('obDateTo').value,ids=form.elements.namedItem('obPassIds').value.trim();
+      const giftText=form.elements.namedItem('fixedGifts').value.trim();
+      c.readyPrizeVenues=form.elements.namedItem('readyPrizeVenues').value.split('\n').filter(l=>l.trim()).map(line=>{const parts=line.split('｜');if(parts.length!==2)throw Error('現貨請每行填「獎項ID｜館別」。');return{prizeId:parts[0].trim(),venue:parts[1].trim()};});
+      if(dateFrom||dateTo||ids||giftText){
+        if(!dateFrom||!dateTo||(!ids&&!giftText))throw Error('請填購課開始日、結束日，以及抽獎課卡或固定贈品設定。');
+        c.obSync={dateFrom,dateTo,passIds:ids.split(/[,，\s]+/).filter(Boolean)};
+        if(giftText)c.obSync.fixedGifts=giftText.split('\n').filter(l=>l.trim()).map(line=>{const parts=line.split('｜').map(p=>p.trim());if(parts.length!==3||parts.some(p=>!p))throw Error('固定贈品請每行填「OB課卡ID｜獎項ID｜領取館別」。');return{passId:parts[0],prizeId:parts[1],venue:parts[2]};});
+      }
+      return c;
     }
     async function run(action) {
       if(busy)return;busy=true;
@@ -153,7 +167,7 @@
         if(JSON.stringify(campaignFromForm())!==JSON.stringify(current.campaign))throw Error('請先儲存變更，再核對來源。');
         const result=await options.api('previewRaffleCampaignActivation',{campaignId:current.campaign.id});if(disposed)return;
         if(!result || result.canActivate!==true || result.campaignId!==current.campaign.id || result.version!==current.version || !result.previewToken || !Number.isInteger(result.sourceRows) || !Number.isInteger(result.prizeCount))throw Error('未收到完整啟用核對結果。');
-        activation=result;node('[data-settings-activation]').innerHTML=`<p>來源核對通過：${result.sourceRows} 筆名單、${result.prizeCount} 個獎品。尚未匯入／寄信。</p><button type="button" class="compact-button" data-settings-activate>確認啟用此活動設定（不寄信）</button>`;message('');
+        activation=result;node('[data-settings-activation]').innerHTML=`<p>來源核對通過：${result.sourceRows} 筆名單、${result.prizeCount} 個獎品。尚未同步／寄信。</p><button type="button" class="compact-button" data-settings-activate>確認啟用此活動設定（不寄信）</button>`;message('');
       });
       if(button.hasAttribute('data-settings-activate')&&activation)return run(async()=>{
         const reason=current.status==='paused'?maintenanceReason():undefined;
@@ -165,13 +179,45 @@
     refresh().catch(e=>{if(!disposed)root.innerHTML=`<p class="state error">${escape(e.message||'活動設定讀取失敗。')}</p>`;});
     return()=>{disposed=true;root.removeEventListener('submit',submit);root.removeEventListener('input',input);root.removeEventListener('click',click);root.replaceChildren();};
   }
+  function renderObSyncPreview(data) {
+    if (!data || data.dryRun !== true || typeof data.readOnly !== 'boolean' || !data.campaignId || !data.previewToken || !Array.isArray(data.passIds) ||
+        ['fetched','newCount','existing','skipped','batchCount','raffleCount','giftCount','excludedZeroPrice','needsReview'].some(k=>!Number.isInteger(data[k])||data[k]<0) || data.raffleCount+data.giftCount!==data.newCount || !Array.isArray(data.gifts) || !Array.isArray(data.reviewPurchases) || data.batchCount !== Math.min(25,data.newCount)) throw Error('未收到完整 OB 同步預覽，不能確認。');
+    return `<h3>同步 OB 購課名單 · 尚未寫入</h3><p>購課期間（台灣時間）：${escape(data.dateFrom)} 至 ${escape(data.dateTo)}<br>抽獎課卡 ID：${data.passIds.map(escape).join('、')||'無（僅直接送）'}</p><p>讀取 ${data.fetched} 筆購課 · 抽獎資格 ${data.raffleCount} 筆 · 固定贈品 ${data.giftCount} 件 · 已同步 ${data.existing} 筆資格／贈品</p><p>排除 0 元／免費课卡 ${data.excludedZeroPrice} 筆 · 金額待核對 ${data.needsReview} 筆 · 不符合共 ${data.skipped} 筆購課</p>${data.reviewPurchases.map(p=>`<p class="state error">購課 ${escape(p.purchaseId)}：${escape(p.reason)}</p>`).join('')}${data.gifts.map(g=>`<p>直接送：${escape(g.studentName)}｜${escape(g.prizeName)}｜${escape(g.venue)}｜購課 ${escape(g.purchaseId)}</p>`).join('')}<p>抽獎資格才產生驗證碼；直接送會新增固定贈品領取紀錄，每項 1 件，不需學生選獎。兩者可同時取得、各自防止重複。只追加紀錄，不修改舊資料、不扣抽獎池庫存、不寄信。</p>${!data.readOnly && data.batchCount ? `<button type="button" class="compact-button" data-ob-confirm>確認新增 ${data.batchCount} 筆資格／贈品（不寄信）</button>` : '<p>目前沒有可寫入的新增資格，或寫入尚未啟用。</p>'}`;
+  }
+  function mountObSync(root, options, campaignId) {
+    let disposed=false,busy=false,plan=null;
+    root.innerHTML='<p role="status" data-ob-message></p><div data-ob-result></div><button type="button" class="compact-button" data-ob-preview>重新核對 OB（不寫入）</button>';
+    const message=root.querySelector('[data-ob-message]'),result=root.querySelector('[data-ob-result]');
+    const run=async(write)=>{
+      if(disposed||busy)return;
+      if(write && (!plan || !global.confirm(`確認新增 ${plan.batchCount} 筆資格／固定贈品？不會寄信或扣抽獎池庫存。`)))return;
+      busy=true;root.querySelectorAll('button').forEach(b=>b.disabled=true);message.textContent=write?'同步中，請勿重複操作…':'核對 OB 購課資料中…';
+      try {
+        if(write){
+          const expected=plan.batchCount;
+          const data=await options.api('confirmRaffleObSync',{operation:JSON.stringify({campaignId,previewToken:plan.previewToken,requestId:global.crypto.randomUUID()})});
+          if(disposed)return;
+          if(!data||data.campaignId!==campaignId||data.inserted!==expected||data.mailSent!==false||!Number.isInteger(data.remaining)||data.remaining<0||!Number.isInteger(data.raffleInserted)||!Number.isInteger(data.giftInserted)||data.raffleInserted<0||data.giftInserted<0||data.raffleInserted+data.giftInserted!==data.inserted)throw Error('未收到完整同步結果');
+          plan=null;result.replaceChildren();message.textContent=`已新增 ${data.raffleInserted} 筆抽獎資格、${data.giftInserted} 件固定贈品，尚有 ${data.remaining} 筆；沒有寄信。可重新核對下一批；抽獎用「預覽邀請信」，贈品備妥後用「領獎通知」。`;
+        }else{
+          plan=null;result.replaceChildren();const data=await options.api('previewRaffleObSync',{campaignId});if(disposed)return;
+          if(data?.campaignId!==campaignId)throw Error('OB 同步活動不符。');
+          result.innerHTML=renderObSyncPreview(data);plan=data;message.textContent='';
+        }
+      }catch(error){if(!disposed){plan=null;result.replaceChildren();message.textContent=(error.message||'讀取失敗')+(write?'。尚未確認結果，請先重新核對 OB；已同步購課會自動排除，不要重複補建。':'');}}
+      finally{busy=false;if(!disposed)root.querySelectorAll('button').forEach(b=>b.disabled=false);}
+    };
+    const click=e=>{if(e.target.closest('[data-ob-preview]'))run(false);if(e.target.closest('[data-ob-confirm]'))run(true);};
+    root.addEventListener('click',click);run(false);
+    return()=>{disposed=true;root.removeEventListener('click',click);root.replaceChildren();};
+  }
   function mount(root, options) {
     let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, fulfillmentView = null, pending = null;
     const admin = options.mode === 'admin';
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
-    let settingsCleanup=null;
+    let settingsCleanup=null,obCleanup=null;
     function settingsButton() {
       if(!admin)return;
       const button=document.createElement('button');button.type='button';button.className='compact-button';button.textContent='活動設定／草稿';button.dataset.raffleSettings='';root.appendChild(button);
@@ -185,7 +231,7 @@
         dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
       });
     }
-    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); root.replaceChildren(); };
+    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); root.replaceChildren(); };
     initial.then(data => {
       if (disposed) return;
       if (!data.enabled || !data.campaigns.length) {
@@ -199,10 +245,20 @@
         <form class="admin-control raffle-search">
           <label>活動<select class="admin-select" data-raffle-campaign>${admin ? '' : '<option value="">全部活動</option>'}${campaigns.map(c => `<option value="${escape(c.id)}">${escape(c.name)}</option>`).join('')}</select></label>
           <label>學生姓名或完整 Email<input class="text-input" data-raffle-query maxlength="100" placeholder="姓名至少 2 個字，或輸入完整 Email" autocomplete="off"></label>
-          <div class="admin-item-actions"><button type="submit" class="compact-button">查詢學生</button>${data.canPrepare ? '<button type="button" class="compact-button" data-raffle-fulfillment>獎品／館別備貨清單</button>' : ''}${admin ? '<button type="button" class="compact-button" data-raffle-preview>核對抽獎結果</button><button type="button" class="compact-button" data-raffle-mail-preview>預覽邀請信（不寄出）</button><button type="button" class="compact-button" data-raffle-mail-send>寄送前確認</button><button type="button" class="compact-button" data-raffle-mail-records>寄信紀錄</button>' : ''}</div>
+          <div class="admin-item-actions"><button type="submit" class="compact-button">查詢學生</button>${data.canPrepare ? '<button type="button" class="compact-button" data-raffle-fulfillment>獎品／館別備貨清單</button>' : ''}${admin ? '<button type="button" class="compact-button" data-raffle-preview>同步領獎資料</button><button type="button" class="compact-button" data-raffle-mail-preview>預覽邀請信（不寄出）</button><button type="button" class="compact-button" data-raffle-mail-send>寄送前確認</button><button type="button" class="compact-button" data-raffle-mail-records>寄信紀錄</button>' : ''}</div>
         </form><div data-raffle-notice aria-live="polite"></div><div data-raffle-result aria-live="polite"><div class="state">請先搜尋學生，不會列出全部名單。</div></div>
         <dialog data-raffle-dialog><form class="dialog-body raffle-search" data-raffle-operation-form><div data-raffle-dialog-body></div><div data-raffle-operation-error class="item-meta" role="alert"></div><div class="admin-item-actions"><button type="submit" class="compact-button" data-raffle-save>確認</button><button type="button" class="compact-button" data-raffle-cancel>取消</button></div></form></dialog>`;
       const form = node('form'), result = node('[data-raffle-result]');
+      if(admin){
+        form.querySelector('.admin-item-actions').insertAdjacentHTML('afterbegin','<button type="button" class="compact-button" data-raffle-ob-sync>同步 OB 購課名單</button>');
+        node('[data-raffle-ob-sync]').addEventListener('click',()=>{
+          const campaignId=node('[data-raffle-campaign]').value;
+          const dialog=document.createElement('dialog');dialog.style.cssText='width:min(680px,calc(100vw - 32px));max-height:85vh;overflow:auto;box-sizing:border-box';dialog.innerHTML='<button type="button" data-ob-close>關閉同步</button><div data-ob-content></div>';root.appendChild(dialog);
+          const disposePanel=mountObSync(dialog.querySelector('[data-ob-content]'),options,campaignId);
+          let closed=false;const close=()=>{if(closed)return;closed=true;disposePanel();dialog.remove();if(obCleanup===close)obCleanup=null;};
+          obCleanup=close;dialog.querySelector('[data-ob-close]').onclick=close;dialog.addEventListener('cancel',e=>{e.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
+        });
+      }
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('beforeend','<button type="button" class="compact-button" data-raffle-ready-preview>預覽領獎通知（不寄出）</button><button type="button" class="compact-button" data-raffle-ready-send>領獎通知寄送前確認</button>');
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('afterbegin','<button type="button" class="compact-button" data-raffle-overview>活動總覽（唯讀）</button>');
       settingsButton();
@@ -328,7 +384,7 @@
         } else if (importButton) {
           if (!preview || preview.readOnly !== false) return;
           selected = { action: 'import', preview };
-          node('[data-raffle-dialog-body]').innerHTML = `<h3>確認匯入 ${escape(preview.batchCount)} 筆？</h3><p>只新增本次核對的領獎資料，不扣來源庫存、不寄信。剩餘資料需再次預覽。</p>`;
+          node('[data-raffle-dialog-body]').innerHTML = `<h3>確認同步 ${escape(preview.batchCount)} 筆？</h3><p>只新增本次核對的領獎資料，不扣來源庫存、不寄信。剩餘資料需再次預覽。</p>`;
         } else {
           const claim = (workspace.claims || []).find(c => c.id === button.dataset.claimId);
           if (!claim) return;
@@ -388,7 +444,7 @@
           const imported = selected.action === 'import';
           const queued = selected.action === 'queue';
           const mailOperation = ['send','reconcile'].includes(selected.action);
-          node('[data-raffle-notice]').innerHTML = `<div class="state">${selected.action === 'send' ? `本批 ${escape(response.total)} 封：已送出／核對 ${escape(response.sent)} 封，待確認 ${escape(response.pendingReview)} 封。待確認不會自動重寄；已完成表示兩個管道都已接受／人工核對，仍不保證收件匣送達或手機跳提醒；各管道結果請看下方紀錄。` : selected.action === 'reconcile' ? '已保存核對結論與理由，沒有重寄。' : queued ? `已排入待寄 ${escape(response.queued)} 封，尚未寄出；可到寄信紀錄查看。` : imported ? `已匯入 ${escape(response.imported)} 筆，剩餘 ${escape(response.remaining || 0)} 筆；沒有寄信。` : '這一筆已更新，已保留操作紀錄。'}</div>`;
+          node('[data-raffle-notice]').innerHTML = `<div class="state">${selected.action === 'send' ? `本批 ${escape(response.total)} 封：已送出／核對 ${escape(response.sent)} 封，待確認 ${escape(response.pendingReview)} 封。待確認不會自動重寄；已完成表示兩個管道都已接受／人工核對，仍不保證收件匣送達或手机跳提醒；各管道結果請看下方紀錄。` : selected.action === 'reconcile' ? '已保存核對結論與理由，沒有重寄。' : queued ? `已排入待寄 ${escape(response.queued)} 封，尚未寄出；可到寄信紀錄查看。` : imported ? `已同步 ${escape(response.imported)} 筆，剩餘 ${escape(response.remaining || 0)} 筆；沒有寄信。` : '這一筆已更新，已保留操作紀錄。'}</div>`;
           pending = null; dialog.close();
           if (fulfillmentView) await read('fulfillment', fulfillmentView.offset, fulfillmentView.groupId);
           else await read(mailOperation ? 'mailRecords' : queued ? (selected.preview?.kind === 'ready' ? 'ready' : 'mail') : imported || selected.action === 'resolve');
@@ -407,5 +463,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { mount, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

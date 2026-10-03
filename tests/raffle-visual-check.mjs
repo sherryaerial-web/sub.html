@@ -57,7 +57,7 @@ try {
    activeAdminTab='raffle';activeAdminSection='raffle';switchView('view-admin');
  });
  await page.locator('[data-raffle-preview]').click();
- await page.getByText('核對結果 · 尚未匯入').waitFor();
+ await page.getByText('核對結果 · 尚未同步').waitFor();
  await page.screenshot({path:'/private/tmp/raffle-preview/admin-mobile.png',fullPage:true});
  await page.evaluate(()=>{
    clearRaffleWorkspace();
@@ -162,7 +162,7 @@ try {
  await page.locator('[data-raffle-preview]').click();
  await page.locator('[data-raffle-confirm-import]').click();
  await page.locator('[data-raffle-save]').click();
- await page.getByText('已匯入 1 筆，剩餘 0 筆；沒有寄信。').waitFor();
+ await page.getByText('已同步 1 筆，剩餘 0 筆；沒有寄信。').waitFor();
  assert.equal(await page.evaluate(()=>window.writeCalls.filter(c=>c.action==='confirmRaffleImport').length),1);
  await page.evaluate(()=>{
    clearRaffleWorkspace();window.sendCalls=[];window.reconcileCalls=[];window.sendMode='normal';

@@ -7,6 +7,13 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('OB preview rejects malformed payloads and only offers gated no-mail confirmation',()=>{
+ const api=load(),p={campaignId:'future',dryRun:true,readOnly:false,dateFrom:'2027-01-01',dateTo:'2027-01-31',passIds:['60'],fetched:3,newCount:2,raffleCount:1,giftCount:1,gifts:[{purchaseId:'1',studentName:'學生',prizeName:'<提袋>',venue:'晴光'}],excludedZeroPrice:1,needsReview:1,reviewPurchases:[{purchaseId:'2',reason:'金額缺漏'}],existing:1,skipped:0,batchCount:2,previewToken:'abc'};
+ assert.match(api.renderObSyncPreview(p),/data-ob-confirm/);assert.match(api.renderObSyncPreview(p),/不寄信/);
+ assert.ok(!api.renderObSyncPreview({...p,readOnly:true}).includes('data-ob-confirm'));
+ assert.match(api.renderObSyncPreview(p),/固定贈品 1/);assert.match(api.renderObSyncPreview(p),/0 元/);assert.match(api.renderObSyncPreview(p),/金額缺漏/);assert.match(api.renderObSyncPreview(p),/&lt;提袋&gt;/);
+ for(const bad of [{},{...p,batchCount:26},{...p,newCount:undefined},{...p,previewToken:''},{...p,giftCount:undefined},{...p,giftCount:2}])assert.throws(()=>api.renderObSyncPreview(bad));
+});
 test('restore UI only offers supported single unclaimed awards and labels legacy multi quantity for manual review',()=>{
  const api=load(),c={id:'a',campaignId:'c',studentKey:'s',quantity:1,claimedQuantity:0,status:'cancelled',venue:'晴光'};
  const html=api.renderClaims([c,{...c,id:'b',quantity:3,claimedQuantity:1}],[],{readOnly:false,canCorrect:true});
@@ -106,7 +113,7 @@ test('untrusted names and statuses never become markup or active buttons', () =>
 });
 test('preview makes no claim that data was written and displays error totals', () => {
   const html = load().renderPreview({ additionCount: 0, duplicates: 2, conflictCount: 1, errorCount: 1, pendingSelection: 3, additions: [], conflicts: [{row:2,message:'來源異動'}], errors: [{row:3,message:'<invalid>'}] });
-  assert.match(html, /尚未匯入/); assert.match(html, /來源異動/); assert.match(html, /&lt;invalid&gt;/);
+  assert.match(html, /尚未同步/); assert.match(html, /來源異動/); assert.match(html, /&lt;invalid&gt;/);
   assert.ok(!html.includes('<button'));
 });
 test('write controls are per claim and constrained by readiness and capabilities', () => {

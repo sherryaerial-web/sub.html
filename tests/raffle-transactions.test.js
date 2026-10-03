@@ -103,3 +103,9 @@ test('journal checks result counts, actor and state consistency',()=>{
    const s=setup();s.importNow();const rows=s.tables.get('RaffleJournal').rows,event=JSON.parse(rows[1][3]);change(event);rows[1][3]=JSON.stringify(event);assert.throws(()=>s.c.readRaffleClaims_(),/日誌/);
  }
 });
+test('fulfillment detail uses existing per-claim versioned preparation and refreshes totals without preparing siblings',()=>{
+ const s=setup(2);s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([{...campaign,readyPrizeVenues:[]}]));s.importNow();const group=s.c.getRaffleFulfillment_(prep,{campaignId:'future'}).groups[0];
+ const detail=s.c.getRaffleFulfillment_(prep,{campaignId:'future',groupId:group.id});assert.equal(detail.claims.length,2);const c=detail.claims[0];
+ s.c.mutateRaffleClaim_(prep,{claimId:c.id,version:c.version,action:'prepare',venue:c.venue,requestId:'prep-from-summary-0001'});
+ const refreshed=s.c.getRaffleFulfillment_(prep,{campaignId:'future'});assert.equal(refreshed.totals.waiting,1);assert.equal(refreshed.totals.ready,1);assert.equal(s.c.readRaffleClaims_().filter(c=>c.status==='waiting').length,1);
+});

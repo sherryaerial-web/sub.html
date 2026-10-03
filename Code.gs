@@ -9203,6 +9203,9 @@ function doPost(e) {
       getRaffleWorkspace: function() {
         return getRaffleWorkspace_(session, { mode: parameters.mode, query: parameters.query, campaignId: parameters.campaignId });
       },
+      getRaffleFulfillment: function() {
+        return getRaffleFulfillment_(session, {campaignId:parameters.campaignId,groupId:parameters.groupId,offset:parameters.offset});
+      },
       previewRaffleImport: function() {
         return previewRaffleImport_(session, parameters.campaignId);
       },
@@ -20880,13 +20883,61 @@ function filterRaffleTeacherClaims_(claims, query) {
   if (term.length < 2 || term.length > 100) return [];
   return claims.filter(function(c) {
     return cleanText_(c.studentName).toLowerCase().indexOf(term) >= 0 || cleanText_(c.email).toLowerCase() === term;
-  }).slice(0, 50).map(function(c) {
+  }).slice(0, 50).map(rafflePublicClaim_);
+}
+
+function rafflePublicClaim_(c) {
     var email = cleanText_(c.email).toLowerCase(), at = email.indexOf('@');
     return { id: c.id, campaignId: c.campaignId, studentKey: raffleHash_(email), studentName: c.studentName,
       maskedEmail: email.slice(0, 1) + '•••' + (at >= 0 ? email.slice(at) : ''), prizeName: c.prizeName,
       venue: c.venue, quantity: c.quantity, claimedQuantity: c.claimedQuantity, status: c.status,
       claimedAt: c.claimedAt || '', claimedBy: c.claimedBy || '', version: Number(c.version) || 0 };
+}
+
+function getRaffleFulfillment_(session, query) {
+  assertRafflePreparer_(session);
+  query = query || {};
+  var config = getRaffleConfiguration_();
+  if (!config.enabled) throw new Error('抽獎工作台尚未啟用。');
+  var campaign = config.campaigns.filter(function(c) { return c.id === query.campaignId; })[0];
+  if (!campaign) throw new Error('請先選擇已設定的抽獎活動。');
+  var offset = query.offset == null || query.offset === '' ? 0 : Number(query.offset);
+  if (!Number.isInteger(offset) || offset < 0) throw new Error('備貨清單分頁格式有誤。');
+  var claims = readRaffleClaims_().filter(function(c) { return c.campaignId === campaign.id; });
+  var groups = Object.create(null), totals = {waiting:0,ready:0,claimed:0}, excluded = {digital:0,cancelled:0};
+  claims.forEach(function(c) {
+    if (c.status === 'digital' || c.status === 'cancelled') { excluded[c.status]++; return; }
+    if (!c.prizeId || !c.prizeName || !Number.isSafeInteger(c.quantity) || !Number.isSafeInteger(c.claimedQuantity) || c.quantity < 1 || c.claimedQuantity < 0 || c.claimedQuantity > c.quantity ||
+        (['waiting','ready'].indexOf(c.status) >= 0 && c.claimedQuantity !== 0) || (c.status === 'partial' && !(c.claimedQuantity > 0 && c.claimedQuantity < c.quantity)) || (c.status === 'claimed' && c.quantity !== c.claimedQuantity)) throw new Error('備貨資料的狀態或數量不一致，請管理員核對。');
+    var id = 'raffle_group_' + raffleHash_(JSON.stringify([campaign.id,c.prizeId,c.venue]));
+    if (!groups[id]) groups[id] = {id:id,prizeName:c.prizeName,venue:c.venue,claimCount:0,waiting:0,ready:0,claimed:0,claims:[]};
+    var group = groups[id];
+    if (group.prizeName !== c.prizeName) throw new Error('同一獎品的名稱資料不一致，請管理員核對。');
+    var waiting = c.status === 'waiting' ? c.quantity : 0;
+    var ready = ['ready','partial'].indexOf(c.status) >= 0 ? c.quantity - c.claimedQuantity : 0;
+    group.claimCount++; group.waiting += waiting; group.ready += ready; group.claimed += c.claimedQuantity; group.claims.push(c);
+    totals.waiting += waiting; totals.ready += ready; totals.claimed += c.claimedQuantity;
+    if (![totals.waiting,totals.ready,totals.claimed].every(Number.isSafeInteger)) throw new Error('備貨數量超出安全範圍。');
   });
+  var sorted = Object.keys(groups).map(function(id) { return groups[id]; }).sort(function(a,b) {
+    var x = a.venue + '\n' + a.prizeName + '\n' + a.id, y = b.venue + '\n' + b.prizeName + '\n' + b.id;
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  var publicGroup = function(g) { return {id:g.id,prizeName:g.prizeName,venue:g.venue,claimCount:g.claimCount,waiting:g.waiting,ready:g.ready,claimed:g.claimed}; };
+  var deadline = campaign.pickupDeadline || '';
+  var result = {campaignId:campaign.id,campaignName:campaign.name,readOnly:PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true',
+    canPrepare:true,canCorrect:getSessionManagementCapabilities_(session).indexOf('raffle_admin') >= 0,
+    pickupDeadline:deadline,pickupBlocked:!!deadline && (!Number.isFinite(Date.parse(deadline)) || Date.now() > Date.parse(deadline)),
+    totals:totals,excluded:excluded,totalGroups:sorted.length,offset:offset,hasMore:offset+50 < sorted.length,groups:[],claims:[]};
+  if (query.groupId) {
+    var selected = groups[query.groupId];
+    if (!selected) throw new Error('找不到備貨群組，請重新查看清單。');
+    selected.claims.sort(function(a,b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+    result.group = publicGroup(selected); result.totalClaims = selected.claims.length;
+    result.hasMore = offset+50 < selected.claims.length;
+    result.claims = selected.claims.slice(offset,offset+50).map(rafflePublicClaim_);
+  } else result.groups = sorted.slice(offset,offset+50).map(publicGroup);
+  return result;
 }
 
 function getRaffleWorkspace_(session, query) {

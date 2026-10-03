@@ -22,6 +22,15 @@ test('mail records can navigate beyond fifty jobs',()=>{
  const api=load();assert.match(api.renderMailRecords({total:60,reviewCount:5,offset:0,hasMore:true,records:[]}),/data-raffle-mail-page="50"/);
  assert.match(api.renderMailRecords({total:60,reviewCount:5,offset:50,hasMore:false,records:[]}),/data-raffle-mail-page="0"/);
 });
+test('fulfillment summary shows unit totals, excludes digital and escapes names with reachable pages',()=>{
+ const api=load(),data={totals:{waiting:3,ready:4,claimed:1},excluded:{digital:2,cancelled:1},groups:[{id:'group',prizeName:'<img>',venue:'晴光',claimCount:4,waiting:3,ready:4,claimed:1}],claims:[],offset:0,totalGroups:51,hasMore:true};
+ const html=api.renderFulfillment(data,[]);assert.match(html,/待備貨 3 件/);assert.match(html,/已備妥未領 4 件/);assert.match(html,/電子獎 2 筆/);assert.match(html,/&lt;img&gt;/);assert.match(html,/data-raffle-fulfillment-group="group"/);assert.match(html,/data-raffle-fulfillment-page="50"/);assert.ok(!html.includes('data-raffle-action="prepare"'));
+ assert.throws(()=>api.renderFulfillment({},[]),/完整/);
+});
+test('fulfillment detail retains individual preparation but blocks expired collection controls',()=>{
+ const api=load(),data={totals:{waiting:1,ready:1,claimed:0},excluded:{digital:0,cancelled:0},groups:[],group:{id:'g',prizeName:'提袋',venue:'晴光'},claims:[{id:'a',studentKey:'a',studentName:'甲',status:'waiting',quantity:1,claimedQuantity:0},{id:'b',studentKey:'b',studentName:'乙',status:'ready',quantity:1,claimedQuantity:0}],offset:0,totalClaims:2,hasMore:false,readOnly:false,canPrepare:true,pickupBlocked:true};
+ const html=api.renderFulfillment(data,[]);assert.match(html,/截止|期限/);assert.match(html,/data-raffle-action="prepare"/);assert.ok(!html.includes('data-raffle-action="collect"'));assert.match(html,/返回備貨總覽/);
+});
 test('mail preview warns delivery history is unchecked and escapes body without send controls',()=>{
   const html=load().renderMailPreview({dryRun:true,deliveryChecked:false,candidateCount:21,skipped:2,previews:[{email:'<unsafe>',subject:'邀請',body:'<script>bad()</script>\ncode'}]});
  assert.match(html,/尚未核對寄信紀錄/);assert.match(html,/21/);assert.match(html,/&lt;script&gt;/);

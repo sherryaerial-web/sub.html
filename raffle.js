@@ -18,7 +18,7 @@
         <p class="item-meta">${escape((campaigns.find(c => c.id === item.campaignId) || {}).name || '')}｜${escape(item.venue || '非實體領取／待確認館別')}｜${escape(item.claimedQuantity || 0)}／${escape(item.quantity || 1)} 件已領</p>
         ${item.claimedAt ? `<p class="item-meta">領取：${escape(item.claimedAt)}｜經手：${escape(item.claimedBy)}</p>` : ''}
         <div class="admin-item-actions">
-          ${permissions.readOnly === false && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
+          ${permissions.readOnly === false && !permissions.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
           ${permissions.readOnly === false && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">這一筆已備妥到館</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && Number(item.claimedQuantity) > 0 && ['partial','claimed','ready'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="correct" data-claim-id="${escape(item.id)}">更正誤領</button>` : ''}
           ${permissions.canCorrect ? `<button type="button" class="compact-button" data-raffle-action="audit" data-claim-id="${escape(item.id)}">操作紀錄</button>` : ''}
@@ -35,6 +35,14 @@
       ${(data.additions || []).map(item => `<div class="raffle-prize"><strong>${escape(item.studentName)}</strong><p>${escape(item.prizeName)}｜${escape(item.venue || '—')}｜${escape(status(item.status))}</p></div>`).join('')}
       ${data.readOnly === false && data.previewToken && data.batchCount > 0 && !data.errorCount && !data.conflictCount ? `<button type="button" class="compact-button" data-raffle-confirm-import>確認匯入前 ${escape(data.batchCount)} 筆（不寄信）</button>` : ''}
     </div>`;
+  }
+  function renderFulfillment(data, campaigns) {
+    if (!data || !data.totals || !data.excluded || !Array.isArray(data.groups) || !Array.isArray(data.claims) || !Number.isInteger(data.offset)) throw Error('未收到完整備貨清單。');
+    const groupId = data.group?.id || '';
+    const pages = `<div class="admin-item-actions">${data.offset > 0 ? `<button type="button" class="compact-button" data-raffle-fulfillment-page="${Math.max(0,data.offset-50)}" data-group-id="${escape(groupId)}">上一頁</button>` : ''}${data.hasMore ? `<button type="button" class="compact-button" data-raffle-fulfillment-page="${data.offset+50}" data-group-id="${escape(groupId)}">下一頁</button>` : ''}</div>`;
+    const heading = `<div class="admin-control"><h3>獎品／館別備貨清單</h3><p>待備貨 ${escape(data.totals.waiting)} 件 · 已備妥未領 ${escape(data.totals.ready)} 件 · 已領取 ${escape(data.totals.claimed)} 件</p><p class="item-meta">以上是本活動已匯入的領獎需求，不是來源庫存。電子獎 ${escape(data.excluded.digital)} 筆、已取消 ${escape(data.excluded.cancelled)} 筆不列入實體備貨。</p>${data.pickupBlocked ? '<p class="state error">已超過領取截止時間或期限設定有誤，請管理員核對；不可直接交付。</p>' : ''}<p class="item-meta">每頁最多 50 ${data.group ? '筆學生紀錄' : '組'}，第 ${Math.floor(data.offset/50)+1} 頁。</p></div>`;
+    if (data.group) return heading + `<div class="admin-control"><button type="button" class="compact-button" data-raffle-fulfillment-group="">返回備貨總覽</button><h3>${escape(data.group.prizeName)}｜${escape(data.group.venue || '待確認館別')}</h3><p>共 ${escape(data.totalClaims)} 筆；請逐筆核對實際到館的獎品，沒有整組一次標記。</p></div>` + renderClaims(data.claims,campaigns,data) + pages;
+    return heading + (data.groups.map(g=>`<article class="admin-control"><h3>${escape(g.prizeName)}｜${escape(g.venue || '待確認館別')}</h3><p>待備貨 ${escape(g.waiting)} 件 · 已備妥未領 ${escape(g.ready)} 件 · 已領取 ${escape(g.claimed)} 件</p><p class="item-meta">${escape(g.claimCount)} 筆領獎紀錄</p><button type="button" class="compact-button" data-raffle-fulfillment-group="${escape(g.id)}">查看學生／逐筆到館</button></article>`).join('') || '<div class="state">目前沒有實體獎品備貨紀錄。</div>') + pages;
   }
   function renderMailPreview(data) {
     if (!data || data.dryRun !== true || typeof data.deliveryChecked !== 'boolean' || !Number.isInteger(data.candidateCount) || !Number.isInteger(data.skipped) || !Array.isArray(data.previews)) throw Error('未收到完整邀請信預覽，請確認後端版本或稍後再試。');
@@ -59,7 +67,7 @@
     return `<div class="admin-control"><h3>寄送前確認 · 尚未寄出</h3><p class="state">${!data.sendEnabled ? '正式寄信未啟用，或尚未確認舊寄信程式已停用交接。' : `目前剩餘配額：${escape(data.quota)} 位收件人；本批 ${escape(data.batchCount)} 封。配額不足時整批停止。`}</p><p>只寄出已排入待寄、再次核對來源一致的信件；每次最多 5 封。匯入或預覽不會寄信。</p>${canSend ? `<button type="button" class="compact-button" data-raffle-confirm-send>核對後寄出這 ${escape(data.batchCount)} 封</button>` : ''}${data.previews.map(item=>`<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>收件人：${escape(item.email)}</strong><p>主旨：${escape(item.subject)}</p><div style="white-space:pre-wrap">${escape(item.body)}</div></article>`).join('') || '<p>目前沒有待寄信件。</p>'}</div>`;
   }
   function mount(root, options) {
-    let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, pending = null;
+    let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, fulfillmentView = null, pending = null;
     const admin = options.mode === 'admin';
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
@@ -77,31 +85,35 @@
         <form class="admin-control raffle-search">
           <label>活動<select class="admin-select" data-raffle-campaign>${admin ? '' : '<option value="">全部活動</option>'}${campaigns.map(c => `<option value="${escape(c.id)}">${escape(c.name)}</option>`).join('')}</select></label>
           <label>學生姓名或完整 Email<input class="text-input" data-raffle-query maxlength="100" placeholder="姓名至少 2 個字，或輸入完整 Email" autocomplete="off"></label>
-          <div class="admin-item-actions"><button type="submit" class="compact-button">查詢學生</button>${admin ? '<button type="button" class="compact-button" data-raffle-preview>核對抽獎結果</button><button type="button" class="compact-button" data-raffle-mail-preview>預覽邀請信（不寄出）</button><button type="button" class="compact-button" data-raffle-mail-send>寄送前確認</button><button type="button" class="compact-button" data-raffle-mail-records>寄信紀錄</button>' : ''}</div>
+          <div class="admin-item-actions"><button type="submit" class="compact-button">查詢學生</button>${data.canPrepare ? '<button type="button" class="compact-button" data-raffle-fulfillment>獎品／館別備貨清單</button>' : ''}${admin ? '<button type="button" class="compact-button" data-raffle-preview>核對抽獎結果</button><button type="button" class="compact-button" data-raffle-mail-preview>預覽邀請信（不寄出）</button><button type="button" class="compact-button" data-raffle-mail-send>寄送前確認</button><button type="button" class="compact-button" data-raffle-mail-records>寄信紀錄</button>' : ''}</div>
         </form><div data-raffle-notice aria-live="polite"></div><div data-raffle-result aria-live="polite"><div class="state">請先搜尋學生，不會列出全部名單。</div></div>
         <dialog data-raffle-dialog><form class="dialog-body raffle-search" data-raffle-operation-form><div data-raffle-dialog-body></div><div data-raffle-operation-error class="item-meta" role="alert"></div><div class="admin-item-actions"><button type="submit" class="compact-button" data-raffle-save>確認</button><button type="button" class="compact-button" data-raffle-cancel>取消</button></div></form></dialog>`;
       const form = node('form'), result = node('[data-raffle-result]');
-      async function read(isPreview, offset = 0) {
+      async function read(isPreview, offset = 0, groupId = '') {
         const mailPreview = isPreview === 'mail';
         const mailRecords = isPreview === 'mailRecords';
         const mailSend = isPreview === 'mailSend';
+        const fulfillment = isPreview === 'fulfillment';
         const campaignId = node('[data-raffle-campaign]').value;
         const query = node('[data-raffle-query]').value.trim();
         if (!isPreview && query.length < 2) { result.innerHTML = '<div class="state">請輸入至少 2 個字的姓名或完整 Email。</div>'; return; }
+        if (fulfillment && !campaignId) { result.innerHTML = '<div class="state">請先選擇一個活動，再查看備貨清單。</div>'; return; }
         const request = ++serial;
         form.querySelectorAll('button').forEach(b => { b.disabled = true; });
         result.innerHTML = '<div class="state" role="status">核對資料中…</div>';
         try {
-          const data = await options.api(mailSend ? 'previewRaffleMailSend' : mailRecords ? 'getRaffleMailRecords' : mailPreview ? 'previewRaffleInvitations' : isPreview ? 'previewRaffleImport' : 'getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher', campaignId, query, ...(mailRecords ? {offset} : {}) });
+          const data = await options.api(fulfillment ? 'getRaffleFulfillment' : mailSend ? 'previewRaffleMailSend' : mailRecords ? 'getRaffleMailRecords' : mailPreview ? 'previewRaffleInvitations' : isPreview ? 'previewRaffleImport' : 'getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher', campaignId, query, ...(mailRecords || fulfillment ? {offset} : {}), ...(fulfillment ? {groupId} : {}) });
           if (disposed || request !== serial) return;
           if (!isPreview && !data.enabled) { result.innerHTML = '<div class="state">工作台已暫停開放。</div>'; return; }
           mailPlan = mailPreview ? {...data,campaignId} : null;
           sendPlan = mailSend ? {...data,campaignId} : null;
           mailRecordsData = mailRecords ? {...data,campaignId} : null;
-          if (mailPreview || mailRecords || mailSend) preview = null;
+          fulfillmentView = fulfillment ? {offset,groupId} : null;
+          if (fulfillment) workspace = data;
+          if (mailPreview || mailRecords || mailSend || fulfillment) preview = null;
           else if (isPreview) preview = { ...data, campaignId };
           else { workspace = data; preview = null; }
-          result.innerHTML = mailSend ? renderMailSendPreview(data) : mailRecords ? renderMailRecords(data) : mailPreview ? renderMailPreview(data) : isPreview ? renderPreview(data) : renderClaims(data.claims || [], campaigns, data);
+          result.innerHTML = fulfillment ? renderFulfillment(data,campaigns) : mailSend ? renderMailSendPreview(data) : mailRecords ? renderMailRecords(data) : mailPreview ? renderMailPreview(data) : isPreview ? renderPreview(data) : renderClaims(data.claims || [], campaigns, data);
           if (!isPreview && (data.claims || []).length >= 50) result.insertAdjacentHTML('beforeend', '<p class="state">最多顯示 50 筆，請用完整 Email 縮小範圍。</p>');
         } catch (error) {
           if (!disposed && request === serial) result.innerHTML = `<div class="state error">${escape(error.message || '讀取失敗，請稍後重試。')}</div>`;
@@ -114,12 +126,14 @@
       if (admin) node('[data-raffle-mail-preview]').addEventListener('click', () => read('mail'));
       if (admin) node('[data-raffle-mail-records]').addEventListener('click', () => read('mailRecords'));
       if (admin) node('[data-raffle-mail-send]').addEventListener('click', () => read('mailSend'));
+      node('[data-raffle-fulfillment]')?.addEventListener('click', () => read('fulfillment'));
       node('[data-raffle-campaign]').addEventListener('change', () => {
         serial++;
         preview = null;
         mailPlan = null;
         sendPlan = null;
         mailRecordsData = null;
+        fulfillmentView = null;
         form.querySelectorAll('button').forEach(b => { b.disabled = false; });
         result.innerHTML = '<div class="state">活動已切換，請重新查詢或核對。</div>';
       });
@@ -129,6 +143,9 @@
       node('[data-raffle-cancel]').addEventListener('click', () => { if (!busy) dialog.close(); });
       dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
       result.addEventListener('click', async event => {
+        const groupButton = event.target.closest('[data-raffle-fulfillment-group]');
+        const fulfillmentPage = event.target.closest('[data-raffle-fulfillment-page]');
+        if (!busy && (groupButton || fulfillmentPage)) { read('fulfillment', fulfillmentPage ? Number(fulfillmentPage.dataset.raffleFulfillmentPage) : 0, groupButton ? groupButton.dataset.raffleFulfillmentGroup : fulfillmentPage.dataset.groupId); return; }
         const pageButton = event.target.closest('[data-raffle-mail-page]');
         if (pageButton && !busy) { read('mailRecords', Number(pageButton.dataset.raffleMailPage)); return; }
         const importButton = event.target.closest('[data-raffle-confirm-import]');
@@ -204,7 +221,8 @@
           const mailOperation = ['send','reconcile'].includes(selected.action);
           node('[data-raffle-notice]').innerHTML = `<div class="state">${selected.action === 'send' ? `本批 ${escape(response.total)} 封：已送出／核對 ${escape(response.sent)} 封，待確認 ${escape(response.pendingReview)} 封。待確認不會自動重寄；已送出不保證收件匣送達。` : selected.action === 'reconcile' ? '已保存核對結論與理由，沒有重寄。' : queued ? `已排入待寄 ${escape(response.queued)} 封，尚未寄出；可到寄信紀錄查看。` : imported ? `已匯入 ${escape(response.imported)} 筆，剩餘 ${escape(response.remaining || 0)} 筆；沒有寄信。` : '這一筆已更新，已保留操作紀錄。'}</div>`;
           pending = null; dialog.close();
-          await read(mailOperation ? 'mailRecords' : queued ? 'mail' : imported);
+          if (fulfillmentView) await read('fulfillment', fulfillmentView.offset, fulfillmentView.groupId);
+          else await read(mailOperation ? 'mailRecords' : queued ? 'mail' : imported);
         } catch (error) {
           if (!disposed) node('[data-raffle-operation-error]').textContent = `${error.message} 尚未確認完成，請勿重複操作。再次確認會使用同一筆操作識別；也可取消後到紀錄核對。`;
         } finally {
@@ -220,5 +238,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview };
+  global.SherryRaffle = { mount, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment };
 })(window);

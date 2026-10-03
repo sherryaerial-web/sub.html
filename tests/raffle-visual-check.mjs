@@ -198,6 +198,36 @@ try {
  await page.evaluate(()=>{window.sendMode='pending';});await page.locator('[data-raffle-mail-send]').click();
  await page.locator('[data-raffle-campaign]').dispatchEvent('change');await page.evaluate(()=>window.finishSendPreview());
  assert.equal(await page.locator('[data-raffle-confirm-send]').count(),0);
+ await page.evaluate(()=>{
+   clearRaffleWorkspace();window.prepWrites=[];window.prepReady=false;window.prepMode='normal';
+   authState.managementCapabilities=['raffle_fulfillment'];
+   callApi=async(action,params)=>{
+     if(action==='getRaffleWorkspace')return{enabled:true,readOnly:false,canPrepare:true,canCorrect:false,campaigns:[{id:'future',name:'新活動'}],claims:[]};
+     if(action==='getRaffleFulfillment'){
+       const g={id:'group1',prizeName:'教室現貨與訂製提袋',venue:'晴光',claimCount:2,waiting:window.prepReady?1:2,ready:window.prepReady?1:0,claimed:0};
+       const data={campaignId:'future',readOnly:false,canPrepare:true,canCorrect:false,totals:{waiting:g.waiting,ready:g.ready,claimed:0},excluded:{digital:1,cancelled:0},offset:params.offset||0,totalGroups:51,hasMore:!params.offset,groups:params.groupId?[]:[g],claims:params.groupId?[{id:'claim1',version:1,studentKey:'a',studentName:'同名學生',maskedEmail:'a•••@example.com',campaignId:'future',prizeName:g.prizeName,venue:'晴光',quantity:1,claimedQuantity:0,status:window.prepReady?'ready':'waiting'},{id:'claim2',version:1,studentKey:'b',studentName:'同名學生',maskedEmail:'b•••@example.com',campaignId:'future',prizeName:g.prizeName,venue:'晴光',quantity:1,claimedQuantity:0,status:'waiting'}]:[]};
+       if(params.groupId){data.group=g;data.totalClaims=2;data.hasMore=false;}
+       if(window.prepMode==='pending')return new Promise(resolve=>{window.finishPrep=()=>resolve(data);});
+       return data;
+     }
+     if(action==='mutateRaffleClaim'){window.prepWrites.push(params.operation);window.prepReady=true;return{claimId:'claim1',version:2,status:'ready',claimedQuantity:0};}
+     throw Error('Unexpected prep action '+action);
+   };switchView('view-raffle');
+ });
+ await page.locator('[data-raffle-fulfillment]').click();await page.getByText('請先選擇一個活動，再查看備貨清單。').waitFor();
+ await page.locator('[data-raffle-campaign]').selectOption('future');await page.locator('[data-raffle-fulfillment]').click();
+ for(const [name,width,height] of [['prep-mobile',390,844],['prep-desktop',1280,1000]]){
+   await page.setViewportSize({width,height});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await page.screenshot({path:`/private/tmp/raffle-preview/${name}.png`,fullPage:true});
+ }
+ assert.equal(await page.locator('[data-raffle-mail-send]').count(),0);
+ await page.locator('[data-raffle-fulfillment-page="50"]').click();await page.getByText('每頁最多 50 組，第 2 頁。').waitFor();
+ await page.locator('[data-raffle-fulfillment-page="0"]').click();
+ await page.locator('[data-raffle-fulfillment-group="group1"]').click();assert.equal(await page.locator('[data-raffle-student]').count(),2);
+ await page.locator('[data-raffle-action="prepare"]').first().click();await page.locator('[data-raffle-cancel]').click();assert.equal(await page.evaluate(()=>window.prepWrites.length),0);
+ await page.locator('[data-raffle-action="prepare"]').first().click();await page.locator('[data-raffle-venue]').selectOption('晴光');await page.locator('[data-raffle-save]').click();
+ await page.getByText('這一筆已更新，已保留操作紀錄。').waitFor();assert.equal(await page.locator('[data-raffle-action="prepare"]').count(),1);
+ await page.locator('[data-raffle-fulfillment-group=""]').click();await page.getByText('待備貨 1 件 · 已備妥未領 1 件 · 已領取 0 件').first().waitFor();
+ await page.evaluate(()=>{window.prepMode='pending';});await page.locator('[data-raffle-fulfillment]').click();await page.locator('[data-raffle-campaign]').dispatchEvent('change');await page.evaluate(()=>window.finishPrep());assert.equal(await page.locator('[data-raffle-fulfillment-group]').count(),0);
  await page.evaluate(()=>clearSession());
  assert.equal(await page.locator('[data-raffle-result]').count(),0);
  console.log('PASS: teacher/admin, disabled, minimum query, same-name grouping, cancellation, venue, same-ID uncertain retry, confirmed import, audit, stale response, logout and mobile/desktop layout');

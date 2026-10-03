@@ -3,6 +3,10 @@ const prep={teacherName:'Tako',managementCapabilities:['raffle_fulfillment']},ad
 const campaign={id:'future',name:'未來活動',sourceSpreadsheetId:'future-source-1234567890'};
 const keys=['id','campaignId','email','studentName','prizeId','prizeName','venue','quantity','claimedQuantity','status','claimedAt','claimedBy','sourceFingerprint'];
 const claim=(id,patch={})=>({id,campaignId:'future',email:id+'@example.com',studentName:'同名學生',prizeId:'p1',prizeName:'提袋',venue:'晴光',quantity:1,claimedQuantity:0,status:'waiting',sourceFingerprint:'secret',...patch});
+test('revoked remaining quantity does not remove already delivered units from totals',()=>{
+ const s=setup([claim('a',{quantity:3,claimedQuantity:1,status:'cancelled'})]);
+ const r=s.c.getRaffleFulfillment_(prep,{campaignId:'future'});assert.equal(r.totals.claimed,1);assert.equal(r.totals.waiting,0);assert.equal(r.totals.ready,0);
+});
 function setup(claims){
  const props=new Map([['RAFFLE_ENABLED','true'],['RAFFLE_WRITES_ENABLED','true'],['RAFFLE_CAMPAIGNS_JSON',JSON.stringify([campaign])]]);let reads=0;
  const rows=[keys,...claims.map(c=>keys.map(k=>String(c[k]??'')))];

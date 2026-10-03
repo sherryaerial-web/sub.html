@@ -3,6 +3,30 @@ const admin={teacherName:'店長',managementCapabilities:['raffle_admin']}, teac
 const campaign={id:'future',name:'新活動',sourceSpreadsheetId:'future-source-1234567890',readyPrizeVenues:[{prizeId:'p1',venue:'晴光'}]};
 const headers=['OB email名稱','OB名字','驗證碼','中獎等級','最終選擇獎品','領取館別','領獎方式','確認時間'];
 const row=['a@example.com','小花','code1','A','提袋','晴光','choose_venue','2027-01-01'];
+test('revocation requires admin reason, preserves history and cannot be reimported or collected',()=>{
+ const s=setup();s.importNow();const claim=s.c.readRaffleClaims_()[0];
+ const op={claimId:claim.id,version:1,action:'revoke',reason:'資格撤銷，保留紀錄',requestId:'request-revoke-0001'};
+ assert.throws(()=>s.c.mutateRaffleClaim_(teacher,op),/權限/);
+ assert.throws(()=>s.c.mutateRaffleClaim_(admin,{...op,reason:''}),/理由/);
+ assert.equal(s.c.mutateRaffleClaim_(admin,op).status,'cancelled');const writes=s.writes();
+ assert.equal(s.c.mutateRaffleClaim_(admin,op).status,'cancelled');assert.equal(s.writes(),writes);
+ assert.equal(s.importNow('request-reimport-0001').imported,0);
+ assert.throws(()=>s.c.mutateRaffleClaim_(teacher,{...op,version:2,action:'collect',quantity:1,venue:'晴光',requestId:'request-collect-9999'}),/可領取/);
+ assert.equal(s.c.getRaffleAudit_(admin,claim.id).events[1].reason,op.reason);
+});
+test('revoking remaining partial award preserves delivery evidence and rejects completed or digital awards',()=>{
+ const s=setup(),claim={id:'seed',status:'partial',quantity:3,claimedQuantity:1,claimedAt:'2027-01-01T00:00:00Z',claimedBy:'老師',version:2};
+ const op={action:'revoke',reason:'剩餘未領取消'};
+ const r=s.c.applyRaffleClaimMutation_(claim,admin,op,campaign,'2027-02-01T00:00:00Z');
+ assert.equal(r.status,'cancelled');assert.equal(r.claimedQuantity,1);assert.equal(r.claimedBy,'老師');assert.equal(r.claimedAt,claim.claimedAt);
+ for(const status of ['claimed','digital','cancelled'])assert.throws(()=>s.c.applyRaffleClaimMutation_({...claim,status},admin,op,campaign,'2027-02-01T00:00:00Z'),/撤銷/);
+});
+test('teacher search exposes per-campaign expiry without rewriting original status and preparation is blocked',()=>{
+ const s=setup();s.importNow();s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([{...campaign,pickupDeadline:'2000-01-01T00:00:00Z'}]));
+ const r=s.c.getRaffleWorkspace_(teacher,{query:'小花'});assert.equal(r.claims[0].pickupBlocked,true);assert.equal(r.claims[0].status,'ready');
+ assert.equal(r.claims[0].pickupDeadline,'2000-01-01T00:00:00Z');
+ assert.throws(()=>s.c.applyRaffleClaimMutation_({...s.c.readRaffleClaims_()[0],status:'waiting'},prep,{action:'prepare',venue:'晴光'},{...campaign,pickupDeadline:'2000-01-01T00:00:00Z'},'2027-01-01T00:00:00Z'),/截止/);
+});
 function setup(count=1){
  const props=new Map([['RAFFLE_ENABLED','true'],['RAFFLE_WRITES_ENABLED','true'],['RAFFLE_CAMPAIGNS_JSON',JSON.stringify([campaign])]]);
  let locked=false,writes=0,failAfterWrite=false,buffered=false,failFlush=false;const pendingWrites=[];

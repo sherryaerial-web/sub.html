@@ -7,6 +7,14 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('expiry is per claim and admin revoke only appears for remaining physical awards',()=>{
+ const api=load(),claim={id:'a',campaignId:'c',studentKey:'x',quantity:1,claimedQuantity:0,status:'ready',pickupBlocked:true,pickupDeadline:'2000-01-01'};
+ const html=api.renderClaims([claim,{...claim,id:'b',pickupBlocked:false}],[],{readOnly:false,canCorrect:true});
+ assert.match(html,/已過領取期限/);assert.equal((html.match(/data-raffle-action="collect"/g)||[]).length,1);
+ assert.equal((html.match(/data-raffle-action="revoke"/g)||[]).length,2);
+ assert.ok(!api.renderClaims([claim],[],{readOnly:false}).includes('data-raffle-action="revoke"'));
+ for(const status of ['claimed','digital','cancelled'])assert.ok(!api.renderClaims([{...claim,status}],[],{readOnly:false,canCorrect:true}).includes('data-raffle-action="revoke"'));
+});
 test('queued closure controls exclude started mail and clearly label never-sent closure',()=>{
  const api=load(),data={total:3,canCloseQueued:true,records:[{id:'a',status:'queued'},{id:'b',status:'sending'},{id:'c',status:'closed',closedBeforeSend:true}]};const html=api.renderMailRecords(data);assert.equal((html.match(/data-raffle-close-queued=/g)||[]).length,1);assert.match(html,/未寄出，不重排/);assert.ok(!api.renderMailRecords({...data,canCloseQueued:false}).includes('data-raffle-close-queued='));
 });
@@ -42,9 +50,9 @@ test('fulfillment summary shows unit totals, excludes digital and escapes names 
  const html=api.renderFulfillment(data,[]);assert.match(html,/待備貨 3 件/);assert.match(html,/已備妥未領 4 件/);assert.match(html,/電子獎 2 筆/);assert.match(html,/&lt;img&gt;/);assert.match(html,/data-raffle-fulfillment-group="group"/);assert.match(html,/data-raffle-fulfillment-page="50"/);assert.ok(!html.includes('data-raffle-action="prepare"'));
  assert.throws(()=>api.renderFulfillment({},[]),/完整/);
 });
-test('fulfillment detail retains individual preparation but blocks expired collection controls',()=>{
+test('fulfillment detail blocks expired preparation and collection controls',()=>{
  const api=load(),data={totals:{waiting:1,ready:1,claimed:0},excluded:{digital:0,cancelled:0},groups:[],group:{id:'g',prizeName:'提袋',venue:'晴光'},claims:[{id:'a',studentKey:'a',studentName:'甲',status:'waiting',quantity:1,claimedQuantity:0},{id:'b',studentKey:'b',studentName:'乙',status:'ready',quantity:1,claimedQuantity:0}],offset:0,totalClaims:2,hasMore:false,readOnly:false,canPrepare:true,pickupBlocked:true};
- const html=api.renderFulfillment(data,[]);assert.match(html,/截止|期限/);assert.match(html,/data-raffle-action="prepare"/);assert.ok(!html.includes('data-raffle-action="collect"'));assert.match(html,/返回備貨總覽/);
+ const html=api.renderFulfillment(data,[]);assert.match(html,/截止|期限/);assert.ok(!html.includes('data-raffle-action="prepare"'));assert.ok(!html.includes('data-raffle-action="collect"'));assert.match(html,/返回備貨總覽/);
 });
 test('mail preview warns delivery history is unchecked and escapes body without send controls',()=>{
   const html=load().renderMailPreview({dryRun:true,deliveryChecked:false,candidateCount:21,skipped:2,previews:[{email:'<unsafe>',subject:'邀請',body:'<script>bad()</script>\ncode'}]});

@@ -8520,6 +8520,26 @@
       refreshIcons();
     }
 
+    function renderPayrollMonthOptions(selectedMonth, optionCount = 24) {
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const selected = /^\d{4}-\d{2}$/.test(String(selectedMonth || ""))
+        ? String(selectedMonth)
+        : currentMonth;
+      const anchor = new Date(`${currentMonth}-01T00:00:00Z`);
+      const monthKeys = Array.from({ length: optionCount }, (_, index) => {
+        const date = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() - index, 1));
+        return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+      });
+      if (!monthKeys.includes(selected)) {
+        monthKeys[monthKeys.length - 1] = selected;
+        monthKeys.sort((a, b) => b.localeCompare(a));
+      }
+      return monthKeys.map((monthKey) => {
+        const [year, month] = monthKey.split("-");
+        return `<option value="${escapeHtml(monthKey)}"${monthKey === selected ? " selected" : ""}>${escapeHtml(year)} 年 ${Number(month)} 月</option>`;
+      }).join("");
+    }
+
     function renderPayrollAdminTab() {
       const content = byId("admin-tab-content");
       const data = payrollDashboard;
@@ -8533,12 +8553,14 @@
         const teacherLines = linesByTeacher[item.teacherName] || [];
         const details = teacherLines.map((line) => `<div class="payroll-detail-row"><span>${escapeHtml(line.date)} ${escapeHtml(line.time)}｜${escapeHtml(line.courseName)}</span><strong>${formatMoney(line.amount + line.manualAdjustment)}</strong></div>`).join("") || '<div class="item-meta">沒有薪資明細</div>';
         const canAdjust = item.status !== "管理員已確認" && item.status !== "有異議";
-        const actions = `${canAdjust ? `<button class="compact-button" type="button" data-admin-action="adjust-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}" data-adjustment="${escapeHtml(item.adminAdjustment)}"><i data-lucide="calculator"></i>調整薪資</button>` : ""}${item.status === "已確認" ? `<button class="primary-button inline-button" type="button" data-admin-action="finalize-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}"><i data-lucide="badge-check"></i>管理員確認</button>` : ""}`;
+        const actions = canAdjust ? `<button class="compact-button" type="button" data-admin-action="adjust-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}" data-adjustment="${escapeHtml(item.adminAdjustment)}"><i data-lucide="calculator"></i>調整薪資</button>` : "";
         return `<article class="list-item payroll-admin-card"><div class="payroll-admin-head"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="payroll-admin-breakdown"><span>鐘點費 ${formatMoney(item.subtotal)}</span><span>獎金 ${formatMoney(item.bonusAmount)}</span><span>固定加扣 ${formatMoney(item.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(item.adminAdjustment)}</span></div></div><strong class="money">${formatMoney(item.totalSalary)}</strong><span class="status-pill">${escapeHtml(item.status)}</span></div>${item.adjustmentReason ? `<div class="payroll-admin-note">調整原因：${escapeHtml(item.adjustmentReason)}</div>` : ""}${item.status === "管理員已確認" ? `<div class="payroll-final-meta">由 ${escapeHtml(item.adminConfirmedBy || "管理員")} 於 ${escapeHtml(item.adminConfirmedAt || "已確認")} 完成確認</div>` : ""}<details class="payroll-detail"><summary>查看課程明細（${teacherLines.length}）</summary><div class="payroll-detail-list">${details}</div></details>${actions ? `<div class="admin-item-actions payroll-admin-actions">${actions}</div>` : ""}</article>`;
       }).join("") || '<div class="state">此月份尚無薪資草稿</div>';
       const disputes = (data.disputes || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}｜${escapeHtml(item.status)}</div><div class="item-meta">${escapeHtml(item.message)}</div>${item.reply ? `<div class="item-meta">回覆：${escapeHtml(item.reply)}</div>` : ""}${item.status === "待處理" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve-payroll-dispute" data-dispute-id="${escapeHtml(item.id)}"><i data-lucide="message-square-reply"></i>回覆異議</button></div>` : ""}</div></article>`).join("") || '<div class="state">目前沒有薪資異議</div>';
       const allDraft = (data.summaries || []).length > 0 && data.summaries.every((item) => item.status === "草稿");
-      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><input id="payroll-admin-month" class="text-input month-input" type="month" value="${escapeHtml(data.month)}"><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && allDraft && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}${data.version && (data.metrics.teacherConfirmed || 0) > 0 ? `<button class="primary-button inline-button" type="button" data-admin-action="finalize-payroll-batch" data-version="${escapeHtml(data.version)}"><i data-lucide="list-checks"></i>確認全部已核對</button>` : ""}<button id="payroll-export" class="compact-button payroll-export-button" type="button" data-admin-action="export-payroll"><i data-lucide="file-spreadsheet"></i>匯出本月薪資 Excel</button></div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待老師確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>待管理確認</span><strong>${data.metrics.teacherConfirmed || 0}</strong></div><div class="summary-item"><span>已結案</span><strong>${data.metrics.finalized || 0}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div><div class="payroll-admin-list">${summaries}</div><div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
+      const confirmedCount = (data.metrics.teacherConfirmed || 0) + (data.metrics.finalized || 0);
+      const monthOptions = renderPayrollMonthOptions(data.month);
+      content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><select id="payroll-admin-month" class="text-input month-input">${monthOptions}</select><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && allDraft && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}<button id="payroll-export" class="compact-button payroll-export-button" type="button" data-admin-action="export-payroll"><i data-lucide="file-spreadsheet"></i>匯出本月薪資 Excel</button></div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待老師確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>老師已確認</span><strong>${confirmedCount}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div><div class="payroll-admin-list">${summaries}</div><div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
       refreshIcons();
     }
 

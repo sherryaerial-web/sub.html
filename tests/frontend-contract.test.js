@@ -3830,16 +3830,52 @@ test('course admin can end every active invitation from one guarded action', asy
   assert.equal(button.disabled, false);
 });
 
-test('payroll admin can adjust salaries and finalize teacher-confirmed results', () => {
+test('payroll admin can adjust salaries without a second admin confirmation', () => {
   assert.match(html, /callPostApi\(["']adjustPayrollSummary["']/);
-  assert.match(html, /callPostApi\(["']finalizePayroll["']/);
   assert.match(html, /調整薪資/);
-  assert.match(html, /管理員確認/);
-  assert.match(html, /確認全部已核對/);
-  assert.match(html, /管理員已確認/);
   assert.match(html, /\.payroll-admin-card\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
-  assert.match(html, /data\.metrics\.teacherConfirmed\s*\|\|\s*0/);
-  assert.match(html, /data\.metrics\.finalized\s*\|\|\s*0/);
+
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext(`payrollDashboard = {
+    month: '2026-09', version: 'payroll-v1', lines: [], disputes: [],
+    summaries: [{
+      teacherName: 'Tako', status: '已確認', version: 'payroll-v1',
+      subtotal: 1000, bonusAmount: 0, fixedAdjustment: 0,
+      adminAdjustment: 0, totalSalary: 1000, adjustmentReason: ''
+    }],
+    metrics: {
+      teachers: 1, totalSalary: 1000, pendingConfirmations: 0,
+      teacherConfirmed: 1, finalized: 0, openDisputes: 0, errors: 0
+    }
+  }`, context);
+
+  context.renderPayrollAdminTab();
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /data-admin-action="adjust-payroll"/);
+  assert.match(rendered, /老師已確認/);
+  assert.doesNotMatch(rendered, /data-admin-action="finalize-payroll"/);
+  assert.doesNotMatch(rendered, /data-admin-action="finalize-payroll-batch"/);
+  assert.doesNotMatch(rendered, /確認全部已核對/);
+  assert.doesNotMatch(rendered, /待管理確認/);
+  assert.doesNotMatch(rendered, /已結案/);
+});
+
+test('payroll admin chooses one of the latest twenty-four months from a select', () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext(`payrollDashboard = {
+    month: '2026-09', version: '', summaries: [], lines: [], disputes: [],
+    metrics: {
+      teachers: 0, totalSalary: 0, pendingConfirmations: 0,
+      teacherConfirmed: 0, finalized: 0, openDisputes: 0, errors: 0
+    }
+  }`, context);
+
+  context.renderPayrollAdminTab();
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /<select id="payroll-admin-month"/);
+  assert.match(rendered, /<option value="2026-09" selected>2026 年 9 月<\/option>/);
+  assert.equal((rendered.match(/<option value="\d{4}-\d{2}"/g) || []).length, 24);
+  assert.doesNotMatch(rendered, /<input id="payroll-admin-month"/);
 });
 
 test('course admin can pause leave registration separately from substitute claims', () => {

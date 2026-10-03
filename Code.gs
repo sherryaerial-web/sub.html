@@ -9224,9 +9224,9 @@ function doPost(e) {
         return confirmRaffleInvitations_(session, parseJsonObject_(parameters.operation, '抽獎待寄確認'));
       },
       previewRaffleReadyNotifications: function() { return previewRaffleReadyNotifications_(session, parameters.campaignId); },
-      confirmRaffleReadyNotifications: function() { return confirmRaffleReadyNotifications_(session, parseJsonObject_(parameters.operation, '可領取通知待寄')); },
+      confirmRaffleReadyNotifications: function() { return confirmRaffleReadyNotifications_(session, parseJsonObject_(parameters.operation, '領獎通知待寄')); },
       previewRaffleReadyMailSend: function() { return previewRaffleReadyMailSend_(session, parameters.campaignId); },
-      sendRaffleReadyMailBatch: function() { return sendRaffleReadyMailBatch_(session, parseJsonObject_(parameters.operation, '可領取通知寄送')); },
+      sendRaffleReadyMailBatch: function() { return sendRaffleReadyMailBatch_(session, parseJsonObject_(parameters.operation, '領獎通知寄送')); },
       getRaffleMailRecords: function() {
         return getRaffleMailRecords_(session, parameters.campaignId, parameters.offset);
       },
@@ -21213,11 +21213,11 @@ function raffleReadyIdentity_(campaign, claim) {
 
 function buildRaffleReadyNotificationPreview_(campaign, claims, reservations) {
   if (!campaign || !/^[A-Za-z0-9_-]{1,80}$/.test(campaign.id || '') || !cleanText_(campaign.name) || /[\r\n]/.test(campaign.name) || !/^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:[/?#][^\s]*)?$/.test(campaign.websiteUrl || '')) throw new Error('活動名稱或 HTTPS 網址設定有誤。');
-  if (campaign.pickupDeadline && (!Number.isFinite(Date.parse(campaign.pickupDeadline)) || Date.now() > Date.parse(campaign.pickupDeadline))) throw new Error('已超過領取截止時間或期限設定有誤，停止可領取通知。');
+  if (campaign.pickupDeadline && (!Number.isFinite(Date.parse(campaign.pickupDeadline)) || Date.now() > Date.parse(campaign.pickupDeadline))) throw new Error('已超過領取截止時間或期限設定有誤，停止領獎通知。');
   if (!Array.isArray(claims) || !Array.isArray(reservations)) throw new Error('缺少領獎或通知紀錄。');
   var reserved = Object.create(null), seen = Object.create(null), groups = Object.create(null), skipped = 0;
   reservations.forEach(function(r) {
-    if (!r || !/^raffle_ready_[a-f0-9]{64}$/.test(r.qualificationId || '') || reserved[r.qualificationId] || ['queued','sending','sent','uncertain'].indexOf(r.status) < 0) throw new Error('可領取通知紀錄有誤。');
+    if (!r || !/^raffle_ready_[a-f0-9]{64}$/.test(r.qualificationId || '') || reserved[r.qualificationId] || ['queued','sending','sent','uncertain'].indexOf(r.status) < 0) throw new Error('領獎通知紀錄有誤。');
     reserved[r.qualificationId] = true;
   });
   claims.forEach(function(c) {
@@ -21234,7 +21234,7 @@ function buildRaffleReadyNotificationPreview_(campaign, claims, reservations) {
   });
   return {skipped:skipped, jobs:Object.keys(groups).sort().map(function(email) {
     var entries = groups[email].sort(function(a,b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; }), ids = entries.map(function(e) { return e.id; });
-    return {id:'raffle_mail_' + raffleHash_(JSON.stringify([campaign.id,email,'ready',ids])), kind:'ready', email:email, qualificationIds:ids, subject:campaign.name + '｜獎品可領取通知',
+    return {id:'raffle_mail_' + raffleHash_(JSON.stringify([campaign.id,email,'ready',ids])), kind:'ready', email:email, qualificationIds:ids, subject:campaign.name + '｜獎品領獎通知',
       body:'您好：\n\n以下獎品已備妥，請至對應館別找老師核對領取：\n' + entries.map(function(e) { return '・' + e.line; }).join('\n') +
       (campaign.pickupDeadline ? '\n\n領取截止時間：' + campaign.pickupDeadline : '') + '\n\n活動網站：' + campaign.websiteUrl + '\n\n尚未備妥的其他獎品不在本次通知內。若您已領取，請與教室核對。\nSherry Aerial Studio'};
   })};
@@ -21271,13 +21271,13 @@ function confirmRaffleReadyNotifications_(session, operation) {
   return withScriptLock_(function() {
     var context = raffleWriteContext_(session,operation,'queue-ready');
     var props = PropertiesService.getScriptProperties();
-    if (props.getProperty('RAFFLE_MAIL_QUEUE_ENABLED') !== 'true' || props.getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true') throw new Error('可領取通知待寄寫入尚未啟用。');
+    if (props.getProperty('RAFFLE_MAIL_QUEUE_ENABLED') !== 'true' || props.getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true') throw new Error('領獎通知待寄寫入尚未啟用。');
     var campaign = raffleMailCampaign_(operation.campaignId), state = readRaffleMailState_(), prior = rafflePriorResult_(state,context);
     if (prior) return prior;
     var plan = raffleReadyNotificationPlan_(campaign,state);
     if (!operation.previewToken || operation.previewToken !== plan.token) throw new Error('來源、領獎或通知紀錄已變更，請重新預覽。');
     var jobs = plan.preview.jobs.slice(0,5).map(function(j) { return Object.assign({},j,{campaignId:campaign.id,status:'queued'}); });
-    if (!jobs.length) throw new Error('目前沒有可排入的可領取通知。');
+    if (!jobs.length) throw new Error('目前沒有可排入的領獎通知。');
     var event = {actor:context.actor,action:'queue',campaignId:campaign.id,jobs:jobs,result:{queued:jobs.length,remaining:plan.preview.jobs.length-jobs.length}};
     appendRaffleMailEvent_(state,context,event); return event.result;
   });
@@ -21323,20 +21323,38 @@ function readRaffleMailState_() {
       reopening.status = 'queued'; reopening.closedBeforeSend = false; reopening.subject = event.subject; reopening.body = event.body;
       reopening.reason = event.reason; reopening.updatedAt = row[2]; reopening.updatedBy = event.actor;
     } else if (event.action === 'send-start') {
+      if (event.channels != null && JSON.stringify(event.channels) !== JSON.stringify(['email','ob'])) fail();
       if (!Array.isArray(event.jobIds) || !event.jobIds.length || event.jobIds.length > 5 || new Set(event.jobIds).size !== event.jobIds.length) fail();
       event.jobIds.forEach(function(id) {
         var job = jobIds[id];
         if (!job || job.campaignId !== event.campaignId || job.status !== 'queued') fail();
         job.status = 'sending'; job.attemptId = row[0]; job.updatedAt = row[2]; job.updatedBy = event.actor;
+        if (event.channels) job.channels = {email:{status:'not_sent'},ob:{status:'not_sent'}};
       });
+    } else if (event.action === 'channel-start' || event.action === 'channel-result') {
+      var channelJob = jobIds[event.jobId];
+      if (!channelJob || channelJob.campaignId !== event.campaignId || channelJob.attemptId !== event.attemptId || channelJob.status !== 'sending' || !channelJob.channels || ['email','ob'].indexOf(event.channel) < 0 || row[0] !== 'channel_' + raffleHash_(JSON.stringify([event.attemptId,event.jobId,event.channel,event.action]))) fail();
+      var channelState = channelJob.channels[event.channel];
+      if (event.action === 'channel-start') {
+        if (channelState.status !== 'not_sent') fail();
+        channelState.status = 'sending';
+      } else {
+        if (channelState.status !== 'sending' || ['sent','uncertain'].indexOf(event.status) < 0) fail();
+        if (event.channel === 'ob' && event.status === 'sent' && (!Array.isArray(event.messageIds) || event.messageIds.length !== 1 || !Number.isSafeInteger(event.messageIds[0]) || event.messageIds[0] < 1)) fail();
+        channelState.status = event.status;
+        if (event.channel === 'ob' && event.status === 'sent') channelState.messageIds = event.messageIds;
+      }
+      channelState.updatedAt = row[2];
     } else if (event.action === 'send-result' || event.action === 'reconcile') {
       var job = jobIds[event.jobId];
       if (!job || job.campaignId !== event.campaignId || job.attemptId !== event.attemptId || !state.requests[event.attemptId] || state.requests[event.attemptId].event.action !== 'send-start') fail();
       if (event.action === 'send-result') {
         if (job.status !== 'sending' || ['sent','uncertain'].indexOf(event.status) < 0 || row[0] !== 'mail_result_' + raffleHash_(JSON.stringify([event.attemptId,event.jobId]))) fail();
+        if (job.channels && (['email','ob'].some(function(c) { return ['sent','uncertain'].indexOf(job.channels[c].status) < 0; }) || event.status !== (job.channels.email.status === 'sent' && job.channels.ob.status === 'sent' ? 'sent' : 'uncertain'))) fail();
       } else {
         if (['sending','uncertain'].indexOf(job.status) < 0 || ['sent','closed'].indexOf(event.status) < 0 || typeof event.reason !== 'string' || !event.reason.trim() || event.reason.length > 300 || !event.result || event.result.jobId !== job.id || event.result.status !== event.status) fail();
         job.reason = event.reason;
+        if (job.channels && event.status === 'sent' && ['email','ob'].some(function(c) { return job.channels[c].status === 'not_sent'; })) fail();
       }
       job.status = event.status; job.updatedAt = row[2]; job.updatedBy = event.actor;
     } else fail();
@@ -21388,7 +21406,7 @@ function getRaffleMailRecords_(session, campaignId, offsetValue) {
     canCloseQueued: PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') === 'true',
     canReconcile: PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') === 'true', records: ordered.slice(offset, offset + 50).map(function(job) {
     return {id: job.id, kind:job.kind || 'invitation', email: job.email, status: job.status, qualificationCount: job.qualificationIds.length, actor: job.actor, createdAt: job.createdAt,
-      updatedAt: job.updatedAt || '', updatedBy: job.updatedBy || '', reason: job.reason || '', closedBeforeSend:job.closedBeforeSend === true};
+      updatedAt: job.updatedAt || '', updatedBy: job.updatedBy || '', reason: job.reason || '', closedBeforeSend:job.closedBeforeSend === true, channels:job.channels || null};
   })};
 }
 
@@ -21512,24 +21530,29 @@ function raffleMailSendPlan_(campaign, state, kind) {
       // queues for the same email; do not merge separately confirmed notices here.
       var ownClaims = ready.claims.filter(function(c) { return job.qualificationIds.indexOf(raffleReadyIdentity_(campaign,c)) >= 0; });
       var match = buildRaffleReadyNotificationPreview_(campaign,ownClaims,ready.reservations).jobs.filter(function(j) { return j.id === job.id; })[0];
-      if (!match || match.email !== job.email || match.subject !== job.subject || match.body !== job.body) throw new Error('待寄通知與目前可領取狀態不符，請先核對變更；尚未寄出。');
+      // Preserve previously confirmed legacy wording; only this exact title rename is compatible.
+      var compatibleSubject = job.subject === campaign.name + '｜獎品可領取通知' ? campaign.name + '｜獎品領獎通知' : job.subject;
+      if (!match || match.email !== job.email || match.subject !== compatibleSubject || match.body !== job.body) throw new Error('待寄通知與目前可領取狀態不符，請先核對變更；尚未寄出。');
     });
-    return {jobs:jobs,token:ready.token};
+    return {jobs:jobs,token:raffleHash_(JSON.stringify(['ob-email-v1',ready.token]))};
   }
   var rows = readRaffleTable_(SpreadsheetApp.openById(campaign.sourceSpreadsheetId), '抽獎名單', false);
   jobs.forEach(function(job) {
     var match = raffleInvitationJobPreview_(campaign,rows,state,job);
     if (!match || match.email !== job.email || match.subject !== job.subject || match.body !== job.body) throw new Error('待寄內容與目前來源或活動不符，請先核對變更；尚未寄出。');
   });
-  return {jobs: jobs, token: raffleHash_(JSON.stringify([campaign, rows, state.events.map(function(e) { return [e.requestId,e.requestHash,e.event]; })]))};
+  return {jobs: jobs, token: raffleHash_(JSON.stringify(['ob-email-v1',campaign, rows, state.events.map(function(e) { return [e.requestId,e.requestHash,e.event]; })]))};
 }
 
 function previewRaffleMailSend_(session, campaignId, kind) {
   assertCapabilitySession_(session, 'raffle_admin');
   var campaign = raffleMailCampaign_(campaignId), enabled = raffleMailSendEnabled_(campaign) && (kind !== 'ready' || PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_MAIL_ENABLED') === 'true');
   var plan = raffleMailSendPlan_(campaign, readRaffleMailState_(), kind);
+  var obConfigured = !!cleanText_(PropertiesService.getScriptProperties().getProperty('OMCEAN_API_TOKEN'));
+  var obLengthValid = plan.jobs.every(function(job) { return (job.subject + '\n\n' + job.body).length <= 1500; });
   var quota = enabled ? MailApp.getRemainingDailyQuota() : null;
-  return {kind:kind || 'invitation',dryRun: true, sendEnabled: !!enabled, quota: quota, batchCount: plan.jobs.length, previewToken: plan.token,
+  return {kind:kind || 'invitation',dryRun: true, sendEnabled: !!enabled && obConfigured && obLengthValid, channels:['email','ob'], obPush:true,
+    blockedReason:!obConfigured ? 'OB 訊息金鑰尚未設定。' : !obLengthValid ? 'OB 訊息超過 1500 字，請先調整通知內容；本批尚未發送。' : '', quota: quota, batchCount: plan.jobs.length, previewToken: plan.token,
     previews: plan.jobs.map(function(job) { return {email: job.email, subject: job.subject, body: job.body}; })};
 }
 
@@ -21556,19 +21579,43 @@ function sendRaffleMailBatch_(session, operation, kind) {
     if (!plan.jobs.length) throw new Error('目前沒有可寄送的待寄信件。');
     var quota = MailApp.getRemainingDailyQuota();
     if (!Number.isInteger(quota) || quota < plan.jobs.length) throw new Error('今日寄信配額不足，本批尚未寄出。');
-    if (state.events.length + 1 + plan.jobs.length > 5000) throw new Error('寄信紀錄容量不足，停止寄信。');
-    appendRaffleMailEvent_(state, context, {action:'send-start',actor:context.actor,campaignId:campaign.id,jobIds:plan.jobs.map(function(job) { return job.id; })});
-    // Do not enter MailApp until the whole batch reservation has flushed successfully.
+    var obToken = cleanText_(PropertiesService.getScriptProperties().getProperty('OMCEAN_API_TOKEN'));
+    if (!obToken) throw new Error('OB 訊息金鑰尚未設定，本批尚未發送。');
+    if (plan.jobs.some(function(job) { return (job.subject + '\n\n' + job.body).length > 1500; })) throw new Error('OB 訊息超過 1500 字，本批尚未發送。');
+    if (state.events.length + 1 + plan.jobs.length * 5 > 5000) throw new Error('寄信紀錄容量不足，停止寄信。');
+    appendRaffleMailEvent_(state, context, {action:'send-start',actor:context.actor,campaignId:campaign.id,channels:['email','ob'],jobIds:plan.jobs.map(function(job) { return job.id; })});
+    // Persist every channel attempt before its transport. Never blindly retry.
     for (var i = 0; i < plan.jobs.length; i++) {
       var job = plan.jobs[i], status = 'sent';
-      try { MailApp.sendEmail({to:job.email,subject:job.subject,body:job.body,name:'Sherry Aerial Studio'}); }
-      catch (error) { status = 'uncertain'; }
+      ['email','ob'].forEach(function(channel) {
+        var start = {action:'channel-start',actor:context.actor,campaignId:campaign.id,jobId:job.id,attemptId:context.requestId,channel:channel};
+        appendRaffleChannelEvent_(start);
+        var result = Object.assign({},start,{action:'channel-result',status:'sent'});
+        try {
+          if (channel === 'email') MailApp.sendEmail({to:job.email,subject:job.subject,body:job.body,name:'Sherry Aerial Studio'});
+          else {
+            var response = UrlFetchApp.fetch('https://api.omceanbooking.com/v1/messages', {
+              method:'post',contentType:'application/json',headers:{Authorization:'Bearer ' + obToken},muteHttpExceptions:true,followRedirects:false,
+              payload:JSON.stringify({email:job.email,message:job.subject + '\n\n' + job.body,pushNotification:true,lineNotification:false})
+            });
+            if (response.getResponseCode() !== 200) throw new Error('OB 未確認接受');
+            var accepted = JSON.parse(response.getContentText());
+            if (!accepted || accepted.recipientCount !== 1 || !Array.isArray(accepted.messageIds) || accepted.messageIds.length !== 1 || !Number.isSafeInteger(accepted.messageIds[0]) || accepted.messageIds[0] < 1) throw new Error('OB 回應不完整');
+            result.messageIds = accepted.messageIds;
+          }
+        } catch (error) { result.status = 'uncertain'; status = 'uncertain'; }
+        appendRaffleChannelEvent_(result);
+      });
       var event = {action:'send-result',actor:context.actor,campaignId:campaign.id,jobId:job.id,attemptId:context.requestId,status:status};
       appendRaffleMailEvent_(readRaffleMailState_(), {requestId:'mail_result_' + raffleHash_(JSON.stringify([context.requestId,job.id])),requestHash:raffleHash_(JSON.stringify(event))}, event);
       if (status === 'uncertain') break;
     }
     return raffleMailAttemptResult_(readRaffleMailState_(), context.requestId);
   });
+}
+
+function appendRaffleChannelEvent_(event) {
+  appendRaffleMailEvent_(readRaffleMailState_(), {requestId:'channel_' + raffleHash_(JSON.stringify([event.attemptId,event.jobId,event.channel,event.action])),requestHash:raffleHash_(JSON.stringify(event))},event);
 }
 
 function closeRaffleQueuedMail_(session, operation) {
@@ -21597,6 +21644,7 @@ function reconcileRaffleMail_(session, operation) {
     if (typeof operation.reason !== 'string' || !operation.reason.trim() || operation.reason.length > 300) throw new Error('請填寫核對理由（最多 300 字）。');
     var job = state.jobs.filter(function(j) { return j.id === operation.jobId && j.campaignId === operation.campaignId; })[0];
     if (!job || ['sending','uncertain'].indexOf(job.status) < 0 || ['sent','closed'].indexOf(operation.status) < 0) throw new Error('這筆寄信狀態已變更或不允許核對。');
+    if (job.channels && operation.status === 'sent' && ['email','ob'].some(function(c) { return job.channels[c].status === 'not_sent'; })) throw new Error('有管道尚未發送，不能標成全部已送出；請結案並保留原因。');
     var event = {action:'reconcile',actor:context.actor,campaignId:job.campaignId,jobId:job.id,attemptId:job.attemptId,status:operation.status,reason:operation.reason.trim(),result:{jobId:job.id,status:operation.status}};
     appendRaffleMailEvent_(state, context, event);
     return event.result;

@@ -28,6 +28,11 @@ function setup(count=2,sameEmail=false){
  const seeds=[headers,...claims.map(c=>headers.map(k=>c[k]??''))];s.tables.set('RaffleClaims',s.sheet(seeds));
  return{...s,claims,seeds,prizes,queueReady:(id='ready-queue-00001')=>s.c.confirmRaffleReadyNotifications_(admin,{campaignId:'future',previewToken:s.c.previewRaffleReadyNotifications_(admin,'future').previewToken,requestId:id}),sendOp:()=>({campaignId:'future',previewToken:s.c.previewRaffleReadyMailSend_(admin,'future').previewToken,requestId:'ready-send-00001'})};
 }
+test('legacy queued ready subject still sends once after fresh review, without changing stored content',()=>{
+ const s=setup(1);s.queueReady();const row=s.tables.get('RaffleMailJournal').data[1],event=JSON.parse(row[4]);event.jobs[0].subject='新活動｜獎品可領取通知';row[4]=JSON.stringify(event);row[3]=s.c.raffleHash_(row[4]);
+ const op=s.sendOp();assert.equal(s.c.sendRaffleReadyMailBatch_(admin,op).sent,1);assert.equal(s.mails[0].subject,'新活動｜獎品可領取通知');
+ s.c.sendRaffleReadyMailBatch_(admin,op);assert.equal(s.mails.length,1);
+});
 test('ready notices merge same email, use remaining quantity and exclude unready/digital/claimed',()=>{
  const s=setup(5),claims=s.claims.map((c,i)=>({...c,email:'same@example.com',status:['ready','partial','waiting','digital','claimed'][i],quantity:i===1?3:1,claimedQuantity:i===1?1:i===4?1:0}));
  const p=s.c.buildRaffleReadyNotificationPreview_(campaign,claims,[]);assert.equal(p.jobs.length,1);assert.equal(p.jobs[0].kind,'ready');assert.equal(p.jobs[0].qualificationIds.length,2);assert.match(p.jobs[0].body,/晴光.*1 件/);assert.match(p.jobs[0].body,/劍潭.*2 件/);assert.match(p.jobs[0].body,/example.com\/raffle/);assert.ok(!p.jobs[0].body.includes('CODE-'));assert.equal(p.skipped,3);
@@ -35,7 +40,9 @@ test('ready notices merge same email, use remaining quantity and exclude unready
 test('preview/queue never mail or change claims/source; actual sender is separate from invitations',()=>{
  const s=setup(),original=JSON.stringify([s.rows,s.seeds,s.prizes]);const p=s.c.previewRaffleReadyNotifications_(admin,'future');assert.equal(p.candidateCount,2);assert.equal(p.readOnly,false);assert.equal(s.writes(),0);assert.equal(s.mails.length,0);
  s.queueReady();assert.equal(s.c.previewRaffleReadyNotifications_(admin,'future').candidateCount,0);assert.equal(s.c.previewRaffleMailSend_(admin,'future').batchCount,0);
- const op=s.sendOp(),r=s.c.sendRaffleReadyMailBatch_(admin,op);assert.equal(r.sent,2);assert.equal(s.mails.length,2);assert.match(s.mails[0].subject,/可領取/);assert.equal(JSON.stringify([s.rows,s.seeds,s.prizes]),original);assert.equal(s.c.sendRaffleReadyMailBatch_(admin,op).sent,2);assert.equal(s.mails.length,2);
+ const ob=[];s.c.UrlFetchApp={fetch:(url,options)=>{ob.push(JSON.parse(options.payload));return{getResponseCode:()=>200,getContentText:()=>JSON.stringify({recipientCount:1,messageIds:[100+ob.length]})};}};
+ const op=s.sendOp(),r=s.c.sendRaffleReadyMailBatch_(admin,op);assert.equal(r.sent,2);assert.equal(s.mails.length,2);assert.match(s.mails[0].subject,/領獎/);assert.equal(JSON.stringify([s.rows,s.seeds,s.prizes]),original);assert.equal(s.c.sendRaffleReadyMailBatch_(admin,op).sent,2);assert.equal(s.mails.length,2);
+ assert.equal(ob.length,2);assert.equal(ob[0].pushNotification,true);assert.match(ob[0].message,/領獎通知/);assert.ok(!ob[0].message.includes('CODE-'));assert.equal(s.c.getRaffleMailRecords_(admin,'future').records[0].channels.ob.status,'sent');
  assert.equal(s.c.getRaffleMailRecords_(admin,'future').records[0].kind,'ready');
 });
 test('permissions and dedicated ready gate block queue/send but preview stays read only',()=>{

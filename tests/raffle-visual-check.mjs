@@ -169,7 +169,7 @@ try {
    callApi=async(action,params)=>{
      if(action==='getRaffleWorkspace')return{enabled:true,readOnly:false,campaigns:[{id:'future',name:'新活動'}],claims:[]};
      if(action==='previewRaffleMailSend'){
-       const preview={dryRun:true,sendEnabled:true,quota:2,batchCount:1,previewToken:'send-token',previews:[{email:'student@example.com',subject:'邀請信',body:'https://example.com/'+ 'long'.repeat(40)+'\nCODE 測試內容'}]};
+       const preview={dryRun:true,sendEnabled:true,channels:['email','ob'],obPush:true,quota:2,batchCount:1,previewToken:'send-token',previews:[{email:'student@example.com',subject:'邀請信',body:'https://example.com/'+ 'long'.repeat(40)+'\nCODE 測試內容'}]};
        if(window.sendMode==='pending')return new Promise(resolve=>{window.finishSendPreview=()=>resolve(preview);});
        return preview;
      }

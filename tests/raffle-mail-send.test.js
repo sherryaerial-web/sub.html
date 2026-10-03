@@ -45,7 +45,7 @@ test('transport exception stops batch, keeps reservations, repeat cannot send re
  const s=setup(2);s.queue();const op=s.operation();s.fault('transport');const r=s.c.sendRaffleMailBatch_(admin,op);assert.equal(r.pendingReview,2);assert.equal(r.sent,0);assert.equal(s.mails.length,1);assert.equal(s.c.sendRaffleMailBatch_(admin,op).pendingReview,2);assert.equal(s.mails.length,1);assert.equal(s.c.previewRaffleInvitations_(admin,'future').candidateCount,0);
 });
 test('post-send journal failure never repeats accepted email or resumes remaining batch',()=>{
- for(const kind of ['before','after']){const s=setup(2);s.queue();const op=s.operation();s.fault(kind,2);assert.throws(()=>s.c.sendRaffleMailBatch_(admin,op),/failed|uncertain/);assert.equal(s.mails.length,1);s.c.sendRaffleMailBatch_(admin,op);assert.equal(s.mails.length,1);}
+ for(const kind of ['before','after']){const s=setup(2);s.queue();const op=s.operation();s.fault(kind,3);assert.throws(()=>s.c.sendRaffleMailBatch_(admin,op),/failed|uncertain/);assert.equal(s.mails.length,1);s.c.sendRaffleMailBatch_(admin,op);assert.equal(s.mails.length,1);}
 });
 test('manual reconciliation requires admin, reason, uncertain job and keeps reservations',()=>{
  const s=setup();s.queue();s.fault('transport');s.c.sendRaffleMailBatch_(admin,s.operation());const job=s.c.readRaffleMailState_().jobs[0],op={campaignId:'future',jobId:job.id,status:'sent',reason:'已向收件人確認收到',requestId:'manual-check-00001'};

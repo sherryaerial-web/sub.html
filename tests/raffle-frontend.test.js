@@ -37,11 +37,11 @@ test('queued closure controls exclude started mail and clearly label never-sent 
  const api=load(),data={total:3,canCloseQueued:true,records:[{id:'a',status:'queued'},{id:'b',status:'sending'},{id:'c',status:'closed',closedBeforeSend:true}]};const html=api.renderMailRecords(data);assert.equal((html.match(/data-raffle-close-queued=/g)||[]).length,1);assert.match(html,/未寄出，不重排/);assert.ok(!api.renderMailRecords({...data,canCloseQueued:false}).includes('data-raffle-close-queued='));
 });
 test('ready notification previews distinguish pickup from invitations and retain gates',()=>{
- const api=load(),data={kind:'ready',dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:false,previewToken:'token',batchCount:1,candidateCount:1,skipped:2,previews:[{email:'a@example.com',subject:'獎品可領取通知',body:'<提袋>｜晴光'}]};
- const html=api.renderMailPreview(data);assert.match(html,/可領取通知預覽/);assert.match(html,/未備妥/);assert.ok(!html.includes('多個驗證碼'));assert.match(html,/&lt;提袋&gt;/);assert.match(html,/data-raffle-confirm-mail/);
+ const api=load(),data={kind:'ready',dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:false,previewToken:'token',batchCount:1,candidateCount:1,skipped:2,previews:[{email:'a@example.com',subject:'獎品領獎通知',body:'<提袋>｜晴光'}]};
+ const html=api.renderMailPreview(data);assert.match(html,/領獎通知預覽/);assert.match(html,/未備妥/);assert.ok(!html.includes('多個驗證碼'));assert.match(html,/&lt;提袋&gt;/);assert.match(html,/data-raffle-confirm-mail/);
  assert.ok(!api.renderMailPreview({...data,readOnly:true}).includes('data-raffle-confirm-mail'));
- const send=api.renderMailSendPreview({...data,quota:3,sendEnabled:true});assert.match(send,/可領取通知.*寄送前確認/);
- const records=api.renderMailRecords({total:2,records:[{id:'a',kind:'ready',status:'sent',qualificationCount:2},{id:'b',kind:'invitation',status:'queued',qualificationCount:1}]});assert.match(records,/可領取通知/);assert.match(records,/2 筆獎品/);assert.match(records,/抽獎邀請/);
+ const send=api.renderMailSendPreview({...data,quota:3,sendEnabled:true});assert.match(send,/領獎通知.*寄送前確認/);
+ const records=api.renderMailRecords({total:2,records:[{id:'a',kind:'ready',status:'sent',qualificationCount:2},{id:'b',kind:'invitation',status:'queued',qualificationCount:1}]});assert.match(records,/領獎通知/);assert.match(records,/2 筆獎品/);assert.match(records,/抽獎邀請/);
 });
 test('campaign settings expose blank drafts, escape names and keep active settings read only',()=>{
  const api=load(),data={readOnly:false,operationalEnabled:false,campaigns:[{campaign:{id:'old',name:'<舊>',sourceSpreadsheetId:'source'},status:'active',version:0}]};
@@ -49,9 +49,9 @@ test('campaign settings expose blank drafts, escape names and keep active settin
  assert.throws(()=>api.renderCampaignSettings({}),/完整/);
 });
 test('actual send preview requires full payload, explicit gate and enough quota',()=>{
- const api=load(),p={dryRun:true,sendEnabled:true,quota:2,batchCount:2,previewToken:'token',previews:[{email:'a@example.com',subject:'test',body:'<unsafe>'},{email:'b@example.com',subject:'test',body:'two'}]};
+ const api=load(),p={dryRun:true,sendEnabled:true,channels:['email','ob'],obPush:true,quota:2,batchCount:2,previewToken:'token',previews:[{email:'a@example.com',subject:'test',body:'<unsafe>'},{email:'b@example.com',subject:'test',body:'two'}]};
  assert.match(api.renderMailSendPreview(p),/data-raffle-confirm-send/);assert.match(api.renderMailSendPreview(p),/&lt;unsafe&gt;/);
- for(const bad of [{...p,sendEnabled:false},{...p,quota:1},{...p,quota:null}]) assert.ok(!api.renderMailSendPreview(bad).includes('data-raffle-confirm-send'));
+ for(const bad of [{...p,sendEnabled:false},{...p,quota:1},{...p,quota:null},{...p,channels:undefined},{...p,obPush:false}]) assert.ok(!api.renderMailSendPreview(bad).includes('data-raffle-confirm-send'));
  assert.throws(()=>api.renderMailSendPreview({}),/完整/);
 });
 test('mail record statuses distinguish acceptance from delivery and offer review only for uncertain attempts',()=>{
@@ -62,6 +62,11 @@ test('mail record statuses distinguish acceptance from delivery and offer review
 test('mail records can navigate beyond fifty jobs',()=>{
  const api=load();assert.match(api.renderMailRecords({total:60,reviewCount:5,offset:0,hasMore:true,records:[]}),/data-raffle-mail-page="50"/);
  assert.match(api.renderMailRecords({total:60,reviewCount:5,offset:50,hasMore:false,records:[]}),/data-raffle-mail-page="0"/);
+});
+test('dual records show individual outcomes without claiming push was requested for unattempted OB',()=>{
+ const api=load(),record={id:'job',kind:'ready',email:'a@example.com',status:'sending',channels:{email:{status:'sent'},ob:{status:'not_sent'}}};
+ const html=api.renderMailRecords({total:1,records:[record]});assert.match(html,/Email：服務已接受/);assert.match(html,/OB：尚未發送/);assert.ok(!html.includes('手機推播已要求'));
+ const accepted=api.renderMailRecords({total:1,records:[{...record,channels:{email:{status:'sent'},ob:{status:'sent'}}}]});assert.match(accepted,/手機推播已要求/);
 });
 test('fulfillment summary shows unit totals, excludes digital and escapes names with reachable pages',()=>{
  const api=load(),data={totals:{waiting:3,ready:4,claimed:1},excluded:{digital:2,cancelled:1},groups:[{id:'group',prizeName:'<img>',venue:'晴光',claimCount:4,waiting:3,ready:4,claimed:1}],claims:[],offset:0,totalGroups:51,hasMore:true};

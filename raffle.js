@@ -22,6 +22,7 @@
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">這一筆已備妥到館</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && ['waiting','ready','partial'].includes(item.status) && Number(item.claimedQuantity) < Number(item.quantity) ? `<button type="button" class="compact-button" data-raffle-action="revoke" data-claim-id="${escape(item.id)}">撤銷未領部分</button>` : ''}
+          ${permissions.readOnly === false && permissions.canCorrect && !item.pickupBlocked && item.status==='cancelled' && item.venue && Number(item.claimedQuantity)<Number(item.quantity) ? `<button type="button" class="compact-button" data-raffle-action="restore" data-claim-id="${escape(item.id)}">核對並恢復未領部分</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && Number(item.claimedQuantity) > 0 && ['partial','claimed','ready'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="correct" data-claim-id="${escape(item.id)}">更正誤領</button>` : ''}
           ${permissions.canCorrect ? `<button type="button" class="compact-button" data-raffle-action="audit" data-claim-id="${escape(item.id)}">操作紀錄</button>` : ''}
         </div>
@@ -312,13 +313,14 @@
           const claim = (workspace.claims || []).find(c => c.id === button.dataset.claimId);
           if (!claim) return;
           selected = { action: button.dataset.raffleAction, claim };
-          const title = { collect:'確認交付獎品', prepare:'確認這一筆已到館', correct:'更正誤領', revoke:'撤銷未領部分', audit:'操作紀錄' }[selected.action];
+          const title = { collect:'確認交付獎品', prepare:'確認這一筆已到館', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
           const maximum = selected.action === 'correct' ? Number(claim.claimedQuantity) - 1 : Number(claim.quantity) - Number(claim.claimedQuantity);
           node('[data-raffle-dialog-body]').innerHTML = `<h3>${escape(title)}</h3><p><strong>${escape(claim.studentName)}</strong>｜${escape(claim.maskedEmail)}</p><p>${escape(claim.prizeName)}｜登記館別：${escape(claim.venue || '—')}</p>
-            ${['collect','prepare'].includes(selected.action) ? `<label>確認實際所在館別<select data-raffle-venue class="admin-select" required><option value="">請選擇</option><option value="${escape(claim.venue)}">${escape(claim.venue)}</option><option value="wrong-venue">其他館別（不可交付）</option></select></label>` : ''}
+            ${['collect','prepare','restore'].includes(selected.action) ? `<label>確認實際所在館別<select data-raffle-venue class="admin-select" required><option value="">請選擇</option><option value="${escape(claim.venue)}">${escape(claim.venue)}</option><option value="wrong-venue">其他館別（不可交付）</option></select></label>` : ''}
             ${['collect','correct'].includes(selected.action) ? `<label>${selected.action === 'correct' ? '更正後已領數量' : '本次領取數量'}<input data-raffle-quantity class="text-input" type="number" min="${selected.action === 'correct' ? 0 : 1}" max="${escape(maximum)}" step="1" value="${selected.action === 'correct' ? 0 : 1}" required></label>` : ''}
-            ${selected.action === 'revoke' ? `<p>停止剩餘 ${escape(maximum)} 件的交付，已領取 ${escape(claim.claimedQuantity)} 件及原紀錄會保留。不能直接恢復；不會回補來源庫存、不寄信，也不撤銷學生其他獎品。</p>` : ''}
-            ${['correct','revoke'].includes(selected.action) ? '<label>操作理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>' : ''}`;
+            ${selected.action === 'revoke' ? `<p>停止剩餘 ${escape(maximum)} 件的交付，已領取 ${escape(claim.claimedQuantity)} 件及原紀錄會保留。恢復須由管理員重新核對；不會回補來源庫存、不寄信，也不撤銷學生其他獎品。</p>` : ''}
+            ${selected.action === 'restore' ? `<p>重新核對來源與期限；保留已領紀錄，不寄信、不增減來源庫存。${Number(claim.claimedQuantity)>0?'部分已領的紀錄須先確認剩餘現貨，恢復後可繼續領取。':'恢復為待備貨，須重新標記到館後才能交付。'}</p>${Number(claim.claimedQuantity)>0?'<label><input type="checkbox" data-raffle-stock-confirmed required>剩餘獎品現貨已確認在該館</label>':''}` : ''}
+            ${['correct','revoke','restore'].includes(selected.action) ? '<label>操作理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>' : ''}`;
         }
         dialog.showModal();
         if (selected.action === 'audit') {
@@ -340,9 +342,10 @@
             : selected.action === 'resolve' ? {campaignId:selected.preview.campaignId,claimId:selected.conflict.id,version:selected.conflict.before.version,previewToken:selected.preview.previewToken,reason:node('[data-raffle-reason]').value.trim(),requestId:requestId()}
             : ['reconcile','closeQueued'].includes(selected.action) ? {campaignId:selected.campaignId,jobId:selected.record.id,...(selected.action==='reconcile'?{status:node('[data-raffle-mail-status]').value}:{}),reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
             : {claimId:selected.claim.id,version:selected.claim.version,action:selected.action,venue:node('[data-raffle-venue]')?.value || '',quantity:node('[data-raffle-quantity]') ? Number(node('[data-raffle-quantity]').value) : undefined,reason:node('[data-raffle-reason]')?.value.trim() || '',requestId:requestId()};
-          if (selected.action !== 'import' && ['collect','prepare'].includes(selected.action) && operation.venue !== selected.claim.venue) { node('[data-raffle-operation-error]').textContent = '館別不一致，請勿交付。'; return; }
+          if (selected.action === 'restore') operation.stockConfirmed = node('[data-raffle-stock-confirmed]')?.checked === true;
+          if (selected.action !== 'import' && ['collect','prepare','restore'].includes(selected.action) && operation.venue !== selected.claim.venue) { node('[data-raffle-operation-error]').textContent = '館別不一致，請勿交付。'; return; }
           if(selected.action==='closeQueued'&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫停止理由。';return;}
-          if(['resolve','revoke'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
+          if(['resolve','revoke','restore'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
           pending = {action:({resolve:'resolveRaffleConflict',send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
           if(selected.preview?.kind === 'ready' && ['send','queue'].includes(selected.action))pending.action=selected.action === 'send' ? 'sendRaffleReadyMailBatch' : 'confirmRaffleReadyNotifications';
         }
@@ -352,6 +355,7 @@
         try {
           const response = await options.api(pending.action, {operation:pending.operation});
           if (disposed) return;
+          if(selected.action==='restore' && (!response || response.claimId!==pending.operation.claimId || response.version!==pending.operation.version+1 || response.claimedQuantity!==Number(selected.claim.claimedQuantity) || response.status!==(Number(selected.claim.claimedQuantity)?'partial':'waiting')))throw Error('未收到完整恢復結果。');
           if(selected.action==='closeQueued'){
             if(!response || response.jobId!==selected.record.id || response.status!=='closed' || response.closedBeforeSend!==true)throw Error('未收到完整停止待寄結果。');
             node('[data-raffle-notice]').textContent='已停止這封待寄並保留理由；沒有寄信，也不會自動重新排入。';pending=null;dialog.close();await read('mailRecords');return;

@@ -21587,7 +21587,7 @@ function readRaffleState_() {
       var event;
       try { event = JSON.parse(row[3]); } catch (e) { throw new Error('領獎日誌內容損壞，停止操作。'); }
       if (!/^[A-Za-z0-9_-]{12,100}$/.test(row[0]) || !/^[a-f0-9]{64}$/.test(row[1]) || requests[row[0]] || !event || !Array.isArray(event.changes) || event.changes.length > 25 || !event.actor || !event.result) throw new Error('領獎日誌重複或不完整，停止操作。');
-      if (!Number.isFinite(Date.parse(row[2])) || typeof event.actor !== 'string' || !event.actor.trim() || typeof event.reason !== 'string' || ['import','prepare','collect','correct','revoke','resolve-source'].indexOf(event.action) < 0) throw new Error('領獎日誌稽核欄位不完整。');
+      if (!Number.isFinite(Date.parse(row[2])) || typeof event.actor !== 'string' || !event.actor.trim() || typeof event.reason !== 'string' || ['import','prepare','collect','correct','revoke','restore','resolve-source'].indexOf(event.action) < 0) throw new Error('領獎日誌稽核欄位不完整。');
       if (event.action === 'import') {
         if (event.result.imported !== event.changes.length || !Number.isInteger(event.result.remaining) || event.result.remaining < 0) throw new Error('領獎日誌匯入筆數不一致。');
       } else if (event.changes.length !== 1) throw new Error('領獎日誌缺少單筆異動，停止操作。');
@@ -21606,6 +21606,7 @@ function readRaffleState_() {
           if (event.action === 'collect' && (['ready','partial'].indexOf(prior.status) < 0 || ['partial','claimed'].indexOf(c.status) < 0 || c.claimedQuantity <= prior.claimedQuantity || !c.venue || c.claimedBy !== event.actor || !Number.isFinite(Date.parse(c.claimedAt)))) throw new Error('領獎日誌領取異動不符。');
           if (event.action === 'correct' && (!event.reason.trim() || ['ready','partial','claimed'].indexOf(prior.status) < 0 || ['ready','partial'].indexOf(c.status) < 0 || c.claimedQuantity >= prior.claimedQuantity)) throw new Error('領獎日誌更正異動不符。');
           if (event.action === 'revoke' && (!event.reason.trim() || event.reason.length > 300 || ['waiting','ready','partial'].indexOf(prior.status) < 0 || c.status !== 'cancelled' || c.claimedQuantity !== prior.claimedQuantity || c.claimedAt !== prior.claimedAt || c.claimedBy !== prior.claimedBy)) throw new Error('領獎日誌撤銷異動不符。');
+          if (event.action === 'restore' && (!event.reason.trim() || event.reason.length > 300 || prior.status !== 'cancelled' || c.claimedQuantity >= c.quantity || c.status !== (prior.claimedQuantity ? 'partial' : 'waiting') || !c.venue || c.claimedQuantity !== prior.claimedQuantity || c.claimedAt !== prior.claimedAt || c.claimedBy !== prior.claimedBy || (prior.claimedQuantity > 0 && event.stockConfirmed !== true))) throw new Error('領獎日誌恢復異動不符。');
         }
         claims[c.id] = c;
       });
@@ -21676,7 +21677,7 @@ function confirmRaffleImport_(session, operation) {
 
 function applyRaffleClaimMutation_(claim, session, operation, campaign, now) {
   var c = Object.assign({}, claim), qty = Number(operation.quantity), action = operation.action;
-  if (['prepare','collect'].indexOf(action) >= 0 && rafflePickupInfo_(campaign,now).pickupBlocked) throw new Error('已超過領取截止時間或期限設定有誤，請聯絡管理員。');
+  if (['prepare','collect','restore'].indexOf(action) >= 0 && rafflePickupInfo_(campaign,now).pickupBlocked) throw new Error('已超過領取截止時間或期限設定有誤，請聯絡管理員。');
   if (action === 'prepare') {
     assertRafflePreparer_(session);
     if (c.status !== 'waiting') throw new Error('此筆不是待備貨，請重新核對。');
@@ -21700,6 +21701,13 @@ function applyRaffleClaimMutation_(claim, session, operation, campaign, now) {
     if (!cleanText_(operation.reason) || cleanText_(operation.reason).length > 300) throw new Error('請填寫 1 至 300 字的撤銷理由。');
     if (['waiting','ready','partial'].indexOf(c.status) < 0 || c.claimedQuantity >= c.quantity) throw new Error('只能撤銷尚未領完的實體獎品。');
     c.status = 'cancelled';
+  } else if (action === 'restore') {
+    assertCapabilitySession_(session, 'raffle_admin');
+    if (!cleanText_(operation.reason) || cleanText_(operation.reason).length > 300) throw new Error('請填寫 1 至 300 字的恢復理由。');
+    if (c.status !== 'cancelled' || c.claimedQuantity >= c.quantity) throw new Error('只能恢復已撤銷且尚未領完的實體獎品。');
+    if (!c.venue || operation.venue !== c.venue) throw new Error('恢復館別不一致。');
+    if (c.claimedQuantity > 0 && operation.stockConfirmed !== true) throw new Error('請確認剩餘獎品現貨已在該館。');
+    c.status = c.claimedQuantity ? 'partial' : 'waiting';
   } else throw new Error('不支援的領獎操作。');
   c.version = (Number(claim.version) || 0) + 1;
   return c;
@@ -21708,7 +21716,7 @@ function applyRaffleClaimMutation_(claim, session, operation, campaign, now) {
 function mutateRaffleClaim_(session, operation) {
   getSessionTeacherName_(session);
   if (operation && operation.action === 'prepare') assertRafflePreparer_(session);
-  if (operation && ['correct','revoke'].indexOf(operation.action) >= 0) assertCapabilitySession_(session, 'raffle_admin');
+  if (operation && ['correct','revoke','restore'].indexOf(operation.action) >= 0) assertCapabilitySession_(session, 'raffle_admin');
   return withScriptLock_(function() {
     var context = raffleWriteContext_(session, operation, 'claim'), state = readRaffleState_();
     var prior = rafflePriorResult_(state, context);
@@ -21719,7 +21727,15 @@ function mutateRaffleClaim_(session, operation) {
     if (!campaign) throw new Error('此活動未開放。');
     if (!Number.isInteger(operation.version) || operation.version !== claim.version) throw new Error('領獎資料版本已更新，請重新查詢。');
     var updated = applyRaffleClaimMutation_(claim, session, operation, campaign, new Date().toISOString());
+    if (operation.action === 'restore') {
+      var source = SpreadsheetApp.openById(campaign.sourceSpreadsheetId);
+      var preview = buildRaffleImportPreview_(campaign, readRaffleTable_(source,'抽獎名單'), readRaffleTable_(source,'獎項設定'), []);
+      var candidate = preview.additions.filter(function(c) { return c.id === claim.id; })[0];
+      if (preview.errors.length || preview.conflicts.length || !candidate || ['waiting','ready'].indexOf(candidate.status) < 0 ||
+          ['campaignId','email','studentName','prizeId','prizeName','venue','quantity','sourceFingerprint'].some(function(k) { return candidate[k] !== claim[k]; })) throw new Error('來源已變更或無法核對，不可恢復；請先確認原始資料。');
+    }
     return appendRaffleEvent_(state, context, { actor: context.actor, action: operation.action,
+      stockConfirmed: operation.action === 'restore' && operation.stockConfirmed === true,
       reason: cleanText_(operation.reason), changes: [{ beforeVersion: claim.version, claim: updated }],
       result: { claimId: updated.id, version: updated.version, status: updated.status, claimedQuantity: updated.claimedQuantity } });
   });

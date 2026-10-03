@@ -3,6 +3,24 @@ const admin={teacherName:'店長',managementCapabilities:['raffle_admin']}, teac
 const campaign={id:'future',name:'新活動',sourceSpreadsheetId:'future-source-1234567890',readyPrizeVenues:[{prizeId:'p1',venue:'晴光'}]};
 const headers=['OB email名稱','OB名字','驗證碼','中獎等級','最終選擇獎品','領取館別','領獎方式','確認時間'];
 const row=['a@example.com','小花','code1','A','提袋','晴光','choose_venue','2027-01-01'];
+test('restore verifies source, deadline, admin and venue then requires preparation; uncertain append retries once',()=>{
+ const s=setup();s.importNow();const c=s.c.readRaffleClaims_()[0];
+ s.c.mutateRaffleClaim_(admin,{claimId:c.id,version:1,action:'revoke',reason:'誤按',requestId:'revoke-restore-0001'});
+ const op={claimId:c.id,version:2,action:'restore',reason:'核對誤撤銷',venue:'晴光',requestId:'restore-test-0001'};
+ assert.throws(()=>s.c.mutateRaffleClaim_(teacher,op),/權限/);
+ assert.throws(()=>s.c.mutateRaffleClaim_(admin,{...op,venue:'劍潭'}),/館別/);
+ s.sourceRows[1][5]='劍潭';assert.throws(()=>s.c.mutateRaffleClaim_(admin,op),/來源/);s.sourceRows[1][5]='晴光';
+ s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([{...campaign,pickupDeadline:'2000-01-01'}]));assert.throws(()=>s.c.mutateRaffleClaim_(admin,op),/截止|期限/);s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([campaign]));
+ s.setFail();assert.throws(()=>s.c.mutateRaffleClaim_(admin,op),/timeout/);const n=s.writes();assert.equal(s.c.mutateRaffleClaim_(admin,op).status,'waiting');assert.equal(s.writes(),n);
+ assert.equal(s.c.readRaffleClaims_()[0].claimedQuantity,0);
+ const rows=s.tables.get('RaffleJournal').rows,e=JSON.parse(rows[3][3]);e.changes[0].claim.status='ready';e.result.status='ready';rows[3][3]=JSON.stringify(e);assert.throws(()=>s.c.readRaffleState_(),/恢復/);
+});
+test('partial restoration preserves delivered evidence and requires explicit remaining stock confirmation',()=>{
+ const s=setup(),c={id:'p',status:'cancelled',quantity:3,claimedQuantity:1,claimedAt:'2027-01-01',claimedBy:'原老師',venue:'晴光',version:4};
+ const op={action:'restore',reason:'核對完成',venue:'晴光'};
+ assert.throws(()=>s.c.applyRaffleClaimMutation_(c,admin,op,campaign,'2027-01-02'),/庫存|現貨/);
+ const r=s.c.applyRaffleClaimMutation_(c,admin,{...op,stockConfirmed:true},campaign,'2027-01-02');assert.equal(r.status,'partial');assert.equal(r.claimedQuantity,1);assert.equal(r.claimedAt,c.claimedAt);assert.equal(r.claimedBy,c.claimedBy);
+});
 test('source acceptance cannot create mixed names in an existing fulfillment group',()=>{
  for(const delivered of [false,true]){
   const s=setup(2);s.importNow();const claims=s.c.readRaffleClaims_();

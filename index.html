@@ -2329,14 +2329,14 @@
             <button type="button" data-view="view-payroll"><span class="account-menu-icon"><i data-lucide="receipt-text"></i></span><span><strong>我的薪資</strong><small>核對明細與確認薪資</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 45 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
             <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
-            <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>領獎查詢</strong><small>以學生姓名或 Email 核對獎品</small></span><i data-lucide="chevron-right"></i></button>
+            <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>學生領獎</strong><small>查詢學生獎品、確認領取</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle" data-capability="raffle_fulfillment" hidden><span class="account-menu-icon"><i data-lucide="package-check"></i></span><span><strong>獎品備貨／到館</strong><small>依獎品館別查看、逐筆確認到館</small></span><i data-lucide="chevron-right"></i></button>
           </div>
           <button id="account-logout" class="account-logout" type="button"><i data-lucide="log-out"></i>登出這個帳號</button>
         </section>
 
         <section id="view-raffle" class="view">
-          <div class="view-header"><div><span class="eyebrow">Raffle</span><h2 class="section-heading">領獎查詢</h2><p class="section-copy">先找學生，再核對活動、獎品與領取館別。</p></div></div>
+          <div class="view-header"><div><span class="eyebrow">Raffle</span><h2 class="section-heading">學生領獎</h2><p class="section-copy">先找學生，再核對活動、獎品與領取館別。</p></div></div>
           <div id="raffle-teacher-root"></div>
         </section>
 
@@ -2353,7 +2353,7 @@
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="operations" data-capability="course_admin"><i data-lucide="list-todo"></i>每月營運</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="invoices" data-capability="invoice_admin"><i data-lucide="receipt-text"></i>發票</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="raffle" data-capability="raffle_admin"><i data-lucide="gift"></i>抽獎・領獎</button>
+              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="raffle" data-capability="raffle_admin"><i data-lucide="gift"></i>抽獎與獎品管理</button>
               <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="tools" data-capability="course_admin"><i data-lucide="wrench"></i>更多工具</button>
             </nav>
             <div class="admin-main">
@@ -2680,7 +2680,7 @@
       "view-payroll": "我的薪資",
       "view-inbox": "訊息",
       "view-account": "我的",
-      "view-raffle": "領獎查詢",
+      "view-raffle": "學生領獎",
       "view-admin": "管理工作台"
     };
 

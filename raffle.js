@@ -232,6 +232,10 @@
           else if (isPreview) preview = { ...data, campaignId };
           else { workspace = data; preview = null; }
           result.innerHTML = overview ? renderOverview(data) : fulfillment ? renderFulfillment(data,campaigns) : mailSend ? renderMailSendPreview(data) : mailRecords ? renderMailRecords(data) : mailPreview ? renderMailPreview(data) : isPreview ? renderPreview(data) : renderClaims(data.claims || [], campaigns, data);
+          if(mailRecords && data.canReopen===true) result.querySelectorAll('article').forEach((article,i)=>{
+            const record=data.records[i];if(record?.status!=='closed'||record.closedBeforeSend!==true)return;
+            const button=document.createElement('button');button.type='button';button.className='compact-button';button.dataset.raffleReopen=record.id;button.textContent='重新核對內容／排入待寄';article.appendChild(button);
+          });
           if (!isPreview && (data.claims || []).length >= 50) result.insertAdjacentHTML('beforeend', '<p class="state">最多顯示 50 筆，請用完整 Email 縮小範圍。</p>');
         } catch (error) {
           if (!disposed && request === serial) result.innerHTML = `<div class="state error">${escape(error.message || '讀取失敗，請稍後重試。')}</div>`;
@@ -274,15 +278,28 @@
         const sendButton = event.target.closest('[data-raffle-confirm-send]');
         const reconcileButton = event.target.closest('[data-raffle-reconcile]');
         const closeQueuedButton = event.target.closest('[data-raffle-close-queued]');
+        const reopenButton = event.target.closest('[data-raffle-reopen]');
         const resolveButton = event.target.closest('[data-raffle-resolve]');
         const button = event.target.closest('[data-raffle-action]');
-        if (!importButton && !mailButton && !sendButton && !reconcileButton && !closeQueuedButton && !resolveButton && !button) return;
+        if (!importButton && !mailButton && !sendButton && !reconcileButton && !closeQueuedButton && !reopenButton && !resolveButton && !button) return;
         if (busy) return;
         pending = null;
         node('[data-raffle-operation-error]').textContent = '';
         node('[data-raffle-save]').hidden = false;
         node('[data-raffle-save]').disabled = false;
-        if (resolveButton) {
+        if(reopenButton) {
+          const record=mailRecordsData?.records.find(r=>r.id===reopenButton.dataset.raffleReopen),campaignId=mailRecordsData?.campaignId;
+          if(!record || mailRecordsData.canReopen!==true || record.status!=='closed' || record.closedBeforeSend!==true)return;
+          const generation=serial;busy=true;reopenButton.disabled=true;selected=null;
+          try {
+            const p=await options.api('previewRaffleMailReopen',{campaignId,jobId:record.id});
+            if(disposed || generation!==serial)return;
+            if(!p || p.campaignId!==campaignId || p.jobId!==record.id || p.email!==record.email || p.kind!==(record.kind||'invitation') || p.dryRun!==true || p.sendEnabled!==false || p.readOnly!==false || typeof p.previewToken!=='string' || !p.previewToken || !p.before || !p.after || [p.before.subject,p.before.body,p.after.subject,p.after.body].some(v=>typeof v!=='string'||!v.trim()))throw Error('未收到完整可重排預覽，或寫入尚未開放。');
+            selected={action:'reopen',record,campaignId,preview:p};
+            node('[data-raffle-dialog-body]').innerHTML=`<h3>核對新內容，重新排入待寄</h3><p>${escape(p.email)}</p><p>只更新這封從未開始寄送的信，維持原收件人與資格／獎品範圍。保留舊內容紀錄；這裡不會寄信。</p>${[['原內容',p.before],['新內容',p.after]].map(([label,c])=>`<h4>${label}：${escape(c.subject)}</h4><div style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(c.body)}</div>`).join('')}<label>重新排入理由<textarea data-raffle-mail-reason class="text-input" maxlength="300" required></textarea></label>`;
+          } catch(error) {if(!disposed && generation===serial)node('[data-raffle-notice]').textContent=error.message;return;}
+          finally {busy=false;if(!disposed)reopenButton.disabled=false;}
+        } else if (resolveButton) {
           const conflict=preview?.conflicts?.find(item=>item.id===resolveButton.dataset.raffleResolve);
           if(preview?.readOnly !== false || !preview.previewToken || conflict?.resolvable !== true || !conflict.before || !conflict.after)return;
           selected={action:'resolve',conflict,preview};
@@ -340,13 +357,13 @@
           const operation = ['import','queue','send'].includes(selected.action)
             ? {campaignId:selected.preview.campaignId,previewToken:selected.preview.previewToken,requestId:requestId()}
             : selected.action === 'resolve' ? {campaignId:selected.preview.campaignId,claimId:selected.conflict.id,version:selected.conflict.before.version,previewToken:selected.preview.previewToken,reason:node('[data-raffle-reason]').value.trim(),requestId:requestId()}
-            : ['reconcile','closeQueued'].includes(selected.action) ? {campaignId:selected.campaignId,jobId:selected.record.id,...(selected.action==='reconcile'?{status:node('[data-raffle-mail-status]').value}:{}),reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
+            : ['reconcile','closeQueued','reopen'].includes(selected.action) ? {campaignId:selected.campaignId,jobId:selected.record.id,...(selected.action==='reconcile'?{status:node('[data-raffle-mail-status]').value}:{}),...(selected.action==='reopen'?{previewToken:selected.preview.previewToken}:{}),reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
             : {claimId:selected.claim.id,version:selected.claim.version,action:selected.action,venue:node('[data-raffle-venue]')?.value || '',quantity:node('[data-raffle-quantity]') ? Number(node('[data-raffle-quantity]').value) : undefined,reason:node('[data-raffle-reason]')?.value.trim() || '',requestId:requestId()};
           if (selected.action === 'restore') operation.stockConfirmed = node('[data-raffle-stock-confirmed]')?.checked === true;
           if (selected.action !== 'import' && ['collect','prepare','restore'].includes(selected.action) && operation.venue !== selected.claim.venue) { node('[data-raffle-operation-error]').textContent = '館別不一致，請勿交付。'; return; }
-          if(selected.action==='closeQueued'&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫停止理由。';return;}
+          if(['closeQueued','reopen'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
           if(['resolve','revoke','restore'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
-          pending = {action:({resolve:'resolveRaffleConflict',send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
+          pending = {action:({reopen:'reopenRaffleMail',resolve:'resolveRaffleConflict',send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
           if(selected.preview?.kind === 'ready' && ['send','queue'].includes(selected.action))pending.action=selected.action === 'send' ? 'sendRaffleReadyMailBatch' : 'confirmRaffleReadyNotifications';
         }
         busy = true;
@@ -355,6 +372,10 @@
         try {
           const response = await options.api(pending.action, {operation:pending.operation});
           if (disposed) return;
+          if(selected.action==='reopen'){
+            if(!response || response.jobId!==selected.record.id || response.status!=='queued')throw Error('未收到完整重新排入結果。');
+            node('[data-raffle-notice]').textContent='已保存新內容並重新排入待寄，沒有寄信；發送前仍須另外核對。';pending=null;dialog.close();await read('mailRecords');return;
+          }
           if(selected.action==='restore' && (!response || response.claimId!==pending.operation.claimId || response.version!==pending.operation.version+1 || response.claimedQuantity!==Number(selected.claim.claimedQuantity) || response.status!==(Number(selected.claim.claimedQuantity)?'partial':'waiting')))throw Error('未收到完整恢復結果。');
           if(selected.action==='closeQueued'){
             if(!response || response.jobId!==selected.record.id || response.status!=='closed' || response.closedBeforeSend!==true)throw Error('未收到完整停止待寄結果。');

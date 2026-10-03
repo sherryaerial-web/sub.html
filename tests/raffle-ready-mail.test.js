@@ -1,5 +1,14 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {setup:base,admin,campaign}=require('./helpers/raffle-mail-fixture');
+test('ready notice reopening uses current source and same prize set without including newly ready awards',()=>{
+ const s=setup(2,true);s.seeds[2][9]='waiting';s.queueReady();const job=s.c.readRaffleMailState_().jobs[0];
+ s.c.closeRaffleQueuedMail_(admin,{campaignId:'future',jobId:job.id,reason:'更新期限',requestId:'ready-close-00001'});s.seeds[2][9]='ready';
+ s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([{...campaign,pickupDeadline:'2099-12-31T00:00Z'}]));
+ const p=s.c.previewRaffleMailReopen_(admin,'future',job.id);assert.match(p.after.body,/2099/);assert.ok(!p.after.body.includes('劍潭'));assert.equal(p.kind,'ready');
+ const op={campaignId:'future',jobId:job.id,previewToken:p.previewToken,reason:'確認期限',requestId:'ready-reopen-0001'};
+ s.props.delete('RAFFLE_READY_MAIL_ENABLED');assert.throws(()=>s.c.reopenRaffleMail_(admin,op),/啟用/);s.props.set('RAFFLE_READY_MAIL_ENABLED','true');
+ s.c.reopenRaffleMail_(admin,op);assert.equal(s.c.previewRaffleReadyMailSend_(admin,'future').batchCount,1);assert.equal(s.c.previewRaffleReadyNotifications_(admin,'future').candidateCount,1);assert.equal(s.mails.length,0);
+});
 test('revocation or accepted source change blocks old pickup mail without releasing stable reservation',()=>{
  for(const action of ['revoke','resolve']){
   const s=setup(1);s.tables.set('RaffleJournal',s.sheet([]));s.queueReady();const op=s.sendOp(),claim=s.c.readRaffleClaims_()[0];

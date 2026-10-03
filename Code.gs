@@ -10059,7 +10059,7 @@ function getObApiJson_(url, options, label) {
   }
 }
 
-function fetchCalendarDetail_(token, calendarIdValue) {
+function fetchCalendarDetail_(token, calendarIdValue, includeNoticeRoster) {
   var apiToken = cleanText_(token);
   var calendarId = cleanText_(calendarIdValue);
   if (!apiToken) throw new Error('尚未設定 Omcean API 權杖。');
@@ -10071,6 +10071,7 @@ function fetchCalendarDetail_(token, calendarIdValue) {
   }, '讀取 OB 課程');
   var detail = normalizeClosureCalendarDetail_(raw);
   if (!detail) throw new Error('OB 單堂課程回傳格式不正確。');
+  if (includeNoticeRoster === true) { detail.noticeAttendees = raw.attendees; detail.publicNotes = raw.publicNotes; }
   return detail;
 }
 
@@ -10133,6 +10134,105 @@ function buildCourseClosureReason_(detail) {
     detail.courseName + ' 課程因未達開課人數因此未開班🥹謝謝';
 }
 
+function closureStudentNoticeEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('COURSE_CLOSURE_STUDENT_OB_ENABLED') === 'true';
+}
+
+function readClosureStudentNotice_(id) {
+  if (!/^[1-9]\d{0,15}$/.test(String(id))) throw Error('關課通知課程 ID 不正確。');
+  var raw = PropertiesService.getScriptProperties().getProperty('CLOSURE_STUDENT_OB_'+id);
+  if (!raw) return null;
+  var item;
+  try { item = JSON.parse(raw); } catch (e) { throw Error('關課通知紀錄損壞，請人工核對。'); }
+  if (!item || ['prepared','cancelled','sending','sent','uncertain'].indexOf(item.status) < 0 || !/^\d{4}\/\d{2}\/\d{2}$/.test(item.date || '')) throw Error('關課通知紀錄不完整。');
+  if (item.status !== 'sent' && (!Array.isArray(item.customerIds) || !item.customerIds.length || item.customerIds.length > 100 ||
+      item.customerIds.some(function(n){return !Number.isSafeInteger(n) || n <= 0;}) || new Set(item.customerIds).size !== item.customerIds.length ||
+      typeof item.message !== 'string' || !item.message.trim() || item.message.length > 1500)) throw Error('關課通知暫存名單不完整。');
+  return item;
+}
+
+function saveClosureStudentNotice_(id, item) {
+  var props = PropertiesService.getScriptProperties(), key = 'CLOSURE_STUDENT_OB_'+id, json = JSON.stringify(item);
+  if (json.length > 2500) throw Error('關課通知超過暫存安全容量。');
+  props.setProperty(key,json);
+  if (props.getProperty(key) !== json) throw Error('關課通知紀錄未確認儲存，停止發送。');
+}
+
+function prepareClosureStudentNotice_(detail) {
+  var id = detail.calendarId, previous = readClosureStudentNotice_(id);
+  if (previous && previous.status !== 'prepared') return;
+  if (detail.enrollmentCount === 0) {
+    if (previous) {
+      var props = PropertiesService.getScriptProperties(), key = 'CLOSURE_STUDENT_OB_'+id;
+      props.deleteProperty(key);
+      if (props.getProperty(key)) throw Error('舊學生暫存尚未清除，停止關課。');
+    }
+    return;
+  }
+  if (!Array.isArray(detail.noticeAttendees)) throw Error('無法取得已預約學生名單，請核對後再關課。');
+  var ids = [], booked = 0;
+  detail.noticeAttendees.forEach(function(a) {
+    if (!a || typeof a.cancelPenalty !== 'boolean') throw Error('學生預約狀態不完整，停止關課。');
+    if (a.cancelPenalty) return;
+    var customerId = a.user && a.user.id;
+    if (!Number.isSafeInteger(customerId) || customerId <= 0) throw Error('學生 OB ID 不完整，停止關課。');
+    booked++;
+    if (ids.indexOf(customerId) < 0) ids.push(customerId);
+  });
+  if (!ids.length || ids.length > 100 || booked !== detail.enrollmentCount) throw Error('學生名單與人數不符，請核對後再關課。');
+  saveClosureStudentNotice_(id,{status:'prepared',date:detail.date,customerIds:ids,cancellationReason:buildCourseClosureReason_(detail),
+    message:'您預約的【'+detail.date+' '+detail.time+'｜'+detail.courseName+'】因報名人數不足，本堂課取消。造成不便，敬請見諒。'});
+}
+
+function sendClosureStudentNoticeSafely_(token, id, warnings) {
+  try {
+    var item = readClosureStudentNotice_(id);
+    if (!item || item.status === 'sent') return;
+    if (item.status === 'sending' || item.status === 'uncertain') throw Error('先前發送結果不明，請核對 OB；未自動重寄。');
+    if (item.status !== 'cancelled') return;
+    item.status = 'sending';
+    saveClosureStudentNotice_(id,item); // Persist before transport; never automatically retry an unknown outcome.
+    try {
+      var response = UrlFetchApp.fetch('https://api.omceanbooking.com/v1/messages/group',{
+        method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+token},muteHttpExceptions:true,
+        payload:JSON.stringify({customerIds:item.customerIds,message:item.message,pushNotification:true,lineNotification:false})
+      });
+      var body = JSON.parse(response.getContentText());
+      if (response.getResponseCode() !== 200 || !body || body.recipientCount !== item.customerIds.length || !Array.isArray(body.messageIds) ||
+          body.messageIds.length !== item.customerIds.length || body.messageIds.some(function(n){return !Number.isSafeInteger(n) || n <= 0;})) throw Error('OB 尚未確認全部通知已儲存。');
+    } catch (error) {
+      item.status = 'uncertain'; saveClosureStudentNotice_(id,item);
+      throw Error('OB 通知結果待核對，未自動重寄。');
+    }
+    // Replace the entire value: no student IDs or message remain after acknowledged success.
+    saveClosureStudentNotice_(id,{status:'sent',date:item.date,count:item.customerIds.length});
+  } catch (error) {
+    warnings.push('課程 '+id+'：'+getErrorMessage_(error));
+  }
+}
+
+function resumeClosureStudentNotices_(token, targetDate, warnings) {
+  var all = PropertiesService.getScriptProperties().getProperties();
+  Object.keys(all).filter(function(k){return /^CLOSURE_STUDENT_OB_\d+$/.test(k);}).forEach(function(key){
+    var id = key.slice('CLOSURE_STUDENT_OB_'.length);
+    try {
+      var item = readClosureStudentNotice_(id);
+      if (item.date !== targetDate || item.status === 'sent') return;
+      if (item.status === 'prepared' || item.status === 'cancelled') {
+        // Handles a crash after OB cancellation but before saving the result, without cancelling again.
+        var closed = fetchCalendarDetail_(token,id,true);
+        if (closed.cancelled !== true) {
+          if (item.status === 'cancelled') throw Error('課程目前未確認取消，未補發通知，請人工核對。');
+          return;
+        }
+        if (!item.cancellationReason || closed.publicNotes !== item.cancellationReason) throw Error('取消原因與原關課紀錄不符，未補發通知，請人工核對。');
+        item.status = 'cancelled'; saveClosureStudentNotice_(id,item);
+      }
+      sendClosureStudentNoticeSafely_(token,id,warnings);
+    } catch (error) { warnings.push('課程 '+id+'：'+getErrorMessage_(error)); }
+  });
+}
+
 function getProcessedClosureKeysUnlocked_(logSheet, targetDate, stage) {
   var keys = {};
   logSheet.getDataRange().getValues().slice(1).forEach(function(row) {
@@ -10192,6 +10292,11 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
       items: [],
       socialCopy: null
     };
+    var notifyStudents = closureStudentNoticeEnabled_();
+    if (notifyStudents) {
+      result.studentNoticeWarnings = [];
+      resumeClosureStudentNotices_(token,targetDate,result.studentNoticeWarnings);
+    }
     var targetDetails = [];
 
     (rawItems || []).forEach(function(raw) {
@@ -10219,7 +10324,7 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
       }
 
       try {
-        var latest = fetchCalendarDetail_(token, preview.calendarId);
+        var latest = fetchCalendarDetail_(token, preview.calendarId, notifyStudents);
         var latestRule = getCourseClosureRule_(latest, stage);
         if (latestRule.manualReview) {
           appendCourseClosureLogUnlocked_(
@@ -10249,6 +10354,7 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
           });
           return;
         }
+        if (notifyStudents) prepareClosureStudentNotice_(latest);
         var cancelled = cancelObCalendarItem_(
           token,
           latest.calendarId,
@@ -10257,6 +10363,15 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
         );
         if (!cancelled || cancelled.cancelled !== true) {
           throw new Error('OB 回傳未確認課程已取消。');
+        }
+        if (notifyStudents) {
+          try {
+            var notice = readClosureStudentNotice_(latest.calendarId);
+            if (notice && notice.status === 'prepared') {
+              notice.status = 'cancelled'; saveClosureStudentNotice_(latest.calendarId,notice);
+            }
+            sendClosureStudentNoticeSafely_(token,latest.calendarId,result.studentNoticeWarnings);
+          } catch (noticeError) { result.studentNoticeWarnings.push('課程 '+latest.calendarId+'：'+getErrorMessage_(noticeError)); }
         }
         appendCourseClosureLogUnlocked_(
           logSheet, targetDate, stage, latest, latestRule,
@@ -10514,6 +10629,10 @@ function notifyCourseClosureResult_(resultValue) {
   if (result.stage === '22:30' && result.socialCopy && cleanText_(result.socialCopy.content)) {
     content += ' 社群提醒文字已整理完成。';
   }
+  if (result.studentNoticeWarnings && result.studentNoticeWarnings.length) {
+    heading += '｜學生通知待核對';
+    content += ' '+result.studentNoticeWarnings.join('；');
+  }
   if (result.practiceRefresh) {
     if (result.practiceRefresh.failed) {
       content += ' 自主練習同步失敗，請到自主練習頁按「更新課表」。';
@@ -10524,7 +10643,8 @@ function notifyCourseClosureResult_(resultValue) {
     }
   }
   return sendPushOnceSafely_(
-    ['closure', String(result.targetDate).replace(/\D/g, ''), String(result.stage).replace(/\D/g, ''), hasFailures ? 'failed' : 'success'].join('_'),
+    ['closure', String(result.targetDate).replace(/\D/g, ''), String(result.stage).replace(/\D/g, ''), hasFailures ? 'failed' : 'success'].join('_') +
+      (result.studentNoticeWarnings && result.studentNoticeWarnings.length ? '_student_notice_review' : ''),
     getActiveCourseAdminNames_(),
     {
       heading: heading,

@@ -1,0 +1,119 @@
+{
+  "sourceCommit": "8d18d45",
+  "functions": [
+    {
+      "name": "cleanText_",
+      "sha256": "fd35fa4ea8f37f3f2b73b8190dd82d5e25c1b930be6a6685c7dba7eb0e160572"
+    },
+    {
+      "name": "isAdminRole_",
+      "sha256": "777519c1b570db82f1f1fe0fc51c32c8bf9cdbda484fac3716fe4f782dbfe30c"
+    },
+    {
+      "name": "normalizeManagementCapabilities_",
+      "sha256": "ed0c8566cb6fac617043034bc729fb5037d8cb1f34ead72aa4496f182ae94ba7"
+    },
+    {
+      "name": "getSessionTeacherName_",
+      "sha256": "789eeea29b6bab46a1671e7d88be360fa9f2e9caf0af2e7b90f7fc9e1599b1ec"
+    },
+    {
+      "name": "getSessionManagementCapabilities_",
+      "sha256": "26c080dcd39497c84be9ff62b6ed67d45b517953d7c0b4aba2d878d281be04ea"
+    },
+    {
+      "name": "assertCapabilitySession_",
+      "sha256": "3a79b8ba9cce71a156925aa877830b64f93902cb919c4187b9c20bde2841ef20"
+    },
+    {
+      "name": "withScriptLock_",
+      "sha256": "3c0a70b4c337dbbb6b1968dbeaea444f83a3170d8bff4dd3162f03538ceba0b4"
+    },
+    {
+      "name": "raffleHash_",
+      "sha256": "403b4d825026e8471757cd989060202294d67610d17dd75adbc0b23f7ceb7b41"
+    },
+    {
+      "name": "raffleColumns_",
+      "sha256": "6b18c013caf12c58ca78f6e3e34b52963640732c646b7cbd637d2b2009565b23"
+    },
+    {
+      "name": "buildRaffleImportPreview_",
+      "sha256": "45c62c6f51b65366108c386fae5138849a789760021854170dec8485a9075906"
+    },
+    {
+      "name": "raffleSourceConflictReason_",
+      "sha256": "4db283aced667d04d71035f867e7074be2a4d167ef82dbb8434cc4e7e237abea"
+    },
+    {
+      "name": "getRaffleConfiguration_",
+      "sha256": "d85104d098e1956121e3bb8ca8e180ff6d0ab1ad171625fa18e7c827f0bbff36"
+    },
+    {
+      "name": "readRaffleLegacyCampaigns_",
+      "sha256": "a396459293b89871fb0f25763310cc41bd5ce0933b88d2f2a8330f4d1e1b3cfb"
+    },
+    {
+      "name": "readRaffleTable_",
+      "sha256": "2c4a0cb84449348687ad1ad9ad9d415bf3545860c71de22143862062859d80a4"
+    },
+    {
+      "name": "readRaffleSeedClaims_",
+      "sha256": "8c399f47fddf1b3078f69820afacb85df4edb0138792b5397212d480079d9ae6"
+    },
+    {
+      "name": "rafflePublicClaim_",
+      "sha256": "9666499a225918db26ab536bb2adf75e85b671bbf5e4f9eb887298de5e8a03a3"
+    },
+    {
+      "name": "rafflePickupInfo_",
+      "sha256": "f32051e62dcfd4e29c592b919593a8627f490124604253f653f883f3e3071cdf"
+    },
+    {
+      "name": "previewRaffleImport_",
+      "sha256": "5bfa01c749cacedd339e5aa0c74afd0e7cb05674a927a9f90d916071f1346866"
+    },
+    {
+      "name": "assertRafflePreparer_",
+      "sha256": "6d129832fac8f7c2caf10a26a941522f348cdfbf5a666289c693382b88928e7f"
+    },
+    {
+      "name": "raffleImportPlan_",
+      "sha256": "b849082672330455f8ec52c9c6b905a9be4c9b6de3c5e9bfdaff6dfe4f577840"
+    },
+    {
+      "name": "readRaffleState_",
+      "sha256": "501a9582e0327ff637edef1e3b050f2b3b2e24029d14f4901322314eae0601a7"
+    },
+    {
+      "name": "readRaffleClaims_",
+      "sha256": "71c00ad463f1b117fc00035fecae6577fc64a9a28ab5667055791732143f7eea"
+    },
+    {
+      "name": "raffleWriteContext_",
+      "sha256": "0aa635215ed5dba2bbc9491c7a008cbfdb803ba179d5e333f81e3ac482f1fb54"
+    },
+    {
+      "name": "rafflePriorResult_",
+      "sha256": "9d89ad5424e956d0cd1ae4c9b431a3d04b94e2224631b8c3b98255f181ff47e0"
+    },
+    {
+      "name": "appendRaffleEvent_",
+      "sha256": "6b32882e5e9b5f5e7b33f5e6d6308a5b5a8a14de672c6c39cd42734a3e14851e"
+    },
+    {
+      "name": "confirmRaffleImport_",
+      "sha256": "f75f6e0e73537809df520a51acef29a3cb281b06d0703a984cb5629ffee9e7ff"
+    },
+    {
+      "name": "applyRaffleClaimMutation_",
+      "sha256": "ae4e494eedab0211ca912c08c5178f0beada6b3918195d1e8cf59b476e9d0c91"
+    },
+    {
+      "name": "mutateRaffleClaim_",
+      "sha256": "dbb861c2b6a2c4d11b5c350a75a4c56b99a0b0ee4f8b25701879ce7c3349e7a8"
+    }
+  ],
+  "mailCodeIncluded": false,
+  "realAccountAuthenticationTested": false
+}

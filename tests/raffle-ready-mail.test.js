@@ -1,5 +1,14 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {setup:base,admin,campaign}=require('./helpers/raffle-mail-fixture');
+test('revocation or accepted source change blocks old pickup mail without releasing stable reservation',()=>{
+ for(const action of ['revoke','resolve']){
+  const s=setup(1);s.tables.set('RaffleJournal',s.sheet([]));s.queueReady();const op=s.sendOp(),claim=s.c.readRaffleClaims_()[0];
+  if(action==='revoke')s.c.mutateRaffleClaim_(admin,{claimId:claim.id,version:0,action:'revoke',reason:'取消剩餘交付',requestId:'revoke-mail-test-01'});
+  else {s.rows[1][9]='劍潭';const p=s.c.previewRaffleImport_(admin,'future');s.c.resolveRaffleConflict_(admin,{campaignId:'future',claimId:claim.id,version:0,previewToken:p.previewToken,reason:'改館',requestId:'resolve-mail-test-01'});}
+  assert.throws(()=>s.c.sendRaffleReadyMailBatch_(admin,op));assert.equal(s.mails.length,0);
+  assert.equal(s.c.readRaffleMailState_().readyReservations.length,1);assert.equal(s.c.previewRaffleReadyNotifications_(admin,'future').candidateCount,0);
+ }
+});
 function setup(count=2,sameEmail=false){
  const s=base(count);s.props.set('RAFFLE_READY_MAIL_ENABLED','true');
  s.rows[0].push('中獎等級','最終選擇獎品','領取館別','領獎方式','確認時間');s.rows.slice(1).forEach((r,i)=>{if(sameEmail)r[0]='same@example.com';r[4]='Yes';r.push('A','提袋',i%2?'劍潭':'晴光','choose_venue','2027-01-01');});

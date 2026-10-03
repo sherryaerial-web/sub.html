@@ -7,6 +7,12 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('source conflict preview shows before after and only permits safe explicit acceptance',()=>{
+ const api=load(),data={readOnly:false,previewToken:'token',conflicts:[{id:'x',row:2,resolvable:true,before:{studentName:'甲',prizeName:'提袋',venue:'晴光',status:'ready'},after:{studentName:'甲',prizeName:'<獎品>',venue:'劍潭',status:'waiting'}},{id:'y',row:3,resolvable:false,message:'已領取不能覆蓋'}]};
+ const html=api.renderPreview(data);assert.match(html,/原紀錄/);assert.match(html,/來源現況/);assert.match(html,/&lt;獎品&gt;/);
+ assert.equal((html.match(/data-raffle-resolve=/g)||[]).length,1);assert.match(html,/已領取不能覆蓋/);
+ assert.ok(!api.renderPreview({...data,readOnly:true}).includes('data-raffle-resolve='));
+});
 test('expiry is per claim and admin revoke only appears for remaining physical awards',()=>{
  const api=load(),claim={id:'a',campaignId:'c',studentKey:'x',quantity:1,claimedQuantity:0,status:'ready',pickupBlocked:true,pickupDeadline:'2000-01-01'};
  const html=api.renderClaims([claim,{...claim,id:'b',pickupBlocked:false}],[],{readOnly:false,canCorrect:true});

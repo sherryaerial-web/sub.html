@@ -3,6 +3,40 @@ const admin={teacherName:'店長',managementCapabilities:['raffle_admin']}, teac
 const campaign={id:'future',name:'新活動',sourceSpreadsheetId:'future-source-1234567890',readyPrizeVenues:[{prizeId:'p1',venue:'晴光'}]};
 const headers=['OB email名稱','OB名字','驗證碼','中獎等級','最終選擇獎品','領取館別','領獎方式','確認時間'];
 const row=['a@example.com','小花','code1','A','提袋','晴光','choose_venue','2027-01-01'];
+test('source conflict compares masked details and explicitly accepts same student unclaimed venue with audit',()=>{
+ const s=setup();s.importNow();const old=s.c.readRaffleClaims_()[0];s.sourceRows[1][5]='劍潭';
+ const p=s.c.previewRaffleImport_(admin,'future'),conflict=p.conflicts[0];
+ assert.equal(conflict.resolvable,true);assert.equal(conflict.before.venue,'晴光');assert.equal(conflict.after.venue,'劍潭');
+ assert.ok(!JSON.stringify(p).includes('a@example.com'));assert.ok(!JSON.stringify(p).includes(old.sourceFingerprint));
+ const op={campaignId:'future',claimId:old.id,version:1,previewToken:p.previewToken,reason:'核對學生改館',requestId:'request-resolve-0001'};
+ const before=JSON.stringify(s.sourceRows);const r=s.c.resolveRaffleConflict_(admin,op);
+ assert.equal(r.status,'waiting');assert.equal(r.version,2);assert.equal(s.c.readRaffleClaims_()[0].venue,'劍潭');assert.equal(JSON.stringify(s.sourceRows),before);
+ const n=s.writes();assert.equal(s.c.resolveRaffleConflict_(admin,op).version,2);assert.equal(s.writes(),n);
+ assert.equal(s.c.previewRaffleImport_(admin,'future').conflictCount,0);
+ const audit=s.c.getRaffleAudit_(admin,old.id);assert.equal(audit.events[1].action,'resolve-source');assert.equal(audit.events[1].reason,op.reason);
+});
+test('source acceptance rejects identity, digital, delivered, cancelled, stale preview, role and missing reason',()=>{
+ for(const kind of ['identity','delivered','cancelled','stale','role','reason','disabled']){
+  const s=setup();s.importNow();let c=s.c.readRaffleClaims_()[0];
+  if(kind==='delivered')s.c.mutateRaffleClaim_(teacher,{claimId:c.id,version:1,action:'collect',quantity:1,venue:'晴光',requestId:'request-collected-0001'});
+  if(kind==='cancelled')s.c.mutateRaffleClaim_(admin,{claimId:c.id,version:1,action:'revoke',reason:'取消',requestId:'request-revoked-0001'});
+  s.sourceRows[1][5]='劍潭';if(kind==='identity')s.sourceRows[1][0]='b@example.com';
+  const p=s.c.previewRaffleImport_(admin,'future');
+  if(['identity','delivered','cancelled'].includes(kind))assert.equal(p.conflicts[0].resolvable,false);
+  const op={campaignId:'future',claimId:c.id,version:kind==='delivered'||kind==='cancelled'?2:1,previewToken:p.previewToken,reason:kind==='reason'?'':'核對',requestId:'request-resolve-0001'};
+  if(kind==='stale')s.sourceRows[1][5]='其他館';if(kind==='disabled')s.props.set('RAFFLE_WRITES_ENABLED','false');
+  const n=s.writes();assert.throws(()=>s.c.resolveRaffleConflict_(kind==='role'?teacher:admin,op));assert.equal(s.writes(),n);
+ }
+ const s=setup();const c={status:'ready',claimedQuantity:0,email:'a@example.com',studentName:'甲',quantity:1};
+ assert.ok(s.c.raffleSourceConflictReason_(c,{...c,status:'digital'}));
+});
+test('source resolution append uncertainty retains request and rejects replay tampering',()=>{
+ const s=setup();s.importNow();const c=s.c.readRaffleClaims_()[0];s.sourceRows[1][5]='劍潭';const p=s.c.previewRaffleImport_(admin,'future');
+ const op={campaignId:'future',claimId:c.id,version:1,previewToken:p.previewToken,reason:'核對',requestId:'request-resolve-0001'};
+ s.setFail();assert.throws(()=>s.c.resolveRaffleConflict_(admin,op),/timeout/);assert.equal(s.c.resolveRaffleConflict_(admin,op).version,2);
+ const rows=s.tables.get('RaffleJournal').rows;const event=JSON.parse(rows[2][3]);event.changes[0].claim.email='attacker@example.com';rows[2][3]=JSON.stringify(event);
+ assert.throws(()=>s.c.readRaffleState_(),/資料|來源/);
+});
 test('revocation requires admin reason, preserves history and cannot be reimported or collected',()=>{
  const s=setup();s.importNow();const claim=s.c.readRaffleClaims_()[0];
  const op={claimId:claim.id,version:1,action:'revoke',reason:'資格撤銷，保留紀錄',requestId:'request-revoke-0001'};

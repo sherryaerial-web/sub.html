@@ -28,15 +28,19 @@
       </div>`).join('')}</article>`).join('');
   }
   function renderPreview(data) {
-    const issues = [...(data.conflicts || []), ...(data.errors || [])];
+    const issues = data.errors || [];
     return `<div class="admin-control"><h3>核對結果 · 尚未匯入</h3>
       <p>可新增 ${escape(data.additionCount || 0)} 筆 · 已存在 ${escape(data.duplicates || 0)} 筆 · 未選獎品 ${escape(data.pendingSelection || 0)} 筆</p>
       <p>需核對 ${escape(data.conflictCount || 0)} 筆 · 格式錯誤 ${escape(data.errorCount || 0)} 筆</p>
       <p class="item-meta">以下最多顯示 100 筆新增及各 100 筆問題。本次沒有寫入資料、扣庫存或寄信。</p>
       ${issues.map(issue => `<p class="state error">第 ${escape(issue.row)} 列：${escape(issue.message)}</p>`).join('')}
+      ${(data.conflicts || []).map(issue=>`<div class="raffle-prize"><p class="state error">第 ${escape(issue.row)} 列：${escape(issue.message)}</p>${renderSourceComparison(issue)}${data.readOnly === false && data.previewToken && issue.resolvable === true ? `<button type="button" class="compact-button" data-raffle-resolve="${escape(issue.id)}">核對並套用此筆來源變更</button>` : ''}</div>`).join('')}
       ${(data.additions || []).map(item => `<div class="raffle-prize"><strong>${escape(item.studentName)}</strong><p>${escape(item.prizeName)}｜${escape(item.venue || '—')}｜${escape(status(item.status))}</p></div>`).join('')}
       ${data.readOnly === false && data.previewToken && data.batchCount > 0 && !data.errorCount && !data.conflictCount ? `<button type="button" class="compact-button" data-raffle-confirm-import>確認匯入前 ${escape(data.batchCount)} 筆（不寄信）</button>` : ''}
     </div>`;
+  }
+  function renderSourceComparison(issue) {
+    return [['原紀錄',issue.before],['來源現況',issue.after]].map(([label,item])=>item?`<p><strong>${label}</strong>：${escape(item.studentName)}｜${escape(item.maskedEmail || '')}<br>${escape(item.prizeName)}｜${escape(item.venue || '待確認館別')}｜${escape(status(item.status))}｜已領 ${escape(item.claimedQuantity || 0)}／${escape(item.quantity || 1)} 件</p>`:'').join('');
   }
   function renderFulfillment(data, campaigns) {
     if (!data || !data.totals || !data.excluded || !Array.isArray(data.groups) || !Array.isArray(data.claims) || !Number.isInteger(data.offset)) throw Error('未收到完整備貨清單。');
@@ -238,14 +242,20 @@
         const sendButton = event.target.closest('[data-raffle-confirm-send]');
         const reconcileButton = event.target.closest('[data-raffle-reconcile]');
         const closeQueuedButton = event.target.closest('[data-raffle-close-queued]');
+        const resolveButton = event.target.closest('[data-raffle-resolve]');
         const button = event.target.closest('[data-raffle-action]');
-        if (!importButton && !mailButton && !sendButton && !reconcileButton && !closeQueuedButton && !button) return;
+        if (!importButton && !mailButton && !sendButton && !reconcileButton && !closeQueuedButton && !resolveButton && !button) return;
         if (busy) return;
         pending = null;
         node('[data-raffle-operation-error]').textContent = '';
         node('[data-raffle-save]').hidden = false;
         node('[data-raffle-save]').disabled = false;
-        if (sendButton) {
+        if (resolveButton) {
+          const conflict=preview?.conflicts?.find(item=>item.id===resolveButton.dataset.raffleResolve);
+          if(preview?.readOnly !== false || !preview.previewToken || conflict?.resolvable !== true || !conflict.before || !conflict.after)return;
+          selected={action:'resolve',conflict,preview};
+          node('[data-raffle-dialog-body]').innerHTML=`<h3>核對並套用這一筆來源變更？</h3>${renderSourceComparison(conflict)}<p>只更新這筆尚未交付的獎品／館別，保留原紀錄。到館狀態依活動現貨設定重新核對。已排入的通知不會改寫或自動重寄，請另至寄信紀錄檢查；不修改來源、不扣庫存。</p><label>核對理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>`;
+        } else if (sendButton) {
           if (!sendPlan || sendPlan.sendEnabled !== true || !sendPlan.batchCount) return;
           selected = {action:'send',preview:sendPlan};
           node('[data-raffle-dialog-body]').innerHTML = `<h3>確定現在寄出 ${escape(sendPlan.batchCount)} 封？</h3><p>用途：${sendPlan.kind === 'ready' ? '可領取通知' : '抽獎邀請'}。這次確認會真的寄信。若結果不明會停止，不會自動重寄；請至寄信紀錄核對。</p>${sendPlan.previews.map(item=>`<p style="overflow-wrap:anywhere">${escape(item.email)}</p>`).join('')}`;
@@ -286,7 +296,7 @@
           try {
             const audit = await options.api('getRaffleAudit', {claimId:selected.claim.id});
             if (disposed || selected !== current || !dialog.open) return;
-            node('[data-raffle-dialog-body]').insertAdjacentHTML('beforeend', (audit.events || []).map(item => `<div class="raffle-prize"><strong>${escape(({import:'匯入',prepare:'到館',collect:'領取',correct:'更正',revoke:'撤銷未領部分','resolve-source':'核對來源變更'})[item.action] || item.action)}</strong><p>${escape(item.at)}｜${escape(item.actor)}｜已領 ${escape(item.claimedQuantity)} 件</p><p>${escape(item.reason || '')}</p></div>`).join(''));
+            node('[data-raffle-dialog-body]').insertAdjacentHTML('beforeend', (audit.events || []).map(item => `<div class="raffle-prize"><strong>${escape(({import:'匯入',prepare:'到館',collect:'領取',correct:'更正',revoke:'撤銷未領部分','resolve-source':'核對來源變更'})[item.action] || item.action)}</strong><p>${escape(item.at)}｜${escape(item.actor)}｜已領 ${escape(item.claimedQuantity)} 件</p><p>${escape(item.prizeName || '')}｜${escape(item.venue || '')}</p><p>${escape(item.reason || '')}</p></div>`).join(''));
           } catch(error) { if (!disposed && selected === current) node('[data-raffle-operation-error]').textContent = error.message; }
         }
       });
@@ -296,11 +306,13 @@
         if (!pending) {
           const operation = ['import','queue','send'].includes(selected.action)
             ? {campaignId:selected.preview.campaignId,previewToken:selected.preview.previewToken,requestId:requestId()}
+            : selected.action === 'resolve' ? {campaignId:selected.preview.campaignId,claimId:selected.conflict.id,version:selected.conflict.before.version,previewToken:selected.preview.previewToken,reason:node('[data-raffle-reason]').value.trim(),requestId:requestId()}
             : ['reconcile','closeQueued'].includes(selected.action) ? {campaignId:selected.campaignId,jobId:selected.record.id,...(selected.action==='reconcile'?{status:node('[data-raffle-mail-status]').value}:{}),reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
             : {claimId:selected.claim.id,version:selected.claim.version,action:selected.action,venue:node('[data-raffle-venue]')?.value || '',quantity:node('[data-raffle-quantity]') ? Number(node('[data-raffle-quantity]').value) : undefined,reason:node('[data-raffle-reason]')?.value.trim() || '',requestId:requestId()};
           if (selected.action !== 'import' && ['collect','prepare'].includes(selected.action) && operation.venue !== selected.claim.venue) { node('[data-raffle-operation-error]').textContent = '館別不一致，請勿交付。'; return; }
           if(selected.action==='closeQueued'&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫停止理由。';return;}
-          pending = {action:({send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
+          if(['resolve','revoke'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
+          pending = {action:({resolve:'resolveRaffleConflict',send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
           if(selected.preview?.kind === 'ready' && ['send','queue'].includes(selected.action))pending.action=selected.action === 'send' ? 'sendRaffleReadyMailBatch' : 'confirmRaffleReadyNotifications';
         }
         busy = true;
@@ -313,6 +325,7 @@
             if(!response || response.jobId!==selected.record.id || response.status!=='closed' || response.closedBeforeSend!==true)throw Error('未收到完整停止待寄結果。');
             node('[data-raffle-notice]').textContent='已停止這封待寄並保留理由；沒有寄信，也不會自動重新排入。';pending=null;dialog.close();await read('mailRecords');return;
           }
+          if(['resolve','revoke'].includes(selected.action) && (!response || response.claimId !== pending.operation.claimId || response.version !== pending.operation.version+1 || (selected.action==='revoke' ? response.status !== 'cancelled' : !['waiting','ready'].includes(response.status))))throw Error('未收到完整領獎異動結果。');
           if (!response || (selected.action === 'send' ? !response.attemptId || !Number.isInteger(response.sent) || !Number.isInteger(response.pendingReview) || !Number.isInteger(response.total) : selected.action === 'reconcile' ? response.jobId !== selected.record.id || !['sent','closed'].includes(response.status) : selected.action === 'queue' ? !Number.isInteger(response.queued) : selected.action === 'import' ? !Number.isInteger(response.imported) : !response.claimId)) throw Error('沒有收到完整確認結果。');
           const imported = selected.action === 'import';
           const queued = selected.action === 'queue';
@@ -320,7 +333,7 @@
           node('[data-raffle-notice]').innerHTML = `<div class="state">${selected.action === 'send' ? `本批 ${escape(response.total)} 封：已送出／核對 ${escape(response.sent)} 封，待確認 ${escape(response.pendingReview)} 封。待確認不會自動重寄；已送出不保證收件匣送達。` : selected.action === 'reconcile' ? '已保存核對結論與理由，沒有重寄。' : queued ? `已排入待寄 ${escape(response.queued)} 封，尚未寄出；可到寄信紀錄查看。` : imported ? `已匯入 ${escape(response.imported)} 筆，剩餘 ${escape(response.remaining || 0)} 筆；沒有寄信。` : '這一筆已更新，已保留操作紀錄。'}</div>`;
           pending = null; dialog.close();
           if (fulfillmentView) await read('fulfillment', fulfillmentView.offset, fulfillmentView.groupId);
-          else await read(mailOperation ? 'mailRecords' : queued ? (selected.preview?.kind === 'ready' ? 'ready' : 'mail') : imported);
+          else await read(mailOperation ? 'mailRecords' : queued ? (selected.preview?.kind === 'ready' ? 'ready' : 'mail') : imported || selected.action === 'resolve');
         } catch (error) {
           if (!disposed) node('[data-raffle-operation-error]').textContent = `${error.message} 尚未確認完成，請勿重複操作。再次確認會使用同一筆操作識別；也可取消後到紀錄核對。`;
         } finally {

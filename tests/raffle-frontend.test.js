@@ -7,6 +7,12 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('overview renderer distinguishes records/units, warnings and rejects incomplete backend response',()=>{
+ const api=load(),mail={total:3,queued:1,sending:1,uncertain:0,sent:1,closed:0,review:1};
+ const data={readOnly:true,sourceChecked:false,campaignId:'c',campaignName:'<活動>',asOf:'2027-01-01T00:00:00Z',claims:{total:3,waiting:1,ready:1,partial:0,claimed:1,digital:0,cancelled:0,deliveredUnits:1,pendingUnits:2,blockedRecords:2,blockedUnits:2},mail:{invitation:mail,ready:{...mail}}};
+ const html=api.renderOverview(data);assert.match(html,/&lt;活動&gt;/);assert.match(html,/2 筆.*2 件/);assert.match(html,/不代表.*收到/);assert.match(html,/未核對來源/);assert.match(html,/寄送中.*待確認/);
+ assert.ok(!html.includes('<button'));assert.throws(()=>api.renderOverview({}));assert.throws(()=>api.renderOverview({...data,mail:{}}));assert.throws(()=>api.renderOverview({...data,claims:{...data.claims,total:NaN}}));
+});
 test('source conflict preview shows before after and only permits safe explicit acceptance',()=>{
  const api=load(),data={readOnly:false,previewToken:'token',conflicts:[{id:'x',row:2,resolvable:true,before:{studentName:'甲',prizeName:'提袋',venue:'晴光',status:'ready'},after:{studentName:'甲',prizeName:'<獎品>',venue:'劍潭',status:'waiting'}},{id:'y',row:3,resolvable:false,message:'已領取不能覆蓋'}]};
  const html=api.renderPreview(data);assert.match(html,/原紀錄/);assert.match(html,/來源現況/);assert.match(html,/&lt;獎品&gt;/);

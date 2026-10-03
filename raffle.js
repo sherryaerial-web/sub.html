@@ -42,6 +42,19 @@
   function renderSourceComparison(issue) {
     return [['原紀錄',issue.before],['來源現況',issue.after]].map(([label,item])=>item?`<p><strong>${label}</strong>：${escape(item.studentName)}｜${escape(item.maskedEmail || '')}<br>${escape(item.prizeName)}｜${escape(item.venue || '待確認館別')}｜${escape(status(item.status))}｜已領 ${escape(item.claimedQuantity || 0)}／${escape(item.quantity || 1)} 件</p>`:'').join('');
   }
+  function renderOverview(data) {
+    const claimKeys=['waiting','ready','partial','claimed','digital','cancelled'];
+    const unitKeys=['deliveredUnits','pendingUnits','blockedRecords','blockedUnits'];
+    const mailKeys=['queued','sending','uncertain','sent','closed'];
+    const valid=(object,keys)=>object && keys.every(k=>Number.isSafeInteger(object[k]) && object[k]>=0);
+    if(!data || data.readOnly!==true || data.sourceChecked!==false || !data.campaignId || typeof data.campaignName!=='string' || !Number.isFinite(Date.parse(data.asOf)) ||
+       !valid(data.claims,['total',...claimKeys,...unitKeys]) || claimKeys.reduce((n,k)=>n+data.claims[k],0)!==data.claims.total ||
+       !['invitation','ready'].every(kind=>valid(data.mail?.[kind],['total','review',...mailKeys]) && mailKeys.reduce((n,k)=>n+data.mail[kind][k],0)===data.mail[kind].total && data.mail[kind].review===data.mail[kind].sending+data.mail[kind].uncertain)) throw Error('未收到完整活動總覽，請重新讀取；不能視為零筆。');
+    const c=data.claims;
+    return `<section class="admin-control"><h3>${escape(data.campaignName)}｜活動總覽</h3><p class="item-meta">讀取時間：${escape(data.asOf)}</p><p>只統計本系統已匯入的紀錄，未核對來源是否有新增或異動；不是來源庫存，也不代表可以直接寄送。</p><p>已匯入 ${escape(c.total)} 筆領獎紀錄 · 已交付 ${escape(c.deliveredUnits)} 件 · 尚未交付 ${escape(c.pendingUnits)} 件（含過期，不含電子／撤銷剩餘）</p>${c.blockedRecords ? `<p class="state error">${escape(c.blockedRecords)} 筆／${escape(c.blockedUnits)} 件已過期或期限需核對，不能直接交付；仍計入下方原狀態。</p>` : ''}</section>
+      <section class="admin-control"><h3>領獎處理</h3>${claimKeys.map(k=>`<p>${escape(status(k))}：${escape(c[k])} 筆</p>`).join('')}<p class="item-meta">「部分領取」獨立計數；撤銷前已交付的件數仍保留。</p></section>
+      ${[['invitation','抽獎邀請'],['ready','可領取通知']].map(([kind,label])=>{const m=data.mail[kind];return `<section class="admin-control"><h3>${label}｜共 ${escape(m.total)} 封</h3>${m.review ? `<p class="state error">${escape(m.review)} 封寄送中／結果待確認，請至「寄信紀錄」核對，勿自行重寄。</p>`:''}<p>待寄 ${escape(m.queued)} 封 · 已寄出 ${escape(m.sent)} 封 · 已停止／結案 ${escape(m.closed)} 封</p><p class="item-meta">已寄出不代表學生已收到；停止／結案不會自動重新排入。詳細核對依寄信紀錄為準。</p></section>`;}).join('')}`;
+  }
   function renderFulfillment(data, campaigns) {
     if (!data || !data.totals || !data.excluded || !Array.isArray(data.groups) || !Array.isArray(data.claims) || !Number.isInteger(data.offset)) throw Error('未收到完整備貨清單。');
     const groupId = data.group?.id || '';
@@ -173,8 +186,10 @@
         <dialog data-raffle-dialog><form class="dialog-body raffle-search" data-raffle-operation-form><div data-raffle-dialog-body></div><div data-raffle-operation-error class="item-meta" role="alert"></div><div class="admin-item-actions"><button type="submit" class="compact-button" data-raffle-save>確認</button><button type="button" class="compact-button" data-raffle-cancel>取消</button></div></form></dialog>`;
       const form = node('form'), result = node('[data-raffle-result]');
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('beforeend','<button type="button" class="compact-button" data-raffle-ready-preview>預覽可領取通知（不寄出）</button><button type="button" class="compact-button" data-raffle-ready-send>可領取通知寄送前確認</button>');
+      if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('afterbegin','<button type="button" class="compact-button" data-raffle-overview>活動總覽（唯讀）</button>');
       settingsButton();
       async function read(isPreview, offset = 0, groupId = '') {
+        const overview = isPreview === 'overview';
         const readyMail = isPreview === 'ready' || isPreview === 'readySend';
         const mailPreview = isPreview === 'mail' || isPreview === 'ready';
         const mailRecords = isPreview === 'mailRecords';
@@ -188,8 +203,9 @@
         form.querySelectorAll('button').forEach(b => { b.disabled = true; });
         result.innerHTML = '<div class="state" role="status">核對資料中…</div>';
         try {
-          const data = await options.api(fulfillment ? 'getRaffleFulfillment' : mailSend ? (readyMail ? 'previewRaffleReadyMailSend' : 'previewRaffleMailSend') : mailRecords ? 'getRaffleMailRecords' : mailPreview ? (readyMail ? 'previewRaffleReadyNotifications' : 'previewRaffleInvitations') : isPreview ? 'previewRaffleImport' : 'getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher', campaignId, query, ...(mailRecords || fulfillment ? {offset} : {}), ...(fulfillment ? {groupId} : {}) });
+          const data = await options.api(overview ? 'getRaffleOverview' : fulfillment ? 'getRaffleFulfillment' : mailSend ? (readyMail ? 'previewRaffleReadyMailSend' : 'previewRaffleMailSend') : mailRecords ? 'getRaffleMailRecords' : mailPreview ? (readyMail ? 'previewRaffleReadyNotifications' : 'previewRaffleInvitations') : isPreview ? 'previewRaffleImport' : 'getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher', campaignId, query, ...(mailRecords || fulfillment ? {offset} : {}), ...(fulfillment ? {groupId} : {}) });
           if (disposed || request !== serial) return;
+          if (overview && data?.campaignId !== campaignId) throw Error('活動總覽與所選活動不符，請重新核對。');
           if ((mailPreview || mailSend) && (readyMail ? data?.kind !== 'ready' : data?.kind && data.kind !== 'invitation')) throw Error('寄信用途不符，請重新核對。');
           if (!isPreview && !data.enabled) { result.innerHTML = '<div class="state">工作台已暫停開放。</div>'; return; }
           mailPlan = mailPreview ? {...data,campaignId} : null;
@@ -197,10 +213,10 @@
           mailRecordsData = mailRecords ? {...data,campaignId} : null;
           fulfillmentView = fulfillment ? {offset,groupId} : null;
           if (fulfillment) workspace = data;
-          if (mailPreview || mailRecords || mailSend || fulfillment) preview = null;
+          if (overview || mailPreview || mailRecords || mailSend || fulfillment) preview = null;
           else if (isPreview) preview = { ...data, campaignId };
           else { workspace = data; preview = null; }
-          result.innerHTML = fulfillment ? renderFulfillment(data,campaigns) : mailSend ? renderMailSendPreview(data) : mailRecords ? renderMailRecords(data) : mailPreview ? renderMailPreview(data) : isPreview ? renderPreview(data) : renderClaims(data.claims || [], campaigns, data);
+          result.innerHTML = overview ? renderOverview(data) : fulfillment ? renderFulfillment(data,campaigns) : mailSend ? renderMailSendPreview(data) : mailRecords ? renderMailRecords(data) : mailPreview ? renderMailPreview(data) : isPreview ? renderPreview(data) : renderClaims(data.claims || [], campaigns, data);
           if (!isPreview && (data.claims || []).length >= 50) result.insertAdjacentHTML('beforeend', '<p class="state">最多顯示 50 筆，請用完整 Email 縮小範圍。</p>');
         } catch (error) {
           if (!disposed && request === serial) result.innerHTML = `<div class="state error">${escape(error.message || '讀取失敗，請稍後重試。')}</div>`;
@@ -210,6 +226,7 @@
       }
       form.addEventListener('submit', event => { event.preventDefault(); read(false); });
       if (admin) node('[data-raffle-preview]').addEventListener('click', () => read(true));
+      if (admin) node('[data-raffle-overview]').addEventListener('click', () => read('overview'));
       if (admin) node('[data-raffle-mail-preview]').addEventListener('click', () => read('mail'));
       if (admin) node('[data-raffle-mail-records]').addEventListener('click', () => read('mailRecords'));
       if (admin) node('[data-raffle-mail-send]').addEventListener('click', () => read('mailSend'));
@@ -349,5 +366,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment };
+  global.SherryRaffle = { mount, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

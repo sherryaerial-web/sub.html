@@ -9250,6 +9250,9 @@ function doPost(e) {
       getRaffleAudit: function() {
         return getRaffleAudit_(session, parameters.claimId);
       },
+      getRaffleOverview: function() {
+        return getRaffleOverview_(session, parameters.campaignId);
+      },
       getInvoiceAdminDashboard: function() {
         return getInvoiceAdminDashboard_(session);
       },
@@ -21330,6 +21333,36 @@ function getRaffleMailRecords_(session, campaignId, offsetValue) {
     return {id: job.id, kind:job.kind || 'invitation', email: job.email, status: job.status, qualificationCount: job.qualificationIds.length, actor: job.actor, createdAt: job.createdAt,
       updatedAt: job.updatedAt || '', updatedBy: job.updatedBy || '', reason: job.reason || '', closedBeforeSend:job.closedBeforeSend === true};
   })};
+}
+
+function buildRaffleOverview_(campaign, claims, jobs, now) {
+  var counts = {total:0,waiting:0,ready:0,partial:0,claimed:0,digital:0,cancelled:0,deliveredUnits:0,pendingUnits:0,blockedRecords:0,blockedUnits:0};
+  var blocked = rafflePickupInfo_(campaign,now).pickupBlocked;
+  claims.filter(function(c) { return c.campaignId === campaign.id; }).forEach(function(c) {
+    if (['waiting','ready','partial','claimed','digital','cancelled'].indexOf(c.status) < 0 || !Number.isSafeInteger(c.quantity) || c.quantity < 1 || !Number.isSafeInteger(c.claimedQuantity) || c.claimedQuantity < 0 || c.claimedQuantity > c.quantity ||
+        (['waiting','ready','digital'].indexOf(c.status) >= 0 && c.claimedQuantity !== 0) || (c.status === 'partial' && !(c.claimedQuantity > 0 && c.claimedQuantity < c.quantity)) || (c.status === 'claimed' && c.claimedQuantity !== c.quantity)) throw new Error('領獎狀態或數量不一致，無法產生活動總覽。');
+    counts.total++; counts[c.status]++; counts.deliveredUnits += c.claimedQuantity;
+    if (['waiting','ready','partial'].indexOf(c.status) >= 0) {
+      var remaining = c.quantity-c.claimedQuantity; counts.pendingUnits += remaining;
+      if (blocked) { counts.blockedRecords++; counts.blockedUnits += remaining; }
+    }
+    if (!Object.keys(counts).every(function(k) { return Number.isSafeInteger(counts[k]); })) throw new Error('總覽數量超出安全範圍。');
+  });
+  var mail = {invitation:{total:0,queued:0,sending:0,uncertain:0,sent:0,closed:0,review:0},ready:{total:0,queued:0,sending:0,uncertain:0,sent:0,closed:0,review:0}};
+  jobs.filter(function(job) { return job.campaignId === campaign.id; }).forEach(function(job) {
+    var kind = job.kind == null ? 'invitation' : job.kind;
+    if (['invitation','ready'].indexOf(kind) < 0 || ['queued','sending','uncertain','sent','closed'].indexOf(job.status) < 0) throw new Error('寄信狀態不完整，無法產生活動總覽。');
+    mail[kind].total++; mail[kind][job.status]++;
+    if (['sending','uncertain'].indexOf(job.status) >= 0) mail[kind].review++;
+  });
+  return {readOnly:true,sourceChecked:false,campaignId:campaign.id,campaignName:campaign.name,asOf:now,claims:counts,mail:mail};
+}
+
+function getRaffleOverview_(session, campaignId) {
+  assertCapabilitySession_(session,'raffle_admin');
+  var campaign = raffleMailCampaign_(campaignId);
+  // Read existing journals only: this is not a source sync, quota check or send permission.
+  return buildRaffleOverview_(campaign,readRaffleClaims_(),readRaffleMailState_().jobs,new Date().toISOString());
 }
 
 function appendRaffleMailEvent_(state, context, event) {

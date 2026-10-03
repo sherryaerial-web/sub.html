@@ -7,6 +7,11 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('campaign settings expose blank drafts, escape names and keep active settings read only',()=>{
+ const api=load(),data={readOnly:false,operationalEnabled:false,campaigns:[{campaign:{id:'old',name:'<舊>',sourceSpreadsheetId:'source'},status:'active',version:0}]};
+ const html=api.renderCampaignSettings(data);assert.match(html,/&lt;舊&gt;/);assert.match(html,/新增活動草稿/);assert.match(html,/尚未開放/);assert.ok(!html.includes('data-settings-edit="old"'));assert.ok(!api.renderCampaignSettings({...data,readOnly:true}).includes('data-settings-new'));
+ assert.throws(()=>api.renderCampaignSettings({}),/完整/);
+});
 test('actual send preview requires full payload, explicit gate and enough quota',()=>{
  const api=load(),p={dryRun:true,sendEnabled:true,quota:2,batchCount:2,previewToken:'token',previews:[{email:'a@example.com',subject:'test',body:'<unsafe>'},{email:'b@example.com',subject:'test',body:'two'}]};
  assert.match(api.renderMailSendPreview(p),/data-raffle-confirm-send/);assert.match(api.renderMailSendPreview(p),/&lt;unsafe&gt;/);

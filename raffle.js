@@ -66,17 +66,93 @@
     const canSend = data.sendEnabled && Number.isInteger(data.quota) && data.quota >= data.batchCount && data.batchCount > 0;
     return `<div class="admin-control"><h3>寄送前確認 · 尚未寄出</h3><p class="state">${!data.sendEnabled ? '正式寄信未啟用，或尚未確認舊寄信程式已停用交接。' : `目前剩餘配額：${escape(data.quota)} 位收件人；本批 ${escape(data.batchCount)} 封。配額不足時整批停止。`}</p><p>只寄出已排入待寄、再次核對來源一致的信件；每次最多 5 封。匯入或預覽不會寄信。</p>${canSend ? `<button type="button" class="compact-button" data-raffle-confirm-send>核對後寄出這 ${escape(data.batchCount)} 封</button>` : ''}${data.previews.map(item=>`<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>收件人：${escape(item.email)}</strong><p>主旨：${escape(item.subject)}</p><div style="white-space:pre-wrap">${escape(item.body)}</div></article>`).join('') || '<p>目前沒有待寄信件。</p>'}</div>`;
   }
+  function renderCampaignSettings(data) {
+    if (!data || !Array.isArray(data.campaigns) || typeof data.readOnly !== 'boolean' || typeof data.operationalEnabled !== 'boolean' || data.campaigns.some(i=>!i.campaign || !['draft','active'].includes(i.status) || !Number.isInteger(i.version))) throw Error('未收到完整活動設定。');
+    return `<h3>活動設定</h3><p class="state">${data.operationalEnabled ? '工作台已開放。' : '正式作業尚未開放。'}草稿與啟用都不會匯入名單、扣庫存或寄信。已啟用活動此階段不可修改。</p>${data.readOnly ? '<p>目前為唯讀設定。</p>' : '<button type="button" class="compact-button" data-settings-new>新增活動草稿</button>'}${data.campaigns.map(i=>`<article class="admin-control" style="overflow-wrap:anywhere"><h4>${escape(i.campaign.name)} · ${i.status==='draft'?'草稿':'已啟用'}</h4><p>活動代碼：${escape(i.campaign.id)}｜版本 ${i.version}</p><p>來源：${escape(i.campaign.sourceSpreadsheetId)}</p>${!data.readOnly && i.status==='draft' ? `<button type="button" class="compact-button" data-settings-edit="${escape(i.campaign.id)}">編輯／核對啟用</button>` : ''}</article>`).join('') || '<p>尚無活動設定。</p>'}`;
+  }
+  function mountCampaignSettings(root, options) {
+    let disposed=false, busy=false, pending=null, current=null, data=null, activation=null;
+    const node=s=>root.querySelector(s), requestId=()=>global.crypto && global.crypto.randomUUID ? global.crypto.randomUUID() : `raffle_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    root.innerHTML='<p role="status">讀取活動設定…</p>';
+    const message=text=>{if(!disposed) node('[data-settings-message]').textContent=text;};
+    const list=()=>{root.innerHTML=`<div data-settings-list>${renderCampaignSettings(data)}</div><div data-settings-editor></div><p role="status" data-settings-message></p>`;};
+    const refresh=async()=>{const result=await options.api('getRaffleCampaignSettings',{});if(disposed)return;renderCampaignSettings(result);data=result;current=null;activation=null;list();};
+    function edit(item) {
+      current=item || {campaign:{id:'',name:'',sourceSpreadsheetId:'',websiteUrl:'',pickupDeadline:'',readyPrizeVenues:[]},version:0,status:'draft'};
+      const c=current.campaign;activation=null;pending=null;
+      node('[data-settings-editor]').innerHTML=`<form class="admin-control" data-settings-form><h4>${c.id?'編輯草稿':'新增活動草稿'}</h4>${[['id','活動代碼（英數、-、_）'],['name','活動名稱'],['sourceSpreadsheetId','來源 Google 試算表 ID'],['websiteUrl','學生抽獎網址（HTTPS）'],['pickupDeadline','領獎截止時間（可留空，例：2027-01-31T22:00+08:00）']].map(([key,label])=>`<label style="display:block">${label}<input style="width:100%;box-sizing:border-box" name="${key}" value="${escape(c[key]||'')}" ${key==='id'&&c.id?'readonly':''} ${key!=='pickupDeadline'?'required':''}></label>`).join('')}<label style="display:block">教室現貨（可留空；每行：獎項ID｜館別）<textarea style="width:100%;box-sizing:border-box" name="readyPrizeVenues" rows="3">${escape((c.readyPrizeVenues||[]).map(p=>p.prizeId+'｜'+p.venue).join('\n'))}</textarea></label><p class="item-meta">請填未來活動資料；本次不搬舊活動。館別需與來源表「領取館別」完全一致。</p><button class="compact-button" type="submit">儲存草稿（不啟用）</button>${current.version>0?'<button class="compact-button" type="button" data-settings-preview>核對來源並預覽啟用</button>':''}<div data-settings-activation></div></form>`;
+      node('[data-settings-form]').querySelectorAll('input,textarea').forEach(el=>{el.classList.add('text-input');});
+      node('[data-settings-form]').querySelectorAll('label').forEach(el=>{el.style.marginBottom='12px';});
+      message('');
+    }
+    function campaignFromForm() {
+      const form=node('[data-settings-form]'), c={};
+      ['id','name','sourceSpreadsheetId','websiteUrl','pickupDeadline'].forEach(k=>{c[k]=form.elements.namedItem(k).value.trim();});
+      c.readyPrizeVenues=form.elements.namedItem('readyPrizeVenues').value.split('\n').filter(l=>l.trim()).map(line=>{const parts=line.split('｜');if(parts.length!==2)throw Error('現貨請每行填「獎項ID｜館別」。');return{prizeId:parts[0].trim(),venue:parts[1].trim()};});return c;
+    }
+    async function run(action) {
+      if(busy)return;busy=true;
+      root.querySelectorAll('button,input,textarea').forEach(e=>{e.disabled=true;});
+      try{await action();}catch(error){if(!disposed){message(error.message||'操作失敗，請稍後再試。');if(pending){[['settingsRetry','重試同一筆操作'],['settingsReload','重新讀取最新狀態（不重送）']].forEach(([key,label])=>{const b=document.createElement('button');b.type='button';b.className='compact-button';b.dataset[key]='';b.textContent=label;node('[data-settings-message]').appendChild(b);});}}}
+      finally{busy=false;if(!disposed)root.querySelectorAll('button,input,textarea').forEach(e=>{e.disabled=!!pending && !e.hasAttribute('data-settings-retry') && !e.hasAttribute('data-settings-reload');});}
+    }
+    async function write() {
+      const p=pending,result=await options.api(p.action,{operation:JSON.stringify(p.operation)});
+      if(disposed)return;
+      if(!result || result.campaignId!==p.campaignId || result.version!==p.operation.version+1 || result.status!==(p.action==='saveRaffleCampaign'?'draft':'active'))throw Error('未收到完整儲存結果，請重試同一筆操作。');
+      pending=null;await refresh();if(disposed)return;
+      if(result.status==='draft')edit(data.campaigns.find(i=>i.campaign.id===result.campaignId));
+      message(result.status==='active'?'已啟用活動設定；未匯入或寄信。請離開再進入領獎工作台，更新活動清單。':'草稿已儲存，尚未啟用。');
+    }
+    const submit=event=>{if(!event.target.matches('[data-settings-form]'))return;event.preventDefault();run(async()=>{const campaign=campaignFromForm();pending={action:'saveRaffleCampaign',campaignId:campaign.id,operation:{campaign,version:current.version,requestId:requestId()}};await write();});};
+    const input=()=>{activation=null;const box=node('[data-settings-activation]');if(box)box.replaceChildren();};
+    const click=event=>{
+      const button=event.target.closest('button');if(!button||busy)return;
+      if(button.hasAttribute('data-settings-new'))return edit(null);
+      if(button.hasAttribute('data-settings-edit'))return edit(data.campaigns.find(i=>i.campaign.id===button.dataset.settingsEdit));
+      if(button.hasAttribute('data-settings-retry'))return run(write);
+      if(button.hasAttribute('data-settings-reload'))return run(async()=>{await refresh();if(disposed)return;pending=null;message('已重新讀取最新狀態，沒有重送；請核對草稿／已啟用狀態後再操作。');});
+      if(button.hasAttribute('data-settings-preview'))return run(async()=>{
+        if(JSON.stringify(campaignFromForm())!==JSON.stringify(current.campaign))throw Error('請先儲存變更，再核對來源。');
+        const result=await options.api('previewRaffleCampaignActivation',{campaignId:current.campaign.id});if(disposed)return;
+        if(!result || result.canActivate!==true || result.campaignId!==current.campaign.id || result.version!==current.version || !result.previewToken || !Number.isInteger(result.sourceRows) || !Number.isInteger(result.prizeCount))throw Error('未收到完整啟用核對結果。');
+        activation=result;node('[data-settings-activation]').innerHTML=`<p>來源核對通過：${result.sourceRows} 筆名單、${result.prizeCount} 個獎品。尚未匯入／寄信。</p><button type="button" class="compact-button" data-settings-activate>確認啟用此活動設定（不寄信）</button>`;message('');
+      });
+      if(button.hasAttribute('data-settings-activate')&&activation)return run(async()=>{
+        if(!global.confirm('確認啟用此活動設定？不會匯入名單或寄信；啟用後本階段不可編輯。'))return;
+        pending={action:'activateRaffleCampaign',campaignId:current.campaign.id,operation:{campaignId:current.campaign.id,version:current.version,previewToken:activation.previewToken,requestId:requestId()}};await write();
+      });
+    };
+    root.addEventListener('submit',submit);root.addEventListener('input',input);root.addEventListener('click',click);
+    refresh().catch(e=>{if(!disposed)root.innerHTML=`<p class="state error">${escape(e.message||'活動設定讀取失敗。')}</p>`;});
+    return()=>{disposed=true;root.removeEventListener('submit',submit);root.removeEventListener('input',input);root.removeEventListener('click',click);root.replaceChildren();};
+  }
   function mount(root, options) {
     let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, fulfillmentView = null, pending = null;
     const admin = options.mode === 'admin';
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
-    const cleanup = () => { disposed = true; serial++; root.replaceChildren(); };
+    let settingsCleanup=null;
+    function settingsButton() {
+      if(!admin)return;
+      const button=document.createElement('button');button.type='button';button.className='compact-button';button.textContent='活動設定／草稿';button.dataset.raffleSettings='';root.appendChild(button);
+      button.addEventListener('click',()=>{
+        const dialog=document.createElement('dialog');dialog.style.cssText='width:min(680px,calc(100vw - 32px));max-height:85vh;overflow:auto;box-sizing:border-box';dialog.innerHTML='<button type="button" data-settings-close>關閉設定</button><div data-settings-content></div>';root.appendChild(dialog);
+        const disposePanel=mountCampaignSettings(dialog.querySelector('[data-settings-content]'),options);
+        let closed=false;
+        const close=()=>{if(closed)return;closed=true;disposePanel();dialog.remove();if(settingsCleanup===close)settingsCleanup=null;};
+        settingsCleanup=close;
+        dialog.querySelector('[data-settings-close]').onclick=close;
+        dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
+      });
+    }
+    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); root.replaceChildren(); };
     initial.then(data => {
       if (disposed) return;
       if (!data.enabled || !data.campaigns.length) {
         root.innerHTML = '<div class="state">領獎工作台尚未開放。未來活動設定完成後，會在這裡提供查詢；舊活動不會自動搬入。</div>';
+        settingsButton();
         return;
       }
       campaigns = data.campaigns;
@@ -89,6 +165,7 @@
         </form><div data-raffle-notice aria-live="polite"></div><div data-raffle-result aria-live="polite"><div class="state">請先搜尋學生，不會列出全部名單。</div></div>
         <dialog data-raffle-dialog><form class="dialog-body raffle-search" data-raffle-operation-form><div data-raffle-dialog-body></div><div data-raffle-operation-error class="item-meta" role="alert"></div><div class="admin-item-actions"><button type="submit" class="compact-button" data-raffle-save>確認</button><button type="button" class="compact-button" data-raffle-cancel>取消</button></div></form></dialog>`;
       const form = node('form'), result = node('[data-raffle-result]');
+      settingsButton();
       async function read(isPreview, offset = 0, groupId = '') {
         const mailPreview = isPreview === 'mail';
         const mailRecords = isPreview === 'mailRecords';
@@ -238,5 +315,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment };
+  global.SherryRaffle = { mount, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment };
 })(window);

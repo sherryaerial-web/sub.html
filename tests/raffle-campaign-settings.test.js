@@ -1,6 +1,25 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto');
 const admin={teacherName:'店長',managementCapabilities:['raffle_admin']};
 const campaign={id:'future',name:'未來活動',sourceSpreadsheetId:'future-source-1234567890',websiteUrl:'https://example.com/raffle',pickupDeadline:'',readyPrizeVenues:[]};
+test('active campaigns pause, edit immutable source, and resume after fresh source preview',()=>{
+ const s=setup();s.save();s.activate();
+ const pause={action:'pause',campaignId:'future',version:2,reason:'調整期限',requestId:'campaign-pause-0001'};
+ assert.throws(()=>s.c.manageRaffleCampaign_({teacherName:'老師',managementCapabilities:['raffle_fulfillment']},pause),/權限/);assert.throws(()=>s.c.manageRaffleCampaign_(admin,{...pause,reason:''}),/原因/);
+ assert.equal(s.c.manageRaffleCampaign_(admin,pause).status,'paused');assert.equal(s.c.getRaffleConfiguration_().campaigns.length,0);
+ const n=s.writes();assert.equal(s.c.manageRaffleCampaign_(admin,pause).version,3);assert.equal(s.writes(),n);
+ const update={action:'update',campaignId:'future',campaign:{...campaign,name:'調整後活動'},version:3,reason:'更新名稱',requestId:'campaign-update-0001'};
+ assert.throws(()=>s.c.manageRaffleCampaign_(admin,{...update,campaign:{...update.campaign,sourceSpreadsheetId:'other-source-1234567890'}}),/來源/);
+ assert.equal(s.c.manageRaffleCampaign_(admin,update).version,4);
+ const p=s.c.previewRaffleCampaignActivation_(admin,'future');const resume={campaignId:'future',version:4,previewToken:p.previewToken,reason:'來源核對完成',requestId:'campaign-resume-0001'};
+ assert.throws(()=>s.c.activateRaffleCampaign_(admin,{...resume,reason:''}),/原因/);
+ s.fail();assert.throws(()=>s.c.activateRaffleCampaign_(admin,resume),/uncertain/);assert.equal(s.c.activateRaffleCampaign_(admin,resume).status,'active');assert.equal(s.c.getRaffleConfiguration_().campaigns[0].name,'調整後活動');
+});
+test('paused source ownership cannot be stolen by another campaign and paused operations stay blocked',()=>{
+ const s=setup();s.save();s.activate();s.c.manageRaffleCampaign_(admin,{action:'pause',campaignId:'future',version:2,reason:'暫停',requestId:'campaign-pause-0001'});
+ s.c.saveRaffleCampaign_(admin,{campaign:{...campaign,id:'other'},version:0,requestId:'campaign-other-0001'});
+ assert.throws(()=>s.c.previewRaffleCampaignActivation_(admin,'other'),/來源/);assert.throws(()=>s.c.raffleMailCampaign_('future'));
+ const rows=s.tables.get('RaffleCampaignJournal').data,e=JSON.parse(rows[3][4]);e.action='update';rows[3][4]=JSON.stringify(e);rows[3][3]=s.c.raffleHash_(rows[3][4]);assert.throws(()=>s.c.readRaffleCampaignState_(),/狀態|異動/);
+});
 function setup(){
  const props=new Map(Object.entries({RAFFLE_ENABLED:'true',RAFFLE_WRITES_ENABLED:'true',RAFFLE_CAMPAIGN_SETTINGS_ENABLED:'true',RAFFLE_CAMPAIGNS_JSON:'[]'})),tables=new Map(),pending=[];
  let locked=false,writes=0,reads=0,fail=false;

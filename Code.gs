@@ -9208,6 +9208,7 @@ function doPost(e) {
       },
       getRaffleCampaignSettings: function() { return getRaffleCampaignSettings_(session); },
       saveRaffleCampaign: function() { return saveRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動草稿')); },
+      manageRaffleCampaign: function() { return manageRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動維護')); },
       previewRaffleCampaignActivation: function() { return previewRaffleCampaignActivation_(session, parameters.campaignId); },
       activateRaffleCampaign: function() { return activateRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動啟用')); },
       previewRaffleImport: function() {
@@ -20929,8 +20930,14 @@ function readRaffleCampaignState_() {
     try { e = JSON.parse(json); } catch (error) { throw new Error('活動設定紀錄損壞。'); }
     if (!/^[A-Za-z0-9_-]{12,100}$/.test(id || '') || !/^[a-f0-9]{64}$/.test(hash || '') || state.requests[id] || raffleHash_(json) !== row[col.payloadHash] || !e || e.seedHash !== seedHash || !cleanText_(e.actor)) throw new Error('活動設定紀錄或舊設定已變更，請核對。');
     var c = normalizeRaffleCampaign_(e.campaign), prior = byId[c.id];
-    if (JSON.stringify(c) !== JSON.stringify(e.campaign) || (prior && prior.status !== 'draft') || e.version !== (prior ? prior.version : 0) + 1 || ['draft','active'].indexOf(e.status) < 0 || (!prior && e.status !== 'draft') ||
-        (e.status === 'active' && (JSON.stringify(prior.campaign) !== JSON.stringify(c) || state.campaigns.some(function(item) { return item.status === 'active' && item.campaign.sourceSpreadsheetId === c.sourceSpreadsheetId; })))) throw new Error('活動設定紀錄版本或狀態有誤。');
+    var same = prior && JSON.stringify(normalizeRaffleCampaign_(prior.campaign)) === JSON.stringify(c);
+    var maintained = e.action === 'pause' || e.action === 'update' || e.action === 'resume';
+    var transition = !prior ? e.status === 'draft' && !e.action : prior.status === 'draft' ? !e.action && (e.status === 'draft' || (e.status === 'active' && same)) :
+      prior.status === 'active' ? e.action === 'pause' && e.status === 'paused' && same :
+      prior.status === 'paused' && ((e.action === 'update' && e.status === 'paused' && c.sourceSpreadsheetId === prior.campaign.sourceSpreadsheetId) || (e.action === 'resume' && e.status === 'active' && same));
+    if (JSON.stringify(c) !== JSON.stringify(e.campaign) || !transition || e.version !== (prior ? prior.version : 0) + 1 ||
+        (maintained && (typeof e.reason !== 'string' || !e.reason.trim() || e.reason.length > 300)) ||
+        (['active','paused'].indexOf(e.status) >= 0 && state.campaigns.some(function(item) { return item.campaign.id !== c.id && ['active','paused'].indexOf(item.status) >= 0 && item.campaign.sourceSpreadsheetId === c.sourceSpreadsheetId; }))) throw new Error('活動設定紀錄版本或狀態有誤。');
     var result = {campaignId:c.id, version:e.version, status:e.status};
     if (JSON.stringify(result) !== JSON.stringify(e.result)) throw new Error('活動設定結果紀錄有誤。');
     var item = {campaign:c, version:e.version, status:e.status, legacy:false};
@@ -20957,7 +20964,9 @@ function raffleCampaignContext_(session, operation, action) {
 function appendRaffleCampaignEvent_(state, context, campaign, status, version) {
   if (state.events.length >= 1000) throw new Error('活動設定紀錄已達安全容量。');
   var result = {campaignId:campaign.id, version:version, status:status};
-  var json = JSON.stringify({campaign:campaign, status:status, version:version, actor:context.actor, seedHash:state.seedHash, result:result});
+  var event = {campaign:campaign, status:status, version:version, actor:context.actor, seedHash:state.seedHash, result:result};
+  if (context.action) { event.action = context.action; event.reason = context.reason; }
+  var json = JSON.stringify(event);
   if (json.length > 45000) throw new Error('活動設定內容過長。');
   var ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getSheetByName('RaffleCampaignJournal');
   try {
@@ -20985,9 +20994,9 @@ function saveRaffleCampaign_(session, operation) {
 
 function raffleCampaignActivationPreview_(state, id) {
   var item = state.campaigns.filter(function(c) { return c.campaign.id === id; })[0];
-  if (!item || item.status !== 'draft') throw new Error('找不到可啟用的活動草稿。');
+  if (!item || ['draft','paused'].indexOf(item.status) < 0) throw new Error('找不到可啟用的活动草稿或暫停活動。');
   var c = item.campaign;
-  if (state.campaigns.some(function(other) { return other.status === 'active' && other.campaign.sourceSpreadsheetId === c.sourceSpreadsheetId; })) throw new Error('此來源已綁定其他活動，不可重複啟用。');
+  if (state.campaigns.some(function(other) { return other.campaign.id !== c.id && ['active','paused'].indexOf(other.status) >= 0 && other.campaign.sourceSpreadsheetId === c.sourceSpreadsheetId; })) throw new Error('此來源已綁定其他活動，不可重複啟用。');
   var ss = SpreadsheetApp.openById(c.sourceSpreadsheetId), rows = readRaffleTable_(ss, '抽獎名單'), prizes = readRaffleTable_(ss, '獎項設定');
   var imported = buildRaffleImportPreview_(c, rows, prizes, []);
   if (imported.errors.length || imported.conflicts.length) throw new Error('來源資料無法安全匯入，請先核對欄位及學生資料。');
@@ -21017,7 +21026,29 @@ function activateRaffleCampaign_(session, operation) {
     var preview = raffleCampaignActivationPreview_(state, operation.campaignId);
     if (operation.version !== preview.version || operation.previewToken !== preview.previewToken) throw new Error('活動版本或來源資料已變更，請重新預覽。');
     var item = state.campaigns.filter(function(c) { return c.campaign.id === operation.campaignId; })[0];
+    if (item.status === 'paused') { context.action = 'resume'; context.reason = raffleCampaignReason_(operation.reason); }
     return appendRaffleCampaignEvent_(state, context, item.campaign, 'active', item.version + 1);
+  });
+}
+
+function raffleCampaignReason_(reason) {
+  if (typeof reason !== 'string' || !reason.trim() || reason.length > 300) throw new Error('請填寫維護原因（最多 300 字）。');
+  return reason.trim();
+}
+
+function manageRaffleCampaign_(session, operation) {
+  var context = raffleCampaignContext_(session, operation, 'manage');
+  if (['pause','update'].indexOf(operation.action) < 0) throw new Error('活動維護動作無效。');
+  context.action = operation.action; context.reason = raffleCampaignReason_(operation.reason);
+  return withScriptLock_(function() {
+    var state = readRaffleCampaignState_(), retry = rafflePriorResult_(state, context);
+    if (retry) return retry;
+    var prior = state.campaigns.filter(function(c) { return c.campaign.id === operation.campaignId; })[0];
+    if (!prior || prior.version !== operation.version) throw new Error('活動版本已變更，請重新載入。');
+    if (prior.status !== (operation.action === 'pause' ? 'active' : 'paused')) throw new Error('活動狀態不允許此操作，修改前請先暫停。');
+    var campaign = normalizeRaffleCampaign_(operation.action === 'update' ? operation.campaign : prior.campaign);
+    if (campaign.id !== prior.campaign.id || campaign.sourceSpreadsheetId !== prior.campaign.sourceSpreadsheetId) throw new Error('不可變更活動代碼或來源試算表。');
+    return appendRaffleCampaignEvent_(state, context, campaign, 'paused', prior.version + 1);
   });
 }
 

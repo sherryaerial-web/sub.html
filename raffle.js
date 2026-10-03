@@ -87,8 +87,8 @@
     return `<div class="admin-control"><h3>${data.kind === 'ready' ? '可領取通知 · ' : ''}寄送前確認 · 尚未寄出</h3><p class="state">${!data.sendEnabled ? '正式寄信未啟用，或尚未確認舊寄信程式已停用交接。' : `目前剩餘配額：${escape(data.quota)} 位收件人；本批 ${escape(data.batchCount)} 封。配額不足時整批停止。`}</p><p>只寄出已排入待寄、再次核對來源一致的信件；每次最多 5 封。匯入或預覽不會寄信。</p>${canSend ? `<button type="button" class="compact-button" data-raffle-confirm-send>核對後寄出這 ${escape(data.batchCount)} 封</button>` : ''}${data.previews.map(item=>`<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>收件人：${escape(item.email)}</strong><p>主旨：${escape(item.subject)}</p><div style="white-space:pre-wrap">${escape(item.body)}</div></article>`).join('') || '<p>目前沒有待寄信件。</p>'}</div>`;
   }
   function renderCampaignSettings(data) {
-    if (!data || !Array.isArray(data.campaigns) || typeof data.readOnly !== 'boolean' || typeof data.operationalEnabled !== 'boolean' || data.campaigns.some(i=>!i.campaign || !['draft','active'].includes(i.status) || !Number.isInteger(i.version))) throw Error('未收到完整活動設定。');
-    return `<h3>活動設定</h3><p class="state">${data.operationalEnabled ? '工作台已開放。' : '正式作業尚未開放。'}草稿與啟用都不會匯入名單、扣庫存或寄信。已啟用活動此階段不可修改。</p>${data.readOnly ? '<p>目前為唯讀設定。</p>' : '<button type="button" class="compact-button" data-settings-new>新增活動草稿</button>'}${data.campaigns.map(i=>`<article class="admin-control" style="overflow-wrap:anywhere"><h4>${escape(i.campaign.name)} · ${i.status==='draft'?'草稿':'已啟用'}</h4><p>活動代碼：${escape(i.campaign.id)}｜版本 ${i.version}</p><p>來源：${escape(i.campaign.sourceSpreadsheetId)}</p>${!data.readOnly && i.status==='draft' ? `<button type="button" class="compact-button" data-settings-edit="${escape(i.campaign.id)}">編輯／核對啟用</button>` : ''}</article>`).join('') || '<p>尚無活動設定。</p>'}`;
+    if (!data || !Array.isArray(data.campaigns) || typeof data.readOnly !== 'boolean' || typeof data.operationalEnabled !== 'boolean' || data.campaigns.some(i=>!i.campaign || !['draft','active','paused'].includes(i.status) || !Number.isInteger(i.version))) throw Error('未收到完整活動設定。');
+    return `<h3>活動設定</h3><p class="state">${data.operationalEnabled ? '工作台已開放。' : '正式作業尚未開放。'}設定不會匯入、扣庫存或寄信。修改已啟用活動前須先暫停本系統的查詢、領取與寄信；不會停止外部學生抽獎網站，既有紀錄與來源綁定保留。</p>${data.readOnly ? '<p>目前為唯讀設定。</p>' : '<button type="button" class="compact-button" data-settings-new>新增活動草稿</button>'}${data.campaigns.map(i=>`<article class="admin-control" style="overflow-wrap:anywhere"><h4>${escape(i.campaign.name)} · ${{draft:'草稿',active:'已啟用',paused:'已暫停'}[i.status]}</h4><p>活動代碼：${escape(i.campaign.id)}｜版本 ${i.version}</p><p>來源：${escape(i.campaign.sourceSpreadsheetId)}</p>${!data.readOnly ? i.status==='active' ? `<button type="button" class="compact-button" data-settings-pause="${escape(i.campaign.id)}">暫停活動</button>` : `<button type="button" class="compact-button" data-settings-edit="${escape(i.campaign.id)}">編輯／核對啟用</button>` : ''}</article>`).join('') || '<p>尚無活動設定。</p>'}`;
   }
   function mountCampaignSettings(root, options) {
     let disposed=false, busy=false, pending=null, current=null, data=null, activation=null;
@@ -101,6 +101,12 @@
       current=item || {campaign:{id:'',name:'',sourceSpreadsheetId:'',websiteUrl:'',pickupDeadline:'',readyPrizeVenues:[]},version:0,status:'draft'};
       const c=current.campaign;activation=null;pending=null;
       node('[data-settings-editor]').innerHTML=`<form class="admin-control" data-settings-form><h4>${c.id?'編輯草稿':'新增活動草稿'}</h4>${[['id','活動代碼（英數、-、_）'],['name','活動名稱'],['sourceSpreadsheetId','來源 Google 試算表 ID'],['websiteUrl','學生抽獎網址（HTTPS）'],['pickupDeadline','領獎截止時間（可留空，例：2027-01-31T22:00+08:00）']].map(([key,label])=>`<label style="display:block">${label}<input style="width:100%;box-sizing:border-box" name="${key}" value="${escape(c[key]||'')}" ${key==='id'&&c.id?'readonly':''} ${key!=='pickupDeadline'?'required':''}></label>`).join('')}<label style="display:block">教室現貨（可留空；每行：獎項ID｜館別）<textarea style="width:100%;box-sizing:border-box" name="readyPrizeVenues" rows="3">${escape((c.readyPrizeVenues||[]).map(p=>p.prizeId+'｜'+p.venue).join('\n'))}</textarea></label><p class="item-meta">請填未來活動資料；本次不搬舊活動。館別需與來源表「領取館別」完全一致。</p><button class="compact-button" type="submit">儲存草稿（不啟用）</button>${current.version>0?'<button class="compact-button" type="button" data-settings-preview>核對來源並預覽啟用</button>':''}<div data-settings-activation></div></form>`;
+      if(current.status==='paused') {
+        const form=node('[data-settings-form]');form.querySelector('h4').textContent='修改暫停中的活動';
+        form.elements.namedItem('sourceSpreadsheetId').readOnly=true;
+        form.querySelector('[type="submit"]').textContent='儲存修改（保持暫停）';
+        form.insertAdjacentHTML('afterbegin','<label style="display:block">修改／恢復原因<input name="maintenanceReason" maxlength="300" required></label><p>現貨設定不會回頭改動已匯入的領獎狀態；已排入的信件若內容不同，寄送前核對會阻擋。</p>');
+      }
       node('[data-settings-form]').querySelectorAll('input,textarea').forEach(el=>{el.classList.add('text-input');});
       node('[data-settings-form]').querySelectorAll('label').forEach(el=>{el.style.marginBottom='12px';});
       message('');
@@ -119,17 +125,24 @@
     async function write() {
       const p=pending,result=await options.api(p.action,{operation:JSON.stringify(p.operation)});
       if(disposed)return;
-      if(!result || result.campaignId!==p.campaignId || result.version!==p.operation.version+1 || result.status!==(p.action==='saveRaffleCampaign'?'draft':'active'))throw Error('未收到完整儲存結果，請重試同一筆操作。');
+      if(!result || result.campaignId!==p.campaignId || result.version!==p.operation.version+1 || result.status!==(p.action==='manageRaffleCampaign'?'paused':p.action==='saveRaffleCampaign'?'draft':'active'))throw Error('未收到完整儲存結果，請重試同一筆操作。');
       pending=null;await refresh();if(disposed)return;
-      if(result.status==='draft')edit(data.campaigns.find(i=>i.campaign.id===result.campaignId));
-      message(result.status==='active'?'已啟用活動設定；未匯入或寄信。請離開再進入領獎工作台，更新活動清單。':'草稿已儲存，尚未啟用。');
+      if(result.status!=='active')edit(data.campaigns.find(i=>i.campaign.id===result.campaignId));
+      message(result.status==='active'?'已啟用活動設定；未匯入或寄信。請離開再進入領獎工作台，更新活動清單。':result.status==='paused'?'活動保持暫停，紀錄未刪除。修改後須重新核對來源並啟用。':'草稿已儲存，尚未啟用。');
     }
-    const submit=event=>{if(!event.target.matches('[data-settings-form]'))return;event.preventDefault();run(async()=>{const campaign=campaignFromForm();pending={action:'saveRaffleCampaign',campaignId:campaign.id,operation:{campaign,version:current.version,requestId:requestId()}};await write();});};
+    const maintenanceReason=()=>{const reason=node('[name="maintenanceReason"]')?.value.trim();if(!reason)throw Error('請填寫修改／恢復原因。');return reason;};
+    const submit=event=>{if(!event.target.matches('[data-settings-form]'))return;event.preventDefault();run(async()=>{const campaign=campaignFromForm();pending={action:current.status==='paused'?'manageRaffleCampaign':'saveRaffleCampaign',campaignId:campaign.id,operation:{campaign,version:current.version,requestId:requestId(),...(current.status==='paused'?{action:'update',campaignId:campaign.id,reason:maintenanceReason()}: {})}};await write();});};
     const input=()=>{activation=null;const box=node('[data-settings-activation]');if(box)box.replaceChildren();};
     const click=event=>{
       const button=event.target.closest('button');if(!button||busy)return;
       if(button.hasAttribute('data-settings-new'))return edit(null);
       if(button.hasAttribute('data-settings-edit'))return edit(data.campaigns.find(i=>i.campaign.id===button.dataset.settingsEdit));
+      if(button.hasAttribute('data-settings-pause'))return run(async()=>{
+        const item=data.campaigns.find(i=>i.campaign.id===button.dataset.settingsPause);
+        const reason=global.prompt('暫停本系統的查詢、領取及寄信（不影響外部抽獎網站），保留所有紀錄。請填寫原因：');
+        if(reason===null)return;if(!reason.trim()||reason.length>300)throw Error('請填寫原因（最多 300 字）。');
+        pending={action:'manageRaffleCampaign',campaignId:item.campaign.id,operation:{action:'pause',campaignId:item.campaign.id,version:item.version,reason:reason.trim(),requestId:requestId()}};await write();
+      });
       if(button.hasAttribute('data-settings-retry'))return run(write);
       if(button.hasAttribute('data-settings-reload'))return run(async()=>{await refresh();if(disposed)return;pending=null;message('已重新讀取最新狀態，沒有重送；請核對草稿／已啟用狀態後再操作。');});
       if(button.hasAttribute('data-settings-preview'))return run(async()=>{
@@ -139,8 +152,9 @@
         activation=result;node('[data-settings-activation]').innerHTML=`<p>來源核對通過：${result.sourceRows} 筆名單、${result.prizeCount} 個獎品。尚未匯入／寄信。</p><button type="button" class="compact-button" data-settings-activate>確認啟用此活動設定（不寄信）</button>`;message('');
       });
       if(button.hasAttribute('data-settings-activate')&&activation)return run(async()=>{
-        if(!global.confirm('確認啟用此活動設定？不會匯入名單或寄信；啟用後本階段不可編輯。'))return;
-        pending={action:'activateRaffleCampaign',campaignId:current.campaign.id,operation:{campaignId:current.campaign.id,version:current.version,previewToken:activation.previewToken,requestId:requestId()}};await write();
+        const reason=current.status==='paused'?maintenanceReason():undefined;
+        if(!global.confirm('確認啟用此活動設定？不會匯入名單或寄信；之後修改須先暫停。'))return;
+        pending={action:'activateRaffleCampaign',campaignId:current.campaign.id,operation:{campaignId:current.campaign.id,version:current.version,previewToken:activation.previewToken,requestId:requestId(),...(reason?{reason}:{})}};await write();
       });
     };
     root.addEventListener('submit',submit);root.addEventListener('input',input);root.addEventListener('click',click);

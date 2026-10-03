@@ -15,11 +15,22 @@ test('restore verifies source, deadline, admin and venue then requires preparati
  assert.equal(s.c.readRaffleClaims_()[0].claimedQuantity,0);
  const rows=s.tables.get('RaffleJournal').rows,e=JSON.parse(rows[3][3]);e.changes[0].claim.status='ready';e.result.status='ready';rows[3][3]=JSON.stringify(e);assert.throws(()=>s.c.readRaffleState_(),/恢復/);
 });
-test('partial restoration preserves delivered evidence and requires explicit remaining stock confirmation',()=>{
+test('legacy multiple quantity restore rejects clearly and never changes delivered evidence',()=>{
  const s=setup(),c={id:'p',status:'cancelled',quantity:3,claimedQuantity:1,claimedAt:'2027-01-01',claimedBy:'原老師',venue:'晴光',version:4};
  const op={action:'restore',reason:'核對完成',venue:'晴光'};
- assert.throws(()=>s.c.applyRaffleClaimMutation_(c,admin,op,campaign,'2027-01-02'),/庫存|現貨/);
- const r=s.c.applyRaffleClaimMutation_(c,admin,{...op,stockConfirmed:true},campaign,'2027-01-02');assert.equal(r.status,'partial');assert.equal(r.claimedQuantity,1);assert.equal(r.claimedAt,c.claimedAt);assert.equal(r.claimedBy,c.claimedBy);
+ assert.throws(()=>s.c.applyRaffleClaimMutation_(c,admin,{...op,stockConfirmed:true},campaign,'2027-01-02'),/多件.*人工核對/);
+ const original=s.c.buildRaffleImportPreview_(campaign,s.sourceRows,s.sourcePrizes,[]).additions[0],seed={...original,...c,id:original.id,version:0};
+ const keys=['id','campaignId','email','studentName','prizeId','prizeName','venue','quantity','claimedQuantity','status','claimedAt','claimedBy','sourceFingerprint'];
+ s.tables.set('RaffleClaims',s.sheet([keys,keys.map(k=>seed[k]??'')]));
+ assert.throws(()=>s.c.mutateRaffleClaim_(admin,{...op,claimId:seed.id,version:0,stockConfirmed:true,requestId:'legacy-restore-0001'}),/多件.*人工核對/);assert.equal(s.writes(),0);assert.equal(s.c.readRaffleClaims_()[0].claimedQuantity,1);
+});
+test('restore cannot reactivate an old name that breaks the current fulfillment group',()=>{
+ const s=setup(2);s.importNow();const [a,b]=s.c.readRaffleClaims_();
+ s.c.mutateRaffleClaim_(admin,{claimId:a.id,version:1,action:'revoke',reason:'誤撤銷',requestId:'name-revoke-0001'});
+ s.sourceRows[1][4]='新提袋';s.sourceRows[2][4]='新提袋';s.sourcePrizes[1][2]='新提袋';const p=s.c.previewRaffleImport_(admin,'future');
+ s.c.resolveRaffleConflict_(admin,{campaignId:'future',claimId:b.id,version:1,previewToken:p.previewToken,reason:'確認新名稱',requestId:'name-resolve-0001'});
+ s.sourceRows[1][4]='提袋';s.sourceRows[2][4]='提袋';s.sourcePrizes[1][2]='提袋';const n=s.writes();
+ assert.throws(()=>s.c.mutateRaffleClaim_(admin,{claimId:a.id,version:2,action:'restore',venue:'晴光',reason:'核對舊紀錄',requestId:'name-restore-0001'}),/名稱/);assert.equal(s.writes(),n);assert.equal(s.c.getRaffleFulfillment_(prep,{campaignId:'future'}).totalGroups,1);
 });
 test('source acceptance cannot create mixed names in an existing fulfillment group',()=>{
  for(const delivered of [false,true]){
@@ -117,7 +128,7 @@ function setup(count=1){
   SpreadsheetApp:{flush:()=>{assert.ok(locked,'flush must hold lock');pendingWrites.splice(0).forEach(fn=>fn());if(failFlush){failFlush=false;throw Error('flush uncertain');}},getActiveSpreadsheet:()=>book,openById:id=>{assert.equal(id,campaign.sourceSpreadsheetId);return source;}}};
  vm.createContext(c);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../Code.gs'),'utf8'),c);
  const importNow=(requestId='request-import-0001')=>{const p=c.previewRaffleImport_(admin,'future');return c.confirmRaffleImport_(admin,{campaignId:'future',previewToken:p.previewToken,requestId});};
- return{c,props,tables,sourceRows,sourcePrizes,importNow,writes:()=>writes,setFail:()=>{failAfterWrite=true;},setBuffered:()=>{buffered=true;},setFlushFail:()=>{failFlush=true;}};
+ return{c,props,tables,sheet,sourceRows,sourcePrizes,importNow,writes:()=>writes,setFail:()=>{failAfterWrite=true;},setBuffered:()=>{buffered=true;},setFlushFail:()=>{failFlush=true;}};
 }
 test('confirmed import appends journal, preserves source, caps batch and reimport is safe',()=>{
  const s=setup(27),before=JSON.stringify(s.sourceRows);const p=s.c.previewRaffleImport_(admin,'future');assert.equal(p.batchCount,25);

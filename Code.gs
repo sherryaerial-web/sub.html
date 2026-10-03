@@ -21670,7 +21670,7 @@ function readRaffleState_() {
           if (event.action === 'collect' && (['ready','partial'].indexOf(prior.status) < 0 || ['partial','claimed'].indexOf(c.status) < 0 || c.claimedQuantity <= prior.claimedQuantity || !c.venue || c.claimedBy !== event.actor || !Number.isFinite(Date.parse(c.claimedAt)))) throw new Error('領獎日誌領取異動不符。');
           if (event.action === 'correct' && (!event.reason.trim() || ['ready','partial','claimed'].indexOf(prior.status) < 0 || ['ready','partial'].indexOf(c.status) < 0 || c.claimedQuantity >= prior.claimedQuantity)) throw new Error('領獎日誌更正異動不符。');
           if (event.action === 'revoke' && (!event.reason.trim() || event.reason.length > 300 || ['waiting','ready','partial'].indexOf(prior.status) < 0 || c.status !== 'cancelled' || c.claimedQuantity !== prior.claimedQuantity || c.claimedAt !== prior.claimedAt || c.claimedBy !== prior.claimedBy)) throw new Error('領獎日誌撤銷異動不符。');
-          if (event.action === 'restore' && (!event.reason.trim() || event.reason.length > 300 || prior.status !== 'cancelled' || c.claimedQuantity >= c.quantity || c.status !== (prior.claimedQuantity ? 'partial' : 'waiting') || !c.venue || c.claimedQuantity !== prior.claimedQuantity || c.claimedAt !== prior.claimedAt || c.claimedBy !== prior.claimedBy || (prior.claimedQuantity > 0 && event.stockConfirmed !== true))) throw new Error('領獎日誌恢復異動不符。');
+          if (event.action === 'restore' && (!event.reason.trim() || event.reason.length > 300 || prior.status !== 'cancelled' || c.quantity !== 1 || prior.claimedQuantity !== 0 || c.status !== 'waiting' || !c.venue || c.claimedQuantity !== prior.claimedQuantity || c.claimedAt !== prior.claimedAt || c.claimedBy !== prior.claimedBy)) throw new Error('領獎日誌恢復異動不符。');
         }
         claims[c.id] = c;
       });
@@ -21769,9 +21769,9 @@ function applyRaffleClaimMutation_(claim, session, operation, campaign, now) {
     assertCapabilitySession_(session, 'raffle_admin');
     if (!cleanText_(operation.reason) || cleanText_(operation.reason).length > 300) throw new Error('請填寫 1 至 300 字的恢復理由。');
     if (c.status !== 'cancelled' || c.claimedQuantity >= c.quantity) throw new Error('只能恢復已撤銷且尚未領完的實體獎品。');
+    if (c.quantity !== 1 || c.claimedQuantity !== 0) throw new Error('舊式多件紀錄須人工核對，現有來源每資格一件，不可自動恢復。');
     if (!c.venue || operation.venue !== c.venue) throw new Error('恢復館別不一致。');
-    if (c.claimedQuantity > 0 && operation.stockConfirmed !== true) throw new Error('請確認剩餘獎品現貨已在該館。');
-    c.status = c.claimedQuantity ? 'partial' : 'waiting';
+    c.status = 'waiting';
   } else throw new Error('不支援的領獎操作。');
   c.version = (Number(claim.version) || 0) + 1;
   return c;
@@ -21797,9 +21797,12 @@ function mutateRaffleClaim_(session, operation) {
       var candidate = preview.additions.filter(function(c) { return c.id === claim.id; })[0];
       if (preview.errors.length || preview.conflicts.length || !candidate || ['waiting','ready'].indexOf(candidate.status) < 0 ||
           ['campaignId','email','studentName','prizeId','prizeName','venue','quantity','sourceFingerprint'].some(function(k) { return candidate[k] !== claim[k]; })) throw new Error('來源已變更或無法核對，不可恢復；請先確認原始資料。');
+      if (state.claims.some(function(other) {
+        return other.id !== claim.id && other.campaignId === claim.campaignId && other.prizeId === claim.prizeId && other.venue === claim.venue && other.status !== 'digital' &&
+          (other.status !== 'cancelled' || other.claimedQuantity > 0) && other.prizeName !== claim.prizeName;
+      })) throw new Error('同館別的同一獎品 ID 已有不同名稱紀錄，不可恢復；請先核對並保留既有交付歷史。');
     }
     return appendRaffleEvent_(state, context, { actor: context.actor, action: operation.action,
-      stockConfirmed: operation.action === 'restore' && operation.stockConfirmed === true,
       reason: cleanText_(operation.reason), changes: [{ beforeVersion: claim.version, claim: updated }],
       result: { claimId: updated.id, version: updated.version, status: updated.status, claimedQuantity: updated.claimedQuantity } });
   });

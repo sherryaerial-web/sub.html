@@ -7,6 +7,12 @@ function load() {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../raffle.js'), 'utf8'), context);
   return context.window.SherryRaffle;
 }
+test('restore UI only offers supported single unclaimed awards and labels legacy multi quantity for manual review',()=>{
+ const api=load(),c={id:'a',campaignId:'c',studentKey:'s',quantity:1,claimedQuantity:0,status:'cancelled',venue:'晴光'};
+ const html=api.renderClaims([c,{...c,id:'b',quantity:3,claimedQuantity:1}],[],{readOnly:false,canCorrect:true});
+ assert.equal((html.match(/data-raffle-action="restore"/g)||[]).length,1);assert.match(html,/多件.*人工核對/);
+ assert.ok(!api.renderClaims([c],[],{readOnly:false,canCorrect:false}).includes('data-raffle-action="restore"'));
+});
 test('overview renderer distinguishes records/units, warnings and rejects incomplete backend response',()=>{
  const api=load(),mail={total:3,queued:1,sending:1,uncertain:0,sent:1,closed:0,review:1};
  const data={readOnly:true,sourceChecked:false,campaignId:'c',campaignName:'<活動>',asOf:'2027-01-01T00:00:00Z',claims:{total:3,waiting:1,ready:1,partial:0,claimed:1,digital:0,cancelled:0,deliveredUnits:1,pendingUnits:2,blockedRecords:2,blockedUnits:2},mail:{invitation:mail,ready:{...mail}}};

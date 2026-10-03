@@ -10,7 +10,7 @@
 ## Global constraints and design
 - No push/deploy, formal data, live mail or credit redemption. Actual future activity and isolated GAS target are missing, so live acceptance cannot be claimed.
 - Active campaign changes require pause first; paused activity retains source ownership. Source ID never changes. Resume revalidates source; changes do not alter historical claim readiness or automatically send mail.
-- Restore cancelled physical claims only with admin reason, fresh source agreement, matching venue and valid deadline. Preserve delivered history; zero-delivered restores to waiting, partial restores with explicit remaining-stock verification.
+- Restore cancelled physical claims only with admin reason, fresh source agreement, matching venue and valid deadline. Preserve delivered history; a single unclaimed award restores to waiting. Review correction: the current source contract is one item per qualification, so legacy multiple-quantity/partially delivered awards must remain blocked for manual investigation rather than pretending a stock checkbox enables restoration.
 - Replace only a closedBeforeSend job with no attempt. Keep same recipient, qualification set and stable job identity; regenerate content from current source. Persist new content with reason in journal before it can be separately sent. Sent/uncertain jobs cannot reopen.
 
 ## Review Focus

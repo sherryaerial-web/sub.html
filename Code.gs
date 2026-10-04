@@ -9849,7 +9849,7 @@ function getCourseClosureRule_(detail, stageValue) {
       base.ruleLabel = '妙妙綢吊優惠課至少 3 人';
       base.minimumEnrollment = 3;
       base.cancelAtOrBelow = 2;
-    } else if (['Jina', '小美', '卡拉', '卡拉 卡拉'].indexOf(teacherName) !== -1) {
+    } else if (['Jina', '小美', 'Josty Lin', '卡拉', '卡拉 卡拉'].indexOf(teacherName) !== -1) {
       base.ruleKey = 'teacher-or-two-points';
       base.ruleLabel = '指定老師／2 點課至少 3 人';
       base.minimumEnrollment = 3;
@@ -9935,19 +9935,18 @@ function buildCourseClosureSocialCopy_(targetDateValue, details) {
     var item = candidate.detail;
     lines.push((lines.length === 0 ? '明' : '') + cleanText_(item.time) +
       getCourseClosureLocation_(item.courseName) + cleanText_(item.teacherName) +
-      getCourseClosureDisplayName_(item.courseName));
+      getCourseClosureDisplayName_(item.courseName) + (twoShort.length ? '缺一，' : ''));
   });
   if (oneShort.length && !twoShort.length) {
     lines.push('各缺一，等到23:40');
   } else {
-    if (oneShort.length) lines.push('各缺一，');
     twoShort.forEach(function(candidate) {
       var item = candidate.detail;
       lines.push((lines.length === 0 ? '明' : '') + cleanText_(item.time) +
         getCourseClosureLocation_(item.courseName) + cleanText_(item.teacherName) +
-        getCourseClosureDisplayName_(item.courseName) + '缺二');
+        getCourseClosureDisplayName_(item.courseName) + '缺二，');
     });
-    if (twoShort.length) lines.push('等到23:40');
+    if (twoShort.length) lines[lines.length - 1] += '等到23:40';
   }
   return {
     targetDate: targetDate,

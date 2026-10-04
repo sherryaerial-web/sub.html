@@ -10420,12 +10420,10 @@ test('22:30 community copy also lists discount courses two people short but neve
   ]);
 
   assert.equal(copy.content, [
-    '明09:30晴光珍珍舞綢',
-    '10:00晴光老師甲空瑜',
-    '10:15劍潭老師乙空環',
-    '各缺一，',
-    '10:30劍潭Melody Wang空瑜缺二',
-    '等到23:40',
+    '明09:30晴光珍珍舞綢缺一，',
+    '10:00晴光老師甲空瑜缺一，',
+    '10:15劍潭老師乙空環缺一，',
+    '10:30劍潭Melody Wang空瑜缺二，等到23:40',
   ].join('\n'));
   assert.deepEqual(JSON.parse(JSON.stringify(copy.calendarIds)), [
     'one-general', 'one-discount-yoga', 'one-discount-hoop', 'two-discount-yoga',
@@ -10434,12 +10432,12 @@ test('22:30 community copy also lists discount courses two people short but neve
 
 test('22:30 community copy includes fixed-three-person teachers at one or two short without changing closure thresholds', () => {
   const backend = loadBackend();
-  for (const teacherName of ['Jina', '小美', '卡拉', '卡拉 卡拉']) {
+  for (const teacherName of ['Jina', '小美', 'Josty Lin', '卡拉', '卡拉 卡拉']) {
     for (const enrollmentCount of [0, 1, 2, 3]) {
       const detail = { calendarId: 'fixed-three', date: '2026/09/28', time: '19:45', courseName: 'B－原始瑜伽', teacherName, enrollmentCount, points: 3 };
       const copy = backend.buildCourseClosureSocialCopy_('2026/09/28', [detail]);
       const expected = enrollmentCount === 1
-        ? `明19:45晴光${teacherName}原始瑜伽缺二\n等到23:40`
+        ? `明19:45晴光${teacherName}原始瑜伽缺二，等到23:40`
         : enrollmentCount === 2
           ? `明19:45晴光${teacherName}原始瑜伽\n各缺一，等到23:40`
           : '';
@@ -10448,6 +10446,15 @@ test('22:30 community copy includes fixed-three-person teachers at one or two sh
       assert.equal(backend.getCourseClosureRule_(detail, '23:40').eligible, enrollmentCount < 3);
     }
   }
+});
+
+test('community copy recognizes Xiaomei OB name for silk and keeps Chin one short', () => {
+  const backend = loadBackend();
+  const copy = backend.buildCourseClosureSocialCopy_('2026/10/05', [
+    { calendarId: 'xiaomei', date: '2026/10/05', time: '11:00', courseName: 'A－綢吊', teacherName: 'Josty Lin', enrollmentCount: 1, points: 4 },
+    { calendarId: 'chin', date: '2026/10/05', time: '21:30', courseName: 'B－空瑜', teacherName: 'Chin', enrollmentCount: 1, points: 4 },
+  ]);
+  assert.equal(copy.content, '明21:30晴光Chin空瑜缺一，\n11:00晴光Josty Lin綢吊缺二，等到23:40');
 });
 
 test('stored community copy removes a private class generated before the exclusion rule', () => {

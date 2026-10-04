@@ -44,6 +44,7 @@ test('preview/queue never mail or change claims/source; actual sender is separat
  const op=s.sendOp(),r=s.c.sendRaffleReadyMailBatch_(admin,op);assert.equal(r.sent,2);assert.equal(s.mails.length,2);assert.match(s.mails[0].subject,/領獎/);assert.equal(JSON.stringify([s.rows,s.seeds,s.prizes]),original);assert.equal(s.c.sendRaffleReadyMailBatch_(admin,op).sent,2);assert.equal(s.mails.length,2);
  assert.equal(ob.length,2);assert.equal(ob[0].pushNotification,true);assert.match(ob[0].message,/領獎通知/);assert.ok(!ob[0].message.includes('CODE-'));assert.equal(s.c.getRaffleMailRecords_(admin,'future').records[0].channels.ob.status,'sent');
  assert.equal(s.c.getRaffleMailRecords_(admin,'future').records[0].kind,'ready');
+ assert.ok(ob[0].message.endsWith('\n\n此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。'));
 });
 test('permissions and dedicated ready gate block queue/send but preview stays read only',()=>{
  const s=setup();assert.throws(()=>s.c.previewRaffleReadyNotifications_({teacherName:'Tako',managementCapabilities:['raffle_fulfillment']},'future'),/權限/);assert.equal(s.writes(),0);

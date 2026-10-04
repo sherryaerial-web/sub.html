@@ -10133,6 +10133,15 @@ function buildCourseClosureReason_(detail) {
     detail.courseName + ' 課程因未達開課人數因此未開班🥹謝謝';
 }
 
+function formatObSystemMessage_(messageValue) {
+  var message = String(messageValue || '').trim();
+  var footer = '此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。';
+  if (!message) throw Error('OB 訊息不可空白。');
+  if (!message.endsWith(footer)) message += '\n\n' + footer;
+  if (message.length > 1500) throw Error('OB 訊息含系統提醒超過 1500 字，本批尚未發送。');
+  return message;
+}
+
 function closureStudentNoticeEnabled_() {
   return PropertiesService.getScriptProperties().getProperty('COURSE_CLOSURE_STUDENT_OB_ENABLED') === 'true';
 }
@@ -10180,7 +10189,7 @@ function prepareClosureStudentNotice_(detail) {
   });
   if (!ids.length || ids.length > 100 || booked !== detail.enrollmentCount) throw Error('學生名單與人數不符，請核對後再關課。');
   saveClosureStudentNotice_(id,{status:'prepared',date:detail.date,customerIds:ids,cancellationReason:buildCourseClosureReason_(detail),
-    message:'您預約的【'+detail.date+' '+detail.time+'｜'+detail.courseName+'】因報名人數不足，本堂課取消。造成不便，敬請見諒。'});
+    message:formatObSystemMessage_('您預約的【'+detail.date+' '+detail.time+'｜'+detail.courseName+'】因報名人數不足，本堂課取消。造成不便，敬請見諒。')});
 }
 
 function sendClosureStudentNoticeSafely_(token, id, warnings) {
@@ -10189,6 +10198,7 @@ function sendClosureStudentNoticeSafely_(token, id, warnings) {
     if (!item || item.status === 'sent') return;
     if (item.status === 'sending' || item.status === 'uncertain') throw Error('先前發送結果不明，請核對 OB；未自動重寄。');
     if (item.status !== 'cancelled') return;
+    item.message = formatObSystemMessage_(item.message);
     item.status = 'sending';
     saveClosureStudentNotice_(id,item); // Persist before transport; never automatically retry an unknown outcome.
     try {
@@ -21919,7 +21929,7 @@ function sendRaffleMailBatch_(session, operation, kind) {
     if (!Number.isInteger(quota) || quota < plan.jobs.length) throw new Error('今日寄信配額不足，本批尚未寄出。');
     var obToken = cleanText_(PropertiesService.getScriptProperties().getProperty('OMCEAN_API_TOKEN'));
     if (!obToken) throw new Error('OB 訊息金鑰尚未設定，本批尚未發送。');
-    if (plan.jobs.some(function(job) { return (job.subject + '\n\n' + job.body).length > 1500; })) throw new Error('OB 訊息超過 1500 字，本批尚未發送。');
+    plan.jobs.forEach(function(job) { formatObSystemMessage_(job.subject + '\n\n' + job.body); });
     if (state.events.length + 1 + plan.jobs.length * 5 > 5000) throw new Error('寄信紀錄容量不足，停止寄信。');
     appendRaffleMailEvent_(state, context, {action:'send-start',actor:context.actor,campaignId:campaign.id,channels:['email','ob'],jobIds:plan.jobs.map(function(job) { return job.id; })});
     // Persist every channel attempt before its transport. Never blindly retry.
@@ -21934,7 +21944,7 @@ function sendRaffleMailBatch_(session, operation, kind) {
           else {
             var response = UrlFetchApp.fetch('https://api.omceanbooking.com/v1/messages', {
               method:'post',contentType:'application/json',headers:{Authorization:'Bearer ' + obToken},muteHttpExceptions:true,followRedirects:false,
-              payload:JSON.stringify({email:job.email,message:job.subject + '\n\n' + job.body,pushNotification:true,lineNotification:false})
+              payload:JSON.stringify({email:job.email,message:formatObSystemMessage_(job.subject + '\n\n' + job.body),pushNotification:true,lineNotification:false})
             });
             if (response.getResponseCode() !== 200) throw new Error('OB 未確認接受');
             var accepted = JSON.parse(response.getContentText());

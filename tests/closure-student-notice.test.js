@@ -18,6 +18,7 @@ test('successful closure sends explicit reason after cancellation, scrubs recipi
  const f=fixture();const r=f.run();assert.equal(r.cancelledCount,1);assert.equal(f.messages.length,1);
  assert.deepEqual(f.messages[0].customerIds,[9]);assert.equal(f.messages[0].pushNotification,true);assert.equal(f.messages[0].lineNotification,false);assert.match(f.messages[0].message,/2027\/01\/02.*14:00.*A－空瑜.*人數不足/);
  const state=JSON.parse(f.props.get('CLOSURE_STUDENT_OB_123'));assert.equal(state.status,'sent');assert.equal(state.customerIds,undefined);assert.equal(state.message,undefined);assert.equal(state.count,1);
+ assert.ok(f.messages[0].message.endsWith('\n\n此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。'));
  f.run();assert.equal(f.messages.length,1);
 });
 test('failed cancellation never sends; later confirmed cancellation resumes from snapshot',()=>{

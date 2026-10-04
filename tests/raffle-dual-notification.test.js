@@ -17,8 +17,18 @@ test('manual invitation confirmation sends both channels once with push and pers
  const s=setup();s.queue();const op=s.operation();assert.equal(s.ob.length,0);assert.equal(s.mails.length,0);
  const result=s.c.sendRaffleMailBatch_(admin,op);assert.equal(result.sent,1);assert.equal(s.ob.length,1);assert.equal(s.mails.length,1);
  assert.equal(s.ob[0].email,'student0@example.com');assert.match(s.ob[0].message,/CODE-0/);
+ assert.ok(s.ob[0].message.endsWith('\n\n此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。'));
+ assert.ok(!s.mails[0].body.includes('請勿直接回覆'));
  const record=s.c.getRaffleMailRecords_(admin,'future').records[0];assert.equal(record.channels.email.status,'sent');assert.equal(record.channels.ob.status,'sent');assert.deepEqual(Array.from(record.channels.ob.messageIds),[101]);
  s.c.sendRaffleMailBatch_(admin,op);assert.equal(s.ob.length,1);assert.equal(s.mails.length,1);
+});
+test('OB footer is idempotent and included in the 1500-character limit',()=>{
+ const s=setup(),footer='此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。';
+ const body='A'.repeat(1500-footer.length-2),message=body+'\n\n'+footer;
+ assert.equal(s.c.formatObSystemMessage_(body),message);
+ assert.equal(s.c.formatObSystemMessage_(message),message);
+ assert.throws(()=>s.c.formatObSystemMessage_(body+'A'),/1500/);
+ assert.throws(()=>s.c.formatObSystemMessage_(' '),/空白/);
 });
 test('OB timeout/ambiguous customer/malformed success never becomes all-sent; email still sends without retry',()=>{
  for(const configure of [s=>s.obThrow=true,s=>s.obCode=409,s=>s.obCode=404,s=>s.obResult={},s=>s.obResult={recipientCount:2,messageIds:[1,2]}]){

@@ -40,13 +40,15 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
   const requestActions = [];
   const submittedForms = [];
   const windowListeners = new Map();
+  const pendingFetch = new Map();
   const bodyChildren = [];
   let claimSubmitted = false;
   let requestCounter = 0;
+  const stored = new Map();
   const localStorage = options.localStorage || {
-    getItem() { return ''; },
-    setItem() {},
-    removeItem() {},
+    getItem(k) { return stored.get(k) || ''; },
+    setItem(k,v) { stored.set(k,v); },
+    removeItem(k) { stored.delete(k); },
   };
   const getElement = (id) => {
     if (!elements.has(id)) {
@@ -111,6 +113,12 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     closest() { return claimCard; },
   };
   const emitWindowEvent = (type, event) => {
+    // Legacy fixture response envelopes now complete the mocked fetch, not a browser postMessage.
+    const reply = event && event.data;
+    if (type === 'message' && reply && pendingFetch.has(reply.requestId)) {
+      pendingFetch.get(reply.requestId)({ok:true,json:async()=>reply.payload});
+      pendingFetch.delete(reply.requestId);
+    }
     (windowListeners.get(type) || []).slice().forEach((listener) => listener(event));
   };
   const document = {
@@ -244,6 +252,16 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
   };
   const responseFor = (url, request = {}) => {
     const isPost = request.method === 'POST';
+    if (isPost) {
+      const fields = Object.fromEntries(new URLSearchParams(request.body || ''));
+      const id = `network-fixture-${++requestCounter}`;
+      const form = document.createElement('form');
+      form.action = url; form.method = request.method; form.target = id;
+      form.enctype = 'application/x-www-form-urlencoded';
+      Object.entries({...fields,requestId:id}).forEach(([name,value])=>form.appendChild({name,value}));
+      bodyChildren.push({tagName:'IFRAME',name:id,contentWindow:{}});
+      return new Promise(resolve=>{pendingFetch.set(id,resolve);form.submit();});
+    }
     const action = isPost
       ? new URLSearchParams(request.body || '').get('action')
       : new URL(url).searchParams.get('action');
@@ -275,6 +293,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
   };
   const context = {
     console,
+    TextEncoder, AbortController, setTimeout, clearTimeout,
     document,
     fetch: responseFor,
     URL,
@@ -284,6 +303,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
       localStorage,
       scrollTo() {},
       crypto: {
+        subtle: require('node:crypto').webcrypto.subtle,
         randomUUID: () => {
           requestCounter += 1;
           return requestCounter === 1 ? 'test-request-uuid' : `test-request-uuid-${requestCounter}`;
@@ -310,7 +330,9 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     };
   }
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  context.window.fetch = responseFor;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-transport.js'),'utf8'),context);
   vm.runInContext(script, context, { filename: 'index.html' });
   return {
     context,
@@ -1107,7 +1129,7 @@ test('course admins can enter and leave a clearly labelled teacher acting mode',
   assert.equal(getElement('acting-banner').hidden, true);
 });
 
-test('sends authenticated POST data through an iframe relay without exposing the session token in the URL', async () => {
+test('sends authenticated POST data as JSON-response fetch without exposing session tokens in URLs', async () => {
   const { context, submittedForms } = createFrontendRuntime({
     getSession: { teacherName: '老師甲', role: '老師', managementCapabilities: [] },
   });
@@ -1119,92 +1141,17 @@ test('sends authenticated POST data through an iframe relay without exposing the
   assert.equal(submittedForms[0].method.toUpperCase(), 'POST');
   assert.equal(submittedForms[0].action.includes('secret-session-token'), false);
   assert.equal(submittedForms[0].fields.sessionToken, 'secret-session-token');
-  assert.equal(submittedForms[0].fields.transport, 'iframe');
-  assert.equal(submittedForms[0].fields.requestId, 'test-request-uuid');
+  assert.equal(submittedForms[0].fields.transport, undefined);
 });
 
-test('ignores forged iframe relay messages before accepting the matching Google response', async () => {
-  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
-  let settled = false;
-  const pending = context.callPostApi('getSession').then((value) => {
-    settled = true;
-    return value;
-  });
-  assert.equal(submittedForms.length, 1);
-  const submitted = submittedForms[0];
-
-  emitWindowEvent('message', {
-    origin: 'https://attacker.example',
-    source: submitted.frameWindow,
-    data: {
-      source: 'sherry-gas-relay',
-      requestId: submitted.fields.requestId,
-      payload: { status: 'success', data: { teacherName: '偽造老師' } },
-    },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(settled, false);
-
-  emitWindowEvent('message', {
-    origin: 'https://relay.script.googleusercontent.com',
-    source: {},
-    data: {
-      source: 'sherry-gas-relay',
-      requestId: 'wrong-request-id',
-      payload: { status: 'success', data: { teacherName: '錯誤老師' } },
-    },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(settled, false);
-
-  emitWindowEvent('message', {
-    origin: 'https://relay.script.googleusercontent.com',
-    source: {},
-    data: {
-      source: 'sherry-gas-relay',
-      requestId: submitted.fields.requestId,
-      payload: { status: 'success', data: { teacherName: '老師甲' } },
-    },
-  });
-
-  assert.equal((await pending).teacherName, '老師甲');
-});
-
-test('accepts the hyphenated Apps Script sandbox origin used by Safari', async () => {
-  const { context, submittedForms, emitWindowEvent } = createFrontendRuntime({}, { autoRelay: false });
-  let settled = false;
-  const pending = context.callPostApi('getSession').then((value) => {
-    settled = true;
-    return value;
-  });
-  const submitted = submittedForms[0];
-
-  try {
-    emitWindowEvent('message', {
-      origin: 'https://n-example-0lu-script.googleusercontent.com',
-      source: {},
-      data: {
-        source: 'sherry-gas-relay',
-        requestId: submitted.fields.requestId,
-        payload: { status: 'success', data: { teacherName: '老師甲' } },
-      },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(settled, true);
-  } finally {
-    if (!settled) {
-      emitWindowEvent('message', {
-        origin: 'https://script.googleusercontent.com',
-        source: {},
-        data: {
-          source: 'sherry-gas-relay',
-          requestId: submitted.fields.requestId,
-          payload: { status: 'success', data: { teacherName: '老師甲' } },
-        },
-      });
-    }
-    await pending;
-  }
+test('returning to the visible app preserves draft fields and invoice checkboxes', async () => {
+  const {context,getElement,emitWindowEvent} = createFrontendRuntime({getSession:{teacherName:'Tako'}});
+  vm.runInContext("authState.sessionToken='session';",context);
+  getElement('practice-note').value='尚未送出';getElement('invoice-draft-email').value='test@example.com';
+  let renders=0;context.renderAdminDashboard=()=>{renders++;};
+  context.document.visibilityState='visible';emitWindowEvent('visibilitychange',{});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(getElement('practice-note').value,'尚未送出');assert.equal(getElement('invoice-draft-email').value,'test@example.com');assert.equal(renders,0);
 });
 
 test('keeps session tokens out of URLs by routing every authenticated read through POST', () => {
@@ -3778,7 +3725,6 @@ test('OB-cancelled queue renders bulk-safe rows separately from pending invitati
   assert.match(rendered, /value="leave-missing"/);
   assert.match(rendered, /data-admin-action="select-all-ob-cancellations"/);
   assert.match(rendered, /data-admin-action="close-ob-cancellations"/);
-  assert.match(html, /longRunningActions\.has\(action\) \? 180000 : 45000/);
   assert.match(html, /"executeNextDayClosures"/);
   assert.match(html, /"closeUnclaimedSubstituteCourses"/);
   assert.match(html, /button\.setAttribute\("aria-busy", "true"\)/);

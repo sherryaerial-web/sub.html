@@ -9027,6 +9027,9 @@ function doPost(e) {
     }
 
     var session = requireSession_(parameters.sessionToken);
+    if (action === 'getAdminOperationStatus') {
+      return createPostResponse_(parameters, { status: 'success', data: getAdminOperationStatus_(parameters) });
+    }
     var actingSession = function() {
       return resolveActingTeacherSession_(session, parameters.actingTeacherName);
     };
@@ -9574,7 +9577,9 @@ function doPost(e) {
       }
     };
     if (!handlers[action]) throw new Error('不支援的操作：' + action);
-    return createPostResponse_(parameters, { status: 'success', data: handlers[action]() });
+    return createPostResponse_(parameters, parameters.clientOperationId
+      ? runTrackedAdminOperation_(parameters, handlers[action])
+      : { status: 'success', data: handlers[action]() });
   } catch (error) {
     console.error(error && error.stack ? error.stack : error);
     return createPostResponse_(parameters, {
@@ -9582,6 +9587,84 @@ function doPost(e) {
       message: error && error.message ? error.message : String(error)
     });
   }
+}
+
+// Authenticated POST receipts: bounded metadata only, no tokens or form content.
+// The result cache may expire; absence of a cached result NEVER permits replay.
+function adminOperationIdentity_(parameters) {
+  var id = cleanText_(parameters.clientOperationId);
+  if (!/^[a-z0-9]{8,12}_[A-Za-z0-9_-]{8,80}$/.test(id)) throw Error('操作查詢編號不正確。');
+  var createdAt = parseInt(id.split('_')[0], 36), now = Date.now();
+  if (createdAt > now + 300000 || createdAt < now - 86400000) throw Error('操作查詢編號已過期，請核對原操作結果，不可直接重送。');
+  var session = requireSession_(parameters.sessionToken);
+  if (!session.teacherName) throw Error('無法確認操作帳號。');
+  return { key: 'ADMIN_OP_' + id, createdAt: createdAt, owner: raffleHash_(session.teacherName) };
+}
+
+function getAdminOperationStatus_(parameters) {
+  var identity = adminOperationIdentity_(parameters);
+  var raw = PropertiesService.getScriptProperties().getProperty(identity.key);
+  if (!raw) return { state: 'not_received' };
+  var record = JSON.parse(raw);
+  if (record.owner !== identity.owner) throw Error('操作查詢權限不符。');
+  var state = record.state;
+  if (state === 'running' && Date.now() - record.startedAt > 600000) state = 'uncertain';
+  var payload = null;
+  if (state !== 'running') {
+    try {
+      var cached = CacheService.getScriptCache().get(identity.key);
+      if (cached) payload = JSON.parse(cached);
+    } catch (error) { /* Metadata still prevents duplicate execution. */ }
+  }
+  return { state: state, payload: payload };
+}
+
+function runTrackedAdminOperation_(parameters, handler) {
+  var identity = adminOperationIdentity_(parameters), props = PropertiesService.getScriptProperties();
+  var inputs = {};
+  Object.keys(parameters).sort().forEach(function(key) {
+    if (['transport', 'sessionToken', 'clientOperationId'].indexOf(key) === -1) inputs[key] = parameters[key];
+  });
+  var fingerprint = raffleHash_(JSON.stringify(inputs));
+  var reserved = withScriptLock_(function() {
+    var raw = props.getProperty(identity.key);
+    if (raw) {
+      var prior = JSON.parse(raw);
+      if (prior.owner !== identity.owner || prior.fingerprint !== fingerprint) throw Error('操作編號已用於不同內容，請核對原操作。');
+      return false;
+    }
+    var all = props.getProperties(), count = 0;
+    Object.keys(all).filter(function(key) { return key.indexOf('ADMIN_OP_') === 0; }).forEach(function(key) {
+      var time = parseInt(key.slice(9).split('_')[0], 36);
+      if (isFinite(time) && time < Date.now() - 86400000) props.deleteProperty(key);
+      else count++;
+    });
+    if (count >= 750) throw Error('操作確認紀錄已達安全容量，本次尚未送出，請聯繫管理員。');
+    var json = JSON.stringify({ owner: identity.owner, fingerprint: fingerprint, state: 'running', startedAt: Date.now() });
+    props.setProperty(identity.key, json);
+    if (props.getProperty(identity.key) !== json) throw Error('無法確認操作紀錄，本次尚未送出。');
+    return true;
+  });
+  if (!reserved) {
+    var priorStatus = getAdminOperationStatus_(parameters);
+    return priorStatus.payload || { status: 'pending', data: priorStatus };
+  }
+  var payload, state;
+  try { payload = { status: 'success', data: handler() }; state = 'completed'; }
+  catch (error) { payload = { status: 'error', message: getErrorMessage_(error) }; state = 'uncertain'; }
+  // If a handler throws after a partial write, do not describe it as safe to retry.
+  withScriptLock_(function() {
+    var record = JSON.parse(props.getProperty(identity.key));
+    record.state = state;
+    var json = JSON.stringify(record);
+    props.setProperty(identity.key, json);
+    if (props.getProperty(identity.key) !== json) throw Error('操作結果待確認，請勿重送。');
+  });
+  try {
+    var resultJson = JSON.stringify(payload);
+    if (resultJson.length <= 20000) CacheService.getScriptCache().put(identity.key, resultJson, 21600);
+  } catch (error) { /* Return normally; durable completion marker remains. */ }
+  return payload;
 }
 
 function getPostParameters_(e) {

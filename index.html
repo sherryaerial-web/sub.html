@@ -2584,6 +2584,7 @@
   <script src="assets/xlsx.full.min.js"></script>
   <script src="assets/jszip.min.js"></script>
   <script src="raffle.js"></script>
+  <script src="admin-transport.js"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -2756,6 +2757,29 @@
       return readApiResponse(response);
     }
 
+    let adminTransport = null;
+    function getAdminTransport() {
+      if (!window.SherryAdminTransport) throw new Error("連線元件未載入，本次尚未送出，請重新開啟系統。");
+      if (!adminTransport) adminTransport = window.SherryAdminTransport.createAdminTransport({
+        url: APP_URL,
+          getSessionToken: () => authState.sessionToken,
+          getSessionOwner: () => authState.teacherName,
+          confirmReconciled: message => window.confirm(message),
+        onStatus: (message, state) => setNotice(message, state === "completed" ? "success" : "error")
+      });
+      return adminTransport;
+    }
+    function resumeAppConnection() {
+      if (!authState.sessionToken) return;
+      // Do not rerender: draft fields, invoice checkboxes and dialogs must survive app switching.
+      getAdminTransport().resume().catch(error => setNotice(error.message, "error"));
+    }
+    window.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") resumeAppConnection();
+    });
+    window.addEventListener("pageshow", event => { if (event.persisted) resumeAppConnection(); });
+    window.addEventListener("online", resumeAppConnection);
+
     async function callPostApi(action, params = {}) {
       const requestParams = { ...params };
       if (authState.actingTeacherName && TEACHER_ACTING_ACTIONS.has(action)) {
@@ -2764,89 +2788,7 @@
       if (authState.sessionToken && !requestParams.sessionToken) {
         requestParams.sessionToken = authState.sessionToken;
       }
-      const requestId = window.crypto && typeof window.crypto.randomUUID === "function"
-        ? window.crypto.randomUUID()
-        : `relay_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const frameName = `sherry_relay_${requestId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
-      const isTrustedRelayOrigin = (origin) => {
-        try {
-          const url = new URL(origin);
-          return url.protocol === "https:" && (
-            url.hostname === "script.google.com" ||
-            url.hostname === "script.googleusercontent.com" ||
-            url.hostname.endsWith(".script.googleusercontent.com") ||
-            url.hostname.endsWith("-script.googleusercontent.com")
-          );
-        } catch (error) {
-          return false;
-        }
-      };
-
-      return new Promise((resolve, reject) => {
-        const iframe = document.createElement("iframe");
-        iframe.name = frameName;
-        iframe.hidden = true;
-        iframe.tabIndex = -1;
-        iframe.setAttribute("aria-hidden", "true");
-
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = APP_URL;
-        form.target = frameName;
-        form.enctype = "application/x-www-form-urlencoded";
-        form.acceptCharset = "UTF-8";
-        form.hidden = true;
-
-        const fields = {
-          action,
-          ...requestParams,
-          transport: "iframe",
-          requestId
-        };
-        Object.entries(fields).forEach(([key, value]) => {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = key;
-          input.value = typeof value === "string" ? value : JSON.stringify(value);
-          form.appendChild(input);
-        });
-
-        let timeoutId;
-        const cleanup = () => {
-          window.removeEventListener("message", handleMessage);
-          if (timeoutId) window.clearTimeout(timeoutId);
-          form.remove();
-          iframe.remove();
-        };
-        const handleMessage = (event) => {
-          if (!isTrustedRelayOrigin(event.origin)) return;
-          const message = event.data;
-          if (!message || message.source !== "sherry-gas-relay" || message.requestId !== requestId) return;
-          cleanup();
-          try {
-            resolve(readApiPayload(message.payload));
-          } catch (error) {
-            reject(error);
-          }
-        };
-
-        window.addEventListener("message", handleMessage);
-        const longRunningActions = new Set([
-          "closeMissingObCancellations",
-          "executeNextDayClosures",
-          "closeUnclaimedSubstituteCourses",
-          "syncInvoicePurchases",
-          "issueInvoiceBatch"
-        ]);
-        const timeoutMs = longRunningActions.has(action) ? 180000 : 45000;
-        timeoutId = window.setTimeout(() => {
-          cleanup();
-          reject(new Error("系統連線逾時，請重新整理後再試一次。"));
-        }, timeoutMs);
-        document.body.appendChild(iframe);
-        document.body.appendChild(form);
-        form.submit();
-      });
+      return getAdminTransport().call(action, requestParams);
     }
 
     function escapeHtml(value) {

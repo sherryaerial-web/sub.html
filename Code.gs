@@ -16699,10 +16699,32 @@ function selectMonthlyDiscountRecommendations_(candidatesValue, countValue) {
   if (candidates.length < required) {
     throw new Error('下個月符合條件的常態課不足 ' + required + ' 堂，無法建立完整推薦。');
   }
-  return {
-    primary: candidates.slice(0, required),
-    alternates: candidates.slice(required)
-  };
+  var teachers = Object.create(null);
+  var primary = [];
+  var alternates = [];
+  candidates.forEach(function(item) {
+    var teacher = normalizeDiscountTeacherKey_(item.teacherName || item.teacherKey);
+    if (teacher && !teachers[teacher] && primary.length < required) {
+      teachers[teacher] = true;
+      primary.push(item);
+    } else {
+      alternates.push(item);
+    }
+  });
+  if (primary.length < required) {
+    throw new Error('下個月符合條件的不同老師不足 ' + required + ' 位，無法建立完整推薦。');
+  }
+  return { primary: primary, alternates: alternates };
+}
+
+function assertMonthlyDiscountTeachersUnique_(items) {
+  var teachers = Object.create(null);
+  (items || []).forEach(function(item) {
+    var teacher = normalizeDiscountTeacherKey_(item.teacherName || item.teacherKey);
+    if (!teacher) throw new Error('找不到優惠課老師，請核對推薦資料。');
+    if (teachers[teacher]) throw new Error('同月份優惠課的老師不可重複，請先換一堂再確認。');
+    teachers[teacher] = true;
+  });
 }
 
 function getMonthlyDiscountDueMonth_(dateKeyValue, timeValue) {
@@ -16951,8 +16973,16 @@ function replaceMonthlyDiscountRecommendation_(session, itemIdValue) {
     var dashboard = getMonthlyDiscountDashboardUnlocked_(ss);
     if (dashboard.status !== '待確認') throw new Error('目前沒有待確認的優惠課推薦。');
     var outgoing = dashboard.recommendations.filter(function(item) { return item.itemId === itemId; })[0];
-    var incoming = dashboard.alternates[0];
-    if (!outgoing || !incoming) throw new Error('目前沒有可替換的候補課程。');
+    if (!outgoing) throw new Error('找不到要替換的推薦。');
+    var remaining = dashboard.recommendations.filter(function(item) { return item.itemId !== itemId; });
+    assertMonthlyDiscountTeachersUnique_(remaining);
+    var teachers = remaining.map(function(item) { return normalizeDiscountTeacherKey_(item.teacherName); });
+    var incoming = dashboard.alternates.filter(function(item) {
+      var teacher = normalizeDiscountTeacherKey_(item.teacherName);
+      return teacher && teachers.indexOf(teacher) === -1;
+    })[0];
+    if (!incoming) throw new Error('目前沒有老師不重複的候補課程可替換。');
+    assertMonthlyDiscountTeachersUnique_(remaining.concat([incoming]));
     var sheet = requireSheet_(ss, SHEETS.DISCOUNT_RECOMMENDATIONS);
     var nowText = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
     sheet.getRange(outgoing.rowNumber, 4, 1, 18).setValues([[
@@ -16981,6 +17011,7 @@ function confirmMonthlyDiscountRecommendations_(session, batchIdValue) {
       throw new Error('這批優惠課已更新，請重新整理後再確認。');
     }
     if (dashboard.recommendations.length !== 3) throw new Error('優惠課必須剛好 3 堂。');
+    assertMonthlyDiscountTeachersUnique_(dashboard.recommendations);
     var recommendationSheet = requireSheet_(ss, SHEETS.DISCOUNT_RECOMMENDATIONS);
     var historySheet = requireSheet_(ss, SHEETS.DISCOUNT_HISTORY);
     var nowText = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');

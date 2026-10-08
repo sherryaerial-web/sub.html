@@ -14284,15 +14284,95 @@ test('monthly discount cooldown matches teacher aliases and blocks two complete 
 test('monthly discount selection always keeps three primary recommendations when candidates exist', () => {
   const backend = loadBackend();
   const selected = backend.selectMonthlyDiscountRecommendations_([
-    { slotKey: 'a', score: 10 },
-    { slotKey: 'b', score: 9 },
-    { slotKey: 'c', score: 8 },
-    { slotKey: 'd', score: 7 },
-    { slotKey: 'e', score: 6 },
+    { slotKey: 'a', teacherName: '老師甲', score: 10 },
+    { slotKey: 'b', teacherName: '老師乙', score: 9 },
+    { slotKey: 'c', teacherName: '老師丙', score: 8 },
+    { slotKey: 'd', teacherName: '老師丁', score: 7 },
+    { slotKey: 'e', teacherName: '老師戊', score: 6 },
   ], 3);
 
   assert.deepEqual(Array.from(selected.primary, (item) => item.slotKey), ['a', 'b', 'c']);
   assert.deepEqual(Array.from(selected.alternates, (item) => item.slotKey), ['d', 'e']);
+});
+
+test('monthly discount selection keeps distinct teachers and preserves skipped candidate order', () => {
+  const backend = loadBackend();
+  const candidates = [
+    { slotKey: 'a', teacherName: 'Ariel Lu', score: 10 },
+    { slotKey: 'b', teacherName: 'ariel', score: 9 },
+    { slotKey: 'c', teacherName: '萱', score: 8 },
+    { slotKey: 'd', teacherName: '小mo(子涵)', score: 7 },
+    { slotKey: 'e', teacherName: '小Mo', score: 6 },
+  ];
+  const before = JSON.stringify(candidates);
+  const selected = backend.selectMonthlyDiscountRecommendations_(candidates, 3);
+  assert.deepEqual(Array.from(selected.primary, item => item.slotKey), ['a', 'c', 'd']);
+  assert.deepEqual(Array.from(selected.alternates, item => item.slotKey), ['b', 'e']);
+  assert.equal(JSON.stringify(candidates), before);
+});
+
+test('monthly discount selection fails when fewer than three distinct teachers qualify', () => {
+  const backend = loadBackend();
+  assert.throws(() => backend.selectMonthlyDiscountRecommendations_([
+    { teacherName: 'Ariel Lu' }, { teacherName: 'ariel' }, { teacherName: '萱' },
+  ], 3), /老師.*不足.*3/);
+});
+
+function createMonthlyDiscountTeacherFixture(primaryTeachers, alternateTeachers = []) {
+  const rows = primaryTeachers.concat(alternateTeachers).map((teacher, index) => {
+    const row = Array(21).fill('');
+    Object.assign(row, { 0: 'nov-batch', 1: '2026-11', 2: `item-${index}`, 3: index < primaryTeachers.length ? '推薦' : '候補',
+      4: index < primaryTeachers.length ? index + 1 : index - primaryTeachers.length + 1,
+      5: `slot-${index}`, 6: 4, 7: '12:15', 8: 'A', 9: 'A－皮拉提斯', 10: teacher,
+      17: '待確認', 18: '2026-10-09 01:05:00', 19: '2026-10-09 01:05:00', 20: '系統每月推薦' });
+    return row;
+  });
+  const sheet = createSheetFixture('優惠課程推薦', [EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS, ...rows]);
+  const history = createSheetFixture('優惠課程歷史', [EXPECTED_DISCOUNT_HISTORY_HEADERS]);
+  const ss = createSpreadsheetFixture([sheet, history]);
+  const backend = loadBackendWithSpreadsheet(ss);
+  backend.currentTimeMs_ = () => new Date('2026-10-09T01:05:00+08:00').getTime();
+  backend.assertCapabilitySession_ = () => '冠蓉';
+  return { backend, sheet, history };
+}
+
+test('monthly discount replacement skips teachers already in the other primary recommendations', () => {
+  const { backend, sheet, history } = createMonthlyDiscountTeacherFixture(['萱', 'Ariel Lu', 'ariel'], ['Ariel', '萱', '小mo']);
+  const firstBefore = JSON.stringify(sheet.values[1]);
+  const secondBefore = JSON.stringify(sheet.values[2]);
+  const result = backend.replaceMonthlyDiscountRecommendation_({}, 'item-2');
+  assert.deepEqual(Array.from(result.recommendations, item => item.teacherName), ['萱', 'Ariel Lu', '小mo']);
+  assert.equal(JSON.stringify(sheet.values[1]), firstBefore);
+  assert.equal(JSON.stringify(sheet.values[2]), secondBefore);
+  assert.equal(sheet.values[3][3], '候補');
+  assert.equal(sheet.values[6][3], '推薦');
+  assert.equal(history.values.length, 1);
+});
+
+test('monthly discount replacement permits the outgoing teacher but fails without an eligible alternate', () => {
+  const fixture = createMonthlyDiscountTeacherFixture(['萱', 'Ariel Lu', '小mo'], ['小Mo', '萱', 'Ariel']);
+  const result = fixture.backend.replaceMonthlyDiscountRecommendation_({}, 'item-2');
+  assert.equal(result.recommendations[2].teacherName, '小Mo');
+  const blocked = createMonthlyDiscountTeacherFixture(['萱', 'Ariel Lu', '小mo'], ['萱', 'Ariel']);
+  const before = JSON.stringify(blocked.sheet.values);
+  assert.throws(() => blocked.backend.replaceMonthlyDiscountRecommendation_({}, 'item-2'), /老師.*不重複/);
+  assert.equal(JSON.stringify(blocked.sheet.values), before);
+});
+
+test('monthly discount confirmation rejects duplicate teacher aliases before writing any rows', () => {
+  const { backend, sheet, history } = createMonthlyDiscountTeacherFixture(['萱', 'Ariel Lu', 'ariel']);
+  const before = JSON.stringify(sheet.values);
+  assert.throws(() => backend.confirmMonthlyDiscountRecommendations_({}, 'nov-batch'), /老師.*不.*重複/);
+  assert.equal(JSON.stringify(sheet.values), before);
+  assert.equal(history.values.length, 1);
+});
+
+test('monthly discount confirmation still accepts three distinct teachers', () => {
+  const { backend, sheet, history } = createMonthlyDiscountTeacherFixture(['萱', 'Ariel Lu', '小mo']);
+  const result = backend.confirmMonthlyDiscountRecommendations_({}, 'nov-batch');
+  assert.equal(result.status, '已確認');
+  assert.equal(history.values.length, 4);
+  assert.ok(sheet.values.slice(1).every(row => row[17] === '已確認'));
 });
 
 test('monthly discount scheduler can catch up after day five at 22:00 until month end', () => {

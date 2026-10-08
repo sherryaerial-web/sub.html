@@ -16615,6 +16615,19 @@ function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, 
   var evaluationMonths = getMonthlyDiscountEvaluationMonths_(recommendationMonth);
   var evaluationMonthSet = {};
   evaluationMonths.forEach(function(month) { evaluationMonthSet[month] = true; });
+  // Normalize Sheets dates once, outside the candidate-by-observation loop.
+  var observations = (observationRowsValue || []).filter(function(row) {
+    return evaluationMonthSet[normalizeMonthKey_(row && row[2])] && !cleanText_(row && row[13]);
+  }).map(function(row) {
+    return {
+      slotKey: cleanText_(row && row[1]), weekday: row && row[3],
+      time: formatMyTime(row && row[4]), room: cleanText_(row && row[5]),
+      courseName: cleanText_(row && row[6]), teacherName: cleanText_(row && row[7]),
+      observed: Math.max(0, Number(row && row[9]) || 0),
+      missed: Math.max(0, Number(row && row[10]) || 0),
+      missedDate: cleanText_(row && row[11])
+    };
+  });
   var history = (historyRowsValue || []).map(function(row) {
     return {
       month: normalizeMonthKey_(row && row[0]), slotKey: cleanText_(row && row[1]),
@@ -16639,24 +16652,14 @@ function buildMonthlyDiscountCandidates_(courseRowsValue, observationRowsValue, 
     if (inCooldown) return;
 
     var totals = { observed: 0, missed: 0, lastMissDate: '' };
-    (observationRowsValue || []).forEach(function(observationRow) {
-      var observationMonth = normalizeMonthKey_(observationRow && observationRow[2]);
-      if (!evaluationMonthSet[observationMonth] || cleanText_(observationRow && observationRow[13])) return;
-      var observation = {
-        slotKey: cleanText_(observationRow && observationRow[1]),
-        weekday: observationRow && observationRow[3],
-        time: formatMyTime(observationRow && observationRow[4]),
-        room: cleanText_(observationRow && observationRow[5]),
-        courseName: cleanText_(observationRow && observationRow[6]),
-        teacherName: cleanText_(observationRow && observationRow[7])
-      };
+    observations.forEach(function(observation) {
       if (!((observation.slotKey && observation.slotKey === descriptor.slotKey) ||
             discountDescriptorsMatch_(descriptor, observation))) return;
-      var observed = Math.max(0, Number(observationRow[9]) || 0);
-      var missed = Math.max(0, Number(observationRow[10]) || 0);
+      var observed = observation.observed;
+      var missed = observation.missed;
       totals.observed += observed;
       totals.missed += Math.min(observed || missed, missed);
-      var missedDate = cleanText_(observationRow[11]);
+      var missedDate = observation.missedDate;
       if (missedDate && missedDate > totals.lastMissDate) totals.lastMissDate = missedDate;
     });
     var missRate = totals.observed ? totals.missed / totals.observed : 0;

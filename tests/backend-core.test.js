@@ -14209,6 +14209,32 @@ test('monthly discount candidates count observation months returned by Sheets as
   assert.match(candidates[0].reason, /近兩個完整月份/);
 });
 
+test('monthly discount candidates normalize observation dates once per row', () => {
+  const backend = loadBackend();
+  const courseRows = Array.from({ length: 20 }, (_, index) => [
+    '2026/09/06', '11:00', 'C－空環 Lv.0', `老師${index}`, `sep-${index}`, '', '', '否', '',
+  ]);
+  const observationRows = [
+    ['obs-1', '', new Date('2026-07-01T00:00:00+08:00'), 0, '11:00', 'C', '空環 Lv.0', '老師0', '', 4, 2, '2026/07/26', '', '', ''],
+    ['obs-2', '', new Date('2026-08-01T00:00:00+08:00'), 0, '11:00', 'C', '空環 Lv.0', '老師0', '', 5, 4, '2026/08/30', '', '', ''],
+  ];
+  const normalizeMonth = backend.normalizeMonthKey_;
+  let dateConversions = 0;
+  backend.normalizeMonthKey_ = (value) => {
+    if (value instanceof Date) dateConversions++;
+    return normalizeMonth(value);
+  };
+
+  const candidates = backend.buildMonthlyDiscountCandidates_(courseRows, observationRows, [], '2026-10');
+
+  assert.equal(candidates.length, 20);
+  assert.equal(candidates[0].teacherName, '老師0');
+  assert.equal(candidates[0].observedSessions, 9);
+  assert.equal(candidates[0].missedSessions, 6);
+  assert.equal(dateConversions, observationRows.length);
+  assert.ok(observationRows[0][2] instanceof Date);
+});
+
 test('monthly discount dashboard rows show a month key when Sheets returns a date', () => {
   const backend = loadBackend();
   const row = Array(21).fill('');

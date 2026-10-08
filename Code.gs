@@ -329,6 +329,7 @@ var CONFIG = {
   PRACTICE_OB_DAY_CACHE_SECONDS: 60 * 60,
   PRACTICE_DAY_VIEW_CACHE_SECONDS: 5 * 60,
   PRACTICE_RECONCILE_HOUR_PROPERTY: 'PRACTICE_RECONCILE_HOUR_V1',
+  MONTHLY_DISCOUNT_RETRY_HOUR_PROPERTY: 'MONTHLY_DISCOUNT_RETRY_HOUR_V1',
   PAYROLL_DRAFT_STATUS: '草稿',
   PAYROLL_PUBLISHED_STATUS: '待確認',
   PAYROLL_CONFIRMED_STATUS: '已確認',
@@ -16704,8 +16705,10 @@ function selectMonthlyDiscountRecommendations_(candidatesValue, countValue) {
 function getMonthlyDiscountDueMonth_(dateKeyValue, timeValue) {
   var dateKey = cleanText_(dateKeyValue);
   var time = cleanText_(timeValue);
-  var match = /^(\d{4})-(\d{2})-05$/.exec(dateKey);
-  if (!match || !/^22:0[0-4]$/.test(time)) return '';
+  var match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(dateKey);
+  if (!match || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) return '';
+  var day = Number(match[3]);
+  if (day < 5 || (day === 5 && time < '22:00')) return '';
   return shiftMonthKey_(match[1] + '-' + match[2], 1);
 }
 
@@ -16811,18 +16814,19 @@ function toMonthlyDiscountRecommendationItem_(row, rowNumber) {
     score: Number(row && row[15]) || 0,
     reason: cleanText_(row && row[16]),
     status: cleanText_(row && row[17]),
-    createdAt: cleanText_(row && row[18]),
-    updatedAt: cleanText_(row && row[19]),
+    createdAt: normalizeNotificationTimestamp_(row && row[18]),
+    updatedAt: normalizeNotificationTimestamp_(row && row[19]),
     actor: cleanText_(row && row[20])
   };
 }
 
-function getMonthlyDiscountDashboardUnlocked_(spreadsheet) {
+function getMonthlyDiscountDashboardUnlocked_(spreadsheet, monthValue) {
+  var month = normalizeMonthKey_(monthValue) || getNextMonthKey_(new Date(currentTimeMs_()));
   var recommendationSheet = spreadsheet.getSheetByName(SHEETS.DISCOUNT_RECOMMENDATIONS);
   var historySheet = spreadsheet.getSheetByName(SHEETS.DISCOUNT_HISTORY);
   if (!recommendationSheet || !historySheet) {
     return {
-      available: false, month: getNextMonthKey_(new Date(currentTimeMs_())),
+      available: false, month: month,
       batchId: '', status: '', pendingCount: 0, recommendations: [], alternates: [], history: []
     };
   }
@@ -16831,7 +16835,7 @@ function getMonthlyDiscountDashboardUnlocked_(spreadsheet) {
   var all = recommendationSheet.getDataRange().getValues().slice(1).map(function(row, index) {
     return toMonthlyDiscountRecommendationItem_(row, index + 2);
   }).filter(function(item) {
-    return item.batchId && item.status !== '已重算';
+    return item.batchId && item.month === month && item.status !== '已重算';
   });
   var latest = all.slice().sort(function(left, right) {
     return right.createdAt.localeCompare(left.createdAt) || right.batchId.localeCompare(left.batchId);
@@ -16853,7 +16857,7 @@ function getMonthlyDiscountDashboardUnlocked_(spreadsheet) {
   var pendingCount = recommendations.filter(function(item) { return item.status === '待確認'; }).length;
   return {
     available: true,
-    month: latest ? latest.month : getNextMonthKey_(new Date(currentTimeMs_())),
+    month: month,
     batchId: latest ? latest.batchId : '',
     status: pendingCount ? '待確認' : (latest ? latest.status : ''),
     pendingCount: pendingCount,
@@ -16897,7 +16901,7 @@ function generateMonthlyDiscountRecommendationsCore_(actorValue, monthValue, for
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureMonthlyDiscountStructureUnlocked_(ss);
     var recommendationSheet = requireSheet_(ss, SHEETS.DISCOUNT_RECOMMENDATIONS);
-    var current = getMonthlyDiscountDashboardUnlocked_(ss);
+    var current = getMonthlyDiscountDashboardUnlocked_(ss, month);
     if (current.batchId && current.month === month && !forceValue) return current;
     if (current.batchId && current.month === month && current.status === '已確認') {
       throw new Error('這個月份的優惠課已確認，不會自動覆蓋。');
@@ -16917,7 +16921,7 @@ function generateMonthlyDiscountRecommendationsCore_(actorValue, monthValue, for
     var selection = selectMonthlyDiscountRecommendations_(candidates, 3);
     appendMonthlyDiscountBatchUnlocked_(recommendationSheet, month, actor, selection);
     created = true;
-    return getMonthlyDiscountDashboardUnlocked_(ss);
+    return getMonthlyDiscountDashboardUnlocked_(ss, month);
   });
   if (created) {
     sendPushAfterMutationSafely_(getActiveCourseAdminNames_(), {
@@ -16932,7 +16936,7 @@ function generateMonthlyDiscountRecommendationsCore_(actorValue, monthValue, for
 
 function generateMonthlyDiscountRecommendations_(session) {
   var actor = assertCapabilitySession_(session, 'course_admin');
-  return generateMonthlyDiscountRecommendationsCore_(actor, getNextMonthKey_(new Date(currentTimeMs_())), true);
+  return generateMonthlyDiscountRecommendationsCore_(actor, getNextMonthKey_(new Date(currentTimeMs_())), false);
 }
 
 function replaceMonthlyDiscountRecommendation_(session, itemIdValue) {
@@ -16994,7 +16998,19 @@ function confirmMonthlyDiscountRecommendations_(session, batchIdValue) {
 function runMonthlyDiscountRecommendationScheduler_(dateKey, time) {
   var month = getMonthlyDiscountDueMonth_(dateKey, time);
   if (!month) return { skipped: true, reason: 'outside-window' };
-  return generateMonthlyDiscountRecommendationsCore_('系統每月推薦', month, false);
+  var properties = getScriptProperties_();
+  var hourKey = month + '|' + dateKey + '|' + time.slice(0, 2);
+  if (properties && properties.getProperty(CONFIG.MONTHLY_DISCOUNT_RETRY_HOUR_PROPERTY) === hourKey) {
+    return { skipped: true, reason: 'same-hour', month: month };
+  }
+  if (properties) properties.setProperty(CONFIG.MONTHLY_DISCOUNT_RETRY_HOUR_PROPERTY, hourKey);
+  try {
+    return generateMonthlyDiscountRecommendationsCore_('系統每月推薦', month, false);
+  } catch (error) {
+    var message = getErrorMessage_(error);
+    console.warn('每月優惠課推薦失敗，下一小時將重試：' + message);
+    return { failed: true, month: month, error: message };
+  }
 }
 
 function buildRecurringClaimCourseOptions_(courseRows, capabilities) {

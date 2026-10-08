@@ -14269,12 +14269,106 @@ test('monthly discount selection always keeps three primary recommendations when
   assert.deepEqual(Array.from(selected.alternates, (item) => item.slotKey), ['d', 'e']);
 });
 
-test('monthly discount scheduler is due only on day five from 22:00 to 22:04', () => {
+test('monthly discount scheduler can catch up after day five at 22:00 until month end', () => {
   const backend = loadBackend();
   assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:00'), '2026-10');
   assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:04'), '2026-10');
-  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:05'), '');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '22:05'), '2026-10');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-10-09', '00:18'), '2026-11');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-12-31', '23:59'), '2027-01');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-05', '21:59'), '');
   assert.equal(backend.getMonthlyDiscountDueMonth_('2026-09-04', '22:00'), '');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-10-01', '22:00'), '');
+  assert.equal(backend.getMonthlyDiscountDueMonth_('2026-10-09', 'invalid'), '');
+});
+
+test('monthly discount dashboard shows a missing next month instead of a confirmed old batch', () => {
+  const old = Array(21).fill('');
+  Object.assign(old, { 0: 'oct-batch', 1: '2026-10', 2: 'oct-item', 3: '推薦', 17: '已確認', 18: new Date('2026-09-05T15:20:00+08:00') });
+  const sheet = createSheetFixture('優惠課程推薦', [EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS, old]);
+  const history = createSheetFixture('優惠課程歷史', [EXPECTED_DISCOUNT_HISTORY_HEADERS, ['2026-10', '', 3, '21:30', 'A', '空瑜', 'Chin']]);
+  const ss = createSpreadsheetFixture([sheet, history]);
+  const backend = loadBackendWithSpreadsheet(ss);
+  backend.currentTimeMs_ = () => new Date('2026-10-09T00:18:00+08:00').getTime();
+
+  const dashboard = backend.getMonthlyDiscountDashboardUnlocked_(ss);
+
+  assert.equal(dashboard.month, '2026-11');
+  assert.equal(dashboard.batchId, '');
+  assert.equal(dashboard.recommendations.length, 0);
+  assert.equal(dashboard.history[0].month, '2026-10');
+  assert.equal(sheet.values[1][17], '已確認');
+});
+
+test('monthly discount retries return the existing target batch without touching confirmed rows', () => {
+  const confirmed = Array(21).fill('');
+  Object.assign(confirmed, { 0: 'nov-batch', 1: '2026-11', 2: 'nov-item', 3: '推薦', 17: '已確認', 18: new Date('2026-10-05T22:00:00+08:00') });
+  const newerOld = Array(21).fill('');
+  Object.assign(newerOld, { 0: 'oct-batch', 1: '2026-10', 2: 'oct-item', 3: '推薦', 17: '已確認', 18: new Date('2026-10-06T12:00:00+08:00') });
+  const sheet = createSheetFixture('優惠課程推薦', [EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS, confirmed, newerOld]);
+  const history = createSheetFixture('優惠課程歷史', [EXPECTED_DISCOUNT_HISTORY_HEADERS]);
+  const ss = createSpreadsheetFixture([sheet, history]);
+  const backend = loadBackendWithSpreadsheet(ss);
+  backend.ensureMonthlyDiscountStructureUnlocked_ = () => {};
+  const before = JSON.stringify(sheet.values);
+
+  const result = backend.generateMonthlyDiscountRecommendationsCore_('冠蓉', '2026-11', false);
+
+  assert.equal(result.batchId, 'nov-batch');
+  assert.equal(result.created, false);
+  assert.equal(JSON.stringify(sheet.values), before);
+});
+
+test('monthly discount scheduler contains failures and retries in the next hour', () => {
+  const values = new Map();
+  const backend = loadBackend();
+  backend.getScriptProperties_ = () => ({ getProperty: key => values.get(key), setProperty: (key, value) => values.set(key, value) });
+  let calls = 0;
+  backend.generateMonthlyDiscountRecommendationsCore_ = () => { calls++; throw new Error('temporary unavailable'); };
+
+  const first = backend.runMonthlyDiscountRecommendationScheduler_('2026-10-09', '00:18');
+  const sameHour = backend.runMonthlyDiscountRecommendationScheduler_('2026-10-09', '00:23');
+  const nextHour = backend.runMonthlyDiscountRecommendationScheduler_('2026-10-09', '01:03');
+
+  assert.equal(first.failed, true);
+  assert.equal(first.month, '2026-11');
+  assert.equal(sameHour.skipped, true);
+  assert.equal(nextHour.failed, true);
+  assert.equal(calls, 2);
+});
+
+test('monthly discount manual retry appends one batch and notifies only once', () => {
+  const recommendation = createSheetFixture('優惠課程推薦', [EXPECTED_DISCOUNT_RECOMMENDATION_HEADERS]);
+  const history = createSheetFixture('優惠課程歷史', [EXPECTED_DISCOUNT_HISTORY_HEADERS]);
+  const ss = createSpreadsheetFixture([
+    recommendation, history,
+    createSheetFixture('課程開課觀測', [EXPECTED_DISCOUNT_OBSERVATION_HEADERS]),
+    createSheetFixture('CourseList', [EXPECTED_COURSE_HEADERS,
+      ['2026/10/06', '10:30', 'A－空環 Lv.0', '老師甲', 'oct-1', '', '', '否', ''],
+      ['2026/10/07', '12:30', 'B－空瑜 Lv.0', '老師乙', 'oct-2', '', '', '否', ''],
+      ['2026/10/08', '18:30', 'C－舞綢 Lv.1', '老師丙', 'oct-3', '', '', '否', '']
+    ])
+  ]);
+  const backend = loadBackendWithSpreadsheet(ss);
+  backend.currentTimeMs_ = () => new Date('2026-10-09T00:18:00+08:00').getTime();
+  backend.ensureMonthlyDiscountStructureUnlocked_ = () => {};
+  backend.assertCapabilitySession_ = () => '冠蓉';
+  backend.getActiveCourseAdminNames_ = () => ['冠蓉'];
+  let notices = 0;
+  backend.sendPushAfterMutationSafely_ = () => { notices++; };
+
+  const first = backend.generateMonthlyDiscountRecommendations_({});
+  const before = JSON.stringify(recommendation.values);
+  const second = backend.generateMonthlyDiscountRecommendations_({});
+
+  assert.equal(first.month, '2026-11');
+  assert.equal(first.created, true);
+  assert.equal(first.recommendations.length, 3);
+  assert.equal(second.created, false);
+  assert.equal(second.batchId, first.batchId);
+  assert.equal(JSON.stringify(recommendation.values), before);
+  assert.equal(history.values.length, 1);
+  assert.equal(notices, 1);
 });
 
 test('monthly discount management actions are exposed through the authenticated API dispatcher', () => {

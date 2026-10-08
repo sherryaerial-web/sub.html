@@ -4401,6 +4401,23 @@ test('monthly discount actions call the backend and refresh the admin dashboard'
   assert.match(html, /callPostApi\("generateMonthlyDiscountRecommendations"/);
 });
 
+test('monthly discount workspace offers retry when next month is missing and protects confirmed batches', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__dashboard = { monthlyDiscount: { month: '2026-11', batchId: '', status: '', recommendations: [], history: [{month: '2026-10', weekday: 3, time: '21:30', teacherName: 'Chin'}] } };
+  vm.runInContext('adminDashboard = __dashboard; renderMonthlyDiscountAdminTab();', context);
+  let output = getElement('admin-tab-content').innerHTML;
+  assert.match(output, /2026 年 11 月 點數優惠課推薦/);
+  assert.match(output, /data-admin-action="generate-monthly-discount"/);
+  assert.match(output, /產生／重試下月推薦/);
+  assert.match(output, /2026 年 10 月/);
+
+  context.__dashboard.monthlyDiscount = {month: '2026-11', batchId: 'nov-confirmed', status: '已確認', recommendations: []};
+  vm.runInContext('adminDashboard = __dashboard; renderMonthlyDiscountAdminTab();', context);
+  output = getElement('admin-tab-content').innerHTML;
+  assert.match(output, /data-admin-action="generate-monthly-discount"[^>]*disabled/);
+  assert.doesNotMatch(output, /data-admin-action="confirm-monthly-discount"/);
+});
+
 test('notification deep links route to the requested teacher or authorized admin page', () => {
   const { context } = createFrontendRuntime();
 

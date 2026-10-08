@@ -355,6 +355,18 @@ function apiPayload(request) {
       options: fixtures.getClaimOptions,
     };
   }
+  if (action === "generateMonthlyDiscountRecommendations" && process.env.VISUAL_SCOPE === "monthly-discount") {
+    fixtures.getAdminDashboard.monthlyDiscount = {
+      ...fixtures.getAdminDashboard.monthlyDiscount,
+      created: true, batchId: "nov-batch", status: "待確認", pendingCount: 3,
+      recommendations: [
+        { itemId: "nov-1", weekday: 6, time: "18:30", room: "C", teacherName: "萱", courseName: "C－空瑜 Lv.2~4", reason: "近兩個完整月份未開 7/7 堂（100%）" },
+        { itemId: "nov-2", weekday: 5, time: "12:30", room: "D", teacherName: "Ariel Lu", courseName: "D－皮拉提斯", reason: "近兩個完整月份未開 6/6 堂（100%）" },
+        { itemId: "nov-3", weekday: 4, time: "12:15", room: "A", teacherName: "Ariel Lu", courseName: "A－皮拉提斯", reason: "近兩個完整月份未開 6/6 堂（100%）" }
+      ], alternates: []
+    };
+    return fixtures.getAdminDashboard.monthlyDiscount;
+  }
   return fixtures[action] ?? { count: 1 };
 }
 
@@ -479,6 +491,7 @@ const results = [];
 const payrollOnly = process.env.VISUAL_SCOPE === "payroll";
 const adminHeaderOnly = process.env.VISUAL_SCOPE === "admin-header";
 const vvipAdminOnly = process.env.VISUAL_SCOPE === "vvip-admin";
+const monthlyDiscountOnly = process.env.VISUAL_SCOPE === "monthly-discount";
 
 try {
   for (const viewport of [
@@ -521,8 +534,8 @@ try {
     await page.route("https://script.google.com/**", async (route) => {
       const request = route.request();
       const payload = { status: "success", data: apiPayload(request) };
-      if (request.method() !== "POST") {
-        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+      if (request.method() !== "POST" || monthlyDiscountOnly) {
+        await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(payload) });
         return;
       }
       const requestId = new URLSearchParams(request.postData() || "").get("requestId");
@@ -534,9 +547,55 @@ try {
       });
     });
 
-    await page.setContent(visualHtml, { waitUntil: "domcontentloaded", timeout: 10000 });
+    if (monthlyDiscountOnly) {
+      await page.route("https://discount.example.test/**", async route => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname === "/") {
+          await route.fulfill({ contentType: "text/html", body: visualHtml });
+          return;
+        }
+        const file = path.resolve(repoDir, "." + pathname);
+        if (!file.startsWith(repoDir + path.sep)) return route.abort();
+        try {
+          const body = await fs.readFile(file);
+          await route.fulfill({ body, contentType: pathname.endsWith(".js") ? "application/javascript" : undefined });
+        } catch {
+          await route.fulfill({ status: 204, body: "" });
+        }
+      });
+      await page.goto("https://discount.example.test/", { waitUntil: "domcontentloaded", timeout: 10000 });
+    } else {
+      await page.setContent(visualHtml, { waitUntil: "domcontentloaded", timeout: 10000 });
+    }
     await page.waitForTimeout(120);
     if (errors.length) throw new Error(`${viewport.name}: browser startup errors: ${errors.join(" | ")}`);
+    if (monthlyDiscountOnly) {
+      fixtures.getAdminDashboard.monthlyDiscount = {
+        month: "2026-11", batchId: "", status: "", recommendations: [], alternates: [],
+        history: [{ month: "2026-10", weekday: 3, time: "21:30", room: "A", teacherName: "Chin", courseName: "A－空瑜 Lv.0" }]
+      };
+      await login(page, "Ivy");
+      await openView(page, "view-admin");
+      await page.locator('[data-admin-section="operations"]').click();
+      await page.locator('[data-admin-tab="monthlyDiscount"]').click();
+      const retry = page.locator('[data-admin-action="generate-monthly-discount"]');
+      if (!await retry.isEnabled()) throw new Error("Missing month cannot be retried");
+      results.push(await capture(page, viewport.name, "discount-missing"));
+      page.once("dialog", dialog => dialog.accept());
+      await retry.click();
+      await page.locator('[data-admin-action="confirm-monthly-discount"]').waitFor();
+      if (await retry.isEnabled()) throw new Error("Existing batch can be regenerated");
+      results.push(await capture(page, viewport.name, "discount-pending"));
+      await page.evaluate(() => {
+        adminDashboard.monthlyDiscount.status = "已確認";
+        renderMonthlyDiscountAdminTab();
+      });
+      if (await retry.isEnabled()) throw new Error("Confirmed batch can be regenerated");
+      results.push(await capture(page, viewport.name, "discount-confirmed"));
+      if (errors.length) throw new Error(`${viewport.name}: browser errors: ${errors.join(" | ")}`);
+      await page.close();
+      continue;
+    }
     if (adminHeaderOnly) {
       await login(page, "Ivy");
       await openView(page, "view-admin");

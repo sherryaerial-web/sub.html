@@ -7651,7 +7651,7 @@
           <div class="item-meta">每月 5 日 22:00 依前兩個完整月的未開課狀況選出 3 堂；代課、特別課、期班、場租、自主練習與近兩月已優惠課程不列入。</div>
           <div class="admin-item-actions">
             ${monthlyDiscount.status === "待確認" ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-monthly-discount" data-batch-id="${escapeHtml(monthlyDiscount.batchId || "")}"><i data-lucide="badge-check"></i>確認這 3 堂</button>` : ""}
-            ${!monthlyDiscount.batchId ? `<button class="compact-button" type="button" data-admin-action="generate-monthly-discount"><i data-lucide="sparkles"></i>產生下月推薦</button>` : ""}
+            <button class="compact-button" type="button" data-admin-action="generate-monthly-discount" ${monthlyDiscount.batchId ? "disabled" : ""}><i data-lucide="refresh-cw"></i>${monthlyDiscount.batchId ? "下月推薦已產生" : "產生／重試下月推薦"}</button>
           </div>
         </div>
         ${discountRows || '<div class="state">目前尚未產生下月優惠課推薦</div>'}
@@ -8842,11 +8842,11 @@
     }
 
     async function generateMonthlyDiscountRecommendations(button) {
-      if (!window.confirm("確定依目前課表與歷史開課資料產生下個月 3 堂優惠課建議？")) return;
+      if (!window.confirm("確定產生或重試下個月 3 堂優惠課建議？已有的推薦與確認紀錄會保留。")) return;
       setButtonBusy(button, true, "計算中...");
       try {
-        await callPostApi("generateMonthlyDiscountRecommendations");
-        setNotice("已產生 3 堂優惠課建議。");
+        const result = await callPostApi("generateMonthlyDiscountRecommendations");
+        setNotice(result && result.created === false ? "下月推薦已存在，已重新載入。" : "已產生 3 堂優惠課建議。");
         await fetchAdminDashboard(true);
       } finally {
         if (button.isConnected) setButtonBusy(button, false, "");

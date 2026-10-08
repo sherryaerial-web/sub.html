@@ -3354,16 +3354,16 @@ test('external-issued marker requires matching version and a reason', () => {
 
 test('invoice OB sync accepts only paid bank transfers at or after the Taipei cutoff', () => {
   const backend = loadBackend();
-  const cutoffMs = Date.parse('2026-09-25T16:00:00.000Z');
+  const cutoffMs = Date.parse('2026-09-30T16:00:00.000Z');
   const valid = {
-    purchasedAt: '2026-09-25T16:00:00.000Z',
+    purchasedAt: '2026-09-30T16:00:00.000Z',
     paymentStatus: 'paid',
     paymentMethod: 'Bank Transfer',
   };
 
   assert.equal(backend.isInvoiceEligiblePurchase_(valid, cutoffMs), true);
   assert.equal(backend.isInvoiceEligiblePurchase_({
-    ...valid, purchasedAt: '2026-09-25T15:59:59.999Z',
+    ...valid, purchasedAt: '2026-09-30T15:59:59.999Z',
   }, cutoffMs), false);
   assert.equal(backend.isInvoiceEligiblePurchase_({
     ...valid, paymentStatus: 'awaiting_verification',
@@ -3371,6 +3371,89 @@ test('invoice OB sync accepts only paid bank transfers at or after the Taipei cu
   assert.equal(backend.isInvoiceEligiblePurchase_({
     ...valid, paymentMethod: 'Cash',
   }, cutoffMs), false);
+});
+
+test('invoice dashboard settles pre-October OB drafts while preserving October and manual records', () => {
+  const fixture = createInvoiceSyncBackend();
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-september-ob', status: 'PENDING', sourceType: 'OB', version: 2,
+    purchasedAt: '2026-09-30T15:59:59.999Z',
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-september-legacy-ob', status: 'INVALID', sourceType: '', version: 6,
+    purchasedAt: '2026-09-28T01:00:00.000Z',
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-october-ob', status: 'PENDING', sourceType: 'OB', version: 3,
+    purchasedAt: '2026-09-30T16:00:00.000Z',
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-september-issued', status: 'ISSUED', sourceType: 'OB', version: 4,
+    purchasedAt: '2026-09-29T01:00:00.000Z', ecpayInvoiceNo: 'AB12345678',
+  });
+  addInvoiceDraft(fixture, {
+    invoiceId: 'invoice-september-manual', status: 'PENDING', sourceType: 'MANUAL', version: 5,
+    purchasedAt: '2026-09-29T01:00:00.000Z',
+  });
+  const session = fixture.backend.requireSession_(fixture.sessionToken);
+
+  const dashboard = fixture.backend.getInvoiceAdminDashboard_(session);
+
+  const queueById = new Map(dashboard.queue.map((row) => [row.invoiceId, row]));
+  assert.equal(queueById.get('invoice-september-ob').status, 'EXTERNAL_ISSUED');
+  assert.equal(queueById.get('invoice-september-ob').version, 3);
+  assert.match(queueById.get('invoice-september-ob').externalIssueNote, /9\/30.*歷史.*已開立/);
+  assert.equal(queueById.get('invoice-september-ob').externalIssuedBy, 'Ivy');
+  assert.equal(queueById.get('invoice-september-legacy-ob').status, 'EXTERNAL_ISSUED');
+  assert.equal(queueById.get('invoice-september-legacy-ob').version, 7);
+  assert.equal(queueById.get('invoice-october-ob').status, 'PENDING');
+  assert.equal(queueById.get('invoice-october-ob').version, 3);
+  assert.equal(queueById.get('invoice-september-issued').status, 'ISSUED');
+  assert.equal(queueById.get('invoice-september-issued').version, 4);
+  assert.equal(queueById.get('invoice-september-manual').status, 'PENDING');
+  assert.equal(queueById.get('invoice-september-manual').version, 5);
+  const audits = fixture.auditSheet.values.slice(-2);
+  assert.deepEqual(
+    audits.map((row) => row[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('invoiceId')]),
+    ['invoice-september-ob', 'invoice-september-legacy-ob'],
+  );
+  assert.equal(audits.every((row) => (
+    row[EXPECTED_INVOICE_AUDIT_HEADERS.indexOf('action')] === 'HISTORICAL_CUTOFF_SETTLED'
+  )), true);
+});
+
+test('invoice OB sync requests purchases from October first', () => {
+  const fixture = createInvoiceSyncBackend();
+  const calls = [];
+  const fetchImpl = (url) => {
+    calls.push(url);
+    return createObResponse(200, []);
+  };
+
+  const result = fixture.backend.syncInvoicePurchases_(fixture.sessionToken, { fetchImpl });
+
+  assert.equal(result.status, 'complete');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /date_from=2026-10-01(?:&|$)/);
+});
+
+test('invoice OB sync resets a cursor saved for the old September range', () => {
+  const fixture = createInvoiceSyncBackend();
+  fixture.settingsSheet.values.push([
+    'invoiceSyncCursor', JSON.stringify({ start: 100, itemIndex: 4 }), '系統', '2026-09-30 23:59:00',
+  ]);
+  const calls = [];
+  const fetchImpl = (url) => {
+    calls.push(url);
+    return createObResponse(200, []);
+  };
+
+  const result = fixture.backend.syncInvoicePurchases_(fixture.sessionToken, { fetchImpl });
+
+  assert.equal(result.status, 'complete');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /date_from=2026-10-01(?:&|$)/);
+  assert.match(calls[0], /start=0(?:&|$)/);
 });
 
 test('invoice OB sync normalizes detail data and groups one payment into multiple items', () => {
@@ -3523,13 +3606,13 @@ test('invoice OB sync saves a 429 cursor and resumes without duplicating the com
   const firstRun = createInvoiceSyncBackend();
   const listRows = [
     {
-      id: 801, purchasedAt: '2026-09-26T02:00:00Z', paymentStatus: 'paid',
+      id: 801, purchasedAt: '2026-10-01T02:00:00Z', paymentStatus: 'paid',
       paymentMethod: 'Bank Transfer', price: 2000,
       user: { id: 80, firstName: '同', lastName: '學', email: 'student@example.com' },
       pass: { id: 81, nameZhHant: '課卡 A' },
     },
     {
-      id: 802, purchasedAt: '2026-09-26T02:00:01Z', paymentStatus: 'paid',
+      id: 802, purchasedAt: '2026-10-01T02:00:01Z', paymentStatus: 'paid',
       paymentMethod: 'Bank Transfer', price: 1000,
       user: { id: 80, firstName: '同', lastName: '學', email: 'student@example.com' },
       pass: { id: 82, nameZhHant: '課卡 B' },
@@ -3551,7 +3634,9 @@ test('invoice OB sync saves a 429 cursor and resumes without duplicating the com
   assert.equal(firstRun.queueSheet.values.length, 2);
   assert.equal(firstRun.itemSheet.values.length, 2);
   const cursorRow = firstRun.settingsSheet.values.find((row) => row[0] === 'invoiceSyncCursor');
-  assert.deepEqual(JSON.parse(cursorRow[1]), { start: 0, itemIndex: 1 });
+  assert.deepEqual(JSON.parse(cursorRow[1]), {
+    dateFrom: '2026-10-01', start: 0, itemIndex: 1,
+  });
 
   const secondCalls = [];
   const secondFetch = (url) => {
@@ -3589,7 +3674,9 @@ test('invoice OB sync pauses on a plain-text 429 response instead of failing JSO
 
   assert.equal(result.status, 'paused');
   assert.equal(result.reason, 'rate_limited');
-  assert.deepEqual(JSON.parse(JSON.stringify(result.cursor)), { start: 0, itemIndex: 0 });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.cursor)), {
+    dateFrom: '2026-10-01', start: 0, itemIndex: 0,
+  });
 });
 
 test('invoice OB sync changes an issued purchase with an explicit refund signal to review only', () => {

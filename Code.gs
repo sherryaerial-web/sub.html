@@ -335,8 +335,8 @@ var CONFIG = {
   PAYROLL_NO_CONFIRM_STATUS: '無需確認',
   PAYROLL_FINALIZED_STATUS: '管理員已確認',
   PAYROLL_REVIEW_STATUS: '有異議',
-  INVOICE_SYNC_CUTOFF_ISO: '2026-09-25T16:00:00.000Z',
-  INVOICE_SYNC_DATE_FROM: '2026-09-26',
+  INVOICE_SYNC_CUTOFF_ISO: '2026-09-30T16:00:00.000Z',
+  INVOICE_SYNC_DATE_FROM: '2026-10-01',
   INVOICE_SYNC_CURSOR_SETTING: 'invoiceSyncCursor',
   INVOICE_SYNC_LAST_AT_SETTING: 'invoiceLastSyncAt',
   INVOICE_DEFAULT_MERCHANT_SETTING: 'invoiceDefaultMerchantProfile',
@@ -7790,15 +7790,20 @@ function fetchObUserPassDetail_(tokenValue, purchaseIdValue, fetchImpl) {
   return body;
 }
 
-function parseInvoiceSyncCursor_(value) {
+function parseInvoiceSyncCursor_(value, dateFromValue) {
+  var dateFrom = cleanText_(dateFromValue);
   try {
     var parsed = JSON.parse(cleanText_(value) || '{}');
+    if (!dateFrom || cleanText_(parsed.dateFrom) !== dateFrom) {
+      return { dateFrom: dateFrom, start: 0, itemIndex: 0 };
+    }
     return {
+      dateFrom: dateFrom,
       start: Math.max(0, Math.floor(Number(parsed.start) || 0)),
       itemIndex: Math.max(0, Math.floor(Number(parsed.itemIndex) || 0))
     };
   } catch (error) {
-    return { start: 0, itemIndex: 0 };
+    return { dateFrom: dateFrom, start: 0, itemIndex: 0 };
   }
 }
 
@@ -7810,22 +7815,37 @@ function syncInvoicePurchasesForActor_(actorValue, optionsValue) {
     var properties = PropertiesService.getScriptProperties();
     var token = cleanText_(properties.getProperty(CONFIG.API_TOKEN_PROPERTY));
     if (!token) throw new Error('尚未設定 Omcean API 權杖。');
+    var historicalSettlement = settleHistoricalInvoiceDraftsUnlocked_(
+      sheets,
+      new Date(CONFIG.INVOICE_SYNC_CUTOFF_ISO).getTime(),
+      actorValue
+    );
     var cursor = parseInvoiceSyncCursor_(
-      getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_SYNC_CURSOR_SETTING, '')
+      getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_SYNC_CURSOR_SETTING, ''),
+      CONFIG.INVOICE_SYNC_DATE_FROM
     );
     var maxRequests = Math.max(1, Math.min(
       CONFIG.INVOICE_SYNC_MAX_REQUESTS,
       Math.floor(Number(options.maxRequests) || CONFIG.INVOICE_SYNC_MAX_REQUESTS)
     ));
     var requestCount = 0;
-    var counters = { createdOrUpdated: 0, skipped: 0, refunds: 0 };
+    var counters = {
+      createdOrUpdated: 0,
+      skipped: 0,
+      refunds: 0,
+      historicalSettled: historicalSettlement.settled
+    };
     var actor = cleanText_(actorValue) || '系統同步';
     var defaultMerchantProfile = cleanText_(
       getInvoiceSettingUnlocked_(sheets.settings, CONFIG.INVOICE_DEFAULT_MERCHANT_SETTING, 'primary')
     ) || 'primary';
 
     function pause(reason, start, itemIndex, error) {
-      var savedCursor = { start: start, itemIndex: itemIndex };
+      var savedCursor = {
+        dateFrom: CONFIG.INVOICE_SYNC_DATE_FROM,
+        start: start,
+        itemIndex: itemIndex
+      };
       setInvoiceSettingUnlocked_(
         sheets.settings,
         CONFIG.INVOICE_SYNC_CURSOR_SETTING,
@@ -7907,7 +7927,7 @@ function syncInvoicePurchasesForActor_(actorValue, optionsValue) {
         setInvoiceSettingUnlocked_(
           sheets.settings,
           CONFIG.INVOICE_SYNC_CURSOR_SETTING,
-          JSON.stringify({ start: 0, itemIndex: 0 }),
+          JSON.stringify({ dateFrom: CONFIG.INVOICE_SYNC_DATE_FROM, start: 0, itemIndex: 0 }),
           actor
         );
         setInvoiceSettingUnlocked_(
@@ -7924,7 +7944,11 @@ function syncInvoicePurchasesForActor_(actorValue, optionsValue) {
         });
         return { status: 'complete', requestCount: requestCount, counters: counters };
       }
-      cursor = { start: cursor.start + page.length, itemIndex: 0 };
+      cursor = {
+        dateFrom: CONFIG.INVOICE_SYNC_DATE_FROM,
+        start: cursor.start + page.length,
+        itemIndex: 0
+      };
       setInvoiceSettingUnlocked_(
         sheets.settings,
         CONFIG.INVOICE_SYNC_CURSOR_SETTING,
@@ -8385,11 +8409,64 @@ function recoverStaleIssuingInvoicesUnlocked_(sheetsValue, nowValue, actorValue)
   return { recovered: recovered, cutoff: cutoff };
 }
 
+function settleHistoricalInvoiceDraftsUnlocked_(sheetsValue, cutoffMsValue, actorValue) {
+  var sheets = sheetsValue;
+  var cutoffMs = Number(cutoffMsValue);
+  if (!sheets || !sheets.queue || !isFinite(cutoffMs)) {
+    return { settled: 0 };
+  }
+  var actor = cleanText_(actorValue) || '系統歷史切分';
+  var eligibleStatuses = [
+    INVOICE_STATUSES.PENDING,
+    INVOICE_STATUSES.INVALID,
+    INVOICE_STATUSES.FAILED,
+    INVOICE_STATUSES.UNCERTAIN
+  ];
+  var note = '9/30（含）以前為歷史期間，確認已開立（既有綠界流程）';
+  var settled = 0;
+  invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE).forEach(function(row) {
+    var sourceType = cleanText_(row.sourceType);
+    var purchasedAtMs = new Date(row.purchasedAt).getTime();
+    if (['', 'OB'].indexOf(sourceType) === -1 ||
+        eligibleStatuses.indexOf(cleanText_(row.status)) === -1 ||
+        !isFinite(purchasedAtMs) || purchasedAtMs >= cutoffMs) {
+      return;
+    }
+    var nextVersion = (Number(row.version) || 0) + 1;
+    var now = formatInvoiceTimestamp_(new Date());
+    updateInvoiceObjectRow_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE, row.rowNumber, {
+      status: INVOICE_STATUSES.EXTERNAL_ISSUED,
+      errorCode: '',
+      errorMessage: '',
+      externalIssueNote: note,
+      externalIssuedBy: actor,
+      updatedAt: now,
+      version: nextVersion
+    });
+    appendInvoiceAuditUnlocked_(sheets.audit, {
+      invoiceId: row.invoiceId,
+      actor: actor,
+      action: 'HISTORICAL_CUTOFF_SETTLED',
+      before: { status: row.status, version: row.version },
+      after: { status: INVOICE_STATUSES.EXTERNAL_ISSUED, version: nextVersion },
+      result: 'historical_already_issued',
+      detail: note
+    });
+    settled += 1;
+  });
+  return { settled: settled };
+}
+
 function getInvoiceAdminDashboard_(session) {
   var actor = assertCapabilitySession_(session, 'invoice_admin');
   return withScriptLock_(function() {
     var sheets = ensureInvoiceSheets_(SpreadsheetApp.getActiveSpreadsheet());
     recoverStaleIssuingInvoicesUnlocked_(sheets, new Date(), actor);
+    settleHistoricalInvoiceDraftsUnlocked_(
+      sheets,
+      new Date(CONFIG.INVOICE_SYNC_CUTOFF_ISO).getTime(),
+      actor
+    );
     var queue = invoiceSheetRows_(sheets.queue, SHEET_HEADERS.INVOICE_QUEUE)
       .map(publicInvoiceRow_)
       .sort(function(left, right) {

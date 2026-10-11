@@ -9776,6 +9776,7 @@ function getCourseCategory_(courseName) {
   if (/舞綢/.test(name)) return '舞綢';
   if (/綢吊/.test(name)) return '綢吊';
   if (/鞦韆/.test(name)) return '鞦韆';
+  if (/飛天管/.test(name)) return '飛天管';
   if (/瑜伽|皮拉提斯|現代小品|柔軟度|柔軟開發|後彎|開髖/.test(name)) return '地板課程';
   return '其他';
 }
@@ -12730,6 +12731,27 @@ function calculatePayrollLinesForCourse_(course, ruleValues) {
       amount: Math.round(teacherRules[0].amount),
       ruleType: '老師專屬薪項',
       ruleDetail: teacherRules[0].courseKeyword || '老師固定時薪'
+    }];
+  }
+  var teacherTierRules = rules.filter(function(rule) {
+    return rule.teacherName === teacherName && rule.billingType === '人數階梯' &&
+      (!rule.courseKeyword || courseName.indexOf(rule.courseKeyword) !== -1);
+  });
+  if (teacherTierRules.length) {
+    var keywordLength = Math.max.apply(null, teacherTierRules.map(function(rule) {
+      return rule.courseKeyword.length;
+    }));
+    var matchingTeacherTiers = teacherTierRules.filter(function(rule) {
+      return rule.courseKeyword.length === keywordLength && rule.threshold === attendance;
+    });
+    if (matchingTeacherTiers.length !== 1) {
+      throw new Error(teacherName + ' 出席 ' + attendance + ' 人的專屬人數階梯薪項缺少或重複，請核對薪項設定。');
+    }
+    return [{
+      teacherName: teacherName,
+      amount: Math.round(matchingTeacherTiers[0].amount),
+      ruleType: '老師專屬人數階梯',
+      ruleDetail: (matchingTeacherTiers[0].courseKeyword || '一般課') + '／' + attendance + ' 人'
     }];
   }
   var tierRules = rules.filter(function(rule) {

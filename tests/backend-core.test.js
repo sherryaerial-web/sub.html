@@ -9925,6 +9925,53 @@ test('payroll summary includes special lines in bonus subtotal before fixed addi
   });
 });
 
+test('teacher-specific attendance tiers pay Shelly without changing other teachers or courses', () => {
+  const backend = loadBackend();
+  const rules = [
+    ['Shelly', '飛天管', '人數階梯', 2, 800],
+    ['Shelly', '飛天管', '人數階梯', 3, 900],
+    ['Shelly', '飛天管', '人數階梯', 4, 1100],
+    ['預設值', '', '人數階梯', 2, 700],
+    ['預設值', '', '人數階梯', 3, 800],
+    ['預設值', '', '人數階梯', 4, 900],
+    ['預設值', '', '人數階梯', 5, 1000],
+  ].map(([teacherName, courseKeyword, billingType, threshold, amount]) =>
+    ({ teacherName, courseKeyword, billingType, threshold, amount }));
+  const course = { calendarId: 'shelly-pole', courseName: 'B－飛天管 Lv.0',
+    instructors: [{ name: 'Shelly' }], attendanceCount: 2 };
+  [800, 900, 1100].forEach((amount, index) => {
+    const result = backend.calculatePayrollLinesForCourse_({ ...course, attendanceCount: index + 2 }, rules);
+    assert.equal(result[0].amount, amount);
+    assert.equal(result[0].ruleType, '老師專屬人數階梯');
+  });
+  [0, 1, 5].forEach((count) => assert.throws(() =>
+    backend.calculatePayrollLinesForCourse_({ ...course, attendanceCount: count }, rules), /Shelly.*人數階梯/));
+  assert.equal(backend.calculatePayrollLinesForCourse_({ ...course, instructors: [{ name: 'Sue' }] }, rules)[0].amount, 700);
+  assert.equal(backend.calculatePayrollLinesForCourse_({ ...course, courseName: 'B－空環 Lv.0' }, rules)[0].amount, 700);
+  assert.equal(backend.calculatePayrollLinesForCourse_({ ...course, courseName: '飛天管 特別課', courseIncome: 3000 }, rules)[0].amount, 1800);
+});
+
+test('teacher-specific attendance tiers reject duplicates and prefer the most specific course keyword', () => {
+  const backend = loadBackend();
+  const course = { calendarId: 'pole-tier', courseName: 'B－飛天管 Lv.0',
+    instructors: [{ name: 'Shelly' }], attendanceCount: 2 };
+  const rules = [['Shelly', '', '人數階梯', 2, 700], ['Shelly', '飛天管', '人數階梯', 2, 800]]
+    .map(([teacherName, courseKeyword, billingType, threshold, amount]) =>
+      ({ teacherName, courseKeyword, billingType, threshold, amount }));
+  assert.equal(backend.calculatePayrollLinesForCourse_(course, rules)[0].amount, 800);
+  assert.throws(() => backend.calculatePayrollLinesForCourse_(course,
+    rules.concat([{ teacherName: 'Shelly', courseKeyword: '飛天管', billingType: '人數階梯', threshold: 2, amount: 900 }])), /Shelly.*人數階梯/);
+});
+
+test('aerial pole capability does not grant Shelly other course categories', () => {
+  const backend = loadBackendWithSpreadsheet(createSpreadsheetFixture([]));
+  backend.findAccount_ = (name) => name === 'Shelly' ? { capabilities: '飛天管' } : null;
+  assert.equal(backend.getCourseCategory_('B－飛天管 Lv.0'), '飛天管');
+  assert.equal(backend.teacherCanTeachCategory_('Shelly', backend.getCourseCategory_('飛天管')), true);
+  assert.equal(backend.teacherCanTeachCategory_('Shelly', backend.getCourseCategory_('空環')), false);
+  assert.equal(backend.teacherCanTeachCategory_('Shelly', backend.getCourseCategory_('原始瑜伽')), false);
+});
+
 test('payroll structure creates append-only operational sheets idempotently', () => {
   const spreadsheet = createSpreadsheetFixture([]);
   const backend = loadBackendWithSpreadsheet(spreadsheet);

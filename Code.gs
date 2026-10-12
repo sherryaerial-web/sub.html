@@ -4026,6 +4026,7 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
       teacherName: cleanText_(row && row[3]),
       interval: normalizePracticeInterval_(date, startTime, endTime)
     });
+    if (row[10] === 'ob') roomsByName[room].blocks[roomsByName[room].blocks.length - 1].timingSource = 'ob';
   });
 
   var participantsByBooking = {};
@@ -4130,7 +4131,7 @@ function buildPracticeDayView_(recordsValue, courseRowsValue, dateValue, student
 }
 
 function getPracticeDayViewCacheKey_(dateValue) {
-  return 'practice_day_view_v3_' + cleanText_(dateValue).replace(/\D/g, '');
+  return 'practice_day_view_v4_' + cleanText_(dateValue).replace(/\D/g, '');
 }
 
 function invalidatePracticeDayViewCache_(dateValues) {
@@ -4159,6 +4160,9 @@ function buildSharedPracticeDayView_(dateValue) {
     courseRows = getSheetValuesWithExpectedHeaders_(courseSheet, SHEET_HEADERS.COURSE_LIST).slice(1);
     courseWarning = 'OB 即時課表讀取失敗，暫以最後同步課表顯示；候補狀態會由排程或管理員更新。';
     console.warn(courseWarning, error);
+  }
+  if (courseSource === 'snapshot') {
+    courseRows = applyRecordedRentalTimingToCourseRows_(courseRows, getRentalRequestsIfAvailable_(ss));
   }
   var studentGroups = [];
   if (ss.getSheetByName(SHEETS.STUDENT_PRACTICE_QUALIFICATIONS)) {
@@ -4225,12 +4229,16 @@ function annotateRentalPracticeDayView_(viewValue, teacherNameValue, requestsVal
       return calendarId && cleanText_(item.calendarId) === calendarId;
     })[0];
     if (!block) {
+      var restoredInterval = resolveRecordedRentalInterval_({
+        date: request.date, room: roomName, startTime: request.startTime, calendarId: calendarId
+      }, requestsValue);
+      if (!restoredInterval) return;
       block = {
         id: 'ob:' + (calendarId || cleanText_(request.requestId)),
         type: 'rental', calendarId: calendarId,
         date: cleanText_(request.date).replace(/-/g, '/'), room: roomName,
-        startTime: cleanText_(request.startTime), endTime: cleanText_(request.endTime),
-        interval: normalizePracticeInterval_(request.date, request.startTime, request.endTime)
+        startTime: restoredInterval.startTime, endTime: restoredInterval.endTime,
+        interval: restoredInterval
       };
       room.blocks.push(block);
     }
@@ -4243,9 +4251,26 @@ function annotateRentalPracticeDayView_(viewValue, teacherNameValue, requestsVal
     block.isMine = block.rentalOwner === teacherName;
     block.label = block.rentalOwner + '的場地租借';
     block.className = cleanText_(request.className);
+    if (block.timingSource !== 'ob') {
+      var rentalInterval = resolveRecordedRentalInterval_(block, requestsValue);
+      if (rentalInterval) {
+        block.startTime = rentalInterval.startTime;
+        block.endTime = rentalInterval.endTime;
+        block.interval = rentalInterval;
+      }
+    }
     block.isPast = isPracticeIntervalPast_(block.date, block.endTime, currentTimeMs_());
   });
   (view.rooms || []).forEach(function(room) {
+    room.blocks.forEach(function(reservation) {
+      if (reservation.type !== 'series-reservation') return;
+      reservation.hasConflict = room.blocks.some(function(other) {
+        return other !== reservation && practiceIntervalsConflict_(reservation.interval, other.interval, 15);
+      });
+      reservation.status = reservation.reservationMode === 'waitlist'
+        ? '候補循環預留，待課表確認' : '循環預留，待課表確認';
+      if (reservation.hasConflict) reservation.status += '（有行程重疊，待核對）';
+    });
     room.blocks.sort(function(left, right) {
       return [left.startTime, left.endTime, left.type, left.id].join('|')
         .localeCompare([right.startTime, right.endTime, right.type, right.id].join('|'));
@@ -4289,7 +4314,7 @@ function getPracticeDay_(session, dateValue) {
 function getPracticeCurrentObRowsForDayView_(dateValue, forceRefreshValue) {
   var date = cleanText_(dateValue).replace(/-/g, '/');
   parsePracticeDateTime_(date, '00:00');
-  var cacheKey = 'practice_ob_day_v1_' + date.replace(/\D/g, '');
+  var cacheKey = 'practice_ob_day_v2_' + date.replace(/\D/g, '');
   if (forceRefreshValue === true) removeCachedValue_(cacheKey);
   var cachedRows = getCachedJsonValue_(cacheKey);
   if (Array.isArray(cachedRows)) return cachedRows;
@@ -6500,6 +6525,57 @@ function expandPracticeSeries_(seriesIdValue, throughDateValue) {
   });
 }
 
+function getPracticeCalendarTiming_(rawValue) {
+  var raw = rawValue || {};
+  var endValue = cleanText_(raw.classEndTime);
+  if (endValue) {
+    var startMs = new Date(raw.classTime || raw.startAt || raw.startTime).getTime();
+    var endMs = new Date(endValue).getTime();
+    if (!isFinite(startMs) || !isFinite(endMs) || endMs <= startMs) {
+      throw new Error('OB 課程結束時間無效，請核對實際起訖時間。');
+    }
+    return { minutes: Math.ceil((endMs - startMs) / 60000), source: 'ob' };
+  }
+  var duration = Number((raw['class'] || raw.course || {}).duration);
+  return { minutes: isFinite(duration) && duration > 0 ? duration : '', source: 'class' };
+}
+
+function resolveRecordedRentalInterval_(sourceValue, requestsValue) {
+  var source = sourceValue || {};
+  var calendarId = cleanText_(source.calendarId);
+  if (!calendarId) return null;
+  var matches = (requestsValue || []).filter(function(request) {
+    return cleanText_(request.status) === RENTAL_STATUS.ACTIVE &&
+      cleanText_(request.obCalendarId) === calendarId &&
+      cleanText_(request.date).replace(/-/g, '/') === cleanText_(source.date).replace(/-/g, '/') &&
+      cleanText_(request.room).toUpperCase() === cleanText_(source.room).toUpperCase() &&
+      cleanText_(request.startTime) === cleanText_(source.startTime);
+  });
+  if (!matches.length) return null;
+  var intervals = matches.map(function(request) {
+    return normalizePracticeInterval_(request.date, request.startTime, request.endTime);
+  });
+  if (intervals.some(function(interval) { return interval.endMs !== intervals[0].endMs; })) {
+    throw new Error('已成立場租有不一致的結束時間，請核對租借紀錄。');
+  }
+  return intervals[0];
+}
+
+function applyRecordedRentalTimingToCourseRows_(rowsValue, requestsValue) {
+  return (rowsValue || []).map(function(row) {
+    if (row[10] === 'ob' || !/場地租借|場租/.test(cleanText_(row[2]))) return row;
+    var interval = resolveRecordedRentalInterval_({
+      date: formatMyDate(row[0]), room: getCourseRoom_(row[2]),
+      startTime: formatMyTime(row[1]), calendarId: cleanText_(row[4])
+    }, requestsValue);
+    if (!interval) return row;
+    var corrected = row.slice();
+    corrected[9] = interval.durationMinutes;
+    corrected[10] = 'rental';
+    return corrected;
+  });
+}
+
 function getPracticeCurrentObRows_(dateFromValue, dateToValue) {
   var dateFrom = cleanText_(dateFromValue).replace(/\//g, '-');
   var dateTo = cleanText_(dateToValue).replace(/\//g, '-');
@@ -6520,6 +6596,8 @@ function getPracticeCurrentObRows_(dateFromValue, dateToValue) {
     if (!item) throw new Error('Omcean API 第 ' + (index + 1) + ' 筆課程資料不完整。');
     if (seen[item.calendarId]) return;
     seen[item.calendarId] = true;
+    var timing = getPracticeCalendarTiming_(rawItem);
+    // Duration and timing source are transient fields; the nine Sheet columns stay unchanged.
     rows.push([
       item.date,
       item.time,
@@ -6530,9 +6608,15 @@ function getPracticeCurrentObRows_(dateFromValue, dateToValue) {
       item.instructorId,
       item.isSubstitute,
       getTimestamp_(),
-      Number((rawItem['class'] || rawItem.course || {}).duration) || ''
+      timing.minutes,
+      timing.source
     ]);
   });
+  if (rows.some(function(row) { return row[10] !== 'ob' && /場地租借|場租/.test(cleanText_(row[2])); })) {
+    rows = applyRecordedRentalTimingToCourseRows_(
+      rows, getRentalRequestsIfAvailable_(SpreadsheetApp.getActiveSpreadsheet())
+    );
+  }
   return rows;
 }
 
@@ -9117,6 +9201,9 @@ function doPost(e) {
     }
 
     var handlers = {
+      getActivityPilotObPage: function() {
+        return getActivityPilotObPage_(session, parameters);
+      },
       getSession: function() {
         return {
           teacherName: session.teacherName,
@@ -10248,6 +10335,54 @@ function getObCancelCalendarPath_() {
     throw new Error('OMCEAN_CANCEL_CALENDAR_PATH 格式不正確。');
   }
   return path;
+}
+
+// Two-reviewer, read-only pilot bridge. Never accepts an upstream method or URL.
+function getActivityPilotObPage_(session, parameters) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  if (['冠蓉', 'Tako'].indexOf(session.teacherName) < 0) throw new Error('無測試權限。');
+  var path = String(parameters.path || ''), q;
+  try { q = JSON.parse(parameters.query || '{}'); } catch (_) { throw new Error('查詢格式錯誤。'); }
+  if (!q || typeof q !== 'object' || Array.isArray(q)) throw new Error('查詢格式錯誤。');
+  var fields;
+  if (path === '/v1/users') fields = ['email', 'start'];
+  else if (path === '/v1/user-passes') fields = ['user_id', 'start'];
+  else if (path === '/v1/reservations') fields = ['email', 'date_from', 'date_to', 'start'];
+  else if (/^\/v1\/(users|calendar)\/[1-9][0-9]{0,14}$/.test(path)) fields = [];
+  else throw new Error('不支援的唯讀查詢。');
+  if (Object.keys(q).some(function(k) { return fields.indexOf(k) < 0; })) throw new Error('不支援的查詢欄位。');
+  if (fields.indexOf('email') >= 0 && (typeof q.email !== 'string' || q.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(q.email))) throw new Error('需要完整 Email。');
+  if (fields.indexOf('user_id') >= 0 && !/^[1-9][0-9]{0,14}$/.test(String(q.user_id || ''))) throw new Error('會員識別錯誤。');
+  if (fields.indexOf('start') >= 0) {
+    var start = Number(q.start || 0);
+    if (!Number.isInteger(start) || start < 0 || start > 900 || start % 100) throw new Error('分頁超出範圍。');
+    q.start = start;
+  }
+  if (path === '/v1/reservations') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(q.date_from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(q.date_to || '')) throw new Error('需要日期範圍。');
+    var span = Date.parse(q.date_to) - Date.parse(q.date_from);
+    if (!Number.isFinite(span) || span <= 0 || span > 366 * 86400000) throw new Error('日期範圍錯誤。');
+  }
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!token) throw new Error('唯讀服務未設定。');
+  var query = Object.keys(q).map(function(k) { return encodeURIComponent(k) + '=' + encodeURIComponent(q[k]); }).join('&');
+  var response = UrlFetchApp.fetch(CONFIG.API_BASE_URL + path + (query ? '?' + query : ''), {
+    method: 'get', followRedirects: false, muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
+  });
+  if (response.getResponseCode() !== 200) throw new Error('OB 唯讀查詢未完成。');
+  var text = response.getContentText();
+  if (text.length > 1048576) throw new Error('OB 回應超出範圍。');
+  var data = JSON.parse(text);
+  if (fields.length && (!Array.isArray(data) || data.length > 100)) throw new Error('OB 分頁格式不符。');
+  function pick(row) {
+    if (!row || typeof row !== 'object') throw new Error('OB 回應格式不符。');
+    var out = {}, allowed = path.indexOf('/v1/users') === 0 ? ['id', 'email'] : path === '/v1/user-passes' ? ['id', 'type', 'visits', 'purchasedAt', 'paymentStatus', 'price', 'paymentMethod'] : path === '/v1/reservations' ? ['id', 'dependencyId', 'calendarId', 'classTime'] : ['id', 'classTime', 'cancelled', 'status'];
+    allowed.forEach(function(k) { if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = row[k]; });
+    ['user', 'pass', 'classRoom'].forEach(function(k) { if (row[k] && typeof row[k] === 'object') out[k] = { id: row[k].id }; });
+    return out;
+  }
+  return Array.isArray(data) ? data.map(pick) : pick(data);
 }
 
 function cancelObCalendarItem_(token, calendarIdValue, reasonValue, onlyEmptyValue) {
@@ -19056,12 +19191,38 @@ function requestLeaveCancellation_(session, substituteId, reason) {
   });
 }
 
+function notifyClaimWithdrawalAdminsSafely_(noticeValue) {
+  var notice = noticeValue || {};
+  try {
+    var activeAdmins = getActiveCourseAdminNames_();
+    var recipients = ['冠蓉', 'Tako'].filter(function(name) {
+      return activeAdmins.indexOf(name) !== -1;
+    });
+    if (!recipients.length) throw new Error('找不到啟用中的退出代課通知管理員。');
+    var content = [
+      cleanText_(notice.teacherName) + '提出退出代課申請',
+      cleanText_(notice.date) + ' ' + cleanText_(notice.time),
+      cleanText_(notice.courseName),
+      '退出原因：' + cleanText_(notice.reason)
+    ].join('\n').slice(0, 500);
+    return sendManagedNotification_(
+      notice.actor, '退出代課申請', notice.substituteId, 'selected', recipients,
+      '待處理：退出代課申請', content, notice.eventKey,
+      buildAppViewUrl_('admin', 'changeRequests')
+    );
+  } catch (error) {
+    console.warn('退出代課申請已保留，但管理員通知失敗。', error);
+    return { attempted: false, accepted: false, error: getErrorMessage_(error) };
+  }
+}
+
 function requestClaimWithdrawal_(session, substituteId, reason) {
   var teacher = getSessionTeacherName_(session);
   var auditActor = getSessionAuditActor_(session);
   var id = requireSubstituteId_(substituteId);
   var requestReason = requireChangeReason_(reason);
-  return withScriptLock_(function() {
+  var notice;
+  var result = withScriptLock_(function() {
     var record = getLeaveRecordByIdUnlocked_(id);
     if (cleanText_(record.row[5]) !== '已領取' || cleanText_(record.row[6]) !== teacher) {
       throw new Error('只有目前的代課老師可以申請退出。');
@@ -19069,6 +19230,12 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
     if (cleanText_(record.row[18]) === '申請退出中') throw new Error('退出申請已送出，請等待處理。');
     if (cleanText_(record.row[18]) === '申請取消中') throw new Error('原老師已申請取消，請等待處理。');
 
+    notice = {
+      actor: auditActor, teacherName: teacher, substituteId: id,
+      date: formatMyDate(record.row[2]), time: formatMyTime(record.row[25]) || formatMyTime(record.row[3]),
+      courseName: cleanText_(record.row[12]) || cleanText_(record.row[4]), reason: requestReason,
+      eventKey: 'claim_withdrawal_request_' + id + '_' + Utilities.getUuid()
+    };
     var before = cleanText_(record.row[18]);
     return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
       record.sheet.getRange(record.rowNumber, 19).setValue('申請退出中');
@@ -19083,6 +19250,8 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
       return { substituteId: id, status: '申請退出中' };
     });
   });
+  notifyClaimWithdrawalAdminsSafely_(notice);
+  return result;
 }
 
 function getOwnSpecialRequestByGroupIdUnlocked_(specialGroupId) {

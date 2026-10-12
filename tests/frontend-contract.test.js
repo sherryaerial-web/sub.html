@@ -3648,6 +3648,13 @@ test('admin invitation rounds keep the fixed teaching roster and invited positio
   assert.equal(rounds.length, 8);
   assert.equal(rounds[0].label, '第 1 輪');
   assert.deepEqual(rounds[0].teachers.map((teacher) => teacher.name), roster.slice(0, 5));
+  assert.deepEqual(rounds[2].teachers.map((teacher) => teacher.name),
+    ['Vivi', 'XUAN', '小mo(子涵）', '小琪', 'Vicky Lee']);
+  assert.deepEqual(rounds.slice(3, 6).flatMap((round) => round.teachers.map((teacher) => teacher.name)),
+    ['萱', 'Chloe Lee', '芮錤 77', '巧', 'Carrie🐟',
+      '嗨底 Heidi', '壹壹', 'wen', 'Chin', 'Melody Wang',
+      'Lily Yellow', '姝姝', '妙妙 簡', '寧寧', 'Josty Lin']);
+  assert.equal(rounds.flatMap((round) => round.teachers).filter((teacher) => teacher.name === 'XUAN').length, 1);
   assert.deepEqual(rounds[6].teachers.map((teacher) => teacher.name), ['番茄🍅', 'Sue']);
   assert.deepEqual(rounds[7].teachers.map((teacher) => teacher.name), ['狗狗 陳', '新老師']);
   assert.equal(rounds[7].label, '其他老師');

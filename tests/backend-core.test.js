@@ -7587,6 +7587,85 @@ test('withdraw request requires the current substitute and a reason', () => {
   assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-claimed')[18], '申請退出中');
 });
 
+function createWithdrawalNoticeBackend() {
+  const fixture = createInvitationBackend();
+  fixture.accountSheet.values.push(
+    createAccount(fixture.backend, '冠蓉', '1111', { role: '管理員' }).concat('', 'course_admin'),
+    createAccount(fixture.backend, 'Tako', '2222').concat('空環', 'course_admin'),
+    createAccount(fixture.backend, '其他管理員', '3333', { role: '管理員' }).concat('', 'course_admin')
+  );
+  return fixture;
+}
+
+test('withdraw request notifies only Kuan and Tako after commit and leaves the course claimed', () => {
+  const f = createWithdrawalNoticeBackend();
+  const pushes = [];
+  f.backend.sendPushNotificationSafely_ = (names, message) => {
+    assert.equal(f.services.__lockState.depth, 0);
+    assert.equal(f.leaveSheet.values.find(r => r[9] === 'leave-claimed')[18], '申請退出中');
+    pushes.push({ names: Array.from(names), message });
+    return { attempted: true, accepted: true, delivered: 2, error: '' };
+  };
+  assert.throws(() => f.backend.requestClaimWithdrawal_(f.teacherASession, 'leave-claimed', '有事'), /目前的代課老師/);
+  assert.throws(() => f.backend.requestClaimWithdrawal_(f.teacherBSession, 'leave-claimed', ''), /原因/);
+  assert.equal(pushes.length, 0);
+  const result = f.backend.requestClaimWithdrawal_(f.teacherBSession, 'leave-claimed', '改特別課');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { substituteId: 'leave-claimed', status: '申請退出中' });
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(pushes[0].names, ['冠蓉', 'Tako']);
+  assert.match(pushes[0].message.heading, /退出代課/);
+  assert.match(pushes[0].message.content, /老師乙.*退出代課/);
+  ['2026/08/12', '12:00', '空環 Lv.1', '改特別課'].forEach(value => assert.ok(pushes[0].message.content.includes(value)));
+  assert.match(pushes[0].message.url, /view=admin&tab=changeRequests/);
+  const inbox = f.spreadsheet.getSheetByName('通知收件人');
+  assert.deepEqual(inbox.values.slice(1).map(r => r[2]), ['冠蓉', 'Tako']);
+  const row = f.leaveSheet.values.find(r => r[9] === 'leave-claimed');
+  assert.equal(row[5], '已領取');
+  assert.equal(row[6], '老師乙');
+  assert.throws(() => f.backend.requestClaimWithdrawal_(f.teacherBSession, 'leave-claimed', '再按一次'), /退出申請已送出/);
+  assert.equal(pushes.length, 1);
+  assert.equal(inbox.values.length, 3);
+});
+
+test('withdraw notification retains inbox on push failure and preserves successful application on notification failure', () => {
+  const f = createWithdrawalNoticeBackend();
+  f.backend.console = { ...console, warn() {} };
+  f.backend.sendPushNotificationSafely_ = () => { throw Error('injected push outage'); };
+  const reason = '臨時無法上課'.repeat(100);
+  const result = f.backend.requestClaimWithdrawal_(f.teacherBSession, 'leave-claimed', reason);
+  assert.equal(result.status, '申請退出中');
+  assert.equal(f.leaveSheet.values.find(r => r[9] === 'leave-claimed')[18], '申請退出中');
+  assert.deepEqual(f.spreadsheet.getSheetByName('通知收件人').values.slice(1).map(r => r[2]), ['冠蓉', 'Tako']);
+  assert.ok(f.spreadsheet.getSheetByName('通知訊息').values[1][4].length <= 500);
+  assert.ok(f.auditSheet.values.some(r => r[2] === '申請退出代課' && r[6] === reason));
+  assert.ok(f.auditSheet.values.some(r => r[2] === '推播通知：退出代課申請' && r[5] === '失敗'));
+  const other = createWithdrawalNoticeBackend();
+  other.backend.console = { ...console, warn() {} };
+  other.backend.sendManagedNotification_ = () => { throw Error('injected notification outage'); };
+  assert.equal(other.backend.requestClaimWithdrawal_(other.teacherBSession, 'leave-claimed', '行程衝突').status, '申請退出中');
+});
+
+test('withdraw notification issues a fresh event after rejection and does not notify before failed writes', () => {
+  const f = createWithdrawalNoticeBackend();
+  const events = [];
+  f.backend.sendPushNotificationSafely_ = (names, message) => {
+    if (Array.from(names).includes('冠蓉')) events.push(message.eventKey);
+    return { attempted: true, accepted: true, error: '' };
+  };
+  f.backend.requestClaimWithdrawal_(f.teacherBSession, 'leave-claimed', '第一次申請');
+  f.backend.resolveChangeRequest_(f.adminSession, 'leave-claimed', 'reject', '請再核對');
+  f.backend.requestClaimWithdrawal_(f.teacherBSession, 'leave-claimed', '重新申請');
+  assert.equal(events.length, 2);
+  assert.notEqual(events[0], events[1]);
+  const failed = createWithdrawalNoticeBackend();
+  let attempts = 0;
+  failed.backend.sendManagedNotification_ = () => { attempts++; };
+  failed.backend.runStateTransitionUnlocked_ = () => { throw Error('injected write failure'); };
+  assert.throws(() => failed.backend.requestClaimWithdrawal_(failed.teacherBSession, 'leave-claimed', '行程'), /write failure/);
+  assert.equal(attempts, 0);
+  assert.equal(failed.leaveSheet.values.find(r => r[9] === 'leave-claimed')[18] || '', '');
+});
+
 test('admin-approved withdrawal immediately reopens the course without OB reconciliation', () => {
   const {
     backend,
@@ -12505,6 +12584,174 @@ test('rental day annotation marks the owner and immediately restores a missing O
   assert.equal(view.rooms[1].blocks[0].calendarId, 'ob-rental-2');
   assert.equal(view.rooms[1].blocks[0].isMine, false);
   assert.equal(view.rooms[1].blocks[0].seriesId, 'series-1');
+});
+
+test('OB actual rental end times drive all seven XUAN cards and occupied intervals', () => {
+  const auth = createAuthServices();
+  auth.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const backend = loadBackend({ PropertiesService: auth.PropertiesService });
+  const examples = [
+    ['2026/10/01', '12:30', '14:00', '55005'], ['2026/10/08', '12:30', '14:00', '55007'],
+    ['2026/10/15', '12:30', '14:00', '55009'], ['2026/10/22', '12:30', '14:00', '55011'],
+    ['2026/10/05', '16:00', '17:30', '55006'], ['2026/10/12', '16:00', '17:30', '55008'],
+    ['2026/10/19', '16:00', '17:30', '55010'],
+  ];
+  backend.fetchCalendarPages_ = () => examples.map(([date, start, end, id]) => ({
+    id, classTime: date.replaceAll('/', '-') + 'T' + start + ':00+08:00',
+    classEndTime: date.replaceAll('/', '-') + 'T' + end + ':00+08:00',
+    class: { id: 242, nameZhHant: 'D－場地租借', duration: 60 },
+    instructors: [{ id: 73, firstName: 'XUAN' }],
+  }));
+  const rows = backend.getPracticeCurrentObRows_('2026/10/01', '2026/10/22');
+  assert.equal(rows.length, 7);
+  examples.forEach(([date, start, end, id], i) => {
+    assert.equal(rows[i][9], 90);
+    const block = backend.buildPracticeDayView_({}, rows, date).rooms[3].blocks[0];
+    assert.equal(block.calendarId, id);
+    assert.equal(block.endTime, end);
+    assert.equal(block.interval.durationMinutes, 90);
+    const lastHalfHour = backend.minutesToTimeText_(backend.timeTextToMinutes_(end) - 20);
+    assert.equal(backend.findPracticeConflictsUnlocked_({ date, room: 'D', startTime: lastHalfHour,
+      endTime: backend.minutesToTimeText_(backend.timeTextToMinutes_(end) + 40) }, {}, [rows[i]]).length, 1);
+    const rental = backend.analyzeRentalConflicts_({ date, room: 'D', startTime: lastHalfHour,
+      endTime: backend.minutesToTimeText_(backend.timeTextToMinutes_(end) + 40), instructorId: 'other' }, [rows[i]], {}, {});
+    assert.equal(rental.upperConflicts.length, 1);
+    assert.equal(rental.upperConflicts[0].endTime, end);
+  });
+});
+
+test('missing OB rental end times use only matching active recorded rentals and retain sixty-minute bookings', () => {
+  const auth = createAuthServices();
+  auth.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const backend = loadBackend({ PropertiesService: auth.PropertiesService,
+    SpreadsheetApp: { getActiveSpreadsheet: () => ({}) } });
+  const raw = [
+    ['owned-90', '12:30', 'D－場地租借'], ['owned-60', '16:00', 'D－場地租借'],
+    ['cancelled', '18:00', 'D－場地租借'], ['wrong-date', '19:00', 'D－場地租借'],
+    ['normal-course', '20:00', 'D－空瑜'],
+  ];
+  backend.fetchCalendarPages_ = () => raw.map(([id, start, name]) => ({
+    id, classTime: '2026-10-15T' + start + ':00+08:00', classEndTime: null,
+    class: { id: 242, nameZhHant: name, duration: 60 }, instructors: [{ id: 73, firstName: 'XUAN' }],
+  }));
+  backend.getRentalRequestsIfAvailable_ = () => [
+    { status: '已成立', obCalendarId: 'owned-90', date: '2026/10/15', room: 'D', startTime: '12:30', endTime: '14:00' },
+    { status: '已成立', obCalendarId: 'owned-60', date: '2026/10/15', room: 'D', startTime: '16:00', endTime: '17:00' },
+    { status: '已取消', obCalendarId: 'cancelled', date: '2026/10/15', room: 'D', startTime: '18:00', endTime: '19:30' },
+    { status: '已成立', obCalendarId: 'wrong-date', date: '2026/10/16', room: 'D', startTime: '19:00', endTime: '20:30' },
+  ];
+  assert.deepEqual(Array.from(backend.getPracticeCurrentObRows_('2026/10/15', '2026/10/15'), r => r[9]),
+    [90, 60, 60, 60, 60]);
+});
+
+test('rental annotation repairs snapshot times and intervals without overwriting verified OB timing', () => {
+  const backend = loadBackend();
+  backend.currentTimeMs_ = () => new Date('2026-10-15T13:45:00+08:00').getTime();
+  const rows = [['2026/10/15', '12:30', 'D－場地租借', 'XUAN', 'rental-90']];
+  const requests = [{ requestId: 'request-90', teacherName: 'XUAN', status: '已成立',
+    date: '2026/10/15', room: 'D', obCalendarId: 'rental-90', startTime: '12:30', endTime: '14:00' }];
+  const before = JSON.stringify(requests);
+  const snapshot = backend.buildPracticeDayView_({}, rows, '2026/10/15');
+  backend.annotateRentalPracticeDayView_(snapshot, 'XUAN', requests);
+  const block = snapshot.rooms[3].blocks[0];
+  assert.equal(block.endTime, '14:00');
+  assert.equal(block.interval.durationMinutes, 90);
+  assert.equal(block.isPast, false);
+  assert.equal(block.isMine, true);
+  const live = backend.buildPracticeDayView_({}, [rows[0].concat(['242', '73', '否', 'stamp', 120, 'ob'])], '2026/10/15');
+  backend.annotateRentalPracticeDayView_(live, 'XUAN', requests);
+  assert.equal(live.rooms[3].blocks[0].endTime, '14:30');
+  assert.equal(live.rooms[3].blocks[0].interval.durationMinutes, 120);
+  assert.equal(JSON.stringify(requests), before);
+});
+
+test('OB invalid rental end time does not silently fall back to sixty minutes', () => {
+  const auth = createAuthServices();
+  auth.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const backend = loadBackend({ PropertiesService: auth.PropertiesService });
+  backend.fetchCalendarPages_ = () => [{ id: 'bad-rental', classTime: '2026-10-15T12:30:00+08:00',
+    classEndTime: 'invalid', class: { id: 242, nameZhHant: 'D－場地租借', duration: 60 },
+    instructors: [{ id: 73, firstName: 'XUAN' }] }];
+  assert.throws(() => backend.getPracticeCurrentObRows_('2026/10/15', '2026/10/15'), /結束時間/);
+});
+
+test('updated rental timing bypasses previously cached one-hour day views', () => {
+  assert.equal(loadBackend().getPracticeDayViewCacheKey_('2026/10/15'), 'practice_day_view_v4_20261015');
+});
+
+test('N.a ninety-minute rentals and real sixty-minute rentals retain their distinct OB timing', () => {
+  const auth = createAuthServices();
+  auth.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const backend = loadBackend({ PropertiesService: auth.PropertiesService });
+  backend.fetchCalendarPages_ = () => [
+    { id: 54598, classTime: '2026-09-21T08:15:00Z', classEndTime: '2026-09-21T09:45:00Z',
+      class: { id: 197, nameZhHant: 'B－場地租借' }, instructors: [{ id: 12, name: '@N.a🧘🏻♀️' }] },
+    { id: 54599, classTime: '2026-09-28T08:15:00Z', classEndTime: '2026-09-28T09:45:00Z',
+      class: { id: 197, nameZhHant: 'B－場地租借' }, instructors: [{ id: 12, name: '@N.a🧘🏻♀️' }] },
+    { id: 'sixty', classTime: '2026-09-28T10:00:00Z', classEndTime: '2026-09-28T11:00:00Z',
+      class: { id: 197, nameZhHant: 'B－場地租借', duration: 90 }, instructors: [{ id: 12, name: '@N.a🧘🏻♀️' }] },
+  ];
+  const rows = backend.getPracticeCurrentObRows_('2026/09/21', '2026/09/28');
+  assert.deepEqual(Array.from(rows, r => r[9]), [90, 90, 60]);
+  const blocks = backend.buildPracticeDayView_({}, rows, '2026/09/28').rooms[1].blocks;
+  assert.deepEqual(Array.from(blocks, block => block.endTime), ['17:45', '19:00']);
+  assert.equal(backend.findPracticeConflictsUnlocked_({date: '2026/09/28', room: 'B',
+    startTime: '17:15', endTime: '18:15'}, {}, [rows[1]]).length, 1);
+});
+
+test('rental record fallback rejects competing end times and does not mutate source rows', () => {
+  const backend = loadBackend();
+  const rows = [['2026/10/15', '12:30', 'D－場地租借', 'XUAN', 'same-id', '', '', '', '', 60, 'class']];
+  const original = JSON.stringify(rows);
+  const first = { status: '已成立', obCalendarId: 'same-id', date: '2026/10/15', room: 'D',
+    startTime: '12:30', endTime: '14:00' };
+  assert.equal(backend.applyRecordedRentalTimingToCourseRows_(rows, [first])[0][9], 90);
+  assert.throws(() => backend.applyRecordedRentalTimingToCourseRows_(rows,
+    [first, { ...first, endTime: '14:30' }]), /不一致的結束時間/);
+  assert.equal(JSON.stringify(rows), original);
+});
+
+test('rental card fallback uses the same exact start match and ambiguity checks as course blockers', () => {
+  const backend = loadBackend();
+  const row = ['2026/10/15', '12:30', 'D－場地租借', 'XUAN', 'same-id'];
+  const shifted = {requestId: 'shifted', teacherName: 'XUAN', status: '已成立',
+    date: '2026/10/15', room: 'D', obCalendarId: 'same-id', startTime: '13:00', endTime: '14:30'};
+  const view = backend.buildPracticeDayView_({}, [row], '2026/10/15');
+  backend.annotateRentalPracticeDayView_(view, 'XUAN', [shifted]);
+  assert.equal(view.rooms[3].blocks[0].startTime, '12:30');
+  assert.equal(view.rooms[3].blocks[0].endTime, '13:30');
+  const first = {...shifted, startTime: '12:30', endTime: '14:00'};
+  const ambiguous = backend.buildPracticeDayView_({}, [row], '2026/10/15');
+  assert.throws(() => backend.annotateRentalPracticeDayView_(ambiguous, 'XUAN',
+    [first, {...first, requestId: 'other', endTime: '14:30'}]), /不一致的結束時間/);
+});
+
+test('snapshot rental repair recomputes series conflicts including immediate missing-card restoration', () => {
+  const backend = loadBackend();
+  backend.currentTimeMs_ = () => new Date('2026-10-14T12:00:00+08:00').getTime();
+  const records = {series: [{seriesId: 'series-conflict', creatorName: 'Tako', room: 'D',
+    startDate: '2026/10/15', startTime: '13:45', endTime: '14:45', status: '啟用中', mode: 'ordinary'}]};
+  const row = ['2026/10/15', '12:30', 'D－場地租借', 'XUAN', 'same-id'];
+  const rental = {requestId: 'repair', teacherName: 'XUAN', status: '已成立', date: '2026/10/15',
+    room: 'D', obCalendarId: 'same-id', startTime: '12:30', endTime: '14:00'};
+  for (const courseRows of [[row], []]) {
+    const view = backend.buildPracticeDayView_(records, courseRows, '2026/10/15');
+    assert.equal(view.rooms[3].blocks.find(block => block.type === 'series-reservation').hasConflict, false);
+    backend.annotateRentalPracticeDayView_(view, 'Tako', [rental]);
+    const reservation = view.rooms[3].blocks.find(block => block.type === 'series-reservation');
+    assert.equal(reservation.hasConflict, true);
+    assert.match(reservation.status, /有行程重疊/);
+  }
+});
+
+test('shared day snapshot uses persisted rental timing before computing reservation conflicts', () => {
+  const f = createPracticeBackend({courseRows: [['2026/10/15', '12:30', 'D－場地租借', 'XUAN', 'same-id']]});
+  f.backend.getPracticeCurrentObRowsForDayView_ = () => {throw Error('injected OB outage');};
+  f.backend.getRentalRequestsIfAvailable_ = () => [{status: '已成立', obCalendarId: 'same-id',
+    date: '2026/10/15', room: 'D', startTime: '12:30', endTime: '14:00'}];
+  const view = f.backend.buildSharedPracticeDayView_('2026/10/15');
+  assert.equal(view.courseSource, 'snapshot');
+  assert.equal(view.rooms[3].blocks[0].endTime, '14:00');
 });
 
 test('rental cancellation skips OB for waitlists and preserves active state when OB cancel fails', () => {

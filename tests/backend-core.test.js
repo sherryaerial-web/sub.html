@@ -9972,6 +9972,27 @@ test('aerial pole capability does not grant Shelly other course categories', () 
   assert.equal(backend.teacherCanTeachCategory_('Shelly', backend.getCourseCategory_('原始瑜伽')), false);
 });
 
+test('Shelly Lin exact OB identity participates in public login and all-teacher notifications and pay tiers', () => {
+  const accountHeaders = ['指導者', 'Salt', 'PIN 雜湊', '是否在職', '角色', '登入失敗次數', '鎖定至', '可教授類別', '功能權限'];
+  const spreadsheet = createSpreadsheetFixture([createSheetFixture('登入帳號', [
+    accountHeaders,
+    ['Shelly Lin', 'test-salt', 'test-hash', '是', '老師', 0, '', '飛天管', ''],
+  ])]);
+  const backend = loadBackendWithSpreadsheet(spreadsheet);
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.getTeachers_())), [{ '指導者': 'Shelly Lin' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.resolveNotificationAudience_('all', []))), ['Shelly Lin']);
+  assert.equal(backend.findAccount_('Shelly'), null);
+  assert.equal(backend.findAccount_('Shelly Lin').capabilities, '飛天管');
+  const rules = [2, 3, 4].map((threshold, index) => ({
+    teacherName: 'Shelly Lin', courseKeyword: '飛天管', billingType: '人數階梯',
+    threshold, amount: [800, 900, 1100][index],
+  }));
+  rules.forEach((rule) => assert.equal(backend.calculatePayrollLinesForCourse_({
+    calendarId: 'ob-shelly-lin', courseName: 'B－飛天管 Lv.0',
+    instructors: [{ name: 'Shelly Lin' }], attendanceCount: rule.threshold,
+  }, rules)[0].amount, rule.amount));
+});
+
 test('payroll structure creates append-only operational sheets idempotently', () => {
   const spreadsheet = createSpreadsheetFixture([]);
   const backend = loadBackendWithSpreadsheet(spreadsheet);

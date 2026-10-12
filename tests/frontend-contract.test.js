@@ -3686,12 +3686,12 @@ test('admin invitation rounds render invited teachers disabled and selectable by
   assert.equal(button.textContent, '勾選本排');
 });
 
-test('Shelly follows Sue in the last fixed invitation round and aerial pole stays its own category', () => {
+test('Shelly Lin follows Sue in the last fixed invitation round and aerial pole stays its own category', () => {
   const { context } = createFrontendRuntime();
-  const rounds = JSON.parse(JSON.stringify(context.buildAdminInvitationRounds(['Shelly', 'Sue', '番茄🍅'], [])));
+  const rounds = JSON.parse(JSON.stringify(context.buildAdminInvitationRounds(['Shelly Lin', 'Sue', '番茄🍅'], [])));
   assert.equal(rounds.length, 1);
   assert.equal(rounds[0].label, '第 7 輪');
-  assert.deepEqual(rounds[0].teachers.map((item) => item.name), ['番茄🍅', 'Sue', 'Shelly']);
+  assert.deepEqual(rounds[0].teachers.map((item) => item.name), ['番茄🍅', 'Sue', 'Shelly Lin']);
   assert.equal(context.getCourseCategory('B－飛天管 Lv.0'), '飛天管');
   assert.equal(context.getClaimSimilarityType('B－飛天管 Lv.0'), '飛天管');
 });

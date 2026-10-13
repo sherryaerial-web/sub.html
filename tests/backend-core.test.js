@@ -7729,6 +7729,233 @@ test('withdraw notification issues a fresh event after rejection and does not no
   assert.equal(failed.leaveSheet.values.find(r => r[9] === 'leave-claimed')[18] || '', '');
 });
 
+function createSpecialWithdrawalFixture(options = {}) {
+  const groupId = 'withdraw-special-group';
+  const sources = ['11:30', '12:45'].map((time, i) => ({
+    sourceType: 'leave', slotKey: 'leave:withdraw-' + i, substituteId: 'withdraw-' + i,
+    calendarId: 'old-' + i, date: '2026/11/08', time, room: 'A',
+    courseName: 'A－空環 Lv.' + (i + 1), originalTeacher: '老師丙',
+  }));
+  const leaves = sources.map(slot => {
+    const row = Array(31).fill('');
+    Object.assign(row, { 0: 'stamp', 1: slot.originalTeacher, 2: slot.date, 3: slot.time,
+      4: slot.courseName, 5: '已領取', 6: '老師乙', 8: '已完成', 9: slot.substituteId,
+      10: slot.calendarId, 12: '大小環特別課', 13: 'Lv.2', 14: '需要新增課程',
+      15: '已核對', 21: groupId, 22: '使用連續時段', 23: 90, 24: '13:00', 25: '11:30',
+    });
+    return row;
+  });
+  const unrelated = ['stamp', '老師丙', '2026/11/09', '10:00', 'B－空環 Lv.1',
+    '確認中', '', '', '', 'unrelated-leave', 'other-id'];
+  while (unrelated.length < 31) unrelated.push('');
+  const f = createInvitationBackend({ nextMonth: '2026-11',
+    courseRows: options.courseRows || [
+      ['2026/11/08', '11:30', 'A－大小環特別課(90min)', '老師乙', 'old-0'],
+    ],
+    leaveRows: leaves.concat([unrelated]),
+    specialRequestRows: [['stamp', groupId, '老師乙', '2026/11/08', 'A',
+      JSON.stringify(sources), JSON.stringify(sources.map(s => s.substituteId)),
+      '11:30', '大小環特別課', 'Lv.2', 90, '13:00', '使用連續時段', '',
+      '待處理', '待核對', '', '', '']],
+  });
+  f.backend.notifyClaimWithdrawalAdminsSafely_ = () => ({});
+  f.backend.openInvitations_(f.adminSession, ['老師甲', '老師乙']);
+  f.backend.requestClaimWithdrawal_(f.teacherBSession, 'withdraw-0', '無法出席');
+  return { ...f, sources, groupId };
+}
+
+test('special withdrawal approval keeps the whole group blocked until all original OB courses return', () => {
+  const f = createSpecialWithdrawalFixture();
+  const beforeNeighbor = JSON.stringify(f.leaveSheet.values[3]);
+  const pushes = [];
+  f.backend.sendPushNotificationSafely_ = (names, message) => { pushes.push(message); return {}; };
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意整組退出');
+  for (const row of f.leaveSheet.values.slice(1, 3)) {
+    assert.equal(row[18], '退出後待回復 OB');
+    assert.equal(row[8], '待回復');
+    assert.equal(f.backend.isOrdinaryOpenLeaveRow_(row), false);
+    assert.equal(row[21], f.groupId);
+  }
+  assert.equal(f.specialRequestSheet.values[1][14], '退出後待回復 OB');
+  assert.match(pushes[0].content, /OB.*回復/);
+  f.backend.reconcileObChanges_(f.adminSession);
+  assert.equal(f.specialRequestSheet.values[1][15], '核對異常');
+  assert.equal(f.backend.getAvailableSubstitutes_(f.teacherASession).length, 0);
+  assert.equal(JSON.stringify(f.leaveSheet.values[3]), beforeNeighbor);
+});
+
+test('special withdrawal reconciliation reconnects unique recreated IDs and releases every source atomically', () => {
+  const f = createSpecialWithdrawalFixture();
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+  f.courseSheet.values.splice(1, 1,
+    ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'old-0'],
+    ['2026/11/08', '12:45', 'A－空環 Lv.2', '老師丙', 'new-1']);
+  const result = f.backend.reconcileObChanges_(f.adminSession);
+  assert.equal(result.matched, 2);
+  for (const [i, row] of f.leaveSheet.values.slice(1, 3).entries()) {
+    assert.equal(row[5], '確認中');
+    assert.equal(row[6], '');
+    assert.equal(row[15], '');
+    assert.equal(row[18], '');
+    assert.deepEqual(Array.from(row.slice(21, 27)), ['', '', '', '', '', '']);
+    assert.equal(row[10], 'old-' + i);
+  }
+  assert.equal(f.leaveSheet.values[2][20], 'new-1');
+  assert.equal(f.specialRequestSheet.values[1][14], '已取消');
+  assert.equal(f.specialRequestSheet.values[1][15], '已回復核對');
+  assert.deepEqual(Array.from(f.backend.getAvailableSubstitutes_(f.teacherASession), r => r['代課編號']), ['withdraw-0', 'withdraw-1']);
+  assert.equal(f.backend.buildTeacherCommitmentSlots_('老師乙', [], [], f.specialRequestSheet.values.slice(1)).length, 0);
+  const after = JSON.stringify(f.leaveSheet.values);
+  f.backend.reconcileObChanges_(f.adminSession);
+  assert.equal(JSON.stringify(f.leaveSheet.values), after);
+});
+
+test('special withdrawal cannot release one restored source or accept ambiguous or wrong restored courses', () => {
+  const good = ['2026/11/08', '12:45', 'A－空環 Lv.2', '老師丙', 'new-1'];
+  for (const extras of [[], [good, good.slice(0, 4).concat('duplicate')],
+    [good.map((v, i) => i === 3 ? '老師甲' : v)],
+    [good.map((v, i) => i === 1 ? '13:00' : v)],
+    [good.map((v, i) => i === 2 ? 'B－空環 Lv.2' : v)],
+    [good.map((v, i) => i === 2 ? 'A－空環 Lv.3' : v)],
+    [good.map((v, i) => i === 0 ? '2026/11/09' : v)],
+    [good, ['2026/11/08', '11:30', 'A－大小環特別課(90min)', '老師乙', 'lingering-special']],
+  ]) {
+    const f = createSpecialWithdrawalFixture();
+    f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+    f.courseSheet.values.splice(1, 1, ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'old-0'], ...extras);
+    f.backend.reconcileObChanges_(f.adminSession);
+    assert.equal(f.specialRequestSheet.values[1][15], '核對異常');
+    assert.equal(f.backend.getAvailableSubstitutes_(f.teacherASession).length, 0);
+    assert.equal(f.leaveSheet.values[1][21], f.groupId);
+    assert.equal(f.leaveSheet.values[2][21], f.groupId);
+  }
+});
+
+test('special withdrawal preserves both sheets when the audit or group write fails', () => {
+  for (const target of ['auditSheet', 'specialRequestSheet']) {
+    const f = createSpecialWithdrawalFixture();
+    const before = [f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values));
+    injectSetValuesFailureOnce(f[target], ({ row }) => row > 1, 'group failure');
+    assert.throws(() => f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意'), /group failure/);
+    assert.deepEqual([f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values)), before);
+  }
+});
+
+test('manual linking during special withdrawal cannot reopen just one source', () => {
+  const f = createSpecialWithdrawalFixture();
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+  f.courseSheet.values.splice(1, 1, ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'new-0']);
+  f.backend.linkReplacementCalendarItem_(f.adminSession, 'withdraw-0', 'new-0');
+  assert.equal(f.backend.isOrdinaryOpenLeaveRow_(f.leaveSheet.values[1]), false);
+  assert.equal(f.leaveSheet.values[1][21], f.groupId);
+  assert.equal(f.specialRequestSheet.values[1][14], '退出後待回復 OB');
+});
+
+test('special withdrawal restore cannot be overwritten by stale edit and cancellation buttons', () => {
+  const f = createSpecialWithdrawalFixture();
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+  const before = [f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values));
+  for (const operation of [
+    () => f.backend.requestClaimWithdrawal_(f.teacherBSession, 'withdraw-1', '再退出'),
+    () => f.backend.advanceSpecialCourseTime_(f.adminSession, f.groupId),
+    () => f.backend.linkSpecialCourseRequestCalendarItem_(f.adminSession, f.groupId, 'old-0'),
+    () => f.backend.correctClaimDetails_(f.adminSession, 'withdraw-0', 'Lv.3', '新備註'),
+    () => f.backend.requestLeaveCancellation_({ teacherName: '老師丙', role: '老師' }, 'withdraw-0', '取消請假'),
+  ]) {
+    assert.throws(operation, /回復|退出|異動/);
+    assert.deepEqual([f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values)), before);
+  }
+});
+
+test('mixed own and leave special withdrawal stays visible and verifies every original slot', () => {
+  const f = createSpecialWithdrawalFixture();
+  f.sources[1].sourceType = 'own';
+  f.sources[1].originalTeacher = '老師乙';
+  f.sources[1].substituteId = '';
+  f.sources[1].slotKey = 'own:old-1';
+  f.specialRequestSheet.values[1][5] = JSON.stringify(f.sources);
+  f.specialRequestSheet.values[1][6] = JSON.stringify(['withdraw-0']);
+  f.leaveSheet.values.splice(2, 1);
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+  assert.ok(f.backend.getAdminDashboard_(f.adminSession).obWork.some(r => r.specialGroupId === f.groupId));
+  const before = JSON.stringify(f.specialRequestSheet.values);
+  assert.throws(() => f.backend.requestSpecialCourseCancellation_(f.teacherBSession, f.groupId, '再取消'), /回復|退出/);
+  assert.equal(JSON.stringify(f.specialRequestSheet.values), before);
+  f.courseSheet.values.splice(1, 1,
+    ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'new-0']);
+  f.backend.reconcileObChanges_(f.adminSession);
+  assert.equal(f.specialRequestSheet.values[1][14], '退出後待回復 OB');
+  f.courseSheet.values.push(['2026/11/08', '12:45', 'A－空環 Lv.2', '老師乙', 'new-1']);
+  f.backend.reconcileObChanges_(f.adminSession);
+  assert.equal(f.specialRequestSheet.values[1][14], '已取消');
+  assert.equal(f.leaveSheet.values[1][5], '確認中');
+});
+
+test('special withdrawal refuses malformed group sources without changing any data', () => {
+  for (const modify of [
+    f => { f.specialRequestSheet.values[1][4] = 'B'; },
+    f => { f.specialRequestSheet.values[1][3] = '2026/11/09'; },
+    f => { f.sources[1].calendarId = 'old-0'; f.specialRequestSheet.values[1][5] = JSON.stringify(f.sources); },
+    f => { f.leaveSheet.values[2][6] = '老師甲'; },
+    f => { f.leaveSheet.values[2][18] = '申請取消中'; },
+    f => { f.specialRequestSheet.values.push(f.specialRequestSheet.values[1].slice()); },
+  ]) {
+    const f = createSpecialWithdrawalFixture(); modify(f);
+    const before = [f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values));
+    assert.throws(() => f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意'), /來源|群組|特別課/);
+    assert.deepEqual([f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values)), before);
+  }
+});
+
+test('special withdrawal restoration rolls back all rows if a write or audit fails', () => {
+  for (const target of ['leaveSheet', 'specialRequestSheet', 'auditSheet']) {
+    const f = createSpecialWithdrawalFixture();
+    f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+    f.courseSheet.values.splice(1, 1, ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'old-0'],
+      ['2026/11/08', '12:45', 'A－空環 Lv.2', '老師丙', 'new-1']);
+    const before = [f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values));
+    injectSetValuesFailureOnce(f[target], ({ row }) => row > 1, 'restore failure');
+    assert.throws(() => f.backend.reconcileObChanges_(f.adminSession), /restore failure/);
+    assert.deepEqual([f.leaveSheet, f.specialRequestSheet, f.auditSheet].map(s => JSON.stringify(s.values)), before);
+  }
+});
+
+test('special withdrawal recreated ID can subsequently be claimed and verified normally', () => {
+  const f = createSpecialWithdrawalFixture();
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+  f.courseSheet.values.splice(1, 1, ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'old-0'],
+    ['2026/11/08', '12:45', 'A－空環 Lv.2', '老師丙', 'new-1']);
+  f.backend.reconcileObChanges_(f.adminSession);
+  f.backend.claimSubstitute_(f.teacherASession, [{ substituteId: 'withdraw-1', changeNote: '' }]);
+  assert.equal(f.leaveSheet.values[2][6], '老師甲');
+  assert.equal(f.leaveSheet.values[2][20], 'new-1');
+  f.courseSheet.values[2][3] = '老師甲';
+  assert.equal(f.backend.reconcileObChanges_(f.adminSession).matched, 1);
+});
+
+test('special withdrawal can restore and then reclaim and withdraw a recreated ID repeatedly', () => {
+  const f = createSpecialWithdrawalFixture();
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-0', 'approve', '同意');
+  f.courseSheet.values.splice(1, 1, ['2026/11/08', '11:30', 'A－空環 Lv.1', '老師丙', 'old-0'],
+    ['2026/11/08', '12:45', 'A－空環 Lv.2', '老師丙', 'new-1']);
+  f.backend.reconcileObChanges_(f.adminSession);
+  f.backend.claimSpecialCourse_(f.teacherBSession, { mode: 'merge',
+    startSlotKey: 'leave:withdraw-0', substituteIds: ['withdraw-0'], courseName: '空環特別課',
+    difficulty: 'Lv.2', durationMinutes: 90 });
+  const secondRequest = f.specialRequestSheet.values[2];
+  const slots = JSON.parse(secondRequest[5]);
+  assert.equal(slots[1].calendarId, 'new-1');
+  f.backend.requestClaimWithdrawal_(f.teacherBSession, 'withdraw-1', '再退出');
+  f.backend.resolveChangeRequest_(f.adminSession, 'withdraw-1', 'approve', '同意');
+  assert.equal(secondRequest[14], '退出後待回復 OB');
+  f.courseSheet.values[2][4] = 'new-again-1';
+  f.backend.linkReplacementCalendarItem_(f.adminSession, 'withdraw-1', 'new-again-1');
+  assert.equal(f.leaveSheet.values[2][10], 'old-1');
+  assert.equal(f.leaveSheet.values[2][20], 'new-again-1');
+  assert.equal(f.leaveSheet.values[1][21], '');
+  assert.equal(secondRequest[14], '已取消');
+});
+
 test('admin-approved withdrawal immediately reopens the course without OB reconciliation', () => {
   const {
     backend,

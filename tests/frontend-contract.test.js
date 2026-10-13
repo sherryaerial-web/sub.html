@@ -3263,6 +3263,22 @@ test('admin owned special source identifiers and restoration rows sort without m
   assert.deepEqual(sourceSlots.map((slot) => slot.calendarId), ['source-ten', 'source-nine']);
 });
 
+test('special withdrawal restoration explains whole-group recovery and hides stale arrangement controls', () => {
+  const { context } = createFrontendRuntime();
+  const own = { recordType: 'specialRequest', specialGroupId: 'withdraw', date: '2026/11/08',
+    status: '退出後待回復 OB', verificationStatus: '待回復 OB', sourceSlots: [
+      { time: '11:30', calendarId: 'old', courseName: 'A－空環 Lv.1', originalTeacher: '老師甲' },
+    ] };
+  const ordinary = { substituteId: 'withdraw-leave', specialGroupId: 'withdraw',
+    date: '2026/11/08', status: '已領取', changeStatus: '退出後待回復 OB',
+    originalCourse: 'A－空環 Lv.1', originalTeacher: '老師甲' };
+  for (const item of [own, ordinary]) {
+    const markup = context.renderAdminObSections([item], []);
+    assert.match(markup, /整組/);
+    assert.doesNotMatch(markup, /data-admin-action="advance-special-time"|data-admin-action="correct-claim"|data-admin-action="link-special-replacement"/);
+  }
+});
+
 test('replacement selector only renders OB courses from the same date', () => {
   const { context } = createFrontendRuntime();
   const markup = context.renderAdminObItem({

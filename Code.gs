@@ -18057,7 +18057,7 @@ function getMySubs_(teacherName, recordMonth) {
       '實際開始時間': formatMyTime(r[25]) || formatMyTime(r[3]),
       '延後分鐘數': Number(r[26]) || 0,
       '異動狀態': cleanText_(r[18]),
-      '可申請退出': cleanText_(r[18]) !== '申請退出中',
+      '可申請退出': ['申請退出中', '退出後待回復 OB'].indexOf(cleanText_(r[18])) === -1,
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
     };
   });
@@ -18097,7 +18097,7 @@ function getMySubs_(teacherName, recordMonth) {
       '接續常態課': continuation,
       '異動狀態': cleanText_(row[14]),
       '可申請退出': false,
-      '可申請取消特別課': ['已取消', '申請取消中', '取消後待回復 OB'].indexOf(cleanText_(row[14])) === -1,
+      '可申請取消特別課': ['已取消', '申請取消中', '取消後待回復 OB', '退出後待回復 OB'].indexOf(cleanText_(row[14])) === -1,
       '取消方式': groupId === 'aca7ee0f-6c5d-43d9-95ee-d85af9695ef3' &&
         name === 'Liz 🌰' && formatMyDate(row[3]) === '2026/10/11' &&
         cleanText_(row[4]) === 'A' ? '保留空堂' : '',
@@ -18184,6 +18184,9 @@ function advanceSpecialCourseTime_(session, specialGroupId) {
     }
     if (!requestRowNumber || !requestRow) {
       throw new Error('找不到特別課安排紀錄，請重新整理。');
+    }
+    if (cleanText_(requestRow[14]) === '退出後待回復 OB') {
+      throw new Error('特別課正在退出回復 OB，不能再調整時間。');
     }
 
     var oldStartTime = formatMyTime(requestRow[7]);
@@ -18657,7 +18660,12 @@ function claimSpecialCourse_(session, payload) {
 
     var storedSourceSlots = slotPlan.orderedSlots.concat(
       slotPlan.continuation ? [slotPlan.continuation] : []
-    );
+    ).map(function(slot) {
+      var stored = Object.assign({}, slot);
+      var item = selected.filter(function(selectedItem) { return selectedItem.id === cleanText_(slot.substituteId); })[0];
+      if (item) stored.originalCalendarId = cleanText_(item.row[10]);
+      return stored;
+    });
     var requestRow = [
       getTimestamp_(),
       specialGroupId,
@@ -19186,6 +19194,7 @@ function requestLeaveCancellation_(session, substituteId, reason) {
   return withScriptLock_(function() {
     var record = getLeaveRecordByIdUnlocked_(id);
     if (cleanText_(record.row[1]) !== teacher) throw new Error('只能申請取消自己的請假。');
+    if (cleanText_(record.row[18]) === '退出後待回復 OB') throw new Error('整組退出正在等待 OB 回復，暫時不能取消請假。');
     if (canSelfCancelLeaveRow_(record.row)) throw new Error('這堂課目前可以直接取消。');
     if (!canRequestLeaveCancellationRow_(record.row)) throw new Error('目前狀態無法申請取消。');
 
@@ -19242,6 +19251,7 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
       throw new Error('只有目前的代課老師可以申請退出。');
     }
     if (cleanText_(record.row[18]) === '申請退出中') throw new Error('退出申請已送出，請等待處理。');
+    if (cleanText_(record.row[18]) === '退出後待回復 OB') throw new Error('退出已核准，請等待整組 OB 回復核對。');
     if (cleanText_(record.row[18]) === '申請取消中') throw new Error('原老師已申請取消，請等待處理。');
 
     notice = {
@@ -19294,6 +19304,7 @@ function requestSpecialCourseCancellation_(session, specialGroupId, reason) {
     }
     var status = cleanText_(record.row[14]);
     if (status === '申請取消中') throw new Error('取消申請已送出，請等待處理。');
+    if (status === '退出後待回復 OB') throw new Error('退出已核准，請等待整組 OB 回復核對。');
     if (status === '已取消' || status === '取消後待回復 OB') {
       throw new Error('這筆特別課已進入取消處理，無法重複申請。');
     }
@@ -19352,6 +19363,152 @@ function resolveSpecialCourseCancellation_(session, specialGroupId, decision, re
   });
 }
 
+function getSpecialWithdrawalRecords_(requestRow, leaveRows) {
+  var groupId = cleanText_(requestRow[1]);
+  var sources = getSpecialRequestSourceSlots_(requestRow);
+  if (!groupId || !sources.length || sources.some(function(slot) {
+    return ['leave', 'own', 'own-continuation'].indexOf(cleanText_(slot.sourceType)) === -1;
+  })) throw new Error('特別課來源時段不完整，請先人工核對。');
+  var calendarIds = sources.map(function(slot) { return cleanText_(slot.calendarId); });
+  if (sources.some(function(slot, index) {
+    return !calendarIds[index] || calendarIds.indexOf(calendarIds[index]) !== index ||
+      formatMyDate(slot.date) !== formatMyDate(requestRow[3]) || cleanText_(slot.room) !== cleanText_(requestRow[4]) ||
+      timeTextToMinutes_(formatMyTime(slot.originalTime || slot.time)) < 0 ||
+      !/^[A-D]$/.test(cleanText_(slot.room)) || !cleanText_(slot.courseName) || !cleanText_(slot.originalTeacher) ||
+      (cleanText_(slot.sourceType) !== 'leave' && cleanText_(slot.originalTeacher) !== cleanText_(requestRow[2]));
+  })) throw new Error('特別課來源日期、教室或課程資料不一致，請先人工核對。');
+  var leaveSources = sources.filter(function(slot) { return cleanText_(slot.sourceType) === 'leave'; });
+  var declaredIds;
+  try { declaredIds = JSON.parse(cleanText_(requestRow[6])); } catch (error) { declaredIds = null; }
+  var sourceIds = leaveSources.map(function(slot) { return cleanText_(slot.substituteId); });
+  if (!sourceIds.length || !Array.isArray(declaredIds) ||
+      declaredIds.length !== sourceIds.length || sourceIds.some(function(id, index) {
+        return !id || sourceIds.indexOf(id) !== index || declaredIds.indexOf(id) === -1;
+      })) throw new Error('特別課來源代課編號不一致，請先人工核對。');
+  var records = [];
+  for (var index = 1; index < leaveRows.length; index++) {
+    var row = leaveRows[index];
+    if (cleanText_(row[21]) !== groupId) continue;
+    var source = leaveSources.filter(function(slot) { return cleanText_(slot.substituteId) === cleanText_(row[9]); });
+    if (source.length !== 1 || records.some(function(record) { return cleanText_(record.row[9]) === cleanText_(row[9]); })) {
+      throw new Error('特別課群組代課紀錄有重複或不一致，請先人工核對。');
+    }
+    var slot = source[0];
+    if (formatMyDate(row[2]) !== formatMyDate(slot.date) ||
+        formatMyTime(row[3]) !== formatMyTime(slot.time) ||
+        cleanText_(row[1]) !== cleanText_(slot.originalTeacher) ||
+        normalizeOrdinaryCourseReconciliationName_(row[4]) !== normalizeOrdinaryCourseReconciliationName_(slot.courseName) ||
+        getCourseRoom_(row[4]) !== cleanText_(slot.room) ||
+        (cleanText_(slot.originalCalendarId)
+          ? cleanText_(row[10]) !== cleanText_(slot.originalCalendarId)
+          : cleanText_(row[10]) !== cleanText_(slot.calendarId) && cleanText_(row[20]) !== cleanText_(slot.calendarId))) {
+      throw new Error('特別課來源課程資料不一致，請先人工核對。');
+    }
+    records.push({ rowNumber: index + 1, row: row, source: slot });
+  }
+  if (records.length !== leaveSources.length) throw new Error('特別課群組代課紀錄缺漏，請先人工核對。');
+  return records;
+}
+
+function getSpecialWithdrawalRequest_(ss, groupId) {
+  var sheet = requireSheet_(ss, SHEETS.SPECIAL_COURSE_REQUESTS);
+  assertHeaders_(sheet, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+  var rows = sheet.getDataRange().getValues();
+  var matches = [];
+  for (var index = 1; index < rows.length; index++) {
+    if (cleanText_(rows[index][1]) === groupId) matches.push({ sheet: sheet, rowNumber: index + 1, row: rows[index] });
+  }
+  if (matches.length !== 1) throw new Error('找不到唯一的特別課群組紀錄，請先人工核對。');
+  return matches[0];
+}
+
+function getRestoredSourceCourse_(slot, courseRows, explicitCalendarId) {
+  var date = formatMyDate(slot.date);
+  var time = formatMyTime(slot.originalTime || slot.time);
+  var room = cleanText_(slot.room);
+  var name = normalizeOrdinaryCourseReconciliationName_(slot.courseName);
+  var teacher = cleanText_(slot.originalTeacher);
+  if (!date || !time || !/^[A-D]$/.test(room) || !name || !teacher || !cleanText_(slot.calendarId)) {
+    return { differences: ['原課程來源資料不完整，無法自動連結'] };
+  }
+  var matches = (courseRows || []).filter(function(row) {
+    return cleanText_(row[4]) && (!explicitCalendarId || cleanText_(row[4]) === explicitCalendarId) &&
+      formatMyDate(row[0]) === date && formatMyTime(row[1]) === time &&
+      getCourseRoom_(row[2]) === room && cleanText_(row[3]) === teacher &&
+      normalizeOrdinaryCourseReconciliationName_(row[2]) === name;
+  });
+  if (matches.length !== 1) return { differences: [
+    '原課程 ' + cleanText_(slot.courseName) + ' ' + time +
+      (matches.length ? ' 找到多堂符合的 OB 課程，請人工確認' : ' 尚未回復 OB')
+  ] };
+  return { calendarId: cleanText_(matches[0][4]), sourceRow: matches[0], differences: [] };
+}
+
+function planSpecialWithdrawalRestore_(requestRow, leaveRows, courseRows) {
+  var records = getSpecialWithdrawalRecords_(requestRow, leaveRows);
+  var differences = [];
+  records.forEach(function(record) {
+    if (cleanText_(record.row[5]) !== '已領取' ||
+        cleanText_(record.row[6]) !== cleanText_(requestRow[2]) ||
+        cleanText_(record.row[18]) !== '退出後待回復 OB') {
+      differences.push('群組代課狀態不一致，暫不釋放');
+    }
+  });
+  var restoredIds = [];
+  var resolvedByLeaveId = {};
+  var sources = getSpecialRequestSourceSlots_(requestRow);
+  sources.forEach(function(slot) {
+    var record = records.filter(function(item) { return cleanText_(item.row[9]) === cleanText_(slot.substituteId); })[0];
+    var explicitId = record && cleanText_(record.row[20]);
+    if (explicitId === cleanText_(slot.calendarId)) explicitId = '';
+    var outcome = getRestoredSourceCourse_(slot, courseRows, explicitId);
+    differences = differences.concat(outcome.differences);
+    if (outcome.calendarId) {
+      if (restoredIds.indexOf(outcome.calendarId) !== -1) differences.push('多個來源連到同一堂 OB 課程，暫不釋放');
+      restoredIds.push(outcome.calendarId);
+      if (record) resolvedByLeaveId[cleanText_(record.row[9])] = outcome.calendarId;
+    }
+  });
+  // Every original slot must return, with no extra course still occupying the restored interval.
+  var starts = sources.map(function(slot) { return timeTextToMinutes_(formatMyTime(slot.originalTime || slot.time)); });
+  var ends = sources.map(function(slot, index) { return starts[index] + getScheduledCourseDurationMinutes_(slot.courseName); });
+  var start = Math.min.apply(Math, starts);
+  var end = Math.max.apply(Math, ends);
+  if ((courseRows || []).some(function(row) {
+    if (formatMyDate(row[0]) !== formatMyDate(requestRow[3]) ||
+        getCourseRoom_(row[2]) !== cleanText_(requestRow[4]) || restoredIds.indexOf(cleanText_(row[4])) !== -1) return false;
+    var time = timeTextToMinutes_(formatMyTime(row[1]));
+    return time >= 0 && time < end && time + getScheduledCourseDurationMinutes_(row[2]) > start;
+  })) differences.push('OB 仍有其他課程占用原時段，請先取消特別課或回復課表');
+  var now = getTimestamp_();
+  var updates = records.map(function(record) {
+    var row = record.row.slice();
+    while (row.length < SHEET_HEADERS.LEAVES.length) row.push('');
+    row[8] = differences.length ? '待回復' : '';
+    row[15] = differences.length ? '核對異常' : '';
+    row[16] = differences.length ? now : '';
+    row[17] = differences.join('；');
+    if (!differences.length) {
+      row[5] = '確認中';
+      row[6] = '';
+      row[7] = '';
+      for (var index = 11; index <= 19; index++) row[index] = '';
+      row[20] = resolvedByLeaveId[cleanText_(row[9])] === cleanText_(row[10]) ? '' : resolvedByLeaveId[cleanText_(row[9])];
+      for (var index = 21; index <= 26; index++) row[index] = '';
+    }
+    return { rowNumber: record.rowNumber, values: row.slice(5, 21), specialValues: row.slice(21, 27), row: row };
+  });
+  return { updates: updates, differences: differences,
+    requestValues: [differences.length ? '退出後待回復 OB' : '已取消',
+      differences.length ? '核對異常' : '已回復核對', now, differences.join('；')],
+    audits: records.map(function(record) {
+      return { action: differences.length ? '特別課退出 OB 回復異常' : '特別課退出後重新開放代課',
+        targetId: cleanText_(record.row[9]), before: cleanText_(record.row[15]),
+        after: differences.length ? '核對異常' : '已重新開放',
+        reason: differences.length ? differences.join('；') : '群組：' + cleanText_(requestRow[1]) + '；OB ID：' + resolvedByLeaveId[cleanText_(record.row[9])] };
+    }) };
+}
+
 function resolveChangeRequest_(session, substituteId, decision, reason) {
   var actor = assertCapabilitySession_(session, 'course_admin');
   var id = requireSubstituteId_(substituteId);
@@ -19389,6 +19546,45 @@ function resolveChangeRequest_(session, substituteId, decision, reason) {
     } else if (requestState === '申請退出中') {
       requestType = 'withdrawal';
       if (normalizedDecision === 'approve') {
+        if (cleanText_(row[21])) {
+          var ss = SpreadsheetApp.getActiveSpreadsheet();
+          var specialRecord = getSpecialWithdrawalRequest_(ss, cleanText_(row[21]));
+          var groupRecords = getSpecialWithdrawalRecords_(specialRecord.row, record.sheet.getDataRange().getValues());
+          if (['待處理', '已完成'].indexOf(cleanText_(specialRecord.row[14])) === -1 ||
+              cleanText_(specialRecord.row[2]) !== priorSubstitute || groupRecords.some(function(item) {
+                return cleanText_(item.row[5]) !== '已領取' || cleanText_(item.row[6]) !== priorSubstitute ||
+                  ['', '申請退出中', '退出申請已駁回'].indexOf(cleanText_(item.row[18])) === -1;
+              })) throw new Error('特別課群組目前有其他異動，請先人工核對。');
+          pushRecipient = priorSubstitute;
+          pushMessage = { heading: '退出特別課已核准',
+            content: '管理員已核准整組退出；等待 OB 原課程全部回復並核對後，才會重新開放領取。',
+            url: buildAppViewUrl_('mysubs') };
+          return runStateTransitionUnlocked_([record.sheet, specialRecord.sheet], function(appendAudits) {
+            var storedSources = getSpecialRequestSourceSlots_(specialRecord.row).map(function(slot) {
+              var stored = Object.assign({}, slot);
+              var sourceRecord = groupRecords.filter(function(item) { return cleanText_(item.row[9]) === cleanText_(slot.substituteId); })[0];
+              if (sourceRecord) stored.originalCalendarId = cleanText_(sourceRecord.row[10]);
+              return stored;
+            });
+            specialRecord.sheet.getRange(specialRecord.rowNumber, 6).setValue(JSON.stringify(storedSources));
+            groupRecords.forEach(function(item) {
+              var next = item.row.slice();
+              while (next.length < SHEET_HEADERS.LEAVES.length) next.push('');
+              next[8] = '待回復'; next[15] = '待回復 OB'; next[16] = ''; next[17] = '';
+              next[18] = '退出後待回復 OB'; next[20] = '';
+              record.sheet.getRange(item.rowNumber, 9).setValue(next[8]);
+              record.sheet.getRange(item.rowNumber, 16, 1, 6).setValues([next.slice(15, 21)]);
+            });
+            specialRecord.sheet.getRange(specialRecord.rowNumber, 15, 1, 4).setValues([['退出後待回復 OB', '待回復 OB', '', '']]);
+            appendAudits(groupRecords.map(function(item) {
+              return { actor: actor, action: '核准整組退出特別課', targetId: cleanText_(item.row[9]),
+                before: cleanText_(item.row[18]), after: '退出後待回復 OB',
+                reason: '群組：' + cleanText_(row[21]) + '；原代課老師：' + priorSubstitute + '；' + resolutionReason };
+            }));
+            return { substituteId: id, requestType: 'withdrawal', decision: 'approve',
+              status: '已領取', specialGroupId: cleanText_(row[21]), affected: groupRecords.length };
+          });
+        }
         row[5] = '確認中';
         row[6] = '';
         row[7] = '';
@@ -19473,9 +19669,25 @@ function reconcileObChanges_(session) {
     var updates = [];
     var specialRequestUpdates = [];
     var audits = [];
+    var withdrawalGroups = {};
+    for (var withdrawalIndex = 1; withdrawalIndex < specialRequestRows.length; withdrawalIndex++) {
+      var withdrawalRow = specialRequestRows[withdrawalIndex];
+      if (cleanText_(withdrawalRow[14]) !== '退出後待回復 OB' || !isSpecialRequestRowInMonth_(withdrawalRow, targetMonth)) continue;
+      var withdrawalGroupId = cleanText_(withdrawalRow[1]);
+      if (!withdrawalGroupId || withdrawalGroups[withdrawalGroupId]) throw new Error('特別課退出群組重複或缺漏，請先人工核對。');
+      withdrawalGroups[withdrawalGroupId] = true;
+      var withdrawalPlan = planSpecialWithdrawalRestore_(withdrawalRow, leaveRows, courseRows);
+      updates = updates.concat(withdrawalPlan.updates);
+      specialRequestUpdates.push({ rowNumber: withdrawalIndex + 1, values: withdrawalPlan.requestValues });
+      withdrawalPlan.audits.forEach(function(event) { event.actor = actor; audits.push(event); });
+      result.checked += withdrawalPlan.updates.length;
+      if (withdrawalPlan.differences.length) result.exceptions += withdrawalPlan.updates.length;
+      else result.matched += withdrawalPlan.updates.length;
+    }
     var ownSpecialRequestByGroup = {};
     for (var specialIndex = 1; specialIndex < specialRequestRows.length; specialIndex++) {
       var specialRow = specialRequestRows[specialIndex];
+      if (withdrawalGroups[cleanText_(specialRow[1])]) continue;
       if (!specialRequestHasOwnSlot_(specialRow)) continue;
       var specialRequestGroupId = cleanText_(specialRow[1]);
       if (specialRequestGroupId) {
@@ -19515,6 +19727,7 @@ function reconcileObChanges_(session) {
       if (!isLeaveRowInMonth_(row, targetMonth) || !isActiveObWorkRow_(row)) continue;
       var expectation = getObExpectation_(row, courseRows);
       var specialGroupId = cleanText_(row[21]);
+      if (withdrawalGroups[specialGroupId]) continue;
       if (specialGroupId && ownSpecialRequestByGroup[specialGroupId] && !expectation.restoreType) {
         continue;
       }
@@ -20298,6 +20511,35 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
       throw new Error('只有待處理 OB 的紀錄可以連結替代 OB 課程。');
     }
     var before = cleanText_(record.row[20]) || cleanText_(record.row[10]);
+    if (changeStatus === '退出後待回復 OB' && cleanText_(record.row[21])) {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var specialRecord = getSpecialWithdrawalRequest_(ss, cleanText_(record.row[21]));
+      if (cleanText_(specialRecord.row[14]) !== '退出後待回復 OB') {
+        throw new Error('特別課退出狀態不一致，請先人工核對。');
+      }
+      var tentativeRows = record.sheet.getDataRange().getValues();
+      var tentative = tentativeRows[record.rowNumber - 1].slice();
+      tentative[20] = replacementId;
+      tentativeRows[record.rowNumber - 1] = tentative;
+      var source = getSpecialRequestSourceSlots_(specialRecord.row).filter(function(slot) {
+        return cleanText_(slot.substituteId) === id;
+      })[0];
+      var selectedOutcome = getRestoredSourceCourse_(source || {}, courseRows, replacementId);
+      if (selectedOutcome.differences.length) throw new Error(selectedOutcome.differences.join('；'));
+      var plan = planSpecialWithdrawalRestore_(specialRecord.row, tentativeRows, courseRows);
+      return runStateTransitionUnlocked_([record.sheet, specialRecord.sheet], function(appendAudits) {
+        plan.updates.forEach(function(update) {
+          record.sheet.getRange(update.rowNumber, 6, 1, 16).setValues([update.values]);
+          record.sheet.getRange(update.rowNumber, 22, 1, 6).setValues([update.specialValues]);
+        });
+        specialRecord.sheet.getRange(specialRecord.rowNumber, 15, 1, 4).setValues([plan.requestValues]);
+        plan.audits.forEach(function(event) { event.actor = actor; });
+        appendAudits(plan.audits.concat([{ actor: actor, action: '連結特別課退出回復課程',
+          targetId: id, before: before, after: replacementId, reason: cleanText_(specialRecord.row[1]) }]));
+        return { substituteId: id, replacementCalendarId: replacementId,
+          verificationStatus: plan.differences.length ? '核對異常' : '已重新開放', differences: plan.differences };
+      });
+    }
     return runStateTransitionUnlocked_([record.sheet], function(appendAudits) {
       if (manualReview) {
         record.sheet.getRange(record.rowNumber, 11).setValue(replacementId);
@@ -20405,6 +20647,9 @@ function linkSpecialCourseRequestCalendarItem_(session, specialGroupId, replacem
       break;
     }
     if (!rowNumber) throw new Error('找不到特別課安排紀錄，請重新整理。');
+    if (cleanText_(values[rowNumber - 1][14]) === '退出後待回復 OB') {
+      throw new Error('特別課正在整組退出回復 OB，請同步原課程後重新核對，不可連結成新的特別課。');
+    }
 
     return runStateTransitionUnlocked_([sheet], function(appendAudits) {
       sheet.getRange(rowNumber, 15, 1, 5).setValues([[
@@ -20451,6 +20696,9 @@ function correctClaimDetails_(session, substituteId, difficultyValue, noteValue)
     var record = getLeaveRecordByIdUnlocked_(id);
     if (cleanText_(record.row[5]) !== '已領取') {
       throw new Error('只有已領取的代課可以直接更正難度與備註。');
+    }
+    if (cleanText_(record.row[18]) === '退出後待回復 OB') {
+      throw new Error('特別課正在退出回復 OB，不能再修改領課內容。');
     }
     var nextRow = record.row.slice();
     var before = {
@@ -20738,7 +20986,7 @@ function getAdminDashboard_(session) {
           (item.status === '已領取' &&
             ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1);
       }).concat(ownSpecialRequests.filter(function(item) {
-        return ['待處理', '核對異常', '取消後待回復 OB'].indexOf(item.status) !== -1 ||
+        return ['待處理', '核對異常', '取消後待回復 OB', '退出後待回復 OB'].indexOf(item.status) !== -1 ||
           ['', '待核對', '核對異常'].indexOf(item.verificationStatus) !== -1;
       })),
       changeRequests: leaves.filter(function(item) {
@@ -20854,7 +21102,7 @@ function canSelfCancelLeaveRow_(row) {
 function canRequestLeaveCancellationRow_(row) {
   return ['確認中', '已領取'].indexOf(cleanText_(row[5])) !== -1 &&
     !canSelfCancelLeaveRow_(row) &&
-    ['申請取消中', '申請退出中'].indexOf(cleanText_(row[18])) === -1;
+    ['申請取消中', '申請退出中', '退出後待回復 OB'].indexOf(cleanText_(row[18])) === -1;
 }
 
 function hasObProcessingStarted_(row) {

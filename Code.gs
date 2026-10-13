@@ -13966,9 +13966,19 @@ function getTeacherHomeDashboard_(session) {
   };
 }
 
+function canActingAdminSupplementClosedLeave_(session) {
+  var actor = cleanText_(session && session.impersonatedBy);
+  if (['冠蓉', 'Tako'].indexOf(actor) === -1 || actor === getSessionTeacherName_(session)) return false;
+  var account = findAccount_(actor);
+  return !!account && isAccountActive_(account.active) &&
+    getAccountManagementCapabilities_(account).indexOf('course_admin') !== -1;
+}
+
 function getMyCourses_(session) {
   var teacher = getSessionTeacherName_(session);
-  if (areLeavesPaused_()) throw new Error('目前已暫停請假登記，請稍後再試。');
+  if (areLeavesPaused_() && !canActingAdminSupplementClosedLeave_(session)) {
+    throw new Error('目前已暫停請假登記，請稍後再試。');
+  }
   var targetMonth = getNextMonthKey_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
@@ -18392,7 +18402,10 @@ function submitLeave_(session, items) {
   var lock = LockService.getScriptLock();
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
-    if (areLeavesPaused_()) throw new Error('目前已暫停請假登記，請稍後再試。');
+    var supplementAfterClose = areLeavesPaused_();
+    if (supplementAfterClose && !canActingAdminSupplementClosedLeave_(session)) {
+      throw new Error('目前已暫停請假登記，請稍後再試。');
+    }
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var courseSheet = requireSheet_(ss, CONFIG.COURSE_SHEET);
     var leaveSheet = requireSheet_(ss, CONFIG.LEAVE_SHEET);
@@ -18491,7 +18504,7 @@ function submitLeave_(session, items) {
           targetId: row[9],
           before: '',
           after: '確認中',
-          reason: [row[2], row[3], row[4]].join(' ')
+          reason: (supplementAfterClose ? '截止後代補：' : '') + [row[2], row[3], row[4]].join(' ')
         };
       }));
       return result;

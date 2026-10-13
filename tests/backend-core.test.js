@@ -5422,6 +5422,111 @@ test('admin can pause new leave requests without changing existing leave records
   assert.equal(backend.submitLeave_(teacherASession, [leaveItem]).created, 1);
 });
 
+test('closed leave registration allows only Kuan and Tako acting for another teacher with an audited deduplicated submission', () => {
+  for (const actor of ['冠蓉', 'Tako']) {
+    const f = createInvitationBackend({ leaveRows: [] });
+    f.accountSheet.values.push(createAccount(f.backend, actor, '1357').concat('', 'course_admin'));
+    const token = f.backend.authenticate_(actor, '1357').sessionToken;
+    f.backend.pauseLeaves_(f.adminSession, true);
+    const settingsBefore = JSON.stringify(f.settingsSheet.values);
+    const courseBefore = JSON.stringify(f.courseSheet.values);
+    const item = { 日期: '2026/08/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a' };
+    const read = JSON.parse(f.backend.doPost({ parameter: {
+      action: 'getMyCourses', sessionToken: token, actingTeacherName: '老師甲',
+    } }).text);
+    assert.equal(read.status, 'success');
+    assert.deepEqual(read.data.map(row => row['OB Calendar ID']), ['calendar-a']);
+    const submit = () => JSON.parse(f.backend.doPost({ parameter: {
+      action: 'submitLeave', sessionToken: token, actingTeacherName: '老師甲', items: JSON.stringify([item]),
+    } }).text);
+    const first = submit();
+    assert.equal(first.status, 'success');
+    assert.equal(first.data.created, 1);
+    const second = submit();
+    assert.equal(second.status, 'success');
+    assert.equal(second.data.created, 0);
+    assert.equal(second.data.duplicates, 1);
+    assert.equal(f.leaveSheet.values.length, 2);
+    assert.equal(f.leaveSheet.values[1][1], '老師甲');
+    assert.equal(f.leaveSheet.values[1][5], '確認中');
+    assert.equal(f.leaveSheet.values[1][10], 'calendar-a');
+    const audit = f.auditSheet.values.find(row => row[3] === f.leaveSheet.values[1][9]);
+    assert.equal(audit[1], `${actor}（代 老師甲 操作）`);
+    assert.match(audit[6], /截止後代補/);
+    assert.equal(JSON.stringify(f.settingsSheet.values), settingsBefore);
+    assert.equal(JSON.stringify(f.courseSheet.values), courseBefore);
+    assert.equal(f.backend.getMyCourses_(f.backend.resolveActingTeacherSession_(f.backend.requireSession_(token), '老師甲')).length, 0);
+  }
+});
+
+test('closed leave registration rejects self mode other administrators and forged acting identities without writes', () => {
+  const f = createInvitationBackend({ leaveRows: [] });
+  f.accountSheet.values.push(createAccount(f.backend, '冠蓉', '1357').concat('', 'course_admin'));
+  const kuanToken = f.backend.authenticate_('冠蓉', '1357').sessionToken;
+  f.backend.pauseLeaves_(f.adminSession, true);
+  const before = JSON.stringify(f.leaveSheet.values);
+  const auditBefore = JSON.stringify(f.auditSheet.values);
+  const item = { 日期: '2026/08/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a' };
+  for (const params of [
+    { sessionToken: kuanToken },
+    { sessionToken: kuanToken, actingTeacherName: '冠蓉' },
+    { sessionToken: f.adminToken, actingTeacherName: '老師甲' },
+    { sessionToken: f.teacherAToken, impersonatedBy: '冠蓉' },
+    { sessionToken: f.teacherAToken, actingTeacherName: '老師乙', impersonatedBy: '冠蓉' },
+  ]) {
+    for (const action of ['getMyCourses', 'submitLeave']) {
+      const response = JSON.parse(f.backend.doPost({ parameter: { ...params, action, items: JSON.stringify([item]) } }).text);
+      assert.equal(response.status, 'error');
+      assert.match(response.message, /暫停請假|課程管理權限/);
+    }
+  }
+  assert.equal(JSON.stringify(f.leaveSheet.values), before);
+  assert.equal(JSON.stringify(f.auditSheet.values), auditBefore);
+});
+
+test('closed leave registration checks the real acting administrator is still active and authorized', () => {
+  for (const revoked of ['inactive', 'capability']) {
+    const f = createInvitationBackend({ leaveRows: [] });
+    f.accountSheet.values.push(createAccount(f.backend, 'Tako', '1357').concat('', 'course_admin'));
+    const session = f.backend.requireSession_(f.backend.authenticate_('Tako', '1357').sessionToken);
+    const acting = f.backend.resolveActingTeacherSession_(session, '老師甲');
+    f.backend.pauseLeaves_(f.adminSession, true);
+    const account = f.accountSheet.values.at(-1);
+    if (revoked === 'inactive') account[3] = '否';
+    else account[8] = '';
+    const before = JSON.stringify(f.leaveSheet.values);
+    assert.throws(() => f.backend.getMyCourses_(acting), /暫停請假/);
+    assert.throws(() => f.backend.submitLeave_(acting, [{
+      日期: '2026/08/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a',
+    }]), /暫停請假/);
+    assert.equal(JSON.stringify(f.leaveSheet.values), before);
+  }
+});
+
+test('closed acting leave registration retains month ownership and stale-course validation', () => {
+  const f = createInvitationBackend({ leaveRows: [], courseRows: [
+    ['2026/08/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-a'],
+    ['2026/07/01', '09:00', '空環 Lv.1', '老師甲', 'calendar-old'],
+    ['2026/08/01', '10:00', '空環 Lv.1', '老師乙', 'calendar-b'],
+  ] });
+  f.accountSheet.values.push(createAccount(f.backend, '冠蓉', '1357').concat('', 'course_admin'));
+  const acting = f.backend.resolveActingTeacherSession_(f.backend.requireSession_(f.backend.authenticate_('冠蓉', '1357').sessionToken), '老師甲');
+  f.backend.pauseLeaves_(f.adminSession, true);
+  const before = JSON.stringify(f.leaveSheet.values);
+  assert.deepEqual(Array.from(f.backend.getMyCourses_(acting), row => row['OB Calendar ID']), ['calendar-a']);
+  const result = f.backend.submitLeave_(acting, [
+    { 日期: '2026/07/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-old' },
+    { 日期: '2026/08/01', 時間: '10:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-b' },
+    { 日期: '2026/08/01', 時間: '09:15', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a' },
+  ]);
+  assert.equal(result.created, 0);
+  assert.equal(result.failed, 3);
+  assert.match(result.errors[0].message, /下個月/);
+  assert.match(result.errors[1].message, /有效課程/);
+  assert.match(result.errors[2].message, /有效課程/);
+  assert.equal(JSON.stringify(f.leaveSheet.values), before);
+});
+
 test('monthly operations require course-admin permission and enforce the leave-to-substitute order', () => {
   const { backend, adminSession, teacherASession } = createInvitationBackend();
   backend.getCurrentMonthlyOperationsMonthKey_ = () => '2026-09';

@@ -2051,23 +2051,23 @@ test('special-course start options label delays relative to the original slot wi
   assert.equal(select.value, '17:30');
 });
 
-test('single-slot special course blocks a gap shorter than 90 minutes after turnover', () => {
+test('single-slot special course blocks a gap shorter than 75 minutes after turnover', () => {
   const { context } = createFrontendRuntime();
   const availability = {
     'leave-tight': {
-      startTime: '13:30', earliestStartTime: '13:30', nextCourseTime: '15:00',
-      mergePartnerIds: ['leave-next'], maxDurationMinutes: 75,
+      startTime: '13:30', earliestStartTime: '13:30', nextCourseTime: '14:45',
+      mergePartnerIds: ['leave-next'], maxDurationMinutes: 60,
     },
   };
 
   assert.equal(
     context.getSingleSlotSpecialCourseBlockReason(availability['leave-tight']),
-    '扣除 15 分鐘換場後不足 90 分鐘，無法安排單堂特別課；請改用「使用連續時段」。',
+    '扣除 15 分鐘換場後不足 75 分鐘，無法安排單堂特別課；請改用「使用連續時段」。',
   );
   assert.equal(context.getSingleSlotSpecialCourseBlockReason({ maxDurationMinutes: 90 }), '');
   assert.throws(() => context.validateSpecialCourseDraft({
     mode: 'vacancy', substituteIds: ['leave-tight'], courseName: '主題課', durationMinutes: 90, note: '',
-  }, availability), /不足 90 分鐘.*使用連續時段/);
+  }, availability), /不足 75 分鐘.*使用連續時段/);
 
   const earlyEligible = {
     'leave-tight': {
@@ -2081,8 +2081,8 @@ test('single-slot special course blocks a gap shorter than 90 minutes after turn
   };
   assert.equal(context.getSingleSlotSpecialCourseBlockReason(earlyEligible['leave-tight']), '');
   assert.match(context.getSingleSlotSpecialCourseBlockReason({
-    startTime: '13:30', earliestStartTime: '13:05', maxDurationMinutes: 65,
-  }), /不足 90 分鐘/);
+    startTime: '13:30', earliestStartTime: '13:05', maxDurationMinutes: 50,
+  }), /不足 75 分鐘/);
   assert.doesNotThrow(() => context.validateSpecialCourseDraft({
     mode: 'vacancy', substituteIds: ['leave-tight'], actualStartTime: '13:15',
     courseName: '主題課', durationMinutes: 90, note: '',
@@ -5416,3 +5416,13 @@ test('invoice admin reports issued failed and uncertain gateway outcomes separat
 
   assert.deepEqual(JSON.parse(JSON.stringify(summary)), { issued: 1, failed: 2, uncertain: 1 });
 });
+
+test('75 minute special option fits a 90 minute gap with turnover', () => {
+  assert.match(html, /name="special-duration" value="75"/);
+  const {context}=createFrontendRuntime();
+  const availability={'leave-75':{room:'A',date:'2026/10/20',startTime:'18:30',nextCourseTime:'20:00',maxDurationMinutes:75}};
+  assert.equal(context.getSingleSlotSpecialCourseBlockReason(availability['leave-75']), '');
+  assert.ok(context.getSpecialCourseStartTimeOptions('leave-75',75,availability).length>0);
+  const draft=context.validateSpecialCourseDraft({mode:'vacancy',substituteIds:['leave-75'],courseName:'75分鐘特別課',durationMinutes:75},availability);
+  assert.equal(draft.durationMinutes,75);
+ });

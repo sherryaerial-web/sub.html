@@ -16051,3 +16051,42 @@ test('rental creation posts one guarded calendar payload and returns the OB id',
     privateNotes: 'Sherry rental request: rent-uuid',
   });
 });
+
+test('75-minute special claim persists duration and reserves turnover', () => {
+  const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/11', '18:30', 'A－舞綢 Lv.1', '老師乙', 'cal-special-1', 'class-silk', 'teacher-b', '否', ''],
+      ['2026/08/11', '21:00', 'A－空環 Lv.1', '老師丙', 'cal-later', 'class-ring', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [[
+      'stamp', '老師乙', '2026/08/11', '18:30', 'A－舞綢 Lv.1',
+      '確認中', '', '', '', 'leave-special-1', 'cal-special-1',
+    ]],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', substituteIds: ['leave-special-1'], courseName: '空中特別編舞',
+    durationMinutes: 150, difficulty: '', note: '使用後方空堂。',
+  }), /15 分鐘換場.*最晚.*20:45/);
+
+  assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', substituteIds: ['leave-special-1'], courseName: '空中特別編舞',
+    durationMinutes: 89, difficulty: '', note: '',
+  }), /90 至 240 分鐘/);
+
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', substituteIds: ['leave-special-1'], courseName: '空中特別編舞',
+    durationMinutes: 75, difficulty: '', note: '',
+  });
+
+  const row = leaveSheet.values.find((item) => item[9] === 'leave-special-1');
+  assert.equal(result.count, 1);
+  assert.equal(row[5], '已領取');
+  assert.equal(row[6], '老師甲');
+  assert.equal(row[12], '空中特別編舞');
+  assert.equal(row[14], '需要新增課程');
+  assert.equal(row[19], '其他');
+  assert.match(row[21], /^invitation-uuid-/);
+  assert.deepEqual(row.slice(22, 25), ['使用後方空堂', 75, '19:45']);
+});

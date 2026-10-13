@@ -17483,8 +17483,8 @@ function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationM
   var wantedKey = cleanText_(startSlotKey);
   var duration = Number(durationMinutes);
   if (!wantedKey) throw new Error('請只勾選特別課開始的第一堂。');
-  if (!isFinite(duration) || Math.floor(duration) !== duration || duration < 90 || duration > 240) {
-    throw new Error('特別課時長必須是 90 至 240 分鐘的整數。');
+  if (!isFinite(duration) || Math.floor(duration) !== duration || (duration !== 75 && duration < 90) || duration > 240) {
+    throw new Error('特別課時長必須是 75 分鐘，或 90 至 240 分鐘的整數。');
   }
 
   var availableSlots = buildSpecialCourseSlotsForTeacher_(teacher, pendingRows, courseRows);
@@ -17642,8 +17642,8 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
   var wantedId = cleanText_(startId);
   var duration = Number(durationMinutes);
   if (!wantedId) throw new Error('請只勾選特別課開始的第一堂。');
-  if (!isFinite(duration) || Math.floor(duration) !== duration || duration < 90 || duration > 240) {
-    throw new Error('特別課時長必須是 90 至 240 分鐘的整數。');
+  if (!isFinite(duration) || Math.floor(duration) !== duration || (duration !== 75 && duration < 90) || duration > 240) {
+    throw new Error('特別課時長必須是 75 分鐘，或 90 至 240 分鐘的整數。');
   }
 
   var startRow = null;
@@ -18521,8 +18521,8 @@ function claimSpecialCourse_(session, payload) {
   }
   if (!courseName) throw new Error('請填寫特別課名稱。');
   if (!isFinite(durationMinutes) || Math.floor(durationMinutes) !== durationMinutes ||
-      durationMinutes < 90 || durationMinutes > 240) {
-    throw new Error('特別課時長必須是 90 至 240 分鐘的整數。');
+      (durationMinutes !== 75 && durationMinutes < 90) || durationMinutes > 240) {
+    throw new Error('特別課時長必須是 75 分鐘，或 90 至 240 分鐘的整數。');
   }
 
   var lock = LockService.getScriptLock();

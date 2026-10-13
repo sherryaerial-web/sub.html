@@ -20617,7 +20617,7 @@ function getAdminCompletedRecordMonthKeys_(openingHistoryValue, fallbackNextMont
   if (month === 13) { year += 1; month = 1; }
   if (month === 0) { year -= 1; month = 12; }
   var adjacentMonth = year + '-' + ('0' + month).slice(-2);
-  return openingMonth ? [openingMonth, adjacentMonth] : [adjacentMonth, anchor];
+  return openingMonth ? [adjacentMonth] : [anchor];
 }
 
 function getAdminDashboard_(session) {

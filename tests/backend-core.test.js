@@ -9079,7 +9079,7 @@ test('reconcile and dashboard exceptions only include next-month leave records',
   );
 });
 
-test('admin completed records retain current and open months without changing other queues or stored history', () => {
+test('admin completed records retain only the open month without changing other queues or stored history', () => {
   const leave = (date, id, verification, change = '') => [
     'stamp', '老師甲', date, '13:30', 'B－舞綢 Lv.1~2', '已領取', '老師乙', '', '待處理',
     id, 'calendar-' + id, '', '主題特別課', '', '沿用原課程', verification, '', '', change,
@@ -9098,6 +9098,7 @@ test('admin completed records retain current and open months without changing ot
       leave('2026/11/01', 'leave-nov-start', '已核對'),
       leave('2026/11/30', 'leave-nov-end', '已關閉'),
       leave('2026/12/01', 'leave-dec', '已核對'),
+      leave('2027/01/01', 'leave-jan', '已核對'),
       leave('2026/10/15', 'leave-old-pending', '待核對'),
       leave('2026/10/16', 'leave-old-cancel', '待核對', '申請取消中'),
       leave('2026/11/16', 'leave-nov-exception', '核對異常'),
@@ -9106,6 +9107,7 @@ test('admin completed records retain current and open months without changing ot
       special('2026/10/31', 'special-oct', '已完成', '已核對'),
       special('2026/11/01', 'special-nov', '已完成', '已核對'),
       special('2026/12/01', 'special-dec', '已完成', '已核對'),
+      special('2027/01/01', 'special-jan', '已完成', '已核對'),
       special('2026/10/15', 'special-old-pending', '待處理', '待核對'),
     ],
   });
@@ -9113,7 +9115,7 @@ test('admin completed records retain current and open months without changing ot
   const specialBefore = JSON.stringify(specialRequestSheet.values);
   const dashboard = backend.getAdminDashboard_(adminSession);
   assert.deepEqual(Array.from(dashboard.completed, item => item.substituteId || item.specialGroupId),
-    ['leave-oct', 'leave-nov-start', 'leave-nov-end', 'special-oct', 'special-nov']);
+    ['leave-nov-start', 'leave-nov-end', 'special-nov']);
   assert.deepEqual(Array.from(dashboard.obWork, item => item.substituteId || item.specialGroupId),
     ['leave-old-pending', 'leave-old-cancel', 'leave-nov-exception', 'special-old-pending']);
   assert.deepEqual(Array.from(dashboard.changeRequests, item => item.substituteId), ['leave-old-cancel']);
@@ -9123,7 +9125,7 @@ test('admin completed records retain current and open months without changing ot
   backend.getNextMonthKey_ = () => '2026-12';
   assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
     item => item.substituteId || item.specialGroupId),
-    ['leave-nov-start', 'leave-nov-end', 'leave-dec', 'special-nov', 'special-dec']);
+    ['leave-dec', 'special-dec']);
 
   backend.getNextMonthKey_ = () => '2026-11';
   let operationTime = '2026-10-13 20:30:00';
@@ -9136,16 +9138,16 @@ test('admin completed records retain current and open months without changing ot
   backend.pauseLeaves_(adminSession, true);
   assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
     item => item.substituteId || item.specialGroupId),
-    ['leave-oct', 'leave-nov-start', 'leave-nov-end', 'special-oct', 'special-nov']);
+    ['leave-nov-start', 'leave-nov-end', 'special-nov']);
   operationTime = '2026-11-06 20:30:00';
   backend.pauseLeaves_(adminSession, false);
   assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
     item => item.substituteId || item.specialGroupId),
-    ['leave-nov-start', 'leave-nov-end', 'leave-dec', 'special-nov', 'special-dec']);
+    ['leave-dec', 'special-dec']);
   operationTime = '2026-12-06 20:30:00';
   backend.pauseLeaves_(adminSession, false);
   assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
-    item => item.substituteId || item.specialGroupId), ['leave-dec', 'special-dec']);
+    item => item.substituteId || item.specialGroupId), ['leave-jan', 'special-jan']);
   assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);
   assert.equal(JSON.stringify(specialRequestSheet.values), specialBefore);
 });

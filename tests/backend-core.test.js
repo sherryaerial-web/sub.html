@@ -8536,6 +8536,178 @@ test('special-course group reconciliation treats dance wording as optional witho
   }
 });
 
+test('own special reconciliation ignores specialist and special-course label suffixes', () => {
+  for (const [expected, actual] of [
+    ['Monkey Roll 🐒 專攻班', 'A－Monkey Roll 🐒 專攻特別課 (75min)'],
+    ['Snake Roll 🐍 專攻班', 'A－Snake Roll 🐍 專攻特別課 (75min)'],
+    ['Lion Roll 🦁 專攻班', 'A－Lion Roll 🦁 專攻特別課 (75min)'],
+    ['Monkey Roll 🐒 特別課', 'A－Monkey Roll 🐒 專攻班特別課 (75min)'],
+    ['Monkey Roll 🐒 專攻班', 'A－Monkey Roll 🐒 特別課 (75min)'],
+    ['Monkey Roll 🐒 專攻班特別課', 'A－Monkey Roll 🐒 專攻特別課 (75min)'],
+    ['Monkey Roll 🐒 專攻班Lv2', 'A－Monkey Roll 🐒 專攻特別課Lv.2(75min)'],
+    ['Monkey Roll 🐒 專攻Lv2', 'A－Monkey Roll 🐒 專攻特別課Lv.2(75min)'],
+  ]) {
+    const f = createInvitationBackend({ nextMonth: '2026-11', leaveRows: [],
+      courseRows: [['2026/11/08', '16:00', actual, '老師甲', 'roll-id']],
+      specialRequestRows: [['stamp', 'roll-group', '老師甲', '2026/11/08', 'A', JSON.stringify([{
+        sourceType: 'own', date: '2026/11/08', time: '16:00', room: 'A',
+        calendarId: 'roll-id', courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲',
+      }]), '[]', '16:00', expected, /Lv/.test(expected) ? 'Lv2' : '', 75, '17:15',
+      '使用後方空堂', '', '待處理', '待核對', '', '', '']],
+    });
+    assert.equal(f.backend.reconcileObChanges_(f.adminSession).matched, 1, expected + ' / ' + actual);
+    assert.equal(f.specialRequestSheet.values[1][15], '已核對');
+    assert.equal(f.specialRequestSheet.values[1][8], expected);
+    assert.equal(f.specialRequestSheet.values[1][10], 75);
+  }
+});
+
+test('special label suffix matching preserves main-title teacher time level and ordinary-course checks', () => {
+  const backend = loadBackend();
+  const expected = { teacher: '老師甲', course: 'Monkey Roll 專攻班', difficulty: 'Lv2',
+    expectedTime: '16:00', classId: '' };
+  const row = ['2026/11/08', '16:00', 'A－Monkey Roll 專攻特別課Lv2(75min)', '老師甲', 'roll'];
+  const compare = (r, e = expected) => Array.from(backend.getObCourseDifferences_('roll', r, e,
+    backend.normalizeSpecialCourseReconciliationName_));
+  assert.deepEqual(compare(row), []);
+  for (const [index, value, error] of [
+    [2, 'A－Snake Roll 專攻特別課Lv2(75min)', /課程不一致/],
+    [2, 'A－Monkey Roll 專攻特別課Lv3(75min)', /等級不一致/],
+    [3, '老師乙', /指導者不一致/], [1, '16:15', /時間不一致/],
+  ]) { const r = row.slice(); r[index] = value; assert.match(compare(r).join('；'), error); }
+  assert.equal(backend.ordinaryCourseReconciliationNamesMatch_('Monkey Roll 專攻班', 'Monkey Roll 特別課'), false);
+  assert.notEqual(backend.normalizeSpecialCourseReconciliationName_('專攻班'), backend.normalizeSpecialCourseReconciliationName_('特別課'));
+  assert.notEqual(backend.normalizeSpecialCourseReconciliationName_('專攻班招生'), backend.normalizeSpecialCourseReconciliationName_('特別課招生'));
+});
+
+test('special label suffix matching does not bypass an unshifted own continuation', () => {
+  const f = createInvitationBackend({ nextMonth: '2026-11', leaveRows: [],
+    courseRows: [
+      ['2026/11/01', '16:00', 'A－Flare 專攻特別課Lv4(90min)', '老師甲', 'flare-id'],
+      ['2026/11/01', '17:30', 'A－空環 Lv.2~3', '老師甲', 'continuation-id'],
+    ], specialRequestRows: [['stamp', 'flare-group', '老師甲', '2026/11/01', 'A', JSON.stringify([
+      { sourceType: 'own', date: '2026/11/01', time: '16:00', room: 'A', calendarId: 'flare-id',
+        courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲' },
+      { sourceType: 'own-continuation', date: '2026/11/01', time: '17:30', originalTime: '17:30',
+        actualStartTime: '17:45', room: 'A', calendarId: 'continuation-id',
+        courseName: 'A－空環 Lv.2~3', originalTeacher: '老師甲', durationMinutes: 60, delayMinutes: 15 },
+    ]), '[]', '16:00', 'Flare 專攻班', 'Lv4', 90, '17:30', '使用連續時段', '', '待處理', '待核對', '', '', '']],
+  });
+  const r = f.backend.reconcileObChanges_(f.adminSession);
+  assert.equal(r.exceptions, 1);
+  assert.doesNotMatch(f.specialRequestSheet.values[1][17], /課程不一致/);
+  assert.match(f.specialRequestSheet.values[1][17], /接續常態課.*17:45.*17:30/);
+});
+
+test('special reconciliation requires the literal payroll marker even when the main title or class ID matches', () => {
+  const backend = loadBackend();
+  for (const classId of ['', 'roll-class']) {
+    const expected = { teacher: '老師甲', course: 'Monkey Roll 專攻班', difficulty: 'Lv2',
+      expectedTime: '16:00', classId };
+    for (const title of ['A－Monkey Roll 專攻班 Lv2(75min)', 'A－Monkey Roll 專攻 Lv2(75min)']) {
+      const row = ['2026/11/08', '16:00', title, '老師甲', 'roll', 'roll-class'];
+      assert.match(backend.getObCourseDifferences_('roll', row, expected,
+        backend.normalizeSpecialCourseReconciliationName_).join('；'), /缺少.*特別課.*薪資/);
+    }
+  }
+});
+
+test('special reconciliation never bypasses its main topic or level just because the class ID matches', () => {
+  const backend = loadBackend();
+  const expectation = { teacher: '老師甲', course: 'Monkey Roll 專攻班', difficulty: 'Lv2',
+    expectedTime: '16:00', classId: 'shared-special-template' };
+  for (const [title, error] of [
+    ['A－Snake Roll 專攻特別課Lv2(75min)', /課程不一致/],
+    ['A－Monkey Roll 專攻特別課Lv3(75min)', /等級不一致/],
+  ]) {
+    const row = ['2026/11/08', '16:00', title, '老師甲', 'roll', 'shared-special-template'];
+    assert.match(backend.getObCourseDifferences_('roll', row, expectation,
+      backend.normalizeSpecialCourseReconciliationName_).join('；'), error);
+  }
+});
+
+test('special reconciliation matches the confirmed Flare descriptions but keeps other main topics distinct', () => {
+  const backend = loadBackend();
+  const expectation = { teacher: '老師甲', course: 'Flare lv4 高階應用專攻班', difficulty: 'Lv4',
+    expectedTime: '16:00', classId: '' };
+  const actual = ['2026/11/01', '16:00', 'A－空環Flare專攻特別課Lv4', '老師甲', 'flare'];
+  assert.deepEqual(Array.from(backend.getObCourseDifferences_('flare', actual, expectation,
+    backend.normalizeSpecialCourseReconciliationName_)), []);
+  assert.equal(backend.getSpecialCourseReconciliationParts_(actual[2]).difficulty, 'Lv.4');
+  for (const title of ['A－空環Snake專攻特別課Lv4', 'A－空環Flare連續技巧專攻特別課Lv4']) {
+    const changed = actual.slice(); changed[2] = title;
+    assert.match(backend.getObCourseDifferences_('flare', changed, expectation,
+      backend.normalizeSpecialCourseReconciliationName_).join('；'), /課程不一致/);
+  }
+});
+
+test('special label grade parsing keeps attached specialist levels and payroll classification intact', () => {
+  const backend = loadBackend();
+  assert.equal(backend.getSpecialCourseReconciliationParts_('Monkey Roll 專攻Lv3').difficulty, 'Lv.3');
+  const expectation = { teacher: '老師甲', course: 'Monkey Roll 專攻Lv3', difficulty: '', expectedTime: '16:00', classId: '' };
+  const row = ['2026/11/08', '16:00', 'A－Monkey Roll 專攻特別課Lv2(75min)', '老師甲', 'roll'];
+  assert.match(backend.getObCourseDifferences_('roll', row, expectation,
+    backend.normalizeSpecialCourseReconciliationName_).join('；'), /等級不一致/);
+  const salary = backend.calculatePayrollLinesForCourse_({ calendarId: 'roll', courseName: row[2],
+    instructors: [{ name: '老師甲' }], courseIncome: 3000 }, []);
+  assert.equal(salary[0].ruleType, '特別課60%');
+  assert.equal(salary[0].amount, 1800);
+});
+
+test('manual special replacement linking uses the same main-title and payroll-marker rules', () => {
+  for (const [actual, status, error] of [
+    ['B－Monkey Roll 專攻特別課 (75min)', '已核對', null],
+    ['Monkey Roll 專攻班', '核對異常', /缺少.*特別課.*薪資/],
+    ['B－Snake Roll 專攻特別課 (75min)', '核對異常', /課程不一致/],
+  ]) {
+    const row = createSpecialGroupReconciliationRows('manual-special').slice(0, 1)[0];
+    row[12] = 'Monkey Roll 專攻班'; row[23] = 75; row[24] = '14:45';
+    const f = createInvitationBackend({ leaveRows: [row],
+      courseRows: [['2026/08/12', '13:30', actual, '老師甲', 'manual-special-new', 'class-special']],
+    });
+    const result = f.backend.linkReplacementCalendarItem_(f.adminSession, 'leave-special-1', 'manual-special-new');
+    assert.equal(result.verificationStatus, status);
+    assert.equal(f.leaveSheet.values[1][12], 'Monkey Roll 專攻班');
+    if (error) assert.match(result.differences.join('；'), error);
+    else assert.deepEqual(Array.from(result.differences), []);
+  }
+});
+
+test('legacy specials without group IDs enforce marker topic level and time at reconciliation and linking entrypoints', () => {
+  for (const useLink of [false, true]) {
+    for (const [actual, actualTime, expectedStatus, error] of [
+      ['Monkey Roll 專攻特別課Lv2(75min)', '13:30', '已核對', null],
+      ['Snake Roll Lv.3', '13:30', '核對異常', /缺少.*特別課.*薪資/],
+      ['Snake Roll 專攻特別課Lv2', '13:30', '核對異常', /課程不一致/],
+      ['Monkey Roll 專攻特別課Lv3', '13:30', '核對異常', /等級不一致/],
+      ['Monkey Roll 專攻特別課Lv2', '14:00', '核對異常', /時間不一致/],
+    ]) {
+      const row = createSpecialGroupReconciliationRows('')[0];
+      row[11] = 'shared-template'; row[12] = 'Monkey Roll 專攻班'; row[13] = 'Lv2';
+      row[14] = '調整為特別課'; row[22] = ''; row[23] = ''; row[24] = '';
+      const f = createInvitationBackend({ leaveRows: [row], courseRows: [
+        ['2026/08/12', actualTime, actual, '老師甲', 'group-calendar-1', 'shared-template'],
+      ] });
+      if (useLink) f.backend.linkReplacementCalendarItem_(f.adminSession, 'leave-special-1', 'group-calendar-1');
+      else f.backend.reconcileObChanges_(f.adminSession);
+      assert.equal(f.leaveSheet.values[1][15], expectedStatus, actual + ' / ' + actualTime);
+      if (error) assert.match(f.leaveSheet.values[1][17], error);
+      if (actualTime !== '13:30') assert.equal(f.leaveSheet.values[1][25] || '', '');
+    }
+  }
+});
+
+test('special reconciliation never requires the marker when restoring an ordinary original course', () => {
+  const row = createSpecialGroupReconciliationRows('')[0];
+  row[8] = '待回復'; row[15] = '待回復 OB'; row[18] = '退出後待回復 OB';
+  const f = createInvitationBackend({ leaveRows: [row], courseRows: [
+    ['2026/08/12', '13:30', 'B－空環 Lv.2', '老師乙', 'group-calendar-1'],
+  ] });
+  assert.equal(f.backend.reconcileObChanges_(f.adminSession).matched, 1);
+  assert.equal(f.leaveSheet.values[1][15], '');
+  assert.equal(f.leaveSheet.values[1][18], '');
+});
+
 test('own special requests accept optional dance wording while preserving their planned title', () => {
   const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
     nextMonth: '2026-11', leaveRows: [],

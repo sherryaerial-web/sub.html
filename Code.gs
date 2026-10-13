@@ -19756,7 +19756,8 @@ function reconcileObChanges_(session) {
         row: row,
         effectiveCalendarId: effectiveCalendarId,
         expectation: expectation,
-        differences: getObCourseDifferences_(effectiveCalendarId, obRow, expectation)
+        differences: getObCourseDifferences_(effectiveCalendarId, obRow, expectation,
+          usesSpecialCourseReconciliation_(row) ? normalizeSpecialCourseReconciliationName_ : undefined)
       });
     }
 
@@ -20278,6 +20279,10 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
   } else if (!obRow) {
     differences.push('找不到 OB 課程（Calendar ID：' + effectiveCalendarId + '）');
   } else {
+    if (courseNameNormalizer === normalizeSpecialCourseReconciliationName_ &&
+        cleanText_(obRow[2]).indexOf('特別課') === -1) {
+      differences.push('OB 課名缺少「特別課」，無法確認特別課薪資');
+    }
     if (cleanText_(obRow[3]) !== expectation.teacher) {
       differences.push('指導者不一致：預期 ' + expectation.teacher + '，OB 為 ' + cleanText_(obRow[3]));
     }
@@ -20285,7 +20290,8 @@ function getObCourseDifferences_(effectiveCalendarId, obRow, expectation, course
       if (cleanText_(obRow[5]) !== expectation.classId) {
         differences.push('課程不一致：預期 Class ID ' + expectation.classId + '，OB 為 ' + cleanText_(obRow[5]));
       }
-    } else {
+    }
+    if (!expectation.classId || courseNameNormalizer === normalizeSpecialCourseReconciliationName_) {
       var courseNamesMatch = typeof courseNameNormalizer === 'function'
         ? normalizeCourse(obRow[2]) === normalizeCourse(expectation.course)
         : ordinaryCourseReconciliationNamesMatch_(expectation.course, obRow[2], {
@@ -20340,6 +20346,12 @@ function ordinaryCourseReconciliationNamesMatch_(expectedCourse, obCourse, optio
     normalizeOrdinaryCourseReconciliationName_(actual);
 }
 
+function usesSpecialCourseReconciliation_(row) {
+  if (['取消後待回復 OB', '退出後待回復 OB'].indexOf(cleanText_(row[18])) !== -1) return false;
+  return Boolean(cleanText_(row[21])) || /特別課/.test(cleanText_(row[14])) ||
+    /特別課/.test(cleanText_(row[12]) || cleanText_(row[4]));
+}
+
 function normalizeSpecialCourseReconciliationName_(value) {
   return getSpecialCourseReconciliationParts_(value).name;
 }
@@ -20348,13 +20360,14 @@ function getSpecialCourseReconciliationParts_(value) {
   var displayName = stripCourseRoom_(value)
     .replace(/舞碼/g, '')
     .replace(/[（(]\s*\d+\s*(?:min|分鐘)\s*[)）]\s*$/i, '')
-    .replace(/(特別課)(Lv\.?\s*\d+(?:\s*[~\-–—]\s*\d+)?)(?=[（(〈]|$)/i, '$1 $2')
+    .replace(/(專攻班|特別課|專攻)(Lv\.?\s*\d+(?:\s*[~\-–—]\s*\d+)?)(?=\s|[（(〈]|$)/i, '$1 $2')
     .replace(/[＆﹠]/g, '&')
     .replace(/瑜珈/g, '瑜伽');
   var courseParts = parseClaimCourseOption_(displayName);
-  var normalizedName = normalizeCourseName_(courseParts.courseTypeName.replace(/\s*特別課\s*$/, ''))
-    .replace(/摺疊環/g, '折疊環')
-    .replace(/^空環中軸專攻班$/, '空環中軸專攻');
+  var normalizedName = normalizeCourseName_(courseParts.courseTypeName.replace(
+    /(?:\s*(?:專攻班|專攻特別課|特別課|專攻))+\s*$/, ''
+  )).replace(/摺疊環/g, '折疊環')
+    .replace(/^(?:flare高階應用|空環flare)$/, 'flare');
   if (!normalizedName) normalizedName = normalizeCourseName_(stripCourseRoom_(value));
   return {
     name: normalizedName === '空中環' ? '空環' : normalizedName,
@@ -20482,7 +20495,8 @@ function getObExpectation_(row, courseRows, newTeacherMonthMap) {
     classId: expectedClassId,
     promotionType: promotionType,
     allowRoomChange: allowRoomChange,
-    expectedTime: formatMyTime(row[25]),
+    expectedTime: formatMyTime(row[25]) || (usesSpecialCourseReconciliation_(row)
+      ? getSpecialCourseActualStartTime_(row[23], row[24]) || formatMyTime(row[3]) : ''),
     restoreType: '',
     closeType: ''
   };
@@ -20554,7 +20568,7 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
         while (nextRow.length < SHEET_HEADERS.LEAVES.length) nextRow.push('');
         var isRestore = ['取消後待回復 OB', '退出後待回復 OB'].indexOf(changeStatus) !== -1;
         nextRow[20] = replacementId;
-        if (!isRestore) {
+        if (!isRestore && !usesSpecialCourseReconciliation_(nextRow)) {
           var originalStartMinutes = timeTextToMinutes_(formatMyTime(nextRow[3]));
           var replacementStartMinutes = timeTextToMinutes_(obCourse.time);
           nextRow[25] = obCourse.time;
@@ -20567,7 +20581,8 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
         var differences = getObCourseDifferences_(
           replacementId,
           obCourse.sourceRow,
-          expectation
+          expectation,
+          usesSpecialCourseReconciliation_(nextRow) ? normalizeSpecialCourseReconciliationName_ : undefined
         );
         var now = getTimestamp_();
         if (!differences.length) {
@@ -20618,7 +20633,7 @@ function linkReplacementCalendarItem_(session, substituteId, replacementCalendar
             replacementCalendarId: replacementId,
             verificationStatus: cleanText_(nextRow[15]) || (expectation.restoreType === 'withdrawal' ? '已重新開放' : ''),
             differences: differences,
-            actualStartTime: formatMyTime(nextRow[25]) || formatMyTime(nextRow[3])
+            actualStartTime: expectation.expectedTime || formatMyTime(nextRow[3])
           };
     });
   });

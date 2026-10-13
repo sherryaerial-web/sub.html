@@ -6696,6 +6696,69 @@ test('own-only special claim appends one arrangement and never creates or change
   assert.equal(specialRequestSheet.values[1][17], '');
 });
 
+test('ninety-minute single-source special claim preserves the delayed ordinary continuation and OB verification', () => {
+  const { backend, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '16:00', 'A－空環 Lv.1~2', '老師甲', 'first', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '17:30', 'A－空環 Lv.2~3', '老師甲', 'next', 'class-b', 'teacher-a', '否', ''],
+      ['2026/08/10', '19:00', 'A－舞綢 Lv.1', '老師乙', 'following', 'class-c', 'teacher-b', '否', ''],
+    ], leaveRows: [],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'merge', startSlotKey: 'own:first', actualStartTime: '16:00',
+    courseName: 'Flare lv4 高階應用專攻班', durationMinutes: 90, difficulty: '', note: '',
+  });
+  assert.equal(result.count, 1);
+  assert.equal(result.endTime, '17:30');
+  assert.equal(result.continuation.actualStartTime, '17:45');
+  assert.equal(result.continuation.endTime, '18:45');
+  assert.equal(leaveSheet.values.length, 1);
+  const slots = JSON.parse(specialRequestSheet.values[1][5]);
+  assert.deepEqual(slots.map(slot => slot.sourceType), ['own', 'own-continuation']);
+  assert.deepEqual(slots.map(slot => slot.calendarId), ['first', 'next']);
+  assert.equal(specialRequestSheet.values[1][10], 90);
+  assert.equal(specialRequestSheet.values[1][11], '17:30');
+  const wrongOutcome = backend.getSpecialCourseRequestObOutcome_(specialRequestSheet.values[1], {
+    first: ['2026/08/10', '16:00', 'A－Flare lv4 高階應用專攻班 (90min)', '老師甲', 'first'],
+    next: ['2026/08/10', '17:30', 'A－空環 Lv.2~3', '老師甲', 'next'],
+  });
+  assert.match(wrongOutcome.differences.join('；'), /接續常態課：時間不一致.*17:45.*17:30/);
+});
+
+test('single-source special continuation blocks duplicate and overlapping claims until cancellation is verified', () => {
+  const { backend, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    courseRows: [
+      ['2026/08/10', '16:00', 'A－空環 Lv.1~2', '老師甲', 'first', 'class-a', 'teacher-a', '否', ''],
+      ['2026/08/10', '17:30', 'A－空環 Lv.2~3', '老師甲', 'next', 'class-b', 'teacher-a', '否', ''],
+      ['2026/08/10', '19:00', 'A－舞綢 Lv.1', '老師乙', 'following', 'class-c', 'teacher-b', '否', ''],
+    ], leaveRows: [],
+  });
+  backend.openInvitations_(adminSession, ['老師甲']);
+  const payload = { mode: 'merge', startSlotKey: 'own:first', actualStartTime: '16:00',
+    courseName: '主題特別課', durationMinutes: 90, difficulty: '', note: '' };
+  backend.claimSpecialCourse_(teacherASession, payload);
+  for (const [status, verification] of [
+    ['待處理', '待核對'], ['已完成', '已核對'], ['申請取消中', '已核對'],
+    ['取消後待回復 OB', '待回復 OB'], ['已取消', '核對異常'],
+  ]) {
+    specialRequestSheet.values[1][14] = status;
+    specialRequestSheet.values[1][15] = verification;
+    const before = JSON.stringify(specialRequestSheet.values);
+    assert.throws(() => backend.claimSpecialCourse_(teacherASession, payload), /已有特別課安排/);
+    assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
+      ...payload, mode: 'vacancy', startSlotKey: 'own:next', actualStartTime: '17:30', durationMinutes: 75,
+    }), /已有特別課安排/);
+    assert.equal(JSON.stringify(specialRequestSheet.values), before);
+    assert.equal(leaveSheet.values.length, 1);
+  }
+  specialRequestSheet.values[1][14] = '已取消';
+  specialRequestSheet.values[1][15] = '已回復核對';
+  const result = backend.claimSpecialCourse_(teacherASession, payload);
+  assert.equal(result.continuation.actualStartTime, '17:45');
+  assert.equal(specialRequestSheet.values.length, 3);
+});
+
 test('special claim stores and reconciles an immediately following own class as a fifteen-minute continuation', () => {
   const { backend, courseSheet, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
     courseRows: [
@@ -9014,6 +9077,77 @@ test('reconcile and dashboard exceptions only include next-month leave records',
     JSON.parse(JSON.stringify(dashboard.exceptions.map((item) => item.substituteId))),
     ['leave-next-exception']
   );
+});
+
+test('admin completed records retain current and open months without changing other queues or stored history', () => {
+  const leave = (date, id, verification, change = '') => [
+    'stamp', '老師甲', date, '13:30', 'B－舞綢 Lv.1~2', '已領取', '老師乙', '', '待處理',
+    id, 'calendar-' + id, '', '主題特別課', '', '沿用原課程', verification, '', '', change,
+  ];
+  const special = (date, id, status, verification) => [
+    'stamp', id, '老師甲', date, 'A', JSON.stringify([{
+      slotKey: 'own:' + id, sourceType: 'own', calendarId: 'calendar-' + id,
+      date, time: '16:00', room: 'A', courseName: 'A－空環 Lv.1~2', originalTeacher: '老師甲',
+    }]), '[]', '16:00', '主題特別課', '', 90, '17:30', '使用後方空堂', '', status, verification, '', '', '',
+  ];
+  const { backend, leaveSheet, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-11', courseRows: [],
+    leaveRows: [
+      leave('2026/09/30', 'leave-sep', '已核對'),
+      leave('2026/10/31', 'leave-oct', '已回復核對'),
+      leave('2026/11/01', 'leave-nov-start', '已核對'),
+      leave('2026/11/30', 'leave-nov-end', '已關閉'),
+      leave('2026/12/01', 'leave-dec', '已核對'),
+      leave('2026/10/15', 'leave-old-pending', '待核對'),
+      leave('2026/10/16', 'leave-old-cancel', '待核對', '申請取消中'),
+      leave('2026/11/16', 'leave-nov-exception', '核對異常'),
+    ],
+    specialRequestRows: [
+      special('2026/10/31', 'special-oct', '已完成', '已核對'),
+      special('2026/11/01', 'special-nov', '已完成', '已核對'),
+      special('2026/12/01', 'special-dec', '已完成', '已核對'),
+      special('2026/10/15', 'special-old-pending', '待處理', '待核對'),
+    ],
+  });
+  const leaveBefore = JSON.stringify(leaveSheet.values);
+  const specialBefore = JSON.stringify(specialRequestSheet.values);
+  const dashboard = backend.getAdminDashboard_(adminSession);
+  assert.deepEqual(Array.from(dashboard.completed, item => item.substituteId || item.specialGroupId),
+    ['leave-oct', 'leave-nov-start', 'leave-nov-end', 'special-oct', 'special-nov']);
+  assert.deepEqual(Array.from(dashboard.obWork, item => item.substituteId || item.specialGroupId),
+    ['leave-old-pending', 'leave-old-cancel', 'leave-nov-exception', 'special-old-pending']);
+  assert.deepEqual(Array.from(dashboard.changeRequests, item => item.substituteId), ['leave-old-cancel']);
+  assert.deepEqual(Array.from(dashboard.exceptions, item => item.substituteId), ['leave-nov-exception']);
+  assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);
+  assert.equal(JSON.stringify(specialRequestSheet.values), specialBefore);
+  backend.getNextMonthKey_ = () => '2026-12';
+  assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
+    item => item.substituteId || item.specialGroupId),
+    ['leave-nov-start', 'leave-nov-end', 'leave-dec', 'special-nov', 'special-dec']);
+
+  backend.getNextMonthKey_ = () => '2026-11';
+  let operationTime = '2026-10-13 20:30:00';
+  const originalFormatDate = backend.Utilities.formatDate;
+  backend.Utilities.formatDate = (value, timezone, pattern) => pattern === 'yyyy-MM-dd HH:mm:ss'
+    ? operationTime : originalFormatDate(value, timezone, pattern);
+  backend.pauseLeaves_(adminSession, false);
+  backend.getNextMonthKey_ = () => '2026-12';
+  operationTime = '2026-11-01 20:30:00';
+  backend.pauseLeaves_(adminSession, true);
+  assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
+    item => item.substituteId || item.specialGroupId),
+    ['leave-oct', 'leave-nov-start', 'leave-nov-end', 'special-oct', 'special-nov']);
+  operationTime = '2026-11-06 20:30:00';
+  backend.pauseLeaves_(adminSession, false);
+  assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
+    item => item.substituteId || item.specialGroupId),
+    ['leave-nov-start', 'leave-nov-end', 'leave-dec', 'special-nov', 'special-dec']);
+  operationTime = '2026-12-06 20:30:00';
+  backend.pauseLeaves_(adminSession, false);
+  assert.deepEqual(Array.from(backend.getAdminDashboard_(adminSession).completed,
+    item => item.substituteId || item.specialGroupId), ['leave-dec', 'special-dec']);
+  assert.equal(JSON.stringify(leaveSheet.values), leaveBefore);
+  assert.equal(JSON.stringify(specialRequestSheet.values), specialBefore);
 });
 
 test('admin replacement choices only include the target month', () => {

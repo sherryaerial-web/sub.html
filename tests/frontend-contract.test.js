@@ -7,6 +7,37 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
+test('ninety-minute single-source special draft accepts a delayed own continuation without merging it', () => {
+  const { context } = createFrontendRuntime();
+  const availability = {
+    'own:first': {
+      slotKey: 'own:first', sourceType: 'own', calendarId: 'first',
+      date: '2026/11/01', room: 'A', startTime: '16:00',
+      nextCourseTime: '17:30', mergePartnerIds: ['own:next'], maxDurationMinutes: 75,
+    },
+    'own:next': {
+      slotKey: 'own:next', sourceType: 'own', calendarId: 'next',
+      date: '2026/11/01', room: 'A', startTime: '17:30',
+      courseName: 'A－空環 Lv.2~3', durationMinutes: 60,
+      nextCourseTime: '19:00', mergePartnerIds: [], maxDurationMinutes: 75,
+    },
+  };
+  const draft = { mode: 'merge', startSlotKey: 'own:first', actualStartTime: '16:00',
+    courseName: 'Flare lv4 高階應用專攻班', durationMinutes: 90, difficulty: '', note: '' };
+  const result = context.validateSpecialCourseDraft(draft, availability);
+  assert.deepEqual(Array.from(result.slotPreview.ids), ['own:first']);
+  assert.equal(result.slotPreview.endTime, '17:30');
+  assert.equal(result.slotPreview.continuation.actualStartTime, '17:45');
+  assert.equal(result.slotPreview.continuation.endTime, '18:45');
+  assert.throws(() => context.validateSpecialCourseDraft({ ...draft, durationMinutes: 75 }, availability), /不需使用後續時段/);
+  assert.throws(() => context.validateSpecialCourseDraft(draft, {
+    ...availability, 'own:next': { ...availability['own:next'], nextCourseTime: '18:45' },
+  }), /接續常態課.*15 分鐘換場/);
+  assert.throws(() => context.validateSpecialCourseDraft(draft, {
+    'own:first': { ...availability['own:first'], mergePartnerIds: [] },
+  }), /尚未開放代課/);
+});
+
 test('raffle deep links resolve to their own workspace rather than course administration', () => {
   const runtime = createFrontendRuntime();
   assert.equal(runtime.context.getInitialAppRoute('?view=raffle').viewId, 'view-raffle');

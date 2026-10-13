@@ -3327,7 +3327,7 @@
         const slotPreview = buildSpecialCourseSlotPreview(
           selectedSlotKeys[0], durationMinutes, actualStartTime, availability
         );
-        if (slotPreview.ids.length < 2) {
+        if (slotPreview.ids.length < 2 && !slotPreview.continuation) {
           throw new Error("此時段不需使用後續時段，請改用「單堂延長」。");
         }
         const result = { mode, substituteIds: explicitStartSlotKey ? [] : substituteIds, actualStartTime, courseName, difficulty, durationMinutes, note, slotPreview };

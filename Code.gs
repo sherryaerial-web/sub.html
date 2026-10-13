@@ -18552,11 +18552,25 @@ function claimSpecialCourse_(session, payload) {
       mode
     );
     var requiredIds = slotPlan.orderedSubstituteIds;
-    if (mode === 'merge' && slotPlan.orderedSlots.length < 2) {
+    if (mode === 'merge' && slotPlan.orderedSlots.length < 2 && !slotPlan.continuation) {
       throw new Error('此時段不需使用後續時段，請改用單堂延長。');
     }
     if (mode === 'vacancy' && slotPlan.orderedSlots.length > 1) {
       throw new Error('這堂特別課會占用後續時段，請改用「使用連續時段」。');
+    }
+    var requestedCalendarIds = slotPlan.orderedSlots.concat(
+      slotPlan.continuation ? [slotPlan.continuation] : []
+    ).map(function(slot) { return cleanText_(slot.calendarId); }).filter(Boolean);
+    var hasExistingArrangement = specialRequestSheet.getDataRange().getValues().slice(1).some(function(row) {
+      if (cleanText_(row[14]) === '已取消' &&
+          ['已回復核對', '已取消核對'].indexOf(cleanText_(row[15])) !== -1) return false;
+      if (requestedCalendarIds.indexOf(cleanText_(row[18])) !== -1) return true;
+      return getSpecialRequestSourceSlots_(row).some(function(slot) {
+        return requestedCalendarIds.indexOf(cleanText_(slot && slot.calendarId)) !== -1;
+      });
+    });
+    if (hasExistingArrangement) {
+      throw new Error('所選課程或接續正課已有特別課安排，請重新整理確認；取消後須完成 OB 回復核對才能再安排。');
     }
     var rowById = {};
     for (var rowIndex = 1; rowIndex < leaveValues.length; rowIndex++) {
@@ -20588,6 +20602,24 @@ function getCourseClosureDashboard_(session) {
   };
 }
 
+function getAdminCompletedRecordMonthKeys_(openingHistoryValue, fallbackNextMonthValue) {
+  var openingMonth = '';
+  (openingHistoryValue || []).forEach(function(event) {
+    if (cleanText_(event.action) !== '恢復全部請假') return;
+    var month = cleanText_(event.time).slice(0, 7);
+    if (/^\d{4}-(0[1-9]|1[0-2])$/.test(month) && month > openingMonth) openingMonth = month;
+  });
+  var anchor = openingMonth || cleanText_(fallbackNextMonthValue);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(anchor)) throw new Error('已完成課程的顯示月份不完整。');
+  var parts = anchor.split('-').map(Number);
+  var year = parts[0];
+  var month = parts[1] + (openingMonth ? 1 : -1);
+  if (month === 13) { year += 1; month = 1; }
+  if (month === 0) { year -= 1; month = 12; }
+  var adjacentMonth = year + '-' + ('0' + month).slice(-2);
+  return openingMonth ? [openingMonth, adjacentMonth] : [adjacentMonth, anchor];
+}
+
 function getAdminDashboard_(session) {
   assertCapabilitySession_(session, 'course_admin');
   return (function() {
@@ -20613,6 +20645,9 @@ function getAdminDashboard_(session) {
       return cleanText_(row[9]);
     });
     var targetMonth = getNextMonthKey_();
+    var completedMonths = getAdminCompletedRecordMonthKeys_(
+      auditByTarget[CONFIG.LEAVES_PAUSED_SETTING] || [], targetMonth
+    );
     var leaves = leaveSourceRows.map(function(row) {
       return toAdminLeaveItem_(
         row,
@@ -20719,10 +20754,12 @@ function getAdminDashboard_(session) {
       })),
       completed: leaves.filter(function(item) {
         if (ownSpecialGroupIds[item.specialGroupId]) return false;
-        return item.status !== '已取消' &&
+        return completedMonths.indexOf(getVvipMonthFromDate_(item.date)) !== -1 &&
+          item.status !== '已取消' &&
           ['已核對', '已回復核對', '已關閉'].indexOf(item.verificationStatus) !== -1;
       }).concat(ownSpecialRequests.filter(function(item) {
-        return item.verificationStatus === '已核對';
+        return completedMonths.indexOf(getVvipMonthFromDate_(item.date)) !== -1 &&
+          item.verificationStatus === '已核對';
       })),
       courseClosure: getCourseClosureDashboard_(session),
       monthlyDiscount: getMonthlyDiscountDashboardUnlocked_(ss),

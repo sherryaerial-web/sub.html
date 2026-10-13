@@ -20133,6 +20133,7 @@ function normalizeSpecialCourseReconciliationName_(value) {
 
 function getSpecialCourseReconciliationParts_(value) {
   var displayName = stripCourseRoom_(value)
+    .replace(/舞碼/g, '')
     .replace(/[（(]\s*\d+\s*(?:min|分鐘)\s*[)）]\s*$/i, '')
     .replace(/(特別課)(Lv\.?\s*\d+(?:\s*[~\-–—]\s*\d+)?)(?=[（(〈]|$)/i, '$1 $2')
     .replace(/[＆﹠]/g, '&')
@@ -20140,10 +20141,10 @@ function getSpecialCourseReconciliationParts_(value) {
   var courseParts = parseClaimCourseOption_(displayName);
   var normalizedName = normalizeCourseName_(courseParts.courseTypeName.replace(/\s*特別課\s*$/, ''))
     .replace(/摺疊環/g, '折疊環')
-    .replace(/迷你環綢舞碼/g, '迷你環綢')
     .replace(/^空環中軸專攻班$/, '空環中軸專攻');
+  if (!normalizedName) normalizedName = normalizeCourseName_(stripCourseRoom_(value));
   return {
-    name: normalizedName === '空中環舞碼' ? '空環舞碼' : normalizedName,
+    name: normalizedName === '空中環' ? '空環' : normalizedName,
     difficulty: cleanText_(courseParts.difficulty)
   };
 }

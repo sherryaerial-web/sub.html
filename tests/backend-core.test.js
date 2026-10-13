@@ -8277,6 +8277,79 @@ test('special-course group reconciliation accepts one surviving OB event for eve
   });
 });
 
+test('special-course group reconciliation treats dance wording as optional without renaming recorded courses', () => {
+  for (const [expectedName, actualName] of [
+    ['雙綢特別課', 'B－雙綢舞碼特別課(90min)'],
+    ['雙綢舞碼特別課', 'B－雙綢特別課(90min)'],
+    ['雙綢特別課', 'B－雙綢特別課舞碼(90min)'],
+    ['雙綢特別課', 'B－雙綢特別課舞碼Lv.2(90min)'],
+    ['雙綢特別課', 'B－雙綢特別課Lv.2舞碼(90min)'],
+    ['雙綢特別課', 'B－雙綢特別課 Lv.2(90min)舞碼'],
+  ]) {
+    const rows = createSpecialGroupReconciliationRows('double-silk').slice(0, 2);
+    rows.forEach((row, index) => {
+      row[2] = '2026/11/16'; row[3] = index ? '14:45' : '13:30';
+      row[4] = index ? 'B－舞綢 Lv.3~5' : 'B－舞綢 Lv.1~2';
+      row[12] = expectedName; row[13] = 'Lv2'; row[20] = 'group-calendar-1';
+      row[23] = 90; row[24] = '15:00'; row[25] = '13:30';
+    });
+    const { backend, leaveSheet, adminSession } = createInvitationBackend({
+      nextMonth: '2026-11', leaveRows: rows,
+      courseRows: [['2026/11/16', '13:30', actualName, '老師甲', 'group-calendar-1', 'class-special', 'teacher-a', '是', '']],
+    });
+    const result = backend.reconcileObChanges_(adminSession);
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), { checked: 2, matched: 2, exceptions: 0 });
+    leaveSheet.values.slice(1).forEach((row, index) => {
+      assert.equal(row[12], expectedName);
+      assert.equal(row[3], index ? '14:45' : '13:30');
+      assert.equal(row[23], 90);
+      assert.equal(row[15], '已核對');
+      assert.equal(row[17], '');
+    });
+  }
+});
+
+test('own special requests accept optional dance wording while preserving their planned title', () => {
+  const { backend, specialRequestSheet, adminSession } = createInvitationBackend({
+    nextMonth: '2026-11', leaveRows: [],
+    courseRows: [['2026/11/16', '13:30', 'B－雙綢舞碼特別課(90min)', '老師甲', 'own-double', 'class-special', 'teacher-a', '否', '']],
+    specialRequestRows: [[
+      'stamp', 'own-double-group', '老師甲', '2026/11/16', 'B', JSON.stringify([{
+        sourceType: 'own', date: '2026/11/16', time: '13:30', room: 'B',
+        courseName: 'B－舞綢 Lv.1~2', originalTeacher: '老師甲', calendarId: 'own-double',
+      }]), '[]', '13:30', '雙綢特別課', 'Lv2', 90, '15:00', '使用後方空堂', '', '待處理', '待核對', '', '', '',
+    ]],
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(backend.reconcileObChanges_(adminSession))),
+    { checked: 1, matched: 1, exceptions: 0 });
+  assert.equal(specialRequestSheet.values[1][8], '雙綢特別課');
+  assert.equal(specialRequestSheet.values[1][15], '已核對');
+});
+
+test('optional dance wording is removed before special-course title aliases are applied', () => {
+  const backend = loadBackend();
+  const row = ['2026/11/16', '13:30', 'A－空環中軸舞碼專攻班特別課Lv.2(90min)', '老師甲', 'core'];
+  const expectation = { teacher: '老師甲', course: '空環中軸專攻特別課', difficulty: 'Lv2', expectedTime: '13:30', classId: '' };
+  assert.deepEqual(Array.from(backend.getObCourseDifferences_('core', row, expectation,
+    backend.normalizeSpecialCourseReconciliationName_)), []);
+});
+
+test('optional special dance wording does not bypass teacher time level or main-title differences', () => {
+  const backend = loadBackend();
+  const expectation = { teacher: '老師甲', course: '雙綢特別課', difficulty: 'Lv2', expectedTime: '13:30', classId: '' };
+  const row = ['2026/11/16', '13:30', 'B－雙綢舞碼特別課Lv.2(90min)', '老師甲', 'double'];
+  for (const [index, value, error] of [
+    [3, '老師乙', /指導者不一致/], [1, '13:45', /時間不一致/],
+    [2, 'B－雙綢舞碼特別課Lv.3(90min)', /等級不一致/],
+    [2, 'B－雙環舞碼特別課Lv.2(90min)', /課程不一致/],
+  ]) {
+    const changed = row.slice(); changed[index] = value;
+    assert.match(backend.getObCourseDifferences_('double', changed, expectation,
+      backend.normalizeSpecialCourseReconciliationName_).join('；'), error);
+  }
+  assert.equal(backend.ordinaryCourseReconciliationNamesMatch_('雙綢', '雙綢舞碼'), false);
+});
+
 test('special-course group reconciliation accepts OB display formatting around the same main title', () => {
   const leaveRows = createSpecialGroupReconciliationRows('special-group-ob-format');
   leaveRows.forEach((row) => {

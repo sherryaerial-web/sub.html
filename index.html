@@ -8519,8 +8519,48 @@
       refreshIcons();
     }
 
+    function getAdminItemSlot(item, useActualTime = true) {
+      const time = useActualTime
+        ? item.specialActualStartTime || item.actualStartTime || item.time
+        : item.originalTime || item.startTime || item.time;
+      const minutes = parseClaimTimeMinutes(time);
+      const room = [item.room, item.actualCourse, item.originalCourse, item.courseName]
+        .map((value) => /^([A-D])(?:$|[\s－\-：:])/i.exec(String(value || "").trim()))
+        .find(Boolean);
+      return {
+        date: normalizeClaimSimilarityDate(item.date) || "9999/99/99",
+        minutes: Number.isFinite(minutes) ? minutes : Infinity,
+        room: room ? room[1].toUpperCase() : "Z",
+        id: String(item.substituteId || item.specialGroupId || item.calendarId || item.originalCalendarId || item.originalCourse || item.courseName || ""),
+      };
+    }
+
+    function compareAdminSlots(left, right) {
+      return left.date.localeCompare(right.date) ||
+        (left.minutes === right.minutes ? 0 : left.minutes - right.minutes) ||
+        left.room.localeCompare(right.room) || left.id.localeCompare(right.id);
+    }
+
+    function sortAdminSourceRows(items) {
+      return (items || []).slice().sort((left, right) =>
+        compareAdminSlots(getAdminItemSlot(left, false), getAdminItemSlot(right, false))
+      );
+    }
+
+    function getChronologicalAdminGroups(items) {
+      // Order whole groups by their earliest actual slot, independently of source-row order.
+      return groupSpecialCourseItems(items).map((group) => {
+        const slots = group.items.map((item) => getAdminItemSlot(item));
+        const slot = slots.reduce((earliest, current) =>
+          compareAdminSlots(current, earliest) < 0 ? current : earliest
+        );
+        return { ...group, items: sortAdminSourceRows(group.items),
+          slot: { ...slot, id: group.specialGroupId || slot.id } };
+      }).sort((left, right) => compareAdminSlots(left.slot, right.slot));
+    }
+
     function renderAdminItems(items, emptyText) {
-      return groupSpecialCourseItems(items).map((group) => renderAdminGroup(group, renderAdminItem)).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`;
+      return getChronologicalAdminGroups(items).map((group) => renderAdminGroup(group, renderAdminItem)).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`;
     }
 
     function groupAdminPendingItemsByDate(items) {
@@ -8665,44 +8705,15 @@
       if (!group.specialGroupId) return rows.map((row) => renderRow(row)).join("");
       const item = rows[0] || {};
       const identifiers = item.recordType === "specialRequest"
-        ? (item.sourceSlots || []).map((slot) => `${slot.sourceType === "own" ? "自己的正課" : "開放代課"} ${slot.time}｜OB Calendar ID ${slot.calendarId || "未提供"}`).join("；")
+        ? sortAdminSourceRows(item.sourceSlots).map((slot) => `${slot.sourceType === "own" ? "自己的正課" : "開放代課"} ${slot.time}｜OB Calendar ID ${slot.calendarId || "未提供"}`).join("；")
         : rows.map((row) => `代課編號 ${row.substituteId || "未提供"}｜OB Calendar ID ${row.originalCalendarId || "未提供"}`).join("；");
       return `<section class="special-record-group"><div class="special-record-heading"><span><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item.specialMode || "特別課")}｜${escapeHtml(item.specialDurationMinutes || "待確認")} 分鐘｜${escapeHtml(item.specialActualStartTime || "待確認")}–${escapeHtml(item.specialEndTime || "待確認")}</span><button class="compact-button special-record-group-action" type="button" data-admin-action="advance-special-time" data-special-group-id="${escapeHtml(group.specialGroupId)}"><i data-lucide="clock-arrow-up"></i>提前 15 分鐘</button></div><div class="item-meta">${escapeHtml(identifiers)}</div>${rows.map((row) => renderRow(row)).join("")}</section>`;
     }
 
     function renderAdminObSections(items, options) {
-      const groups = groupSpecialCourseItems(items);
-      const compareGroupsByEffectiveTime = (left, right) => {
-        const leftItem = (left.items || [])[0] || {};
-        const rightItem = (right.items || [])[0] || {};
-        const leftKey = [
-          leftItem.date || "",
-          leftItem.specialActualStartTime || leftItem.actualStartTime || leftItem.time || "",
-          left.specialGroupId || leftItem.substituteId || "",
-        ].join("|");
-        const rightKey = [
-          rightItem.date || "",
-          rightItem.specialActualStartTime || rightItem.actualStartTime || rightItem.time || "",
-          right.specialGroupId || rightItem.substituteId || "",
-        ].join("|");
-        return leftKey.localeCompare(rightKey);
-      };
-      const ordinaryGroups = groups.filter((group) => !group.specialGroupId)
-        .sort(compareGroupsByEffectiveTime);
-      const specialGroups = groups.filter((group) => group.specialGroupId)
-        .sort(compareGroupsByEffectiveTime);
-      const renderGroups = (source) => source.map((group) =>
+      return getChronologicalAdminGroups(items).map((group) =>
         renderAdminGroup(group, (item) => renderAdminObItem(item, options || []))
       ).join("");
-      const sections = [];
-      if (ordinaryGroups.length) {
-        const ordinaryCount = ordinaryGroups.reduce((total, group) => total + (group.items || []).length, 0);
-        sections.push(`<section class="admin-ob-section"><div class="queue-section-heading"><strong>一般代課</strong><span>${ordinaryCount} 堂</span></div>${renderGroups(ordinaryGroups)}</section>`);
-      }
-      if (specialGroups.length) {
-        sections.push(`<section class="admin-ob-section"><div class="queue-section-heading"><strong>特別課群組</strong><span>${specialGroups.length} 組</span></div>${renderGroups(specialGroups)}</section>`);
-      }
-      return sections.join("");
     }
 
     function renderAdminItem(item, extraHtml = "") {
@@ -8741,7 +8752,7 @@
           }
           const originalSources = (Array.isArray(item.sourceSlots) ? item.sourceSlots : [])
             .concat(item.continuation ? [item.continuation] : []);
-          const sourceRows = originalSources.map((slot) => `<div class="item-meta">${escapeHtml(slot.originalTime || slot.time || "—")}｜${escapeHtml(slot.courseName || "原課程")}｜原 Calendar ID ${escapeHtml(slot.calendarId || "未提供")}</div>`).join("");
+          const sourceRows = sortAdminSourceRows(originalSources).map((slot) => `<div class="item-meta">${escapeHtml(slot.originalTime || slot.time || "—")}｜${escapeHtml(slot.courseName || "原課程")}｜原 Calendar ID ${escapeHtml(slot.calendarId || "未提供")}</div>`).join("");
           const detail = `<div class="ob-details"><div class="item-meta">請先在 OB 回復來源課程並保留原 Calendar ID，再依序按「同步 OB 課表」與「重新核對 OB」；核對成功後才會取消特別課並釋放時段。</div>${sourceRows}${item.differenceReason ? `<div class="item-meta">差異：${escapeHtml(item.differenceReason)}</div>` : ""}</div>`;
           return renderAdminItem(item, detail);
         }

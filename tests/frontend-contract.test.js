@@ -3129,7 +3129,7 @@ test('admin-only dashboard provides all work queues and required actions', () =>
   assert.match(html, /複製 LINE 邀請文字/);
 });
 
-test('admin OB work renders ordinary courses separately from special-course groups', () => {
+test('admin OB work interleaves ordinary courses and intact special-course groups', () => {
   const { context } = createFrontendRuntime();
   const markup = context.renderAdminObSections([
     {
@@ -3138,7 +3138,7 @@ test('admin OB work renders ordinary courses separately from special-course grou
       actualCourse: 'B－空環 Lv.1', status: '已領取', changeStatus: '', auditHistory: [],
     },
     {
-      recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/09/20', time: '14:00',
+      recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/09/17', time: '14:00',
       originalCourse: 'C－空環＋C－舞綢', originalTeacher: '老師丙', substituteTeacher: '老師丙',
       actualCourse: '空中環長帶舞碼', specialMode: '使用連續時段', specialDurationMinutes: 90,
       specialActualStartTime: '14:00', specialEndTime: '15:30', status: '待處理', changeStatus: '',
@@ -3146,10 +3146,8 @@ test('admin OB work renders ordinary courses separately from special-course grou
     },
   ], []);
 
-  assert.match(markup, /一般代課<\/strong><span>1 堂<\/span>/);
-  assert.match(markup, /特別課群組<\/strong><span>1 組<\/span>/);
-  assert.ok(markup.indexOf('一般代課') < markup.indexOf('特別課群組'));
-  assert.ok(markup.indexOf('ordinary-1') < markup.indexOf('special-1'));
+  assert.match(markup, /special-record-group/);
+  assert.ok(markup.indexOf('special-1') < markup.indexOf('ordinary-1'));
 });
 
 test('admin OB work sorts ordinary courses and special-course groups by effective date and time', () => {
@@ -3183,6 +3181,86 @@ test('admin OB work sorts ordinary courses and special-course groups by effectiv
 
   assert.ok(markup.indexOf('ordinary-early') < markup.indexOf('ordinary-late'));
   assert.ok(markup.indexOf('special-early') < markup.indexOf('special-late'));
+  assert.ok(markup.indexOf('ordinary-early') < markup.indexOf('special-early'));
+  assert.ok(markup.indexOf('special-late') < markup.indexOf('ordinary-late'));
+});
+
+test('admin chronological rendering normalizes dates and times and prefers actual starts', () => {
+  const { context } = createFrontendRuntime();
+  const items = [
+    { substituteId: 'october', date: '2026/10/3', time: '7:00', actualStartTime: '11:00', originalCourse: 'B-october' },
+    { substituteId: 'later', date: '2026/09/30', time: '7:00', actualStartTime: '10:00', originalCourse: 'A-later' },
+    { recordType: 'specialRequest', specialGroupId: 'special', date: '2026/9/30', time: '6:00',
+      actualStartTime: '7:00', specialActualStartTime: '9:15', originalCourse: 'B-special', sourceSlots: [] },
+    { substituteId: 'earlier', date: '2026-09-30', time: '12:00', actualStartTime: '8:00', originalCourse: 'D-earlier' },
+  ];
+  const before = JSON.stringify(items);
+  for (const render of [() => context.renderAdminObSections(items, []), () => context.renderAdminItems(items, '')]) {
+    const courses = Array.from(render().matchAll(/class="item-course">([^<]*)</g), (match) => match[1]);
+    assert.deepEqual(courses, ['D-earlier', 'B-special', 'A-later', 'B-october']);
+  }
+  assert.equal(JSON.stringify(items), before);
+});
+
+test('admin same-time ordering uses rooms A through D then stable IDs across course types', () => {
+  const { context } = createFrontendRuntime();
+  const items = [
+    { substituteId: 'c', date: '2026/10/3', time: '9:00', room: 'C', originalCourse: 'unprefixed-room-C', actualCourse: 'A－other' },
+    { specialGroupId: 'b', date: '2026/10/03', time: '09:00', originalCourse: 'B－special' },
+    { substituteId: 'z', date: '2026/10/03', time: '09:00', originalCourse: 'A－tie-z' },
+    { recordType: 'specialRequest', specialGroupId: 'd', date: '2026/10/03', specialActualStartTime: '9:00',
+      originalCourse: 'unprefixed', actualCourse: 'D－special', sourceSlots: [] },
+    { substituteId: 'a', date: '2026/10/03', time: '09:00', originalCourse: 'A－tie-a' },
+    { specialGroupId: 'm', date: '2026/10/03', time: '09:00', originalCourse: 'A－tie-special-m' },
+  ];
+  const expected = ['A－tie-a', 'A－tie-special-m', 'A－tie-z', 'B－special', 'unprefixed-room-C', 'unprefixed'];
+  for (const render of [context.renderAdminItems, (rows) => context.renderAdminObSections(rows, [])]) {
+    assert.deepEqual(Array.from(render(items, '').matchAll(/class="item-course">([^<]*)</g), (match) => match[1]), expected);
+    assert.deepEqual(Array.from(render(items.slice().reverse(), '').matchAll(/class="item-course">([^<]*)</g), (match) => match[1]), expected);
+  }
+});
+
+test('admin groups sort by their earliest actual slot and keep source rows chronological and intact', () => {
+  const { context } = createFrontendRuntime();
+  const items = [
+    { specialGroupId: 'merged', substituteId: 'source-late', date: '2026/10/03', time: '9:00',
+      specialActualStartTime: '8:45', originalCourse: 'A－source-late' },
+    { substituteId: 'middle', date: '2026/10/03', time: '09:00', originalCourse: 'B－middle' },
+    { specialGroupId: 'merged', substituteId: 'source-early', date: '2026/10/3', time: '7:00',
+      specialActualStartTime: '10:45', originalCourse: 'A－source-early' },
+    { substituteId: 'first', date: '2026/10/03', time: '8:30', originalCourse: 'D－first' },
+  ];
+  const before = JSON.stringify(items);
+  items.forEach(Object.freeze);
+  Object.freeze(items);
+  for (const render of [() => context.renderAdminItems(items, ''), () => context.renderAdminObSections(items, []),
+    () => context.renderAdminItems(items.slice().reverse(), ''), () => context.renderAdminObSections(items.slice().reverse(), [])]) {
+    const markup = render();
+    assert.deepEqual(Array.from(markup.matchAll(/class="item-course">([^<]*)</g), (match) => match[1]),
+      ['D－first', 'A－source-early', 'A－source-late', 'B－middle']);
+    const groups = Array.from(markup.matchAll(/<section class="special-record-group">([\s\S]*?)<\/section>/g));
+    assert.equal(groups.length, 1);
+    assert.match(groups[0][1], /source-early[\s\S]*source-late/);
+    assert.doesNotMatch(groups[0][1], /B－middle/);
+  }
+  assert.equal(JSON.stringify(items), before);
+});
+
+test('admin owned special source identifiers and restoration rows sort without mutating source slots', () => {
+  const { context } = createFrontendRuntime();
+  const sourceSlots = Object.freeze([
+    Object.freeze({ sourceType: 'own', time: '10:00', calendarId: 'source-ten', courseName: 'A－ten' }),
+    Object.freeze({ sourceType: 'own', time: '9:00', calendarId: 'source-nine', courseName: 'A－nine' }),
+  ]);
+  const item = { recordType: 'specialRequest', specialGroupId: 'owned', date: '2026/10/03',
+    time: '9:15', specialActualStartTime: '9:15', originalCourse: 'owned', sourceSlots };
+  const markup = context.renderAdminObSections([item], []);
+  assert.ok(markup.indexOf('source-nine') < markup.indexOf('source-ten'));
+  const restoration = context.renderAdminObItem({ ...item, status: '取消後待回復 OB',
+    continuation: { originalTime: '8:30', calendarId: 'source-eight', courseName: 'A－eight' } }, []);
+  assert.ok(restoration.indexOf('source-eight') < restoration.indexOf('source-nine'));
+  assert.ok(restoration.indexOf('source-nine') < restoration.indexOf('source-ten'));
+  assert.deepEqual(sourceSlots.map((slot) => slot.calendarId), ['source-ten', 'source-nine']);
 });
 
 test('replacement selector only renders OB courses from the same date', () => {

@@ -1,6 +1,11 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {webcrypto}=require('node:crypto');
 const {createAdminTransport}=require('../admin-transport.js');
+test('gift journal owns reconciliation without an outer receipt blocking its same-ID retry',async()=>{
+ const s=fixture(p=>{assert.equal(p.clientOperationId,undefined);return {status:'success',data:{state:'recorded'}};});
+ await s.make().call('mutateActivityGift',{sessionToken:'session-a',expectedActor:'Tako',operation:{requestId:'gift-request-0001'}});
+ assert.equal(s.data.size,0);
+});
 function fixture(handler) {
  const data=new Map(),calls=[],notices=[];
  const storage={getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,v)};

@@ -9369,6 +9369,9 @@ function doPost(e) {
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
       },
+      getActivityGiftWorkspace: function() { return activityGiftAppRequest_(session, 'review-list'); },
+      getActivityGiftOperation: function() { if (parameters.expectedActor !== getSessionTeacherName_(session)) throw new Error('登入帳號已變更。'); return activityGiftAppRequest_(session, 'review-status', parseJsonObject_(parameters.operation, '測試領取核對')); },
+      mutateActivityGift: function() { if (parameters.expectedActor !== getSessionTeacherName_(session)) throw new Error('登入帳號已變更。'); return activityGiftAppRequest_(session, 'review-mutate', parseJsonObject_(parameters.operation, '測試領取')); },
       getRaffleWorkspace: function() {
         return getRaffleWorkspace_(session, { mode: parameters.mode, query: parameters.query, campaignId: parameters.campaignId });
       },
@@ -22222,6 +22225,61 @@ function getRaffleFulfillment_(session, query) {
   return result;
 }
 
+// This bridge only reaches the isolated two-person test. No formal sheet or OB writes.
+function activityGiftAppConfig_(session) {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ACTIVITY_GIFT_APP_TEST_ENABLED') !== 'true') throw new Error('活動送球測試未開放。');
+  var actor = assertCapabilitySession_(session, 'raffle_admin');
+  if (['冠蓉', 'Tako'].indexOf(actor) < 0) throw new Error('活動送球測試未開放。');
+  var cfg;
+  try { cfg = JSON.parse(props.getProperty('ACTIVITY_GIFT_APP_TEST_CONFIG') || '{}'); } catch (_) { throw new Error('活動送球測試未開放。'); }
+  var target = 'https://script.google.com/macros/s/AKfycbzWbonyJFjc0OAz1t1ixNMI0AqyjXN16k-loc9RmlehopELrV5wBVw96t-AYmsGNT-hXA/exec';
+  if (!cfg || cfg.environment !== 'test' || cfg.url !== target || typeof cfg.secret !== 'string' || cfg.secret.length < 32) throw new Error('活動送球測試未開放。');
+  return {actor: actor, url: target, secret: cfg.secret, readOnly: props.getProperty('ACTIVITY_GIFT_APP_TEST_WRITES_ENABLED') !== 'true'};
+}
+
+function activityGiftAppAvailable_(session) {
+  try { activityGiftAppConfig_(session); return true; } catch (_) { return false; }
+}
+
+function activityGiftAppRequest_(session, action, operation) {
+  var cfg = activityGiftAppConfig_(session);
+  if (['review-list', 'review-status', 'review-mutate'].indexOf(action) < 0) throw new Error('不支援的測試操作。');
+  if (action === 'review-mutate' && cfg.readOnly) throw new Error('目前為唯讀測試。');
+  var body = {secret: cfg.secret, action: action, actor: cfg.actor};
+  if (action !== 'review-list') {
+    var op = operation;
+    if (!op || Array.isArray(op) || Object.keys(op).some(function(k) { return ['action','claimId','version','requestId','quantity'].indexOf(k) < 0; }) ||
+        ['prepare','collect'].indexOf(op.action) < 0 || typeof op.claimId !== 'string' || !op.claimId || op.claimId.length > 200 ||
+        !Number.isSafeInteger(op.version) || op.version < 1 || typeof op.requestId !== 'string' || !/^[A-Za-z0-9_-]{12,100}$/.test(op.requestId) ||
+        (op.action === 'prepare' && op.quantity !== undefined) || (op.action === 'collect' && (!Number.isSafeInteger(op.quantity) || op.quantity < 1 || op.quantity > 2))) throw new Error('測試領取資料不完整。');
+    body.operation = op;
+  }
+  try {
+    // Never retry an uncertain write. The client persists its request ID and queries status.
+    var response = UrlFetchApp.fetch(cfg.url, {method:'post', contentType:'text/plain;charset=UTF-8', payload:JSON.stringify(body), muteHttpExceptions:true});
+    var text = response.getContentText();
+    if (response.getResponseCode() !== 200 || text.length > 100000) throw new Error('invalid_response');
+    var data = JSON.parse(text);
+    if (!data || data.success !== true || data.testOnly !== true) throw new Error('invalid_response');
+    var result = {success:true, testOnly:true, actor:cfg.actor, readOnly:cfg.readOnly};
+    if (action === 'review-list') {
+      if (!Array.isArray(data.claims) || data.claims.length > 200) throw new Error('invalid_claims');
+      result.claims = data.claims.map(function(c) {
+        if (!c || !Number.isSafeInteger(c.quantity) || !Number.isSafeInteger(c.claimedQuantity) || c.quantity < 1 || c.claimedQuantity < 0 || c.claimedQuantity > c.quantity || !Number.isSafeInteger(c.version) || c.version < 1) throw new Error('invalid_claim');
+        var out = {};
+        ['id','studentName','email','prizeName','venue','status'].forEach(function(k) { if (typeof c[k] !== 'string' || c[k].length > 500) throw new Error('invalid_claim'); out[k] = c[k]; });
+        out.quantity=c.quantity; out.claimedQuantity=c.claimedQuantity; out.version=c.version; out.directPickup=c.directPickup===true;
+        return out;
+      });
+    } else {
+      if (['recorded','superseded','missing'].indexOf(data.state) < 0) throw new Error('unknown_result');
+      result.state = data.state;
+    }
+    return result;
+  } catch (_) { throw new Error('測試操作結果尚未確認，請先核對上一筆，勿另建重複操作。'); }
+}
+
 function getRaffleWorkspace_(session, query) {
   getSessionTeacherName_(session);
   query = query || {};
@@ -22229,6 +22287,7 @@ function getRaffleWorkspace_(session, query) {
   if (query.mode === 'fulfillment') assertRafflePreparer_(session);
   var config = getRaffleConfiguration_();
   var result = { enabled: config.enabled, readOnly: true, campaigns: config.campaigns.map(function(c) { return { id: c.id, name: c.name }; }), claims: [] };
+  result.activityGiftTestEnabled = activityGiftAppAvailable_(session);
   if (!config.enabled) return result;
   result.readOnly = PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true';
   var caps = getSessionManagementCapabilities_(session);

@@ -211,13 +211,68 @@
     root.addEventListener('click',click);run(false);
     return()=>{disposed=true;root.removeEventListener('click',click);root.replaceChildren();};
   }
+  function createActivityGiftController({api,storage,actor,isActive=()=>true,id=()=>global.crypto.randomUUID()}) {
+    const key='activity-gift-app-pending:'+actor;
+    let busy=false;
+    const pending=()=>{const raw=storage.getItem(key);return raw?JSON.parse(raw):null;};
+    const terminal=r=>r&&['recorded','superseded'].includes(r.state);
+    const finish=r=>{if(terminal(r))storage.removeItem(key);return r;};
+    const send=async op=>{if(!isActive())throw Error('頁面已關閉，本次未繼續送出');const r=await api('mutateActivityGift',{operation:op,expectedActor:actor});if(!terminal(r))throw Error('結果尚未確認');return finish(r);};
+    return {pending,
+      async submit(input){if(busy||pending())throw Error('請先核對上一筆');busy=true;try{const op={...input,requestId:id()};storage.setItem(key,JSON.stringify(op));return await send(op);}finally{busy=false;}},
+      async reconcile(){if(busy)throw Error('核對中');const op=pending();if(!op)return null;busy=true;try{return finish(await api('getActivityGiftOperation',{operation:op,expectedActor:actor}));}finally{busy=false;}},
+      async retry(){if(busy)throw Error('核對中');const op=pending();if(!op)return null;busy=true;try{const r=await api('getActivityGiftOperation',{operation:op,expectedActor:actor});if(terminal(r))return finish(r);if(r.state!=='missing')throw Error('結果尚未確認');return await send(op);}finally{busy=false;}}
+    };
+  }
+
+  function mountActivityGifts(root, options) {
+    let disposed=false,busy=false,controller=null,controllerActor='',claims=[],readOnly=true;
+    root.innerHTML='<h3>活動送球（限定測試）</h3><p>沿用目前老師登入。僅測試紀錄，不發放正式獎品或通知。</p><button type="button" class="compact-button" data-gift-load>查看／更新測試送球</button><label>搜尋學生<input class="text-input" data-gift-search placeholder="姓名或 Email"></label><p data-gift-message role="status"></p><div data-gift-recovery hidden><button type="button" class="compact-button" data-gift-check>核對上一筆</button><button type="button" class="compact-button" data-gift-retry>以原操作重試</button></div><div data-gift-claims></div>';
+    const node=s=>root.querySelector(s),message=text=>{if(!disposed)node('[data-gift-message]').textContent=text;};
+    const outcome=r=>r?.state==='recorded'?'已核對完成，不會重複領取。':r?.state==='superseded'?'資料已有更新；這筆未重複寫入，請依最新紀錄操作。':'未查到完成紀錄；可再次核對，或以原操作重試。';
+    function render(){
+      if(disposed)return;
+      let pending=null;try{pending=controller&&controller.pending();}catch(_){message('無法讀取待核對紀錄，請勿繼續領取。');pending=true;}
+      node('[data-gift-recovery]').hidden=!pending;
+      root.querySelectorAll('button').forEach(b=>b.disabled=busy);
+      node('[data-gift-retry]').disabled=busy||readOnly;
+      const query=node('[data-gift-search]').value.trim().toLowerCase();
+      node('[data-gift-claims]').innerHTML=claims.filter(c=>[c.studentName,c.email].some(v=>v.toLowerCase().includes(query))).map(c=>{
+        const remaining=c.quantity-c.claimedQuantity;
+        const collectible=remaining>0&&(['ready','partial'].includes(c.status)||(c.directPickup&&c.status==='waiting'));
+        const disabled=busy||pending||readOnly?' disabled':'';
+        const button=(label,action,quantity)=>`<button type="button" class="compact-button" data-gift-id="${escape(c.id)}" data-gift-action="${action}" data-gift-quantity="${quantity||''}"${disabled}>${label}</button>`;
+        return `<section class="admin-item"><strong>${escape(c.studentName)}</strong><p>${escape(c.email)} · ${escape(c.prizeName)}</p><p>${escape(c.directPickup?'教室現貨':c.venue)} · 已領 ${c.claimedQuantity}／共 ${c.quantity} 顆</p>${collectible?button('登記領取 1 顆（測試）','collect',1)+(remaining>=2?button('登記領取 2 顆（測試）','collect',2):''):''}${c.status==='waiting'&&!c.directPickup?button('標記已到館（測試）','prepare'):''}</section>`;
+      }).join('');
+    }
+    async function load(){
+      const data=await options.api('getActivityGiftWorkspace',{});if(disposed)return;
+      if(data.testOnly!==true||!data.actor||!Array.isArray(data.claims))throw Error('測試資料無法確認');
+      if(!controller||controllerActor!==data.actor){const actor=data.actor;controllerActor=actor;controller=createActivityGiftController({api:options.api,storage:global.localStorage,actor,isActive:()=>!disposed&&controllerActor===actor});}
+      claims=data.claims;readOnly=data.readOnly!==false;
+    }
+    async function run(fn){if(disposed||busy)return;busy=true;render();try{await fn();}catch(e){message((e.message||'連線中斷')+'；若已送出，請先核對上一筆。');}finally{busy=false;render();}}
+    node('[data-gift-load]').onclick=()=>run(async()=>{await load();if(disposed)return;if(controller.pending()){const r=await controller.reconcile();await load();message(outcome(r));}else message(readOnly?'目前僅可查看測試紀錄。':'請核對學生與顆數；這裡不可實際兌領。');});
+    node('[data-gift-search]').oninput=render;
+    node('[data-gift-check]').onclick=()=>run(async()=>{const r=await controller.reconcile();await load();message(outcome(r));});
+    node('[data-gift-retry]').onclick=()=>run(async()=>{const r=await controller.retry();await load();message(outcome(r));});
+    node('[data-gift-claims]').onclick=event=>{
+      const b=event.target.closest('[data-gift-id]');if(!b||b.disabled||disposed||busy||readOnly)return;
+      const c=claims.find(c=>c.id===b.dataset.giftId);if(!c)return;
+      if(!global.confirm(`限定測試：${c.studentName}，${b.textContent}？不發放實物。`))return;
+      run(async()=>{const op={action:b.dataset.giftAction,claimId:c.id,version:c.version};if(op.action==='collect')op.quantity=Number(b.dataset.giftQuantity);const r=await controller.submit(op);await load();message(outcome(r));});
+    };
+    return ()=>{disposed=true;root.replaceChildren();};
+  }
+
   function mount(root, options) {
     let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, fulfillmentView = null, pending = null;
     const admin = options.mode === 'admin';
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
-    let settingsCleanup=null,obCleanup=null;
+    let settingsCleanup=null,obCleanup=null,giftCleanup=null;
+    function giftPanel(data){if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement('section');panel.dataset.activityGiftPanel='';root.appendChild(panel);giftCleanup=mountActivityGifts(panel,options);}
     function settingsButton() {
       if(!admin)return;
       const button=document.createElement('button');button.type='button';button.className='compact-button';button.textContent='活動設定／草稿';button.dataset.raffleSettings='';root.appendChild(button);
@@ -231,12 +286,13 @@
         dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
       });
     }
-    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); root.replaceChildren(); };
+    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); root.replaceChildren(); };
     initial.then(data => {
       if (disposed) return;
       if (!data.enabled || !data.campaigns.length) {
         root.innerHTML = '<div class="state">領獎工作台尚未開放。未來活動設定完成後，會在這裡提供查詢；舊活動不會自動搬入。</div>';
         settingsButton();
+        giftPanel(data);
         return;
       }
       campaigns = data.campaigns;
@@ -262,6 +318,7 @@
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('beforeend','<button type="button" class="compact-button" data-raffle-ready-preview>預覽領獎通知（不寄出）</button><button type="button" class="compact-button" data-raffle-ready-send>領獎通知寄送前確認</button>');
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('afterbegin','<button type="button" class="compact-button" data-raffle-overview>活動總覽（唯讀）</button>');
       settingsButton();
+      giftPanel(data);
       async function read(isPreview, offset = 0, groupId = '') {
         const overview = isPreview === 'overview';
         const readyMail = isPreview === 'ready' || isPreview === 'readySend';
@@ -463,5 +520,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

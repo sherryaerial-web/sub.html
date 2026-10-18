@@ -13969,9 +13969,10 @@ function getTeacherHomeDashboard_(session) {
   };
 }
 
-function canActingAdminSupplementClosedLeave_(session) {
-  var actor = cleanText_(session && session.impersonatedBy);
-  if (['冠蓉', 'Tako'].indexOf(actor) === -1 || actor === getSessionTeacherName_(session)) return false;
+function canAdminSupplementClosedLeave_(session) {
+  var teacher = getSessionTeacherName_(session);
+  var actor = cleanText_(session && session.impersonatedBy) || (teacher === 'Tako' ? teacher : '');
+  if (['冠蓉', 'Tako'].indexOf(actor) === -1 || (actor === teacher && teacher !== 'Tako')) return false;
   var account = findAccount_(actor);
   return !!account && isAccountActive_(account.active) &&
     getAccountManagementCapabilities_(account).indexOf('course_admin') !== -1;
@@ -13979,7 +13980,7 @@ function canActingAdminSupplementClosedLeave_(session) {
 
 function getMyCourses_(session) {
   var teacher = getSessionTeacherName_(session);
-  if (areLeavesPaused_() && !canActingAdminSupplementClosedLeave_(session)) {
+  if (areLeavesPaused_() && !canAdminSupplementClosedLeave_(session)) {
     throw new Error('目前已暫停請假登記，請稍後再試。');
   }
   var targetMonth = getNextMonthKey_();
@@ -18406,7 +18407,7 @@ function submitLeave_(session, items) {
   lock.waitLock(CONFIG.LOCK_TIMEOUT_MS);
   try {
     var supplementAfterClose = areLeavesPaused_();
-    if (supplementAfterClose && !canActingAdminSupplementClosedLeave_(session)) {
+    if (supplementAfterClose && !canAdminSupplementClosedLeave_(session)) {
       throw new Error('目前已暫停請假登記，請稍後再試。');
     }
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -18507,7 +18508,8 @@ function submitLeave_(session, items) {
           targetId: row[9],
           before: '',
           after: '確認中',
-          reason: (supplementAfterClose ? '截止後代補：' : '') + [row[2], row[3], row[4]].join(' ')
+          reason: (supplementAfterClose ? (session.impersonatedBy ? '截止後代補：' : '截止後補登：') : '') +
+            [row[2], row[3], row[4]].join(' ')
         };
       }));
       return result;

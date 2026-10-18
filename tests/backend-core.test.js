@@ -5459,9 +5459,78 @@ test('closed leave registration allows only Kuan and Tako acting for another tea
   }
 });
 
-test('closed leave registration rejects self mode other administrators and forged acting identities without writes', () => {
+test('closed leave registration permits Tako self submission with ownership month deduplication and a named audit actor', () => {
+  for (const actingTeacherName of ['', 'Tako']) {
+    const f = createInvitationBackend({ leaveRows: [], courseRows: [
+      ['2026/08/01', '09:00', '空環 Lv.1', 'Tako', 'tako-own'],
+      ['2026/07/01', '09:00', '空環 Lv.1', 'Tako', 'tako-old'],
+      ['2026/08/01', '10:00', '空環 Lv.1', '老師甲', 'calendar-a'],
+    ] });
+    f.backend.console = { error() {} };
+    f.accountSheet.values.push(createAccount(f.backend, 'Tako', '1357').concat('空環', 'course_admin'));
+    const token = f.backend.authenticate_('Tako', '1357').sessionToken;
+    f.backend.pauseLeaves_(f.adminSession, true);
+    const settingsBefore = JSON.stringify(f.settingsSheet.values);
+    const courseBefore = JSON.stringify(f.courseSheet.values);
+    const params = { sessionToken: token, actingTeacherName };
+    const read = JSON.parse(f.backend.doPost({ parameter: { ...params, action: 'getMyCourses' } }).text);
+    assert.equal(read.status, 'success');
+    assert.deepEqual(read.data.map(r => r['OB Calendar ID']), ['tako-own']);
+    const item = { 日期: '2026/08/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'tako-own' };
+    const submit = items => JSON.parse(f.backend.doPost({ parameter: { ...params, action: 'submitLeave', items: JSON.stringify(items) } }).text);
+    const invalid = submit([
+      { 日期: '2026/07/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'tako-old' },
+      { 日期: '2026/08/01', 時間: '10:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'calendar-a' },
+      { ...item, 時間: '09:15' },
+    ]);
+    assert.equal(invalid.status, 'success');
+    assert.equal(invalid.data.created, 0);
+    assert.equal(invalid.data.failed, 3);
+    assert.equal(f.leaveSheet.values.length, 1);
+    const first = submit([item]);
+    assert.equal(first.status, 'success');
+    assert.equal(first.data.created, 1);
+    const duplicate = submit([item]);
+    assert.equal(duplicate.status, 'success');
+    assert.equal(duplicate.data.created, 0);
+    assert.equal(duplicate.data.duplicates, 1);
+    assert.equal(f.leaveSheet.values.length, 2);
+    assert.equal(f.leaveSheet.values[1][1], 'Tako');
+    assert.equal(f.leaveSheet.values[1][5], '確認中');
+    const audit = f.auditSheet.values.find(r => r[3] === f.leaveSheet.values[1][9]);
+    assert.equal(audit[1], 'Tako');
+    assert.match(audit[6], /截止後補登/);
+    assert.doesNotMatch(audit[6], /代補/);
+    assert.equal(JSON.stringify(f.settingsSheet.values), settingsBefore);
+    assert.equal(JSON.stringify(f.courseSheet.values), courseBefore);
+  }
+});
+
+test('closed leave registration still rejects inactive or unauthorized Tako self sessions', () => {
+  for (const revoked of ['inactive', 'capability']) {
+    const f = createInvitationBackend({ leaveRows: [], courseRows: [
+      ['2026/08/01', '09:00', '空環 Lv.1', 'Tako', 'tako-own'],
+    ] });
+    f.accountSheet.values.push(createAccount(f.backend, 'Tako', '1357').concat('空環', 'course_admin'));
+    const session = f.backend.requireSession_(f.backend.authenticate_('Tako', '1357').sessionToken);
+    f.backend.pauseLeaves_(f.adminSession, true);
+    const account = f.accountSheet.values.at(-1);
+    if (revoked === 'inactive') account[3] = '否';
+    else account[8] = '';
+    const before = JSON.stringify(f.leaveSheet.values);
+    assert.throws(() => f.backend.getMyCourses_(session), /暫停請假/);
+    assert.throws(() => f.backend.submitLeave_(session, [{
+      日期: '2026/08/01', 時間: '09:00', 課程: '空環 Lv.1', 'OB Calendar ID': 'tako-own',
+    }]), /暫停請假|帳號未啟用/);
+    assert.equal(JSON.stringify(f.leaveSheet.values), before);
+  }
+});
+
+test('closed leave registration rejects Kuan self mode other administrators and forged acting identities without writes', () => {
   const f = createInvitationBackend({ leaveRows: [] });
+  f.backend.console = { error() {} };
   f.accountSheet.values.push(createAccount(f.backend, '冠蓉', '1357').concat('', 'course_admin'));
+  f.accountSheet.values.push(createAccount(f.backend, 'Tako', '2468').concat('空環', 'course_admin'));
   const kuanToken = f.backend.authenticate_('冠蓉', '1357').sessionToken;
   f.backend.pauseLeaves_(f.adminSession, true);
   const before = JSON.stringify(f.leaveSheet.values);
@@ -5470,8 +5539,11 @@ test('closed leave registration rejects self mode other administrators and forge
   for (const params of [
     { sessionToken: kuanToken },
     { sessionToken: kuanToken, actingTeacherName: '冠蓉' },
+    { sessionToken: f.adminToken },
     { sessionToken: f.adminToken, actingTeacherName: '老師甲' },
+    { sessionToken: f.adminToken, actingTeacherName: 'Tako' },
     { sessionToken: f.teacherAToken, impersonatedBy: '冠蓉' },
+    { sessionToken: f.teacherAToken, teacherName: 'Tako', name: 'Tako', impersonatedBy: 'Tako', role: '管理員', managementCapabilities: 'course_admin' },
     { sessionToken: f.teacherAToken, actingTeacherName: '老師乙', impersonatedBy: '冠蓉' },
   ]) {
     for (const action of ['getMyCourses', 'submitLeave']) {

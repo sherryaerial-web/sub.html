@@ -13,6 +13,17 @@ function fixture(handler) {
  const make=(extra={})=>createAdminTransport({url:'https://example.test/exec',fetch,storage,crypto:webcrypto,getSessionToken:()=> 'session-a',getSessionOwner:()=> 'Tako',onStatus:(...args)=>notices.push(args),timeoutMs:20,...extra});
  return {make,calls,data,notices};
 }
+test('special OB preview is read-only and confirmation reconciles a lost response without resending',async()=>{
+ const s=fixture(p=>{
+  if(p.action==='previewSpecialCourseObAdoption'){assert.equal(p.clientOperationId,undefined);return {status:'success',data:{previewToken:'review'}};}
+  if(p.action==='confirmSpecialCourseObAdoption'){assert.ok(p.clientOperationId);throw Error('response lost');}
+  return {status:'success',data:{state:'completed',payload:{status:'success',data:{verificationStatus:'已核對'}}}};
+ });
+ const t=s.make();await t.call('previewSpecialCourseObAdoption',{sessionToken:'session-a',specialGroupId:'g'});
+ const result=await t.call('confirmSpecialCourseObAdoption',{sessionToken:'session-a',specialGroupId:'g',previewToken:'review',reason:'confirmed'});
+ assert.equal(result.verificationStatus,'已核對');
+ assert.deepEqual(s.calls.map(p=>p.action),['previewSpecialCourseObAdoption','confirmSpecialCourseObAdoption','getAdminOperationStatus']);
+});
 test('returning from another app checks the session before sending and never reloads form inputs',async()=>{
  const s=fixture(p=>({status:'success',data:p.action==='getSession'?{teacherName:'Tako'}:{id:'booking'}})),t=s.make();
  await t.resume();const result=await t.call('createPracticeBooking',{sessionToken:'session-a',practice:{time:'11:00'}});

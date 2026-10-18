@@ -309,6 +309,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     const authenticatedReads = new Set([
       'getAvailableSubstitutes', 'getClaimOptions', 'getClaimPageData', 'getMySubs',
       'getMyCourses', 'getMyLeaves', 'getAdminDashboard', 'recordInvitationFirstView',
+      'previewSpecialCourseObAdoption',
     ]);
     const data = isPost && !authenticatedReads.has(action)
       ? (action === 'getPracticeDay'
@@ -1755,6 +1756,7 @@ test('maps own and open substitute slots into the special-course picker without 
 
 test('renders own-course special requests as one teacher record and one admin work item', () => {
   const { context } = createFrontendRuntime();
+  vm.runInContext('authState.teacherName = "冠蓉"; authState.managementCapabilities = ["course_admin"];', context);
   const sourceSlots = [
     { slotKey: 'own:cal-1', sourceType: 'own', time: '09:00', courseName: 'A－空環 Lv.1', calendarId: 'cal-1', originalTeacher: '老師甲' },
     { slotKey: 'own:cal-2', sourceType: 'own', time: '10:30', courseName: 'A－空環 Lv.2', calendarId: 'cal-2', originalTeacher: '老師甲' },
@@ -1787,12 +1789,14 @@ test('renders own-course special requests as one teacher record and one admin wo
     status: '待處理', changeStatus: '', sourceSlots, continuation, auditHistory: [],
   }, [{ calendarId: 'cal-special', date: '2026/08/10', time: '09:00', courseName: 'A－舞綢中軸特別課', teacherName: '老師甲' }]);
   assert.match(adminMarkup, /data-special-replacement-select="special-1"/);
-  assert.match(adminMarkup, /data-admin-action="link-special-replacement"/);
+  assert.match(adminMarkup, /data-admin-action="preview-special-ob-adoption"/);
+  assert.match(adminMarkup, /人工確認並採用 OB/);
+  assert.doesNotMatch(adminMarkup, /連結替代課程/);
   assert.match(adminMarkup, /接續本人常態課/);
   assert.match(adminMarkup, /請在 OB 將.*A－空環 Lv\.3.*11:00.*11:15/);
   assert.doesNotMatch(adminMarkup, /調整開始時間：09:00 →\s*</);
   assert.doesNotMatch(adminMarkup, /data-substitute-id=""/);
-  assert.match(html, /linkAdminSpecialReplacement\(groupId, select\.value\)/);
+  assert.match(html, /previewAdminSpecialObAdoption\(button\.dataset\.specialGroupId, select\.value\)/);
 
   const groupedMarkup = context.renderAdminGroup({
     specialGroupId: 'special-1',
@@ -1805,8 +1809,7 @@ test('renders own-course special requests as one teacher record and one admin wo
       specialActualStartTime: '09:00', specialEndTime: '11:00',
     }],
   }, (item) => context.renderAdminObItem(item, []));
-  assert.match(groupedMarkup, /class="[^"]*special-record-group-action[^"]*"[^>]*data-admin-action="advance-special-time"/);
-  assert.match(groupedMarkup, /提前 15 分鐘/);
+  assert.doesNotMatch(groupedMarkup, /data-admin-action="advance-special-time"|提前 15 分鐘/);
 
   const restoredContinuationMarkup = context.renderAdminObItem({
     recordType: 'specialRequest', specialGroupId: 'special-1', date: '2026/08/10', time: '08:45',
@@ -1901,10 +1904,12 @@ test('Liz October 11 first special teacher record explains the empty-slot cancel
   assert.doesNotMatch(markup, /原課程回復核對/);
 });
 
-test('admin special-course advance action calls the backend and refreshes the work list', async () => {
+test('admin special OB adoption previews changes and requires a reason before confirming', async () => {
   const { context, getElement, requestActions } = createFrontendRuntime({
-    advanceSpecialCourseTime: {
-      specialGroupId: 'special-advance-1', actualStartTime: '18:15', endTime: '19:45',
+    previewSpecialCourseObAdoption: {
+      previewToken: 'review-token', date: '2026/11/15', room: 'C', teacherName: '蜜莉 戴', durationMinutes: 90,
+      before: { courseName: '小木偶迷你換特別課', startTime: '13:10', endTime: '14:40' },
+      after: { courseName: 'C－迷你環綢舞碼特別課(90min)', startTime: '13:00', endTime: '14:30' },
     },
     getAdminDashboard: {
       pendingInvitations: [], activeInvitees: [], obWork: [], changeRequests: [],
@@ -1912,14 +1917,34 @@ test('admin special-course advance action calls the backend and refreshes the wo
     },
   });
 
-  await context.advanceAdminSpecialCourseTime('special-advance-1');
+  vm.runInContext('authState.sessionToken = "test-session"; authState.teacherName = "Tako";', context);
+  await context.previewAdminSpecialObAdoption('manual-adopt', '53954');
+  assert.equal(getElement('request-dialog').open, true);
+  assert.match(getElement('request-dialog-copy').textContent, /13:10–14:40/);
+  assert.match(getElement('request-dialog-copy').textContent, /13:00–14:30/);
+  assert.equal(requestActions.filter(action => action === 'confirmSpecialCourseObAdoption').length, 0);
+  await context.submitRequestDialog({ preventDefault() {} });
+  assert.match(getElement('notice').textContent, /原因/);
+  getElement('request-reason').value = '已確認正式課名與時間';
+  await context.submitRequestDialog({ preventDefault() {} });
+  assert.equal(requestActions.filter(action => action === 'confirmSpecialCourseObAdoption').length, 1);
+  assert.equal(getElement('request-dialog').open, false);
+  assert.equal(typeof context.advanceAdminSpecialCourseTime, 'undefined');
+});
 
-  assert.deepEqual(
-    requestActions.filter((action) => action === 'advanceSpecialCourseTime' || action === 'getAdminDashboard'),
-    ['advanceSpecialCourseTime', 'getAdminDashboard'],
-  );
-  assert.match(getElement('notice').textContent, /18:15–19:45/);
-  assert.match(getElement('notice').textContent, /OB/);
+test('special manual confirmation replaces only special links and is limited to the two managers', () => {
+  const { context } = createFrontendRuntime();
+  const item = { specialGroupId: 'g', substituteId: 's', date: '2026/11/15', status: '已領取', auditHistory: [] };
+  for (const teacher of ['冠蓉', 'Tako', '其他管理員']) {
+    vm.runInContext(`authState.teacherName = ${JSON.stringify(teacher)}; authState.managementCapabilities = ["course_admin"];`, context);
+    const special = context.renderAdminObItem(item, []);
+    assert.equal(special.includes('人工確認並採用 OB'), teacher !== '其他管理員');
+    assert.doesNotMatch(special, /data-admin-action="link-replacement"|advance-special-time/);
+    const ordinary = context.renderAdminObItem({ ...item, specialGroupId: '' }, []);
+    assert.match(ordinary, /data-admin-action="link-replacement"/);
+    const restoring = context.renderAdminObItem({ ...item, changeStatus: '退出後待回復 OB' }, []);
+    assert.doesNotMatch(restoring, /人工確認並採用 OB/);
+  }
 });
 
 test('renders delayed claim timing in teacher and admin records without replacement controls on occupancy', () => {
@@ -3238,7 +3263,7 @@ test('admin groups sort by their earliest actual slot and keep source rows chron
     const markup = render();
     assert.deepEqual(Array.from(markup.matchAll(/class="item-course">([^<]*)</g), (match) => match[1]),
       ['D－first', 'A－source-early', 'A－source-late', 'B－middle']);
-    const groups = Array.from(markup.matchAll(/<section class="special-record-group">([\s\S]*?)<\/section>/g));
+    const groups = Array.from(markup.matchAll(/<section class="special-record-group"[^>]*>([\s\S]*?)<\/section>/g));
     assert.equal(groups.length, 1);
     assert.match(groups[0][1], /source-early[\s\S]*source-late/);
     assert.doesNotMatch(groups[0][1], /B－middle/);

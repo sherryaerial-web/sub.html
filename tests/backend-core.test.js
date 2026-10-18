@@ -8654,6 +8654,171 @@ test('reconciliation accepts a normal OB title for a new-teacher substitute whil
   assert.equal(row[17], '');
 });
 
+function createManualSpecialAdoptionFixture({ grouped = false } = {}) {
+  const sources = [
+    { sourceType: grouped ? 'leave' : 'own', date: '2026/11/15', time: '12:10', courseName: 'C－空環 Lv.1~2', originalTeacher: grouped ? '老師乙' : '老師甲', calendarId: '53954', substituteId: grouped ? 'leave-special-1' : '' },
+    { sourceType: grouped ? 'leave' : 'own', date: '2026/11/15', time: '13:30', courseName: 'C－空環 Lv.2~3', originalTeacher: grouped ? '老師丙' : '老師甲', calendarId: '53955', substituteId: grouped ? 'leave-special-2' : '' },
+  ];
+  const leaves = grouped ? createSpecialGroupReconciliationRows('manual-adopt').slice(0, 2).map((row, i) => {
+    row[2] = '2026/11/15'; row[3] = sources[i].time; row[4] = sources[i].courseName;
+    row[10] = sources[i].calendarId; row[12] = '小木偶迷你換特別課'; row[13] = 'Lv.2';
+    row[23] = 90; row[24] = '14:40'; row[25] = '13:10';
+    while (row.length < 31) row.push('');
+    return row;
+  }) : [];
+  const request = ['時間', 'manual-adopt', '老師甲', '2026/11/15', 'C', JSON.stringify(sources),
+    JSON.stringify(leaves.map(row => row[9])), '13:10', '小木偶迷你換特別課', 'Lv.2', 90, '14:40',
+    '使用連續時段', '麻煩請改13:00開始 謝謝', '待處理', '核對異常', '', '時間不一致', ''];
+  const f = createInvitationBackend({ nextMonth: '2026-11', leaveRows: leaves,
+    specialRequestRows: [request], courseRows: [
+      ['2026/11/15', '13:00', 'C－迷你環綢舞碼特別課(90min)', '老師甲', '53954', 'class-special', 'teacher-a', '否', ''],
+    ] });
+  for (const name of ['冠蓉', 'Tako']) f.accountSheet.values.push(createAccount(f.backend, name, '1357', { role: '管理員' }).concat('空環', 'course_admin'));
+  const baseUtilities = loadBackend().Utilities;
+  f.backend.Utilities.formatDate = baseUtilities.formatDate;
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-only');
+  f.liveItems = [{ id: 53954, classTime: '2026-11-15T13:00:00+08:00', classEndTime: '2026-11-15T14:30:00+08:00',
+    class: { id: 'class-special', nameZhHant: 'C－迷你環綢舞碼特別課(90min)', duration: 90 },
+    instructors: [{ id: 'teacher-a', name: '老師甲' }] }];
+  f.backend.fetchCalendarPages_ = () => f.liveItems;
+  f.session = { teacherName: '冠蓉', role: '管理員' };
+  f.preview = () => f.backend.previewSpecialCourseObAdoption_(f.session, 'manual-adopt', '53954');
+  f.confirm = token => f.backend.confirmSpecialCourseObAdoption_(f.session, 'manual-adopt', '53954', token, '已確認採用 OB 正式課名與 13:00 時間');
+  return f;
+}
+
+test('manual special OB adoption previews without writing then adopts only the approved request', () => {
+  const f = createManualSpecialAdoptionFixture();
+  const before = JSON.stringify(f.specialRequestSheet.values);
+  const preview = f.preview();
+  assert.equal(JSON.stringify(f.specialRequestSheet.values), before);
+  assert.equal(preview.before.startTime, '13:10');
+  assert.equal(preview.after.startTime, '13:00');
+  assert.equal(preview.after.endTime, '14:30');
+  const sources = f.specialRequestSheet.values[1][5];
+  const result = f.confirm(preview.previewToken);
+  const row = f.specialRequestSheet.values[1];
+  assert.equal(result.verificationStatus, '已核對');
+  assert.equal(row[5], sources);
+  assert.equal(row[7], '13:00'); assert.equal(row[8], 'C－迷你環綢舞碼特別課(90min)');
+  assert.equal(row[9], 'Lv.2'); assert.equal(row[11], '14:30');
+  assert.deepEqual(row.slice(14, 16), ['已完成', '已核對']);
+  assert.equal(row[18], '53954');
+  assert.equal(f.auditSheet.values[1][1], '冠蓉');
+  assert.match(f.auditSheet.values[1][4], /13:10/);
+  assert.match(f.auditSheet.values[1][5], /13:00/);
+  assert.match(f.auditSheet.values[1][6], /已確認採用/);
+  assert.throws(() => f.confirm(preview.previewToken), /變更|重新預覽/);
+});
+
+test('manual special OB adoption updates a whole claimed group without changing original IDs or claimants', () => {
+  const f = createManualSpecialAdoptionFixture({ grouped: true });
+  const originals = f.leaveSheet.values.slice(1).map(row => row.slice(0, 7));
+  f.confirm(f.preview().previewToken);
+  f.leaveSheet.values.slice(1).forEach((row, i) => {
+    assert.deepEqual(row.slice(0, 7), originals[i]);
+    assert.equal(row[10], String(53954 + i));
+    assert.equal(row[12], 'C－迷你環綢舞碼特別課(90min)');
+    assert.equal(row[20], '53954'); assert.equal(row[25], '13:00'); assert.equal(row[24], '14:30');
+    assert.equal(row[8], '已完成'); assert.equal(row[15], '已核對');
+  });
+});
+
+test('manual special OB adoption accepts a restored source ID while preserving the original leave ID', () => {
+  const f = createManualSpecialAdoptionFixture({ grouped: true });
+  const slots = JSON.parse(f.specialRequestSheet.values[1][5]);
+  slots[0].originalCalendarId = 'old-53954';
+  f.specialRequestSheet.values[1][5] = JSON.stringify(slots);
+  f.leaveSheet.values[1][10] = 'old-53954'; f.leaveSheet.values[1][20] = '53954';
+  f.confirm(f.preview().previewToken);
+  assert.equal(f.leaveSheet.values[1][10], 'old-53954');
+  assert.equal(f.leaveSheet.values[1][20], '53954');
+});
+
+test('manual special OB adoption rejects unsafe selections, permission changes and stale previews', () => {
+  const cases = [
+    [f => { f.session = f.adminSession; }, /權限/],
+    [f => { f.specialRequestSheet.values[1][14] = '申請取消中'; }, /取消|退出|待處理/],
+    [f => { f.liveItems[0].cancelled = true; }, /找不到|取消/],
+    [f => { f.liveItems[0].class.nameZhHant = 'C－迷你環綢舞碼'; }, /特別課/],
+    [f => { f.liveItems[0].instructors[0].name = '老師乙'; }, /老師/],
+    [f => { f.liveItems[0].class.nameZhHant = 'A－迷你環綢特別課(90min)'; }, /教室|館別/],
+    [f => { f.liveItems[0].classEndTime = '2026-11-15T14:00:00+08:00'; }, /分鐘|時長/],
+    [f => { f.liveItems.push({ ...f.liveItems[0], id: 999, classTime: '2026-11-15T14:30:00+08:00', classEndTime: '2026-11-15T15:30:00+08:00' }); }, /衝突|換場/],
+    [f => { f.liveItems[0].class.nameZhHant = 'C－迷你環綢特別課Lv3(90min)'; f.courseSheet.values[1][2] = f.liveItems[0].class.nameZhHant; }, /等級不一致/],
+  ];
+  for (const [change, error] of cases) {
+    const f = createManualSpecialAdoptionFixture(); change(f);
+    const before = JSON.stringify(f.specialRequestSheet.values);
+    assert.throws(() => f.preview(), error);
+    assert.equal(JSON.stringify(f.specialRequestSheet.values), before);
+  }
+  const f = createManualSpecialAdoptionFixture(); const p = f.preview();
+  assert.throws(() => f.backend.confirmSpecialCourseObAdoption_(f.session, 'manual-adopt', '53954', p.previewToken, ''), /原因/);
+  f.specialRequestSheet.values[1][13] += '更新';
+  assert.throws(() => f.confirm(p.previewToken), /變更|重新預覽/);
+});
+
+test('manual special OB adoption rolls back the entire group if audit append fails', () => {
+  const f = createManualSpecialAdoptionFixture({ grouped: true });
+  const p = f.preview();
+  const before = [f.specialRequestSheet, f.leaveSheet, f.auditSheet].map(sheet => JSON.stringify(sheet.values));
+  injectSetValuesFailureOnce(f.auditSheet, ({ row }) => row > 1, 'audit unavailable');
+  assert.throws(() => f.confirm(p.previewToken), /audit unavailable/);
+  [f.specialRequestSheet, f.leaveSheet, f.auditSheet].forEach((sheet, i) => assert.equal(JSON.stringify(sheet.values), before[i]));
+});
+
+test('manual special OB adoption preserves continuation checks and rejects corrupt group membership', () => {
+  const f = createManualSpecialAdoptionFixture({ grouped: true });
+  f.leaveSheet.values[2][23] = 120;
+  assert.throws(() => f.preview(), /群組|分鐘/);
+  const own = createManualSpecialAdoptionFixture();
+  const sources = JSON.parse(own.specialRequestSheet.values[1][5]);
+  sources.push({ sourceType: 'own-continuation', date: '2026/11/15', time: '14:40', originalTime: '14:40',
+    actualStartTime: '14:45', courseName: 'C－空環 Lv.3', originalTeacher: '老師甲', calendarId: 'next', durationMinutes: 60 });
+  own.specialRequestSheet.values[1][5] = JSON.stringify(sources);
+  own.liveItems.push({ id: 'next', classTime: '2026-11-15T14:50:00+08:00', classEndTime: '2026-11-15T15:50:00+08:00',
+    class: { id: 'next-class', nameZhHant: 'C－空環 Lv.3', duration: 60 }, instructors: [{ name: '老師甲' }] });
+  assert.throws(() => own.preview(), /接續常態課.*時間不一致/);
+});
+
+test('manual special OB adoption rechecks live timing, actor and active account after preview', () => {
+  const f = createManualSpecialAdoptionFixture(); const p = f.preview();
+  f.liveItems[0].classEndTime = '2026-11-15T14:00:00+08:00';
+  assert.throws(() => f.confirm(p.previewToken), /分鐘|時長/);
+  const other = createManualSpecialAdoptionFixture(); const originalPreview = other.preview();
+  other.session = { teacherName: 'Tako', role: '管理員' };
+  assert.throws(() => other.confirm(originalPreview.previewToken), /變更|重新預覽/);
+  const ownPreview = other.preview();
+  other.confirm(ownPreview.previewToken);
+  assert.equal(other.auditSheet.values[1][1], 'Tako');
+});
+
+test('manual special OB adoption does not release cancelled reservations before verified OB restoration', () => {
+  for (const verification of ['核對異常', '待核對', '已回復核對', '已取消核對']) {
+    const f = createManualSpecialAdoptionFixture();
+    const old = f.specialRequestSheet.values[1].slice(); old[1] = 'old-special'; old[14] = '已取消'; old[15] = verification; old[18] = '53954';
+    f.specialRequestSheet.values.push(old);
+    if (['已回復核對', '已取消核對'].includes(verification)) assert.ok(f.preview().previewToken);
+    else assert.throws(() => f.preview(), /其他特別課群組|保留/);
+  }
+});
+
+test('manual special OB adoption uses authoritative live duration for adjacent formal courses', () => {
+  const f = createManualSpecialAdoptionFixture();
+  f.courseSheet.values.push(['2026/11/15', '11:45', 'D－綢吊', '老師甲', 'previous', 'previous-class', 'teacher-a']);
+  f.liveItems.push({ id: 'previous', classTime: '2026-11-15T11:45:00+08:00', classEndTime: '2026-11-15T12:45:00+08:00',
+    class: { id: 'previous-class', nameZhHant: 'D－綢吊', duration: 60 }, instructors: [{ name: '老師甲' }] });
+  assert.ok(f.preview().previewToken);
+});
+
+test('manual special OB adoption accepts the effective substitute rather than the original OB instructor', () => {
+  const f = createManualSpecialAdoptionFixture({ grouped: true });
+  f.liveItems[0].instructors = [{ name: '老師乙' }, { name: '老師甲', isSubstitute: true }];
+  f.confirm(f.preview().previewToken);
+  assert.equal(f.leaveSheet.values[1][6], '老師甲');
+});
+
 function createSpecialGroupReconciliationRows(groupId = 'special-group-a') {
   return [
     ['時間', '老師乙', '2026/08/12', '13:30', 'B－空環 Lv.2', '已領取', '老師甲', '', '待處理', 'leave-special-1', 'group-calendar-1', '', '卡拉特別課', '', '調整為特別課', '待核對', '', '', '', '地板課程', '', groupId, '使用連續時段', 180, '16:30'],

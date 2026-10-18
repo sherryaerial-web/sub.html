@@ -9379,6 +9379,7 @@ function doPost(e) {
         return getRaffleFulfillment_(session, {campaignId:parameters.campaignId,groupId:parameters.groupId,offset:parameters.offset});
       },
       getRaffleCampaignSettings: function() { return getRaffleCampaignSettings_(session); },
+      getActivityProductionReadiness: function() { return getActivityProductionReadiness_(session); },
       saveRaffleCampaign: function() { return saveRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動草稿')); },
       manageRaffleCampaign: function() { return manageRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動維護')); },
       previewRaffleMailReopen: function() { return previewRaffleMailReopen_(session, parameters.campaignId, parameters.jobId); },
@@ -22026,6 +22027,133 @@ function readRaffleCampaignState_() {
     byId[c.id] = item; state.events.push(e); state.requests[id] = {requestHash:hash, event:e};
   });
   return state;
+}
+
+// Generated from activity-pilot/src/campaign.mjs draft helpers.
+function activityProductionDraftAudit_(input,evidence,nowMs) {
+const PURCHASE_RULES=Object.freeze([Object.freeze({points:60,stars:2,balls:1}),Object.freeze({points:100,stars:3,balls:2})]);
+function activityDraft({environment,endsAt=Date.parse('2027-01-01T00:00:00+08:00')}={}){
+ if(!['test','production'].includes(environment))throw Error('invalid_environment');
+ const startsAt=Date.parse(environment==='test'?'2026-10-01T00:00:00+08:00':'2026-11-15T00:00:00+08:00');
+ if(!Number.isSafeInteger(endsAt)||endsAt<=startsAt||endsAt-startsAt>366*86400000)throw Error('explicit_end_required');
+ return Object.freeze({environment,enabled:false,requiresLaunchConfirmation:true,startsAt,endsAt,starsPerDraw:3,purchaseRules:PURCHASE_RULES});
+}
+
+// Offline draft validation only. Never authorizes a deployment or a reward.
+// Resource IDs must come from a trusted operator inventory, not a student form.
+function auditProductionDraft(input){
+ const v=input&&typeof input==='object'&&!Array.isArray(input)?input:{};
+ const expected=activityDraft({environment:'production'}),blockers=[];
+ const key=x=>typeof x==='string'&&x.length>0&&x.length<=128&&x.trim()===x&&!/[\s\x00-\x1f]/.test(x);
+ const numeric=x=>typeof x==='string'&&/^[1-9][0-9]{0,14}$/.test(x);
+ if(v.environment!=='production'||v.enabled!==false||v.requiresLaunchConfirmation!==true)blockers.push('disabled_production_draft_required');
+ if(v.startsAt!==expected.startsAt||v.endsAt!==expected.endsAt)blockers.push('activity_window');
+ if(v.starsPerDraw!==3||!Array.isArray(v.purchaseRules)||v.purchaseRules.length!==2||PURCHASE_RULES.some(rule=>v.purchaseRules.filter(r=>r&&r.points===rule.points&&r.stars===rule.stars&&r.balls===rule.balls).length!==1))blockers.push('reward_rules');
+ const resources=v.resources;
+ if(['database','sheet','gas'].some(k=>!key(resources?.production?.[k])||!key(resources?.test?.[k])||resources.production[k]===resources.test[k]))blockers.push('resource_isolation');
+ if(!Array.isArray(v.roomIds)||v.roomIds.length!==4||v.roomIds.some(x=>!numeric(x))||new Set(v.roomIds).size!==4)blockers.push('room_mapping');
+ const passes=v.passRules;
+ if(!Array.isArray(passes)||passes.length<2||passes.some(r=>!numeric(r?.passId)||![60,100].includes(r.points))||new Set(passes.map(r=>r.passId)).size!==passes.length||![60,100].every(points=>passes.some(r=>r.points===points)))blockers.push('pass_mapping');
+ if(!key(v.ballPrizeId))blockers.push('ball_prize_mapping');
+ if(v.referralMode!=='manual')blockers.push('referral_history');
+ return {draftValid:blockers.length===0,canActivate:false,liveVerified:false,blockers,
+  pendingChecks:['resource_inventory','member_identity','prize_inventory_mapping','inventory','notification_handoff','end_to_end_acceptance','launch_approval']};
+}
+// Inspects trusted operator snapshots only; it neither fetches nor binds members.
+// A consistent snapshot is not proof of present stock or identity ownership.
+function auditLaunchEvidence(context,evidence,nowMs=Date.now()){
+ const c=context||{},e=evidence||{},key=x=>typeof x==='string'&&x.trim()===x&&x.length>0&&x.length<=128&&!/[\x00-\x1f]/.test(x);
+ const fresh=t=>Number.isSafeInteger(nowMs)&&nowMs>0&&Number.isSafeInteger(t)&&t>0&&t<=nowMs&&nowMs-t<=86400000;
+ const count=x=>Number.isSafeInteger(x)&&x>=0;
+ const result=()=>({snapshotValid:false,count:0,issues:[]});
+ const identity=result(),fulfillment=result(),notifications=result();
+ const contextOK=key(c.campaignId)&&Number.isSafeInteger(c.version)&&c.version>0;
+ const header=(s,source)=>contextOK&&key(source)&&s?.environment==='production'&&s.campaignId===c.campaignId&&s.version===c.version&&s.sourceId===source&&s.complete===true&&fresh(s.checkedAt)&&Array.isArray(s.records)&&s.records.length>0&&s.records.length<=10000&&s.total===s.records.length;
+ const i=e.identity;
+ if(!header(i,c.database))identity.issues.push('identity_snapshot_missing_or_stale');
+ else{
+  const members=new Set(),lines=new Set();identity.count=i.records.length;
+  for(const row of i.records){
+   if(!row||typeof row.memberId!=='string'||!/^[1-9][0-9]{0,14}$/.test(row.memberId)||!/^U[a-f0-9]{32}$/.test(row.lineId||'')||!key(row.confirmedBy)||!Number.isSafeInteger(row.confirmedAt)||row.confirmedAt<=0||row.confirmedAt>i.checkedAt){identity.issues.push('identity_unconfirmed');continue;}
+   if(members.has(row.memberId)||lines.has(row.lineId))identity.issues.push('identity_conflict');
+   members.add(row.memberId);lines.add(row.lineId);
+  }
+ }
+ const f=e.fulfillment;
+ if(!header(f,c.sheet)||!key(c.ballPrizeId))fulfillment.issues.push('inventory_snapshot_missing_or_stale');
+ else{
+  const groups=new Set();let ball=false;fulfillment.count=f.records.length;
+  for(const row of f.records){
+   if(!row||!key(row.prizeId)||!count(row.available)||!count(row.required)||typeof row.directPickup!=='boolean'||(row.prizeId===c.ballPrizeId?row.directPickup!==true||row.venue!=='':row.directPickup!==false||!key(row.venue))){fulfillment.issues.push('prize_mapping_invalid');continue;}
+   const group=JSON.stringify([row.prizeId,row.venue]);if(groups.has(group))fulfillment.issues.push('inventory_duplicate');groups.add(group);
+   if(row.prizeId===c.ballPrizeId)ball=true;
+   if(row.available<row.required)fulfillment.issues.push('inventory_shortage');
+  }
+  if(!ball)fulfillment.issues.push('ball_mapping_missing');
+ }
+ const n=f?.notifications;
+ if(!header(f,c.sheet)||!n||!Array.isArray(n.channels)||n.channels.length!==2||!n.channels.includes('ob')||!n.channels.includes('email')||n.pushNotification!==true||n.systemFooter!==true||n.oldSenderStopped!==true||n.idempotencyVerified!==true||n.recoveryVerified!==true||!key(n.verifiedBy)||!fresh(n.verifiedAt)||n.verifiedAt>f.checkedAt)notifications.issues.push('notification_handoff_unverified');
+ for(const r of [identity,fulfillment,notifications]){r.issues=[...new Set(r.issues)];r.snapshotValid=r.issues.length===0;}
+ return {canActivate:false,liveVerified:false,identity,fulfillment,notifications};
+}
+
+ const report=auditProductionDraft(input),v=input||{};
+ report.evidence=auditLaunchEvidence({campaignId:v.id,version:v.version,database:v.resources?.production?.database,sheet:v.resources?.production?.sheet,ballPrizeId:v.ballPrizeId},evidence,nowMs);
+ return report;
+}
+// Optional operator-produced evidence export. Read-only: never creates tabs or fixes cells.
+function readActivityEvidenceSource_(draft) {
+ const source=draft?.evidenceSource?.spreadsheetId;
+ if(draft?.environment!=='production'||!activityProductionDraftAudit_(draft).draftValid||!draft.id||!Number.isSafeInteger(draft.version)||draft.version<1||!source||source!==draft.resources?.production?.sheet||source===draft.resources?.test?.sheet||!/^[A-Za-z0-9_-]{16,}$/.test(source))throw Error('evidence_source');
+ const book=SpreadsheetApp.openById(source);
+ function table(name,fields,max){
+  const sheet=book.getSheetByName(name);if(!sheet)throw Error('evidence_table');
+  const height=sheet.getLastRow(),width=sheet.getLastColumn();
+  if(!Number.isInteger(height)||height<2||height>max+1||width!==fields.length)throw Error('evidence_size');
+  const rows=[];
+  for(let start=1;start<=height;start+=200){
+   const count=Math.min(200,height-start+1),page=sheet.getRange(start,1,count,width).getDisplayValues();
+   if(page.length!==count||page.some(r=>r.length!==width||r.some(v=>typeof v!=='string'||v.length>512)))throw Error('evidence_page');rows.push(...page);
+  }
+  if(sheet.getLastRow()!==height||sheet.getLastColumn()!==width)throw Error('evidence_changed');
+  const header=rows[0];if(new Set(header).size!==fields.length||fields.some(f=>!header.includes(f)))throw Error('evidence_headers');
+  return {rows,values:rows.slice(1).map(row=>Object.fromEntries(fields.map(f=>[f,row[header.indexOf(f)]])))};
+ }
+ const manifestFields=['snapshotId','environment','campaignId','version','checkedAt','complete','identitySourceId','identityCount','inventoryCount','identityHash','inventoryHash','notificationHash'];
+ const first=table('ActivityEvidenceManifest',manifestFields,1),m=first.values[0];
+ const number=v=>{if(!/^(0|[1-9][0-9]*)$/.test(v)||!Number.isSafeInteger(Number(v)))throw Error('evidence_number');return Number(v);};
+ const bool=v=>{if(v!=='true'&&v!=='false')throw Error('evidence_boolean');return v==='true';};
+ if(!/^[A-Za-z0-9_-]{8,100}$/.test(m.snapshotId)||m.environment!=='production'||m.campaignId!==draft.id||number(m.version)!==draft.version||!bool(m.complete)||m.identitySourceId!==draft.resources.production.database)throw Error('evidence_manifest');
+ const identities=table('ActivityIdentityEvidence',['snapshotId','memberId','lineId','confirmedBy','confirmedAt'],10000);
+ const stock=table('ActivityInventoryEvidence',['snapshotId','prizeId','venue','directPickup','available','required'],10000);
+ const notification=table('ActivityNotificationEvidence',['snapshotId','channels','pushNotification','systemFooter','oldSenderStopped','idempotencyVerified','recoveryVerified','verifiedBy','verifiedAt'],1);
+ if(identities.values.length!==number(m.identityCount)||stock.values.length!==number(m.inventoryCount))throw Error('evidence_count');
+ for(const [data,digest] of [[identities,m.identityHash],[stock,m.inventoryHash],[notification,m.notificationHash]]){
+  if(data.values.some(r=>r.snapshotId!==m.snapshotId)||raffleHash_(JSON.stringify(data.rows))!==digest)throw Error('evidence_changed');
+ }
+ if(JSON.stringify(first.rows)!==JSON.stringify(table('ActivityEvidenceManifest',manifestFields,1).rows))throw Error('evidence_changed');
+ const common={environment:'production',campaignId:draft.id,version:draft.version,checkedAt:number(m.checkedAt),complete:true};
+ const n=notification.values[0];
+ return {identity:{...common,sourceId:m.identitySourceId,total:identities.values.length,records:identities.values.map(r=>({memberId:r.memberId,lineId:r.lineId,confirmedBy:r.confirmedBy,confirmedAt:number(r.confirmedAt)}))},
+  fulfillment:{...common,sourceId:source,total:stock.values.length,records:stock.values.map(r=>({prizeId:r.prizeId,venue:r.venue,directPickup:bool(r.directPickup),available:number(r.available),required:number(r.required)})),
+   notifications:{channels:n.channels.split(','),pushNotification:bool(n.pushNotification),systemFooter:bool(n.systemFooter),oldSenderStopped:bool(n.oldSenderStopped),idempotencyVerified:bool(n.idempotencyVerified),recoveryVerified:bool(n.recoveryVerified),verifiedBy:n.verifiedBy,verifiedAt:number(n.verifiedAt)}}};
+}
+function getActivityProductionReadiness_(session) {
+ assertCapabilitySession_(session, 'raffle_admin');
+ var raw=PropertiesService.getScriptProperties().getProperty('ACTIVITY_PRODUCTION_DRAFT_JSON'),draft=null,configured=false;
+ try { if(raw && raw.length<=32768) { draft=JSON.parse(raw); configured=!!draft&&typeof draft==='object'&&!Array.isArray(draft); } } catch(_) {}
+ var evidenceRaw=PropertiesService.getScriptProperties().getProperty('ACTIVITY_PRODUCTION_EVIDENCE_JSON'),evidence=null;
+ try { if(evidenceRaw && evidenceRaw.length<=32768)evidence=JSON.parse(evidenceRaw); } catch(_) {}
+ var sourceFailed=false;
+ if(draft && Object.prototype.hasOwnProperty.call(draft,'evidenceSource')){
+  evidence=null;
+  try { evidence=readActivityEvidenceSource_(draft); } catch(_) { sourceFailed=true; }
+ }
+ var result=activityProductionDraftAudit_(draft,evidence,Date.now());
+ if(!configured)result.blockers.unshift('draft_unconfigured');
+ if(sourceFailed){result.blockers.push('evidence_source_unavailable');result.draftValid=false;}
+ result.evidenceSource=draft&&Object.prototype.hasOwnProperty.call(draft,'evidenceSource')?'configured_sheet':'saved_snapshot';
+ return result;
 }
 
 function getRaffleCampaignSettings_(session) {

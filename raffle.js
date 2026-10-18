@@ -90,6 +90,23 @@
     const canSend = dual && data.sendEnabled && Number.isInteger(data.quota) && data.quota >= data.batchCount && data.batchCount > 0;
     return `<div class="admin-control"><h3>${data.kind === 'ready' ? '領獎通知 · ' : ''}寄送前確認 · 尚未寄出</h3><p class="state">${!dual ? '通知服務版本尚未更新，請重新載入後再試；目前不可發送。' : !data.sendEnabled ? escape(data.blockedReason || '正式通知未啟用，或尚未確認舊寄信程式已停用交接。') : `目前剩餘配額：${escape(data.quota)} 位收件人；本批 ${escape(data.batchCount)} 封。配額不足時整批停止。`}</p><p>本次同時發送 OB 站內訊息（開啟手機推播）＋Email；不發 LINE。只寄出已排入待寄、再次核對來源一致的信件；每次最多 5 封。匯入或預覽不會寄信。</p>${canSend ? `<button type="button" class="compact-button" data-raffle-confirm-send>核對後寄出這 ${escape(data.batchCount)} 封</button>` : ''}${data.previews.map(item=>`<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>收件人：${escape(item.email)}</strong><p>主旨：${escape(item.subject)}</p><div style="white-space:pre-wrap">${escape(item.body)}</div></article>`).join('') || '<p>目前沒有待寄信件。</p>'}</div>`;
   }
+  function renderProductionReadiness(data) {
+    if(!data||typeof data.draftValid!=='boolean'||data.canActivate!==false||data.liveVerified!==false||!Array.isArray(data.blockers)||!Array.isArray(data.pendingChecks)||data.draftValid!==(data.blockers.length===0))throw Error('未收到完整上線檢查結果，不能視為通過。');
+    const labels={draft_unconfigured:'尚未設定正式活動草稿',disabled_production_draft_required:'正式草稿必須保持關閉並等待啟用確認',activity_window:'活動日期須為 2026/11/15 至 12/31',reward_rules:'星星與送球規則不符',resource_isolation:'正式與測試資料資源尚未確認分離',room_mapping:'四館對應缺漏或重複',pass_mapping:'60／100 點課卡對應缺漏或重複',ball_prize_mapping:'球的正式獎品對應缺漏',referral_history:'新生歷史尚無完整證據，須保留人工核對',resource_inventory:'正式資源清單實際核對',member_identity:'全店會員身分配對',prize_inventory_mapping:'正式獎品與庫存來源對應',inventory:'實際庫存與備貨確認',notification_handoff:'OB＋Email 通知交接',end_to_end_acceptance:'完整流程真人驗收',launch_approval:'正式啟用確認'};
+    labels.evidence_source_unavailable='核對來源無法讀取或資料不完整；本次不採用舊結果，請管理者確認來源與版本。';
+    const items=list=>list.map(code=>`<li>${escape(labels[code]||'未知檢查項目，待核對')}</li>`).join('');
+    const evidenceLabels={identity_snapshot_missing_or_stale:'會員核對資料缺漏、不完整、來源不符或超過一天',identity_unconfirmed:'會員配對缺少有效確認紀錄',identity_conflict:'重複 LINE／OB 會員配對，需先釐清',inventory_snapshot_missing_or_stale:'庫存核對資料缺漏、不完整、來源不符或超過一天',prize_mapping_invalid:'獎品、館別或數量設定有誤',inventory_duplicate:'同獎品同館別庫存重複',inventory_shortage:'庫存不足，不能用其他獎品數量抵補',ball_mapping_missing:'缺少球的正式獎品對應',notification_handoff_unverified:'OB＋Email 通知交接紀錄尚未核實'};
+    let evidenceHtml='<p>尚無會員、庫存與通知的核對資料。</p>';
+    const sourceHtml=data.evidenceSource==='configured_sheet'?'<p>核對來源：指定試算表的保存資料。這不是即時 OB／LINE 查詢，也不會建立會員綁定。</p>':data.evidenceSource==='saved_snapshot'?'<p>核對來源：伺服器保存的資料快照，不是即時查詢。</p>':'';
+    if(data.evidence){
+      if(data.evidence.canActivate!==false||data.evidence.liveVerified!==false)throw Error('核對資料不能當成正式啟用許可。');
+      evidenceHtml=[['identity','會員配對'],['fulfillment','獎品與庫存'],['notifications','通知交接']].map(([key,title])=>{
+        const r=data.evidence[key];if(!r||typeof r.snapshotValid!=='boolean'||!Number.isSafeInteger(r.count)||r.count<0||!Array.isArray(r.issues)||r.snapshotValid!==(r.issues.length===0))throw Error('核對資料不完整。');
+        return `<h4>${title}</h4><p>${r.snapshotValid?'保存資料檢查通過（不是即時驗證）':'待核對'}${r.count?' · '+r.count+' 筆':''}</p><ul>${r.issues.map(code=>`<li>${escape(evidenceLabels[code]||'未知核對問題，請人工確認')}</li>`).join('')}</ul>`;
+      }).join('');
+    }
+    return `<section class="admin-control"><h3>聖誕活動上線檢查（唯讀）</h3><p>僅檢查伺服器保存的草稿，不代表已部署或正式上線；不發獎、不改庫存、不發通知。</p><h4>設定檢查</h4>${data.draftValid?'<p>草稿格式檢查通過，尚未核實線上設定。</p>':`<ul>${items(data.blockers)}</ul>`}${sourceHtml}${evidenceHtml}<h4>正式驗收待確認</h4><ul>${items(data.pendingChecks)}</ul><p>此處不能啟用正式活動。原抽獎活動設定與本次聖誕活動驗收不同。</p></section>`;
+  }
   function renderCampaignSettings(data) {
     if (!data || !Array.isArray(data.campaigns) || typeof data.readOnly !== 'boolean' || typeof data.operationalEnabled !== 'boolean' || data.campaigns.some(i=>!i.campaign || !['draft','active','paused'].includes(i.status) || !Number.isInteger(i.version))) throw Error('未收到完整活動設定。');
     return `<h3>活動設定</h3><p class="state">${data.operationalEnabled ? '工作台已開放。' : '正式作業尚未開放。'}設定不會匯入、扣庫存或寄信。修改已啟用活動前須先暫停本系統的查詢、領取與寄信；不會停止外部學生抽獎網站，既有紀錄與來源綁定保留。</p>${data.readOnly ? '<p>目前為唯讀設定。</p>' : '<button type="button" class="compact-button" data-settings-new>新增活動草稿</button>'}${data.campaigns.map(i=>`<article class="admin-control" style="overflow-wrap:anywhere"><h4>${escape(i.campaign.name)} · ${{draft:'草稿',active:'已啟用',paused:'已暫停'}[i.status]}</h4><p>活動代碼：${escape(i.campaign.id)}｜版本 ${i.version}</p><p>來源：${escape(i.campaign.sourceSpreadsheetId)}</p>${!data.readOnly ? i.status==='active' ? `<button type="button" class="compact-button" data-settings-pause="${escape(i.campaign.id)}">暫停活動</button>` : `<button type="button" class="compact-button" data-settings-edit="${escape(i.campaign.id)}">編輯／核對啟用</button>` : ''}</article>`).join('') || '<p>尚無活動設定。</p>'}`;
@@ -99,7 +116,7 @@
     const node=s=>root.querySelector(s), requestId=()=>global.crypto && global.crypto.randomUUID ? global.crypto.randomUUID() : `raffle_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     root.innerHTML='<p role="status">讀取活動設定…</p>';
     const message=text=>{if(!disposed) node('[data-settings-message]').textContent=text;};
-    const list=()=>{root.innerHTML=`<div data-settings-list>${renderCampaignSettings(data)}</div><div data-settings-editor></div><p role="status" data-settings-message></p>`;};
+    const list=()=>{root.innerHTML=`<button type="button" class="compact-button" data-production-check>查看聖誕活動上線缺項（唯讀）</button><div data-production-report role="status"></div><div data-settings-list>${renderCampaignSettings(data)}</div><div data-settings-editor></div><p role="status" data-settings-message></p>`;};
     const refresh=async()=>{const result=await options.api('getRaffleCampaignSettings',{});if(disposed)return;renderCampaignSettings(result);data=result;current=null;activation=null;list();};
     function edit(item) {
       current=item || {campaign:{id:'',name:'',sourceSpreadsheetId:'',websiteUrl:'',pickupDeadline:'',readyPrizeVenues:[]},version:0,status:'draft'};
@@ -153,6 +170,11 @@
     const input=()=>{activation=null;const box=node('[data-settings-activation]');if(box)box.replaceChildren();};
     const click=event=>{
       const button=event.target.closest('button');if(!button||busy)return;
+      if(button.hasAttribute('data-production-check'))return run(async()=>{
+        node('[data-production-report]').textContent='檢查中，請稍候…';
+        try {const report=await options.api('getActivityProductionReadiness',{});if(!disposed)node('[data-production-report]').innerHTML=renderProductionReadiness(report);}
+        catch(error){if(!disposed)node('[data-production-report]').textContent='無法取得完整檢查結果，不能視為通過。';throw error;}
+      });
       if(button.hasAttribute('data-settings-new'))return edit(null);
       if(button.hasAttribute('data-settings-edit'))return edit(data.campaigns.find(i=>i.campaign.id===button.dataset.settingsEdit));
       if(button.hasAttribute('data-settings-pause'))return run(async()=>{
@@ -227,7 +249,7 @@
 
   function mountActivityGifts(root, options) {
     let disposed=false,busy=false,controller=null,controllerActor='',claims=[],readOnly=true;
-    root.innerHTML='<h3>活動送球（限定測試）</h3><p>沿用目前老師登入。僅測試紀錄，不發放正式獎品或通知。</p><button type="button" class="compact-button" data-gift-load>查看／更新測試送球</button><label>搜尋學生<input class="text-input" data-gift-search placeholder="姓名或 Email"></label><p data-gift-message role="status"></p><div data-gift-recovery hidden><button type="button" class="compact-button" data-gift-check>核對上一筆</button><button type="button" class="compact-button" data-gift-retry>以原操作重試</button></div><div data-gift-claims></div>';
+    root.innerHTML='<h3>活動獎品（限定測試）</h3><p>沿用目前老師登入。僅測試紀錄，不發放正式獎品或通知。</p><button type="button" class="compact-button" data-gift-load>查看／更新測試獎品</button><label>搜尋學生<input class="text-input" data-gift-search placeholder="姓名或 Email"></label><label>篩選獎品<select class="text-input" data-gift-prize><option value="">全部獎品</option></select></label><p data-gift-message role="status" aria-live="polite"></p><div data-gift-recovery hidden><button type="button" class="compact-button" data-gift-check>核對上一筆</button><button type="button" class="compact-button" data-gift-retry>以原操作重試</button></div><div data-gift-claims></div>';
     const node=s=>root.querySelector(s),message=text=>{if(!disposed)node('[data-gift-message]').textContent=text;};
     const outcome=r=>r?.state==='recorded'?'已核對完成，不會重複領取。':r?.state==='superseded'?'資料已有更新；這筆未重複寫入，請依最新紀錄操作。':'未查到完成紀錄；可再次核對，或以原操作重試。';
     function render(){
@@ -237,23 +259,29 @@
       root.querySelectorAll('button').forEach(b=>b.disabled=busy);
       node('[data-gift-retry]').disabled=busy||readOnly;
       const query=node('[data-gift-search]').value.trim().toLowerCase();
-      node('[data-gift-claims]').innerHTML=claims.filter(c=>[c.studentName,c.email].some(v=>v.toLowerCase().includes(query))).map(c=>{
+      const prize=node('[data-gift-prize]').value;
+      node('[data-gift-claims]').innerHTML=claims.filter(c=>(!prize||c.prizeName===prize)&&[c.studentName,c.email].some(v=>v.toLowerCase().includes(query))).map(c=>{
         const remaining=c.quantity-c.claimedQuantity;
+        const unit=c.directPickup?'顆':'件';
         const collectible=remaining>0&&(['ready','partial'].includes(c.status)||(c.directPickup&&c.status==='waiting'));
         const disabled=busy||pending||readOnly?' disabled':'';
         const button=(label,action,quantity)=>`<button type="button" class="compact-button" data-gift-id="${escape(c.id)}" data-gift-action="${action}" data-gift-quantity="${quantity||''}"${disabled}>${label}</button>`;
-        return `<section class="admin-item"><strong>${escape(c.studentName)}</strong><p>${escape(c.email)} · ${escape(c.prizeName)}</p><p>${escape(c.directPickup?'教室現貨':c.venue)} · 已領 ${c.claimedQuantity}／共 ${c.quantity} 顆</p>${collectible?button('登記領取 1 顆（測試）','collect',1)+(remaining>=2?button('登記領取 2 顆（測試）','collect',2):''):''}${c.status==='waiting'&&!c.directPickup?button('標記已到館（測試）','prepare'):''}</section>`;
-      }).join('');
+        return `<section class="admin-item"><strong>${escape(c.studentName)}</strong><p>${escape(c.email)} · ${escape(c.prizeName)}</p><p>${escape(c.directPickup?'教室現貨':c.venue)} · 已領 ${c.claimedQuantity}／共 ${c.quantity} ${unit} · 剩餘 ${remaining} ${unit}</p>${collectible?button('登記領取 1 '+unit+'（測試）','collect',1)+(remaining>=2?button('登記領取 2 '+unit+'（測試）','collect',2):''):''}${c.status==='waiting'&&!c.directPickup?button('標記已到館（測試）','prepare'):''}</section>`;
+      }).join('')||'<p>查無符合條件的測試獎品，請調整學生搜尋或獎品篩選。</p>';
     }
     async function load(){
       const data=await options.api('getActivityGiftWorkspace',{});if(disposed)return;
       if(data.testOnly!==true||!data.actor||!Array.isArray(data.claims))throw Error('測試資料無法確認');
       if(!controller||controllerActor!==data.actor){const actor=data.actor;controllerActor=actor;controller=createActivityGiftController({api:options.api,storage:global.localStorage,actor,isActive:()=>!disposed&&controllerActor===actor});}
       claims=data.claims;readOnly=data.readOnly!==false;
+      const select=node('[data-gift-prize]'),selected=select.value,names=[...new Set(claims.map(c=>c.prizeName))];
+      select.innerHTML='<option value="">全部獎品</option>'+names.map(name=>`<option value="${escape(name)}">${escape(name)}</option>`).join('');
+      select.value=names.includes(selected)?selected:'';
     }
-    async function run(fn){if(disposed||busy)return;busy=true;render();try{await fn();}catch(e){message((e.message||'連線中斷')+'；若已送出，請先核對上一筆。');}finally{busy=false;render();}}
+    async function run(fn){if(disposed||busy)return;busy=true;message('處理中，正在核對最新紀錄，請稍候，勿重複點擊。');render();try{await fn();}catch(e){message((e.message||'連線中斷')+'；若已送出，請先核對上一筆。');}finally{busy=false;render();}}
     node('[data-gift-load]').onclick=()=>run(async()=>{await load();if(disposed)return;if(controller.pending()){const r=await controller.reconcile();await load();message(outcome(r));}else message(readOnly?'目前僅可查看測試紀錄。':'請核對學生與顆數；這裡不可實際兌領。');});
     node('[data-gift-search]').oninput=render;
+    node('[data-gift-prize]').onchange=render;
     node('[data-gift-check]').onclick=()=>run(async()=>{const r=await controller.reconcile();await load();message(outcome(r));});
     node('[data-gift-retry]').onclick=()=>run(async()=>{const r=await controller.retry();await load();message(outcome(r));});
     node('[data-gift-claims]').onclick=event=>{
@@ -520,5 +548,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

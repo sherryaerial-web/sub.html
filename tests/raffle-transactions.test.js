@@ -3,6 +3,35 @@ const admin={teacherName:'店長',managementCapabilities:['raffle_admin']}, teac
 const campaign={id:'future',name:'新活動',sourceSpreadsheetId:'future-source-1234567890',readyPrizeVenues:[{prizeId:'p1',venue:'晴光'}]};
 const headers=['OB email名稱','OB名字','驗證碼','中獎等級','最終選擇獎品','領取館別','領獎方式','確認時間'];
 const row=['a@example.com','小花','code1','A','提袋','晴光','choose_venue','2027-01-01'];
+test('same student prizes stay independent across venue preparation, lost response and collection',()=>{
+ const s=setup(3);
+ s.sourcePrizes.push(['p2','A','球','choose_venue']);
+ s.sourceRows[1][4]='球';
+ s.sourceRows[3][5]='劍潭';
+ s.props.set('RAFFLE_CAMPAIGNS_JSON',JSON.stringify([{...campaign,readyPrizeVenues:[{prizeId:'p2',venue:'晴光'}]}]));
+ const sourceBefore=JSON.stringify(s.sourceRows);s.importNow();
+ const all=()=>s.c.readRaffleClaims_();
+ const ball=all().find(c=>c.prizeName==='球');
+ const bag=all().find(c=>c.prizeName==='提袋'&&c.venue==='晴光');
+ const other=all().find(c=>c.prizeName==='提袋'&&c.venue==='劍潭');
+ assert.equal(new Set(all().map(c=>c.email)).size,1);
+ assert.equal(s.c.getRaffleFulfillment_(prep,{campaignId:'future'}).totalGroups,3);
+ const collect={claimId:ball.id,version:ball.version,action:'collect',venue:'晴光',quantity:1,requestId:'multi-ball-collect-01'};
+ s.setFail();assert.throws(()=>s.c.mutateRaffleClaim_(teacher,collect),/timeout/);
+ const writes=s.writes();assert.equal(s.c.mutateRaffleClaim_(teacher,collect).status,'claimed');assert.equal(s.writes(),writes);
+ assert.equal(all().find(c=>c.id===bag.id).claimedQuantity,0);
+ assert.equal(all().find(c=>c.id===other.id).status,'waiting');
+ const bagCollect={claimId:bag.id,version:bag.version,action:'collect',venue:'晴光',quantity:1,requestId:'multi-bag-collect-01'};
+ assert.throws(()=>s.c.mutateRaffleClaim_(teacher,bagCollect),/可領取|備貨/);assert.equal(s.writes(),writes);
+ const prepare={claimId:bag.id,version:bag.version,action:'prepare',venue:'晴光',requestId:'multi-bag-prepare-01'};
+ assert.throws(()=>s.c.mutateRaffleClaim_(prep,{...prepare,venue:'劍潭'}),/館別/);
+ assert.equal(s.c.mutateRaffleClaim_(prep,prepare).status,'ready');
+ assert.equal(s.c.mutateRaffleClaim_(teacher,{...bagCollect,version:bag.version+1}).status,'claimed');
+ const totals=s.c.getRaffleFulfillment_(prep,{campaignId:'future'}).totals;
+ assert.equal(totals.claimed,2);assert.equal(totals.waiting,1);assert.equal(totals.ready,0);
+ assert.equal(all().find(c=>c.id===other.id).claimedQuantity,0);
+ assert.equal(JSON.stringify(s.sourceRows),sourceBefore);
+});
 test('restore verifies source, deadline, admin and venue then requires preparation; uncertain append retries once',()=>{
  const s=setup();s.importNow();const c=s.c.readRaffleClaims_()[0];
  s.c.mutateRaffleClaim_(admin,{claimId:c.id,version:1,action:'revoke',reason:'誤按',requestId:'revoke-restore-0001'});

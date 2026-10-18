@@ -9017,7 +9017,8 @@
       const preview = await callPostApi("previewSpecialCourseObAdoption", { specialGroupId, replacementCalendarId });
       openRequestDialog({
         action: "confirm-special-ob", specialGroupId, replacementCalendarId, previewToken: preview.previewToken,
-        title: "人工確認並採用 OB", reasonLabel: "確認原因", reasonPlaceholder: "請填寫已核對的修改原因",
+        title: "人工確認並採用 OB", reasonRequired: false,
+        reasonLabel: "確認原因（可留白）", reasonPlaceholder: "可留白，或填寫補充說明",
         copy: `${preview.date}｜${preview.room} 教室｜${preview.teacherName}\n原申請：${preview.before.courseName}\n${preview.before.startTime}–${preview.before.endTime}\n採用 OB：${preview.after.courseName}\n${preview.after.startTime}–${preview.after.endTime}（${preview.durationMinutes} 分鐘）`
       });
     }

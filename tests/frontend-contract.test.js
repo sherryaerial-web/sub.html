@@ -1904,7 +1904,7 @@ test('Liz October 11 first special teacher record explains the empty-slot cancel
   assert.doesNotMatch(markup, /原課程回復核對/);
 });
 
-test('admin special OB adoption previews changes and requires a reason before confirming', async () => {
+test('admin special OB adoption previews changes and accepts a blank reason before confirming', async () => {
   const { context, getElement, requestActions } = createFrontendRuntime({
     previewSpecialCourseObAdoption: {
       previewToken: 'review-token', date: '2026/11/15', room: 'C', teacherName: '蜜莉 戴', durationMinutes: 90,
@@ -1923,13 +1923,18 @@ test('admin special OB adoption previews changes and requires a reason before co
   assert.match(getElement('request-dialog-copy').textContent, /13:10–14:40/);
   assert.match(getElement('request-dialog-copy').textContent, /13:00–14:30/);
   assert.equal(requestActions.filter(action => action === 'confirmSpecialCourseObAdoption').length, 0);
-  await context.submitRequestDialog({ preventDefault() {} });
-  assert.match(getElement('notice').textContent, /原因/);
-  getElement('request-reason').value = '已確認正式課名與時間';
+  assert.equal(getElement('request-reason').required, false);
+  assert.match(getElement('request-reason-label').textContent, /可留白/);
+  assert.equal(getElement('request-reason').value, '');
   await context.submitRequestDialog({ preventDefault() {} });
   assert.equal(requestActions.filter(action => action === 'confirmSpecialCourseObAdoption').length, 1);
   assert.equal(getElement('request-dialog').open, false);
   assert.equal(typeof context.advanceAdminSpecialCourseTime, 'undefined');
+  context.openRequestDialog({ action: 'request-cancel', title: '取消請假' });
+  assert.equal(getElement('request-reason').required, true);
+  await context.submitRequestDialog({ preventDefault() {} });
+  assert.match(getElement('notice').textContent, /請填寫原因/);
+  assert.equal(requestActions.filter(action => action === 'requestLeaveCancellation').length, 0);
 });
 
 test('special manual confirmation replaces only special links and is limited to the two managers', () => {

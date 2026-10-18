@@ -20812,7 +20812,7 @@ function previewSpecialCourseObAdoption_(session, groupId, calendarId) {
 function confirmSpecialCourseObAdoption_(session, groupId, calendarId, previewTokenValue, reasonValue) {
   assertSpecialCourseObAdoptionActor_(session);
   var reason = cleanText_(reasonValue), previewToken = cleanText_(previewTokenValue);
-  if (!reason || reason.length > 240) throw new Error('請填寫 240 字以內的人工確認原因。');
+  if (reason.length > 240) throw new Error('人工確認原因最多 240 字，也可以留白。');
   return withScriptLock_(function() {
     var cache = getScriptCache_(), saved = cache && cache.get('special_ob_' + previewToken);
     if (!saved) throw new Error('預覽已過期或已使用，請重新預覽。');

@@ -8754,7 +8754,7 @@ test('manual special OB adoption rejects unsafe selections, permission changes a
     assert.equal(JSON.stringify(f.specialRequestSheet.values), before);
   }
   const f = createManualSpecialAdoptionFixture(); const p = f.preview();
-  assert.throws(() => f.backend.confirmSpecialCourseObAdoption_(f.session, 'manual-adopt', '53954', p.previewToken, ''), /原因/);
+  assert.throws(() => f.backend.confirmSpecialCourseObAdoption_(f.session, 'manual-adopt', '53954', p.previewToken, 'x'.repeat(241)), /240/);
   f.specialRequestSheet.values[1][13] += '更新';
   assert.throws(() => f.confirm(p.previewToken), /變更|重新預覽/);
 });
@@ -8766,6 +8766,21 @@ test('manual special OB adoption rolls back the entire group if audit append fai
   injectSetValuesFailureOnce(f.auditSheet, ({ row }) => row > 1, 'audit unavailable');
   assert.throws(() => f.confirm(p.previewToken), /audit unavailable/);
   [f.specialRequestSheet, f.leaveSheet, f.auditSheet].forEach((sheet, i) => assert.equal(JSON.stringify(sheet.values), before[i]));
+});
+
+test('manual special OB adoption accepts optional reasons while retaining automatic actor and change audits', () => {
+  for (const reason of ['', '   ', undefined, 'x'.repeat(240)]) {
+    const f = createManualSpecialAdoptionFixture({ grouped: true });
+    const p = f.preview();
+    const result = f.backend.confirmSpecialCourseObAdoption_(f.session, 'manual-adopt', '53954', p.previewToken, reason);
+    assert.equal(result.verificationStatus, '已核對');
+    assert.equal(f.auditSheet.values.length, 4);
+    f.auditSheet.values.slice(1).forEach(row => {
+      assert.ok(row[0]); assert.equal(row[1], '冠蓉');
+      assert.ok(row[4]); assert.ok(row[5]);
+      assert.equal(row[6], String(reason || '').trim());
+    });
+  }
 });
 
 test('manual special OB adoption preserves continuation checks and rejects corrupt group membership', () => {

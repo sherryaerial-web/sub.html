@@ -661,13 +661,13 @@ test('teacher login uses a native select that opens reliably on Safari', () => {
 test('notification permission is requested only after the signed-in teacher taps enable', async () => {
   assert.match(html, /id=["']push-permission-card["']/);
   assert.match(html, /id=["']push-enable["']/);
-  assert.match(html, /OneSignal\.Notifications\.requestPermission/);
+  assert.match(html, /(?:OneSignal|pushSdk)\.Notifications\.requestPermission/);
   assert.match(html, /OneSignal\.User\.PushSubscription\.optIn/);
 
   const calls = [];
   const oneSignal = {
     init: async (options) => calls.push(['init', options.appId]),
-    login: async (externalId) => calls.push(['login', externalId]),
+    login: async (externalId) => { calls.push(['login', externalId]); oneSignal.User.externalId = externalId; },
     logout: async () => calls.push(['logout']),
     Notifications: {
       permission: false,
@@ -682,6 +682,8 @@ test('notification permission is requested only after the signed-in teacher taps
         optIn: async () => {
           calls.push(['optIn']);
           oneSignal.User.PushSubscription.optedIn = true;
+          oneSignal.User.PushSubscription.id = '11111111-1111-4111-8111-111111111111';
+          oneSignal.User.PushSubscription.token = 'device-token';
         },
         optOut: async () => calls.push(['optOut']),
       },
@@ -693,6 +695,7 @@ test('notification permission is requested only after the signed-in teacher taps
       appId: 'onesignal-app-id',
       externalId: 'teacher_opaque_actual_user',
     },
+    getPushSubscriptionStatus: { status: 'ready', matched: true, enabled: true },
   });
   context.window.OneSignalDeferred = {
     push(callback) { return Promise.resolve(callback(oneSignal)); },
@@ -710,7 +713,244 @@ test('notification permission is requested only after the signed-in teacher taps
   await context.requestPushPermission();
   assert.equal(calls.some(([name]) => name === 'requestPermission'), true);
   assert.equal(calls.some(([name]) => name === 'optIn'), true);
-  assert.equal(getElement('push-permission-card').hidden, true);
+  assert.equal(getElement('push-permission-card').hidden, false);
+  assert.match(getElement('push-status-copy').textContent, /已確認.*綁定/);
+});
+
+function createPushFrontendFixture(overrides = {}, fixtures = {}) {
+  const calls = [];
+  const listeners = {};
+  const oneSignal = {
+    init: async () => calls.push('init'),
+    login: async id => { calls.push(['login', id]); oneSignal.User.externalId = id; },
+    logout: async () => calls.push('logout'),
+    Notifications: { permission: true, requestPermission: async () => calls.push('permission') },
+    User: {
+      externalId: '',
+      addEventListener: (event, listener) => { listeners.user = listener; },
+      PushSubscription: {
+        id: '11111111-1111-4111-8111-111111111111', token: 'device-token', optedIn: true,
+        optIn: async () => calls.push('optIn'), optOut: async () => calls.push('optOut'),
+        addEventListener: (event, listener) => { listeners.subscription = listener; },
+      },
+    },
+    ...overrides,
+  };
+  const runtime = createFrontendRuntime({
+    getPushConfiguration: { configured: true, appId: 'app', externalId: 'teacher_real_owner' },
+    getPushSubscriptionStatus: { status: 'ready', matched: true, enabled: true },
+    ...fixtures,
+  });
+  runtime.context.window.OneSignalDeferred = { push: callback => Promise.resolve(callback(oneSignal)) };
+  runtime.context.window.Notification = { permission: 'granted' };
+  vm.runInContext("authState.sessionToken = 'push-session'; authState.teacherName = 'Tako'; authState.actingTeacherName = 'Jina';", runtime.context);
+  return { ...runtime, oneSignal, calls, listeners };
+}
+
+test('push diagnostics remain accessible when the SDK says opted in and verify this device on the server', async () => {
+  assert.match(html, /id="push-check"/);
+  assert.match(html, /id="push-repair"/);
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  assert.equal(f.calls.includes('permission'), false);
+  assert.equal(f.calls.includes('optIn'), false);
+  await f.context.checkPushNotifications();
+  const check = f.submittedForms.find(form => form.fields.action === 'getPushSubscriptionStatus');
+  assert.ok(check);
+  assert.equal(check.fields.actingTeacherName, undefined);
+  assert.equal(check.fields.subscriptionId, f.oneSignal.User.PushSubscription.id);
+  assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+  assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已送達|保證/);
+});
+
+test('push repair rebinds only the real owner and opts in without deleting or opting out a subscription', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  f.oneSignal.User.externalId = 'stale-owner';
+  await f.context.repairPushNotifications();
+  assert.deepEqual(f.calls.filter(call => Array.isArray(call)), [['login', 'teacher_real_owner'], ['login', 'teacher_real_owner']]);
+  assert.equal(f.calls.filter(call => call === 'optIn').length, 1);
+  assert.equal(f.calls.includes('logout'), false);
+  assert.equal(f.calls.includes('optOut'), false);
+  assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+  assert.equal(f.submittedForms.some(form => /send|submit|delete/i.test(form.fields.action)), false);
+});
+
+test('push repair never reports success if the server cannot confirm this subscription', async () => {
+  const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: { status: 'not_linked', matched: false, enabled: false } });
+  await f.context.repairPushNotifications();
+  assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+  assert.match(f.getElement('push-status-copy').textContent, /尚未.*綁定/);
+});
+
+test('push diagnostics do not accept a local opt-in without a subscription id and token', async () => {
+  const f = createPushFrontendFixture();
+  f.oneSignal.User.PushSubscription.id = '';
+  f.oneSignal.User.PushSubscription.token = '';
+  await f.context.initializePushForSession();
+  await f.context.checkPushNotifications();
+  assert.match(f.getElement('push-status-copy').textContent, /尚未.*訂閱/);
+  assert.equal(f.requestActions.includes('getPushSubscriptionStatus'), false);
+});
+
+test('push initialization failures remain visible and a repair tap can retry', async () => {
+  let attempts = 0;
+  const f = createPushFrontendFixture({ init: async () => { if (++attempts === 1) throw Error('temporary'); } });
+  await f.context.initializePushForSession();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  await f.context.repairPushNotifications();
+  assert.equal(attempts, 2);
+  assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+});
+
+test('iPhone outside Home Screen and denied permission never start a push repair', async () => {
+  const f = createPushFrontendFixture();
+  f.context.window.navigator = { userAgent: 'iPhone', standalone: false };
+  await f.context.repairPushNotifications();
+  assert.equal(f.calls.length, 0);
+  assert.match(f.getElement('push-status-copy').textContent, /主畫面/);
+  f.context.window.navigator.standalone = true;
+  f.context.window.Notification.permission = 'denied';
+  await f.context.repairPushNotifications();
+  assert.equal(f.calls.length, 0);
+  assert.match(f.getElement('push-status-copy').textContent, /設定/);
+});
+
+test('subscription events invalidate previous remote confirmation without sending a push', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  await f.context.checkPushNotifications();
+  assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+  f.oneSignal.User.PushSubscription.id = '22222222-2222-4222-8222-222222222222';
+  f.listeners.subscription();
+  assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+  assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 1);
+});
+
+test('push diagnostics ignore a late reply after logout', async () => {
+  let finish;
+  const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: new Promise(resolve => { finish = resolve; }) });
+  await f.context.initializePushForSession();
+  const pending = f.context.checkPushNotifications();
+  while (!f.requestActions.includes('getPushSubscriptionStatus')) await new Promise(resolve => setImmediate(resolve));
+  f.context.clearSession();
+  finish({ status: 'ready', matched: true, enabled: true });
+  await pending;
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+});
+
+test('push repair double taps share one opt-in and one remote check', async () => {
+  const f = createPushFrontendFixture();
+  await Promise.all([f.context.repairPushNotifications(), f.context.repairPushNotifications()]);
+  assert.equal(f.calls.filter(call => call === 'optIn').length, 1);
+  assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 1);
+});
+
+test('push permission prompt starts within the tap before network rebinding can lose iPhone user activation', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  f.oneSignal.Notifications.permission = false;
+  const order = [];
+  f.oneSignal.Notifications.requestPermission = async () => {
+    order.push('permission'); f.oneSignal.Notifications.permission = true;
+  };
+  const api = f.context.callPostApi;
+  f.context.callPostApi = (...args) => { order.push(args[0]); return api(...args); };
+  await f.context.repairPushNotifications();
+  assert.equal(order[0], 'permission');
+});
+
+test('logout during deferred push initialization cannot deadlock the next account binding', async () => {
+  let sdkReady;
+  const f = createPushFrontendFixture();
+  f.context.window.OneSignalDeferred = { push: callback => { sdkReady = () => callback(f.oneSignal); } };
+  const pending = f.context.initializePushForSession();
+  while (!sdkReady) await new Promise(resolve => setImmediate(resolve));
+  f.context.clearSession();
+  sdkReady();
+  await pending;
+  f.context.window.OneSignalDeferred = { push: callback => callback(f.oneSignal) };
+  vm.runInContext("authState.teacherName = 'Tako'; authState.sessionToken = 'new-session';", f.context);
+  await f.context.initializePushForSession();
+  assert.equal(f.oneSignal.User.externalId, 'teacher_real_owner');
+});
+
+test('logout during SDK restoration removes the restored old identity even when session initialization returns null', async () => {
+  let finishInit;
+  const f = createPushFrontendFixture({ init: () => new Promise(resolve => { finishInit = resolve; }) });
+  f.oneSignal.User.externalId = 'previous-account';
+  const pending = f.context.initializePushForSession();
+  while (!finishInit) await new Promise(resolve => setImmediate(resolve));
+  f.context.clearSession();
+  finishInit();
+  await pending;
+  await vm.runInContext('pushIdentityQueue', f.context);
+  assert.equal(f.calls.filter(call => call === 'logout').length, 1);
+});
+
+test('a failed new account initialization cannot leave an in-flight old login bound to the device', async () => {
+  let finishLogin;
+  const f = createPushFrontendFixture({ login: id => new Promise(resolve => {
+    finishLogin = () => { f.oneSignal.User.externalId = id; resolve(); };
+  }) });
+  const old = f.context.initializePushForSession();
+  while (!finishLogin) await new Promise(resolve => setImmediate(resolve));
+  f.context.clearSession();
+  vm.runInContext("authState.teacherName = 'Jina'; authState.sessionToken = 'new-session';", f.context);
+  f.context.callPostApi = async () => { throw Error('offline'); };
+  const next = f.context.initializePushForSession();
+  finishLogin();
+  await Promise.all([old, next]);
+  await vm.runInContext('pushIdentityQueue', f.context);
+  assert.equal(f.calls.filter(call => call === 'logout').length, 1);
+});
+
+test('SDK caller timeout does not start a second SDK init while the original remains in progress', async () => {
+  const completions = [];
+  const timers = new Map();
+  let timerId = 0;
+  const f = createPushFrontendFixture({ init: () => new Promise(resolve => { completions.push(resolve); }) });
+  f.context.window.setTimeout = callback => { timers.set(++timerId, callback); return timerId; };
+  f.context.window.clearTimeout = id => timers.delete(id);
+  const first = f.context.initializePushForSession();
+  while (!completions.length) await new Promise(resolve => setImmediate(resolve));
+  Array.from(timers.values()).at(-1)();
+  await first;
+  const repair = f.context.repairPushNotifications();
+  await new Promise(resolve => setImmediate(resolve));
+  const count = completions.length;
+  completions.forEach(resolve => resolve());
+  await repair;
+  assert.equal(count, 1);
+});
+
+test('a new session can check notifications while a stale permission prompt is unresolved', async () => {
+  let finishPermission;
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  f.oneSignal.Notifications.permission = false;
+  f.oneSignal.Notifications.requestPermission = () => new Promise(resolve => { finishPermission = resolve; });
+  const old = f.context.repairPushNotifications();
+  while (!finishPermission) await new Promise(resolve => setImmediate(resolve));
+  f.context.clearSession();
+  vm.runInContext("authState.teacherName = 'Tako'; authState.sessionToken = 'new-session';", f.context);
+  f.oneSignal.Notifications.permission = true;
+  const next = f.context.checkPushNotifications();
+  await new Promise(resolve => setImmediate(resolve));
+  const checked = f.requestActions.includes('getPushSubscriptionStatus');
+  finishPermission();
+  await Promise.all([old, next]);
+  assert.equal(checked, true);
+  assert.equal(f.getElement('push-check').disabled, false);
+});
+
+test('notification history marks legacy false success without rewriting its stored audit', () => {
+  const f = createFrontendRuntime();
+  assert.equal(f.context.getNotificationHistoryResult({ status: '已送出', detail: '{"messageId":""}' }).status, '未建立推播');
+  assert.equal(f.context.getNotificationHistoryResult({ status: '已送出', detail: '{"messageId":"created"}' }).status, '推播已建立');
+  assert.equal(f.context.getNotificationHistoryResult({ status: '已送出', detail: 'invalid' }).status, '結果待確認');
+  assert.equal(f.context.getNotificationHistoryResult({ status: '失敗', detail: '{"error":"無有效訂閱"}' }).error, '無有效訂閱');
 });
 
 test('notification setup explains iPhone Home Screen requirement and logs out push identity', () => {

@@ -1345,6 +1345,120 @@ test('OneSignal accepted response without recipient count remains a successful s
   });
 });
 
+function createPushStatusFixture(body, code = 200) {
+  const f = createNotificationBackend();
+  const props = f.services.PropertiesService.getScriptProperties();
+  props.setProperty('ONESIGNAL_APP_ID', 'public-app-id');
+  props.setProperty('ONESIGNAL_REST_API_KEY', 'private-rest-key');
+  props.setProperty('PUSH_EXTERNAL_ID_SALT', 'private-salt');
+  f.requests = [];
+  f.backend.UrlFetchApp = { fetch(url, options) {
+    f.requests.push({ url, options });
+    return { getResponseCode: () => code,
+      getContentText: () => typeof body === 'string' ? body : JSON.stringify(body) };
+  } };
+  return f;
+}
+
+for (const body of [{ id: '', errors: ['All included players are not subscribed'] }, {}, null, [], 'not-json']) {
+  test(`OneSignal never reports a created push without a message id: ${JSON.stringify(body)}`, () => {
+    const f = createPushStatusFixture(body);
+    const result = f.backend.sendPushNotificationSafely_(['Jina'], { heading: '測試', content: '內容' });
+    assert.equal(result.accepted, false);
+    assert.equal(result.messageId, '');
+    assert.ok(result.error);
+    assert.doesNotMatch(result.error, /private-rest-key|private-salt|All included players/);
+    assert.equal(f.requests.length, 1);
+  });
+}
+
+test('OneSignal preserves accepted partial batches when a message id exists', () => {
+  const f = createPushStatusFixture({ id: 'created-message', errors: { invalid_aliases: { external_id: ['other'] } } });
+  assert.equal(f.backend.sendPushNotificationSafely_(['Jina'], {}).accepted, true);
+  assert.equal(f.requests.length, 1);
+});
+
+test('a missing OneSignal message is audited as failed but its inbox message remains saved without resending', () => {
+  const f = createPushStatusFixture({ id: '', errors: ['not subscribed'] });
+  const result = f.backend.sendManualNotification_(f.adminSession, {
+    heading: '測試', content: '內容', audienceMode: 'selected', teacherNames: ['Jina'],
+  });
+  assert.equal(result.accepted, false);
+  assert.equal(f.auditSheet.values.at(-1)[5], '失敗');
+  assert.equal(f.backend.getNotificationInbox_({ teacherName: 'Jina' }).items.length, 1);
+  assert.equal(f.requests.length, 1);
+});
+
+test('push subscription checks query only the real session owner and expose no provider personal data', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const f = createPushStatusFixture({ subscriptions: [
+    { id, type: 'SafariPush', enabled: true, notification_types: 1, token: 'private-device-token', ip: 'private-ip' },
+  ] });
+  const externalId = f.backend.getPushExternalId_('冠蓉');
+  // The provider response must confirm the same identity, not just an arbitrary device ID.
+  f.backend.UrlFetchApp.fetch = (url, options) => {
+    f.requests.push({ url, options });
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({
+      identity: { external_id: externalId }, properties: { ip: 'private-ip' },
+      subscriptions: [{ id, type: 'SafariPush', enabled: true, notification_types: 1, token: 'private-device-token' }],
+    }) };
+  };
+  const result = f.backend.getPushSubscriptionStatus_(f.adminSession, id);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.matched, true);
+  assert.equal(result.enabled, true);
+  assert.equal(f.requests[0].options.method, 'get');
+  assert.equal(f.requests[0].url, `https://api.onesignal.com/apps/public-app-id/users/by/external_id/${externalId}`);
+  assert.doesNotMatch(JSON.stringify(result), /private-|teacher_|subscriptions|token|ip/);
+});
+
+for (const [label, subscription, expected] of [
+  ['unlinked', { id: '22222222-2222-4222-8222-222222222222', enabled: true }, 'not_linked'],
+  ['unsubscribed', { id: '11111111-1111-4111-8111-111111111111', type: 'SafariPush', enabled: false, token: 'token', notification_types: 1 }, 'unsubscribed'],
+  ['invalid token', { id: '11111111-1111-4111-8111-111111111111', type: 'SafariPush', enabled: true, token: '', notification_types: 1 }, 'unsubscribed'],
+  ['invalidated subscription', { id: '11111111-1111-4111-8111-111111111111', type: 'SafariPush', enabled: true, token: 'token', notification_types: -2 }, 'unsubscribed'],
+]) {
+  test(`push subscription checks do not report ${label} devices as ready`, () => {
+    const f = createPushStatusFixture({});
+    f.backend.UrlFetchApp.fetch = () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({
+      identity: { external_id: f.backend.getPushExternalId_('Jina') }, subscriptions: [subscription],
+    }) });
+    assert.equal(f.backend.getPushSubscriptionStatus_({ teacherName: 'Jina' }, '11111111-1111-4111-8111-111111111111').status, expected);
+  });
+}
+
+for (const [code, body, expected] of [[404, {}, 'not_linked'], [403, {}, 'unavailable'], [429, {}, 'unavailable'], [200, 'not-json', 'unavailable'], [200, {}, 'unavailable']]) {
+  test(`push subscription check handles provider ${code}/${JSON.stringify(body)} without false success`, () => {
+    const f = createPushStatusFixture(body, code);
+    assert.equal(f.backend.getPushSubscriptionStatus_({ teacherName: 'Jina' }, '11111111-1111-4111-8111-111111111111').status, expected);
+    assert.equal(f.requests.length, 1);
+  });
+}
+
+test('push subscription check is session-scoped even when an administrator is acting as another teacher', () => {
+  const f = createPushStatusFixture({}, 404);
+  const token = f.backend.authenticate_('冠蓉', '1234').sessionToken;
+  const result = JSON.parse(f.backend.doPost({ parameter: {
+    action: 'getPushSubscriptionStatus', sessionToken: token, actingTeacherName: 'Jina',
+    teacherName: 'Jina', externalId: 'foreign-id', subscriptionId: '11111111-1111-4111-8111-111111111111',
+  } }).text);
+  assert.equal(result.status, 'success');
+  assert.equal(result.data.status, 'not_linked');
+  assert.ok(f.requests[0].url.endsWith(f.backend.getPushExternalId_('冠蓉')));
+  const count = f.requests.length;
+  const denied = JSON.parse(f.backend.doPost({ parameter: { action: 'getPushSubscriptionStatus', subscriptionId: '11111111-1111-4111-8111-111111111111' } }).text);
+  assert.equal(denied.status, 'error');
+  assert.equal(f.requests.length, count);
+});
+
+test('push subscription check rejects invalid device ids before accessing the provider', () => {
+  const f = createPushStatusFixture({});
+  assert.equal(f.backend.getPushSubscriptionStatus_({ teacherName: 'Jina' }, '').status, 'missing_subscription');
+  assert.throws(() => f.backend.getPushSubscriptionStatus_({ teacherName: 'Jina' }, '../foreign'), /裝置/);
+  assert.throws(() => f.backend.getPushSubscriptionStatus_({}, ''), /登入/);
+  assert.equal(f.requests.length, 0);
+});
+
 test('notification schedule windows support delayed five-minute trigger execution without overlap', () => {
   const backend = loadBackend();
 
@@ -1691,7 +1805,7 @@ test('course administrators can manually notify selected active teachers and the
   assert.equal(auditSheet.values.length, 2);
   assert.equal(auditSheet.values[1][1], '冠蓉');
   assert.equal(auditSheet.values[1][2], '推播通知：手動');
-  assert.equal(auditSheet.values[1][5], '已送出');
+  assert.equal(auditSheet.values[1][5], '推播已建立');
 });
 
 test('managed notifications can open the relevant admin tool', () => {

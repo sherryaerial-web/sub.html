@@ -1150,6 +1150,54 @@ function getPushConfiguration_(session) {
   };
 }
 
+function getPushSubscriptionStatus_(session, subscriptionIdValue) {
+  var teacherName = getSessionTeacherName_(session);
+  var subscriptionId = cleanText_(subscriptionIdValue).toLowerCase();
+  if (subscriptionId && !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(subscriptionId)) {
+    throw new Error('通知裝置編號不正確，請重新檢查。');
+  }
+  var result = { status: 'unavailable', matched: false, enabled: false };
+  var properties = getScriptProperties_();
+  var appId = properties && cleanText_(properties.getProperty(CONFIG.ONESIGNAL_APP_ID_PROPERTY));
+  var key = properties && cleanText_(properties.getProperty(CONFIG.ONESIGNAL_REST_API_KEY_PROPERTY));
+  var externalId = getPushExternalId_(teacherName);
+  if (!appId || !key || !externalId) {
+    result.status = 'not_configured';
+    return result;
+  }
+  if (!subscriptionId) {
+    result.status = 'missing_subscription';
+    return result;
+  }
+  try {
+    // Resolve only the authenticated owner; never accept a caller-supplied teacher or alias.
+    var response = UrlFetchApp.fetch('https://api.onesignal.com/apps/' + encodeURIComponent(appId) +
+      '/users/by/external_id/' + encodeURIComponent(externalId), {
+      method: 'get', headers: { Authorization: 'Key ' + key }, muteHttpExceptions: true
+    });
+    var code = response.getResponseCode();
+    if (code === 404) {
+      result.status = 'not_linked';
+      return result;
+    }
+    if (code !== 200) return result;
+    var body = JSON.parse(response.getContentText());
+    if (!body || !body.identity || body.identity.external_id !== externalId || !Array.isArray(body.subscriptions)) return result;
+    var subscription = body.subscriptions.filter(function(item) {
+      return item && cleanText_(item.id).toLowerCase() === subscriptionId;
+    })[0];
+    result.matched = Boolean(subscription);
+    result.enabled = Boolean(subscription && subscription.enabled === true && cleanText_(subscription.token) &&
+      ['ChromePush', 'FirefoxPush', 'SafariPush'].indexOf(subscription.type) !== -1 &&
+      Number(subscription.notification_types) > 0);
+    result.status = !result.matched ? 'not_linked' : result.enabled ? 'ready' : 'unsubscribed';
+    return result;
+  } catch (error) {
+    // Provider bodies contain device tokens and personal data; return only the check result.
+    return result;
+  }
+}
+
 function getActiveCourseAdminNames_() {
   var sheet = getAccountsSheet_();
   var headers = getHeaderMap_(sheet);
@@ -1221,15 +1269,23 @@ function sendPushNotificationSafely_(teacherNames, messageValue) {
         error: 'OneSignal 推播失敗（HTTP ' + responseCode + '）。'
       };
     }
-    var body = {};
+    var body;
     try {
       body = JSON.parse(response.getContentText() || '{}');
-    } catch (ignore) {}
+    } catch (ignore) {
+      return { attempted: true, accepted: false, delivered: null, messageId: '',
+        error: '推播回應無法確認，請先查閱 OneSignal 紀錄，勿直接重送。' };
+    }
+    var messageId = body && typeof body.id === 'string' ? cleanText_(body.id) : '';
+    if (!messageId) {
+      return { attempted: true, accepted: false, delivered: 0, messageId: '',
+        error: '推播未建立，目標可能沒有有效訂閱。請老師從主畫面 App 檢查並重新綁定通知。' };
+    }
     return {
       attempted: true,
       accepted: true,
       delivered: body.recipients == null ? null : (Number(body.recipients) || 0),
-      messageId: cleanText_(body.id),
+      messageId: messageId,
       error: ''
     };
   } catch (error) {
@@ -2406,10 +2462,12 @@ function sendManagedNotification_(actorName, sourceLabel, sourceId, audienceMode
     action: '推播通知：' + cleanText_(sourceLabel),
     targetId: cleanText_(sourceId),
     before: recipients.join('、'),
-    after: accepted ? '已送出' : '失敗',
+    after: accepted ? '推播已建立' : '失敗',
     reason: JSON.stringify({
       heading: copy.heading,
       recipients: recipients.length,
+      requestedRecipients: recipients.length,
+      providerRecipients: result ? result.delivered : null,
       messageId: cleanText_(result && result.messageId),
       error: cleanText_(result && result.error)
     })
@@ -9213,6 +9271,9 @@ function doPost(e) {
       },
       getPushConfiguration: function() {
         return getPushConfiguration_(session);
+      },
+      getPushSubscriptionStatus: function() {
+        return getPushSubscriptionStatus_(session, parameters.subscriptionId);
       },
       getNotificationInbox: function() {
         return getNotificationInbox_(session);

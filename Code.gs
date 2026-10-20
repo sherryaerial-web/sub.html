@@ -17,6 +17,7 @@ var SHEETS = {
   PAYROLL_SUMMARIES: '薪資結算',
   PAYROLL_DISPUTES: '薪資異議',
   PAYROLL_PAYMENT_SETTINGS: '薪資付款設定',
+  PAYROLL_DEDUCTIONS: '薪資單月扣款',
   SHERRY_PAYROLL_FORMAT: '給雪莉的格式',
   SPECIAL_COURSE_REQUESTS: '特別課安排',
   COURSE_CLOSURE_SETTINGS: '關課設定',
@@ -106,6 +107,11 @@ var SHEET_HEADERS = {
     '提出時間', '處理者', '處理時間'
   ],
   PAYROLL_PAYMENT_SETTINGS: ['老師', '轉帳群組/銀行', '備註', '是否啟用'],
+  PAYROLL_DEDUCTIONS: [
+    '扣款編號', '薪資月份', '老師', '事由日期', '扣款金額', '原因', '狀態',
+    '登記時間', '登記者', '取消時間', '取消者', '取消原因'
+  ],
+  PAYROLL_DEDUCTION_EXTENSION: ['單月扣款', '單月扣款原因', '單月扣款編號 JSON'],
   COURSE_CLOSURE_SETTINGS: ['設定鍵', '設定值', '更新時間', '操作者', '備註'],
   COURSE_CLOSURE_LOG: [
     '執行時間', '目標日期', '檢核時段', 'OB Calendar ID', '課程', '老師',
@@ -7385,7 +7391,8 @@ function ensurePayrollStructureUnlocked_(spreadsheet) {
     ['source', SHEETS.PAYROLL_SOURCE, SHEET_HEADERS.PAYROLL_SOURCE],
     ['snapshot', SHEETS.PAYROLL_SNAPSHOT, SHEET_HEADERS.PAYROLL_SNAPSHOT],
     ['lines', SHEETS.PAYROLL_LINES, SHEET_HEADERS.PAYROLL_LINES],
-    ['summaries', SHEETS.PAYROLL_SUMMARIES, SHEET_HEADERS.PAYROLL_SUMMARIES],
+    ['summaries', SHEETS.PAYROLL_SUMMARIES, SHEET_HEADERS.PAYROLL_SUMMARIES.concat(SHEET_HEADERS.PAYROLL_DEDUCTION_EXTENSION)],
+    ['deductions', SHEETS.PAYROLL_DEDUCTIONS, SHEET_HEADERS.PAYROLL_DEDUCTIONS],
     ['disputes', SHEETS.PAYROLL_DISPUTES, SHEET_HEADERS.PAYROLL_DISPUTES],
     ['paymentSettings', SHEETS.PAYROLL_PAYMENT_SETTINGS, SHEET_HEADERS.PAYROLL_PAYMENT_SETTINGS]
   ].forEach(function(definition) {
@@ -9784,6 +9791,12 @@ function doPost(e) {
           adjustment: parameters.adjustment,
           reason: parameters.reason
         });
+      },
+      recordPayrollDeduction: function() {
+        return recordPayrollDeduction_(session, parseJsonObject_(parameters.deduction, '單月扣款'));
+      },
+      cancelPayrollDeduction: function() {
+        return cancelPayrollDeduction_(session, parameters.deductionId, parameters.reason);
       },
       finalizePayroll: function() {
         return finalizePayroll_(
@@ -13249,6 +13262,118 @@ function syncPayrollMonth_(session, monthValue) {
   });
 }
 
+function getPayrollDeductions_(spreadsheet, month) {
+  var sheet = spreadsheet.getSheetByName(SHEETS.PAYROLL_DEDUCTIONS);
+  if (!sheet) return [];
+  assertHeaders_(sheet, SHEET_HEADERS.PAYROLL_DEDUCTIONS);
+  var seen = Object.create(null);
+  var activeEvents = Object.create(null);
+  return sheet.getDataRange().getValues().slice(1).map(function(row, index) {
+    if (row.every(function(value) { return value === '' || value == null; })) return null;
+    return { rowNumber: index + 2, id: cleanText_(row[0]), month: normalizePayrollMonthValue_(row[1]),
+      teacherName: cleanText_(row[2]), eventDate: formatMyDate(row[3]), amount: Number(row[4]),
+      reason: cleanText_(row[5]), status: cleanText_(row[6]), createdAt: cleanText_(row[7]),
+      createdBy: cleanText_(row[8]), cancelledAt: cleanText_(row[9]),
+      cancelledBy: cleanText_(row[10]), cancellationReason: cleanText_(row[11]) };
+  }).filter(function(item) {
+    if (!item) return false;
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(item.id) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(item.month) ||
+        !item.teacherName || !item.reason || !item.eventDate || !Number.isSafeInteger(item.amount) || item.amount <= 0 ||
+        ['有效', '已取消'].indexOf(item.status) === -1) throw new Error('單月扣款資料不完整，已停止薪資試算。');
+    try { parsePracticeDateTime_(item.eventDate, '00:00'); }
+    catch (error) { throw new Error('單月扣款事由日期不正確，已停止薪資試算。'); }
+    var signature = JSON.stringify([item.month, item.teacherName, item.eventDate, item.amount, item.reason, item.status]);
+    if (seen[item.id]) {
+      if (seen[item.id] !== signature) throw new Error('單月扣款編號重複且資料衝突，已停止薪資試算。');
+      return false;
+    }
+    seen[item.id] = signature;
+    if (item.status === '有效') {
+      var eventKey = JSON.stringify([item.month, item.teacherName, item.eventDate, item.amount, item.reason]);
+      if (activeEvents[eventKey]) throw new Error('已有相同單月扣款的不同編號，已停止薪資試算。');
+      activeEvents[eventKey] = item.id;
+    }
+    return true;
+  }).filter(function(item) {
+    return item.month === month;
+  });
+}
+
+function assertPayrollDeductionMonthEditable_(spreadsheet, month) {
+  var sheet = spreadsheet.getSheetByName(SHEETS.PAYROLL_SUMMARIES);
+  if (sheet && sheet.getDataRange().getValues().slice(1).some(function(row) {
+    return normalizePayrollMonthValue_(row[0]) === month;
+  })) throw new Error('本月已有薪資草稿或結算，請使用「調整薪資」，不能更改待扣款紀錄。');
+}
+
+function recordPayrollDeduction_(session, input) {
+  var actor = assertCapabilitySession_(session, 'payroll_admin');
+  var item = input || {};
+  var id = cleanText_(item.id);
+  var month = getPayrollMonthRange_(item.month).month;
+  var teacher = cleanText_(item.teacherName);
+  var date = cleanText_(item.eventDate).replace(/-/g, '/');
+  var amount = Number(item.amount);
+  var reason = cleanText_(item.reason);
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('缺少有效扣款編號。');
+  if (!Number.isSafeInteger(amount) || amount <= 0 || !reason) throw new Error('請填寫正整數扣款金額及原因。');
+  try { parsePracticeDateTime_(date, '00:00'); } catch (error) { throw new Error('扣款事由日期不正確。'); }
+  if (getActiveAccountTeacherNames_().indexOf(teacher) === -1) throw new Error('找不到在職老師，請重新選擇。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    ensurePayrollStructureUnlocked_(ss);
+    var sheet = requireSheet_(ss, SHEETS.PAYROLL_DEDUCTIONS);
+    var records = getPayrollDeductions_(ss, month);
+    var existing = records.filter(function(row) { return row.id === id; })[0];
+    if (existing) {
+      if (existing.teacherName !== teacher || existing.eventDate !== date || existing.amount !== amount || existing.reason !== reason) {
+        throw new Error('扣款編號已存在，但內容不同，請先核對紀錄。');
+      }
+      return existing;
+    }
+    // IDs are unique across months as well, even when the caller changes the selected month.
+    if (sheet.getDataRange().getValues().slice(1).some(function(row) { return cleanText_(row[0]) === id; })) {
+      throw new Error('扣款編號已存在於不同月份，請先核對紀錄。');
+    }
+    assertPayrollDeductionMonthEditable_(ss, month);
+    if (records.some(function(row) { return row.status === '有效' && row.teacherName === teacher &&
+      row.eventDate === date && row.amount === amount && row.reason === reason; })) throw new Error('已有相同單月扣款紀錄，請勿重複登記。');
+    var now = getTimestamp_();
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, SHEET_HEADERS.PAYROLL_DEDUCTIONS.length)
+        .setValues([[id, month, teacher, date, amount, reason, '有效', now, actor, '', '', '']]);
+      appendAudits([{ actor: actor, action: '登記單月扣款', targetId: id, before: '',
+        after: month + '｜' + teacher + '｜-' + amount, reason: date + '；' + reason }]);
+      return { id: id, month: month, teacherName: teacher, amount: amount, status: '有效' };
+    });
+  });
+}
+
+function cancelPayrollDeduction_(session, idValue, reasonValue) {
+  var actor = assertCapabilitySession_(session, 'payroll_admin');
+  var id = cleanText_(idValue);
+  var reason = cleanText_(reasonValue);
+  if (!id || !reason) throw new Error('請填寫扣款編號與取消原因。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.PAYROLL_DEDUCTIONS);
+    assertHeaders_(sheet, SHEET_HEADERS.PAYROLL_DEDUCTIONS);
+    var matches = sheet.getDataRange().getValues().slice(1).map(function(row, index) {
+      return { row: row, rowNumber: index + 2 };
+    }).filter(function(item) { return cleanText_(item.row[0]) === id; });
+    if (matches.length !== 1) throw new Error('找不到唯一的單月扣款紀錄。');
+    var target = matches[0];
+    if (cleanText_(target.row[6]) === '已取消') return { id: id, status: '已取消' };
+    assertPayrollDeductionMonthEditable_(ss, normalizePayrollMonthValue_(target.row[1]));
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(target.rowNumber, 7).setValue('已取消');
+      sheet.getRange(target.rowNumber, 10, 1, 3).setValues([[getTimestamp_(), actor, reason]]);
+      appendAudits([{ actor: actor, action: '取消單月扣款', targetId: id, before: '有效', after: '已取消', reason: reason }]);
+      return { id: id, status: '已取消' };
+    });
+  });
+}
+
 function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
   var snapshotSheet = requireSheet_(spreadsheet, SHEETS.PAYROLL_SNAPSHOT);
   var lineSheet = requireSheet_(spreadsheet, SHEETS.PAYROLL_LINES);
@@ -13256,6 +13381,13 @@ function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
   assertHeaders_(snapshotSheet, SHEET_HEADERS.PAYROLL_SNAPSHOT);
   assertHeaders_(lineSheet, SHEET_HEADERS.PAYROLL_LINES);
   assertHeaders_(summarySheet, SHEET_HEADERS.PAYROLL_SUMMARIES);
+  var deductionByTeacher = {};
+  if (!draft.errors.length) getPayrollDeductions_(spreadsheet, draft.month).filter(function(item) {
+    return item.status === '有效';
+  }).forEach(function(item) {
+    if (!deductionByTeacher[item.teacherName]) deductionByTeacher[item.teacherName] = [];
+    deductionByTeacher[item.teacherName].push(item);
+  });
   var errorById = {};
   draft.errors.forEach(function(error) { errorById[error.calendarId] = error.message; });
   var snapshotRows = courses.map(function(item) {
@@ -13279,14 +13411,28 @@ function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
     ];
   });
   if (lineRows.length) lineSheet.getRange(lineSheet.getLastRow() + 1, 1, lineRows.length, SHEET_HEADERS.PAYROLL_LINES.length).setValues(lineRows);
-  var summaryRows = draft.summaries.map(function(summary) {
+  var summaries = draft.summaries.slice();
+  Object.keys(deductionByTeacher).forEach(function(teacher) {
+    if (!summaries.some(function(summary) { return summary.teacherName === teacher; })) {
+      summaries.push(calculatePayrollSummary_(teacher, [], []));
+    }
+  });
+  var summaryRows = summaries.map(function(summary) {
+    var deductions = deductionByTeacher[summary.teacherName] || [];
+    var deduction = deductions.reduce(function(total, item) { return total + item.amount; }, 0);
     return [
       draft.month, summary.teacherName, summary.subtotal, summary.bonusRate, summary.bonusAmount,
-      summary.fixedAdjustment, summary.totalSalary, summary.profit, version,
-      CONFIG.PAYROLL_DRAFT_STATUS, '', now, 0, '', '', ''
+      summary.fixedAdjustment, summary.totalSalary - deduction, Number(summary.profit) || 0, version,
+      CONFIG.PAYROLL_DRAFT_STATUS, '', now, 0, '', '', '', deduction,
+      deductions.map(function(item) { return item.eventDate + ' ' + item.reason + '（-' + item.amount + '）'; }).join('；'),
+      JSON.stringify(deductions.map(function(item) { return item.id; }))
     ];
   });
-  if (summaryRows.length) summarySheet.getRange(summarySheet.getLastRow() + 1, 1, summaryRows.length, SHEET_HEADERS.PAYROLL_SUMMARIES.length).setValues(summaryRows);
+  if (summaryRows.length) {
+    ensureSheetHeaders_(summarySheet, SHEET_HEADERS.PAYROLL_SUMMARIES.concat(SHEET_HEADERS.PAYROLL_DEDUCTION_EXTENSION));
+    summarySheet.getRange(summarySheet.getLastRow() + 1, 1, summaryRows.length,
+      SHEET_HEADERS.PAYROLL_SUMMARIES.length + SHEET_HEADERS.PAYROLL_DEDUCTION_EXTENSION.length).setValues(summaryRows);
+  }
 }
 
 function publishPayroll_(session, monthValue, versionValue) {
@@ -13362,7 +13508,9 @@ function getPayrollSummaryObject_(row) {
     profit: Number(row[7]) || 0, version: cleanText_(row[8]), status: status,
     confirmedAt: cleanText_(row[10]), updatedAt: cleanText_(row[11]),
     adminAdjustment: Number(row[12]) || 0, adjustmentReason: cleanText_(row[13]),
-    adminConfirmedAt: cleanText_(row[14]), adminConfirmedBy: cleanText_(row[15])
+    adminConfirmedAt: cleanText_(row[14]), adminConfirmedBy: cleanText_(row[15]),
+    oneTimeDeduction: Number(row[16]) || 0, oneTimeDeductionReason: cleanText_(row[17]),
+    oneTimeDeductionIds: row[18] ? parseJsonArray_(row[18], '單月扣款編號') : []
   };
 }
 
@@ -13556,7 +13704,7 @@ function adjustPayrollSummary_(session, payload) {
       while (row.length < SHEET_HEADERS.PAYROLL_SUMMARIES.length) row.push('');
       var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
       row[6] = (Number(row[2]) || 0) + (Number(row[4]) || 0) +
-        (Number(row[5]) || 0) + adjustment;
+        (Number(row[5]) || 0) + adjustment - (Number(row[16]) || 0);
       var nextStatus = status === CONFIG.PAYROLL_DRAFT_STATUS
         ? CONFIG.PAYROLL_DRAFT_STATUS
         : (Number(row[6]) === 0 ? CONFIG.PAYROLL_NO_CONFIRM_STATUS : CONFIG.PAYROLL_PUBLISHED_STATUS);
@@ -13783,6 +13931,8 @@ function getPayrollAdminDashboard_(session, monthValue) {
     month: month,
     version: version,
     summaries: summaries,
+    deductions: getPayrollDeductions_(ss, month),
+    deductionTeachers: ss.getSheetByName(SHEETS.ACCOUNTS) ? getActiveAccountTeacherNames_() : [],
     sherryFormatRows: getSherryPayrollExportRows_(ss, summaries),
     lines: lines,
     disputes: disputes,

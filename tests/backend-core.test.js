@@ -3300,7 +3300,7 @@ test('creates supporting sheets and does not change the structure when rerun', (
       'CourseList', 'VVIP名單', 'VVIP選課紀錄', 'VVIP選課設定',
       '代課邀請', '操作紀錄', '登入帳號', '系統設定',
       '薪項設定', '薪資來源資料', '薪資同步快照', '薪資明細', '薪資結算',
-      '薪資異議', '薪資付款設定', '請假代課紀錄', '特別課安排',
+      '薪資異議', '薪資付款設定', '薪資單月扣款', '請假代課紀錄', '特別課安排',
       '關課設定', '關課紀錄', '自主練習系列', '自主練習場次',
       '自主練習參與者', '自主練習例外', '自主練習操作紀錄',
       '學生自主練習資格', '學生自主練習場次',
@@ -11083,6 +11083,120 @@ test('payroll summary includes special lines in bonus subtotal before fixed addi
   });
 });
 
+function createOneTimeDeductionFixture() {
+  const f = createNotificationBackend();
+  f.services.Utilities.formatDate = formatTaipeiDate;
+  f.adminSession.managementCapabilities.push('payroll_admin');
+  f.backend.ensurePayrollStructureUnlocked_(f.spreadsheet);
+  f.input = { id: 'deduction-noshow-20261019', month: '2026-10', teacherName: 'Jina',
+    eventDate: '2026/10/19', amount: 700, reason: '10/19 no-show，僅扣本次' };
+  f.draft = { month: '2026-10', errors: [], lines: [], summaries: [{
+    teacherName: 'Jina', subtotal: 900, bonusRate: 0, bonusAmount: 0,
+    fixedAdjustment: 0, totalSalary: 900, profit: 1200,
+  }] };
+  return f;
+}
+
+test('one-time payroll deductions are month-scoped and idempotent, with audited creation', () => {
+  const f = createOneTimeDeductionFixture();
+  const first = f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  const again = f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  assert.equal(first.id, f.input.id);
+  assert.equal(again.id, first.id);
+  const rows = f.spreadsheet.getSheetByName('薪資單月扣款').values;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1][1], '2026-10');
+  assert.equal(rows[1][4], 700);
+  assert.equal(f.auditSheet.values.filter(row => row[2] === '登記單月扣款').length, 1);
+  assert.throws(() => f.backend.recordPayrollDeduction_(f.adminSession, { ...f.input, amount: 800 }), /編號.*不同/);
+  assert.throws(() => f.backend.recordPayrollDeduction_(f.adminSession, { ...f.input, id: 'another-deduction' }), /相同.*扣款/);
+});
+
+test('one-time payroll deductions require payroll permission and complete positive whole-dollar input', () => {
+  const f = createOneTimeDeductionFixture();
+  assert.throws(() => f.backend.recordPayrollDeduction_({ teacherName: 'Tako', managementCapabilities: ['course_admin'] }, f.input), /薪資/);
+  for (const patch of [{ month: '2026-13' }, { amount: -700 }, { amount: 0 }, { amount: 1.5 }, { reason: '' },
+    { teacherName: '不存在老師' }, { eventDate: '2026/02/30' }, { id: '' }]) {
+    assert.throws(() => f.backend.recordPayrollDeduction_(f.adminSession, { ...f.input, ...patch }));
+  }
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+});
+
+test('one-time deduction applies once per fresh draft, never accumulates on resync or leaks into next month', () => {
+  const f = createOneTimeDeductionFixture();
+  f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct-1', 'now', [], f.draft);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct-2', 'now', [], f.draft);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-nov', 'now', [], { ...f.draft, month: '2026-11' });
+  const rows = f.spreadsheet.getSheetByName('薪資結算').values.slice(1);
+  assert.deepEqual(rows.map(row => row[6]), [200, 200, 900]);
+  assert.deepEqual(rows.map(row => row[16]), [700, 700, 0]);
+  assert.equal(f.draft.summaries[0].totalSalary, 900);
+  const summary = f.backend.getPayrollSummaryObject_(rows[1]);
+  assert.equal(summary.oneTimeDeduction, 700);
+  assert.match(summary.oneTimeDeductionReason, /no-show/);
+  assert.deepEqual(Array.from(summary.oneTimeDeductionIds), [f.input.id]);
+});
+
+test('manual payroll adjustment cannot overwrite the separate one-time deduction', () => {
+  const f = createOneTimeDeductionFixture();
+  f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct', 'now', [], f.draft);
+  const result = f.backend.adjustPayrollSummary_(f.adminSession, { month: '2026-10', teacherName: 'Jina',
+    version: 'v-oct', adjustment: 100, reason: '其他補發' });
+  assert.equal(result.totalSalary, 300);
+  assert.equal(result.oneTimeDeduction, 700);
+  assert.equal(result.adminAdjustment, 100);
+});
+
+test('a deduction can be cancelled before drafting but not silently changed after the month is drafted', () => {
+  const f = createOneTimeDeductionFixture();
+  f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  assert.throws(() => f.backend.cancelPayrollDeduction_(f.adminSession, f.input.id, ''), /原因/);
+  f.backend.cancelPayrollDeduction_(f.adminSession, f.input.id, '登記錯誤');
+  f.backend.cancelPayrollDeduction_(f.adminSession, f.input.id, '登記錯誤');
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct', 'now', [], f.draft);
+  assert.equal(f.spreadsheet.getSheetByName('薪資結算').values[1][6], 900);
+  assert.throws(() => f.backend.recordPayrollDeduction_(f.adminSession, { ...f.input, id: 'new-deduction-record' }), /已有薪資/);
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 2);
+});
+
+test('corrupt or conflicting deduction records stop drafting before any salary rows are appended', () => {
+  const f = createOneTimeDeductionFixture();
+  f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  const ledger = f.spreadsheet.getSheetByName('薪資單月扣款');
+  ledger.values.push([...ledger.values[1]]);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct-1', 'now', [], f.draft);
+  assert.equal(f.spreadsheet.getSheetByName('薪資結算').values[1][6], 200);
+  ledger.values[2][4] = 800;
+  const count = f.spreadsheet.getSheetByName('薪資結算').values.length;
+  assert.throws(() => f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct-2', 'now', [], f.draft), /扣款.*重複|扣款.*衝突/);
+  assert.equal(f.spreadsheet.getSheetByName('薪資結算').values.length, count);
+});
+
+test('a nonempty deduction with a missing id or month cannot silently disappear from payroll', () => {
+  for (const column of [0, 1]) {
+    const f = createOneTimeDeductionFixture();
+    f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+    f.spreadsheet.getSheetByName('薪資單月扣款').values[1][column] = '';
+    assert.throws(() => f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct', 'now', [], f.draft), /扣款/);
+    assert.equal(f.spreadsheet.getSheetByName('薪資結算').values.length, 1);
+  }
+});
+
+test('copied deduction events and cross-month id collisions block salary drafting', () => {
+  for (const column of [0, 1]) {
+    const f = createOneTimeDeductionFixture();
+    f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+    const ledger = f.spreadsheet.getSheetByName('薪資單月扣款');
+    const copy = [...ledger.values[1]];
+    copy[column] = column === 0 ? 'copied-event-new-id' : '2026-11';
+    ledger.values.push(copy);
+    assert.throws(() => f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct', 'now', [], f.draft), /扣款.*重複|相同.*扣款/);
+    assert.equal(f.spreadsheet.getSheetByName('薪資結算').values.length, 1);
+  }
+});
+
 test('teacher-specific attendance tiers pay Shelly without changing other teachers or courses', () => {
   const backend = loadBackend();
   const rules = [
@@ -11162,7 +11276,9 @@ test('payroll structure creates append-only operational sheets idempotently', ()
   assert.deepEqual(spreadsheet.getSheetByName('薪資來源資料').values[0], EXPECTED_PAYROLL_SOURCE_HEADERS);
   assert.deepEqual(spreadsheet.getSheetByName('薪資同步快照').values[0], EXPECTED_PAYROLL_SNAPSHOT_HEADERS);
   assert.deepEqual(spreadsheet.getSheetByName('薪資明細').values[0], EXPECTED_PAYROLL_LINE_HEADERS);
-  assert.deepEqual(spreadsheet.getSheetByName('薪資結算').values[0], EXPECTED_PAYROLL_SUMMARY_HEADERS);
+  assert.deepEqual(spreadsheet.getSheetByName('薪資結算').values[0], EXPECTED_PAYROLL_SUMMARY_HEADERS.concat([
+    '單月扣款', '單月扣款原因', '單月扣款編號 JSON',
+  ]));
   assert.deepEqual(spreadsheet.getSheetByName('薪資異議').values[0], EXPECTED_PAYROLL_DISPUTE_HEADERS);
   assert.deepEqual(spreadsheet.getSheetByName('薪資付款設定').values[0], EXPECTED_PAYROLL_PAYMENT_HEADERS);
   assert.equal(spreadsheet.sheets.filter((sheet) => sheet.name === '薪資明細').length, 1);
@@ -11182,8 +11298,8 @@ test('payroll draft writes complete summary rows after append-only admin columns
     }],
   });
 
-  assert.equal(summaries.values[1].length, EXPECTED_PAYROLL_SUMMARY_HEADERS.length);
-  assert.deepEqual(summaries.values[1].slice(12), [0, '', '', '']);
+  assert.equal(summaries.values[1].length, EXPECTED_PAYROLL_SUMMARY_HEADERS.length + 3);
+  assert.deepEqual(summaries.values[1].slice(12), [0, '', '', '', 0, '', '[]']);
 });
 
 test('payroll draft blocks missing special-course income and keeps complete instructor lists', () => {

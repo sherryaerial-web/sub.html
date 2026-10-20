@@ -4044,11 +4044,14 @@ test('admin invitation rounds keep the fixed teaching roster and invited positio
   assert.equal(rounds[0].label, '第 1 輪');
   assert.deepEqual(rounds[0].teachers.map((teacher) => teacher.name), roster.slice(0, 5));
   assert.deepEqual(rounds[2].teachers.map((teacher) => teacher.name),
-    ['Vivi', 'XUAN', '小mo(子涵）', '小琪', 'Vicky Lee']);
+    ['Vivi', 'XUAN', '小mo(子涵）', '小琪', 'Lily Yellow']);
   assert.deepEqual(rounds.slice(3, 6).flatMap((round) => round.teachers.map((teacher) => teacher.name)),
-    ['萱', 'Chloe Lee', '芮錤 77', '巧', 'Carrie🐟',
-      '嗨底 Heidi', '壹壹', 'wen', 'Chin', 'Melody Wang',
-      'Lily Yellow', '姝姝', '妙妙 簡', '寧寧', 'Josty Lin']);
+    ['Vicky Lee', '萱', 'Chloe Lee', '芮錤 77', '巧',
+      'Carrie🐟', '嗨底 Heidi', '壹壹', 'wen', 'Chin',
+      'Melody Wang', '姝姝', '妙妙 簡', '寧寧', 'Josty Lin']);
+  const orderedNames = rounds.slice(0, 7).flatMap((round) => round.teachers.map((teacher) => teacher.name));
+  assert.equal(new Set(orderedNames).size, roster.length);
+  assert.equal(orderedNames.filter((name) => name === 'Lily Yellow').length, 1);
   assert.equal(rounds.flatMap((round) => round.teachers).filter((teacher) => teacher.name === 'XUAN').length, 1);
   assert.deepEqual(rounds[6].teachers.map((teacher) => teacher.name), ['番茄🍅', 'Sue']);
   assert.deepEqual(rounds[7].teachers.map((teacher) => teacher.name), ['狗狗 陳', '新老師']);
@@ -4058,6 +4061,53 @@ test('admin invitation rounds keep the fixed teaching roster and invited positio
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '冠蓉'), false);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === '狗狗 陳'), true);
   assert.equal(rounds.flatMap((round) => round.teachers).some((teacher) => teacher.name === 'Angela Chuang'), false);
+});
+
+test('monthly pending deductions can be registered before a payroll version exists without auto-submitting', () => {
+  const f = createFrontendRuntime();
+  vm.runInContext(`payrollDashboard = { month: '2026-10', version: '', summaries: [], lines: [], disputes: [],
+    deductionTeachers: ['妙妙 簡'], deductions: [{ id: 'no-show-one', teacherName: '妙妙 簡', eventDate: '2026/10/19', amount: 700, reason: 'no-show', status: '有效' }], metrics: {} };`, f.context);
+  f.context.renderPayrollAdminTab();
+  const rendered = f.getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /id="payroll-deduction-form"/);
+  assert.match(rendered, /待試算/);
+  assert.match(rendered, /妙妙 簡/);
+  assert.match(rendered, /700/);
+  assert.equal(f.requestActions.some(action => /^(record|cancel)PayrollDeduction$/.test(action)), false);
+});
+
+test('pending deduction registration requires confirmation and retains one stable id after an uncertain result', async () => {
+  const f = createFrontendRuntime();
+  vm.runInContext("payrollDashboard = { month: '2026-10', version: '' }; authState.teacherName = '冠蓉'; authState.sessionToken = 'session';", f.context);
+  f.getElement('payroll-deduction-teacher').value = '妙妙 簡';
+  f.getElement('payroll-deduction-date').value = '2026-10-19';
+  f.getElement('payroll-deduction-amount').value = '700';
+  f.getElement('payroll-deduction-reason').value = 'no-show';
+  const calls = [];
+  f.context.callPostApi = async (action, payload) => { calls.push({ action, payload }); if (calls.length === 1) throw Error('結果待確認'); return { id: payload.deduction.id }; };
+  f.context.fetchPayrollAdminDashboard = async () => {};
+  f.context.window.confirm = () => false;
+  await f.context.submitPayrollDeduction();
+  assert.equal(calls.length, 0);
+  f.context.window.confirm = () => true;
+  await f.context.submitPayrollDeduction();
+  await f.context.submitPayrollDeduction();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].payload.deduction.id, calls[1].payload.deduction.id);
+  assert.equal(calls[0].payload.deduction.amount, 700);
+  assert.equal(calls[0].payload.deduction.month, '2026-10');
+});
+
+test('one-time deduction presentation is separate from recurring and manual payroll adjustments', () => {
+  const f = createFrontendRuntime();
+  assert.match(f.context.payrollDeductionSummaryHtml({ oneTimeDeduction: 700, oneTimeDeductionReason: '10/19 no-show' }), /單月扣款/);
+  assert.match(f.context.payrollDeductionSummaryHtml({ oneTimeDeduction: 700, oneTimeDeductionReason: '10/19 no-show' }), /10\/19 no-show/);
+  assert.equal(f.context.payrollDeductionSummaryHtml({ oneTimeDeduction: 0 }), '');
+  const sheets = f.context.buildPayrollExecutiveExportSheets({ summaries: [{
+    teacherName: '妙妙 簡', subtotal: 900, bonusRate: 0, bonusAmount: 0,
+    fixedAdjustment: 0, adminAdjustment: 100, oneTimeDeduction: 700, totalSalary: 300,
+  }] });
+  assert.equal(sheets[1].rows[1][4], -600);
 });
 
 test('admin invitation rounds render invited teachers disabled and selectable by row', () => {

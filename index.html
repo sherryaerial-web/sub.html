@@ -1023,6 +1023,13 @@
     }
     .practice-admin-filter-actions { display: flex; gap: 8px; align-items: end; }
     .practice-admin-list { display: grid; gap: 10px; }
+    .practice-admin-history { margin-top: 20px; }
+    .practice-admin-history-month { margin-top: 10px; border-top: 1px solid var(--line); }
+    .practice-admin-history-month > summary { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 10px 2px; cursor: pointer; font-size: 14px; font-weight: 750; list-style: none; }
+    .practice-admin-history-month > summary::-webkit-details-marker { display: none; }
+    .practice-admin-history-month > summary::before { content: "+"; flex: 0 0 18px; color: var(--muted); font-size: 18px; }
+    .practice-admin-history-month[open] > summary::before { content: "-"; }
+    .practice-admin-history-month > summary > span { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
     .practice-admin-card {
       padding: 15px;
       border: 1px solid var(--line);
@@ -8604,7 +8611,7 @@
           <summary>已結束紀錄（${endedStudentRequests.length} 筆）</summary>
           <div class="practice-admin-list">${endedStudentRequests.map(renderStudentCard).join("")}</div>
         </details>` : "";
-      const bookingCards = bookings.map((booking) => {
+      const renderBookingCard = (booking) => {
         const participants = (booking.participants || []).map((participant) => `
           <div class="practice-admin-participant">
             <span><strong>${escapeHtml(participant.teacherName)}</strong>｜${escapeHtml(participant.role)}${participant.status && participant.status !== "有效" ? `｜${escapeHtml(participant.status)}` : ""}</span>
@@ -8629,7 +8636,34 @@
           ${audits ? `<details class="practice-admin-audits"><summary>查看操作紀錄（${(booking.audits || []).length}）</summary>${audits}</details>` : ""}
           ${editable ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="update-practice" data-booking-id="${escapeHtml(booking.bookingId)}"><i data-lucide="calendar-clock"></i>調整時段</button><button class="danger-button" type="button" data-admin-action="cancel-practice" data-booking-id="${escapeHtml(booking.bookingId)}" data-series-id="${escapeHtml(booking.seriesId || "")}"><i data-lucide="calendar-x"></i>取消登記</button></div>` : ""}
         </article>`;
-      }).join("") || '<div class="state">目前沒有符合條件的自主練習</div>';
+      };
+      const currentBookings = [];
+      const historicalMonths = new Map();
+      bookings.forEach((booking) => {
+        const date = String(booking.date || "").replace(/\//g, "-");
+        const end = Date.parse(`${date}T${booking.endTime || ""}:00+08:00`);
+        const historical = ["已取消", "衝突取消"].includes(booking.status) || (Number.isFinite(end) && end <= now);
+        if (!historical) {
+          currentBookings.push(booking);
+          return;
+        }
+        const month = /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date) ? date.slice(0, 7) : "";
+        if (!historicalMonths.has(month)) historicalMonths.set(month, []);
+        historicalMonths.get(month).push(booking);
+      });
+      const compareBookingTime = (a, b) =>
+        `${String(a.date || "").replace(/\//g, "-")}T${a.startTime || ""}`
+          .localeCompare(`${String(b.date || "").replace(/\//g, "-")}T${b.startTime || ""}`);
+      const bookingCards = currentBookings.sort(compareBookingTime).map(renderBookingCard).join("")
+        || '<div class="state">目前沒有進行中或即將開始的老師自主練習</div>';
+      const historyCount = bookings.length - currentBookings.length;
+      const historyCards = Array.from(historicalMonths.keys()).sort((a, b) => b.localeCompare(a)).map((month) => {
+        const items = historicalMonths.get(month).sort((a, b) => compareBookingTime(b, a));
+        return `<details class="practice-admin-history-month" data-practice-admin-month="${escapeHtml(month)}">
+          <summary>${month ? `${escapeHtml(month.replace("-", " 年 "))} 月` : "日期未設定"}<span>${items.length} 筆</span></summary>
+          <div class="practice-admin-list">${items.map(renderBookingCard).join("")}</div>
+        </details>`;
+      }).join("");
       const failures = (data.notificationFailures || []).map((item) => `
         <article class="notification-history-row"><div class="notification-schedule-head"><strong>${escapeHtml(item.time || "時間未記錄")}</strong><span class="status-pill">推播失敗</span></div><div class="item-meta">${escapeHtml(item.reason || "原因未記錄")}｜場次 ${escapeHtml(item.targetId || "未記錄")}</div></article>`).join("") || '<div class="state">目前沒有推播失敗紀錄</div>';
       content.innerHTML = `
@@ -8650,7 +8684,9 @@
           <div class="practice-admin-filter-actions"><button class="compact-button" type="submit"><i data-lucide="search"></i>套用篩選</button><button class="compact-button" type="button" data-admin-action="clear-practice-filters"><i data-lucide="rotate-ccw"></i>清除</button></div>
         </form>
         <div class="admin-summary"><div class="summary-item"><span>查詢筆數</span><strong>${Number(summary.total) || 0}</strong></div><div class="summary-item"><span>已成立</span><strong>${Number(summary.active) || 0}</strong></div><div class="summary-item"><span>候補</span><strong>${Number(summary.waitlisted) || 0}</strong></div><div class="summary-item"><span>已取消／衝突取消</span><strong>${Number(summary.cancelled) || 0}</strong></div></div>
-        <div class="practice-admin-list">${bookingCards}</div>
+        <div class="queue-section-heading"><strong>進行中／即將開始</strong><span>${currentBookings.length} 筆</span></div>
+        <div class="practice-admin-list" data-practice-admin-current>${bookingCards}</div>
+        ${historyCount ? `<section class="practice-admin-history" data-practice-admin-history><div class="queue-section-heading"><strong>已結束／已取消紀錄</strong><span>${historyCount} 筆</span></div>${historyCards}</section>` : ""}
         <section class="practice-admin-failures"><div class="admin-control"><strong>推播失敗待處理</strong><div class="item-meta">自主練習異動通知若未成功送出，會保留在這裡供管理員追查。</div></div>${failures}</section>`;
       refreshIcons();
     }

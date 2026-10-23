@@ -4665,6 +4665,63 @@ test('practice admin dashboard renders participant intervals and failure audit s
   assert.match(rendered, /推播服務無回應/);
 });
 
+test('practice admin groups ended and cancelled bookings into collapsed months without losing records', () => {
+  const { context, getElement } = createFrontendRuntime({}, { now: '2026-10-23T15:00:00+08:00' });
+  const booking = (bookingId, date, startTime, endTime, status = '已成立') => ({
+    bookingId, date, startTime, endTime, status, room: 'A', creatorName: 'Tako',
+    participants: [{ teacherName: 'Tako', role: '建立者', startTime, endTime, status: '有效' }],
+    audits: [{ time: '2026/10/01 10:00', actor: '冠蓉', action: '建立自主練習', reason: '保留操作紀錄' }],
+  });
+  const bookings = [
+    booking('past-sep', '2026/09/03', '14:00', '15:00'),
+    booking('future', '2026/10/24', '14:00', '15:00', '候補'),
+    booking('at-end', '2026/10/23', '14:00', '15:00'),
+    booking('ongoing', '2026-10-23', '14:00', '15:01'),
+    booking('future-cancel', '2026/11/02', '14:00', '15:00', '已取消'),
+    booking('future-conflict', '2026/11/03', '14:00', '15:00', '衝突取消'),
+    booking('unknown-end', 'not-a-date', '14:00', ''),
+  ];
+  const before = JSON.stringify(bookings);
+  context.__practiceAdminDashboard = { filters: { dateFrom: '2026-09-01', room: 'A' }, summary: { total: 7, active: 4, waitlisted: 1, cancelled: 2 }, bookings, notificationFailures: [] };
+  context.__studentPracticeAdminDashboard = { summary: {}, requests: [] };
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; renderPracticeAdminDashboard();', context);
+  const rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /data-practice-admin-current/);
+  const current = rendered.match(/<div[^>]*data-practice-admin-current[^>]*>([\s\S]*?)<\/div>\s*<section[^>]*data-practice-admin-history/)[1];
+  for (const id of ['ongoing', 'future', 'unknown-end']) assert.match(current, new RegExp(`data-practice-admin-booking="${id}"`));
+  for (const id of ['past-sep', 'at-end', 'future-cancel', 'future-conflict']) assert.doesNotMatch(current, new RegExp(`data-practice-admin-booking="${id}"`));
+  assert.ok(current.indexOf('booking="ongoing"') < current.indexOf('booking="future"'));
+  const groups = Array.from(rendered.matchAll(/<details class="practice-admin-history-month"([^>]*data-practice-admin-month="([^"]+)"[^>]*)>([\s\S]*?)(?=<details class="practice-admin-history-month"|<\/section>)/g));
+  assert.deepEqual(groups.map(match => match[2]), ['2026-11', '2026-10', '2026-09']);
+  for (const group of groups) assert.doesNotMatch(group[1], /\bopen\b/);
+  assert.match(groups[0][3], /future-cancel/);
+  assert.match(groups[0][3], /future-conflict/);
+  assert.match(groups[1][3], /at-end/);
+  assert.match(groups[2][3], /past-sep/);
+  assert.match(groups[2][3], /保留操作紀錄/);
+  assert.match(groups[2][3], /參與者與各自時段/);
+  assert.equal((rendered.match(/data-practice-admin-booking=/g) || []).length, 7);
+  assert.match(rendered, /id="practice-admin-date-from"[^>]*value="2026-09-01"/);
+  assert.equal(JSON.stringify(bookings), before);
+});
+
+test('practice admin keeps historical filter matches and empty results accessible', () => {
+  const { context, getElement } = createFrontendRuntime({}, { now: '2026-10-23T15:00:00+08:00' });
+  context.__practiceAdminDashboard = { filters: { dateTo: '2026-09-30', status: '已取消', teacherName: 'Tako' }, summary: { total: 1, cancelled: 1 }, bookings: [{ bookingId: 'historical-filter', date: '2026/09/03', room: 'A', startTime: '14:00', endTime: '15:00', status: '已取消' }] };
+  context.__studentPracticeAdminDashboard = { summary: {}, requests: [] };
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; renderPracticeAdminDashboard();', context);
+  let rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /data-practice-admin-month="2026-09"/);
+  assert.match(rendered, /data-practice-admin-booking="historical-filter"/);
+  assert.match(rendered, /id="practice-admin-date-to"[^>]*value="2026-09-30"/);
+  assert.match(rendered, /value="已取消" selected/);
+  assert.match(rendered, /id="practice-admin-teacher"[^>]*value="Tako"/);
+  vm.runInContext('practiceAdminDashboard.bookings = []; renderPracticeAdminDashboard();', context);
+  rendered = getElement('admin-tab-content').innerHTML;
+  assert.match(rendered, /目前沒有進行中或即將開始的老師自主練習/);
+  assert.doesNotMatch(rendered, /data-practice-admin-month=/);
+});
+
 test('admin can correct claimed difficulty and note without asking the teacher to withdraw', () => {
   assert.match(html, /data-admin-tab=["']delayClosures["']/);
   assert.match(html, /data-admin-action=["']correct-claim["']/);

@@ -19,6 +19,7 @@
         ${item.claimedAt ? `<p class="item-meta">領取：${escape(item.claimedAt)}｜經手：${escape(item.claimedBy)}</p>` : ''}
         ${item.pickupBlocked && ['waiting','ready','partial'].includes(item.status) ? `<p class="state error">已過領取期限／期限需核對：${escape(item.pickupDeadline)}；暫停備貨與交付，原紀錄保留。</p>` : ''}
         <div class="admin-item-actions">
+          ${permissions.readyDeliveryCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-ready-delivery="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">通知學生（限定測試）</button>` : ''}
           ${permissions.readyPreviewCampaign && permissions.readyPreviewCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-ready-preview="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">預覽到館通知（不寄送）</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">這一筆已備妥到館</button>` : ''}
@@ -415,10 +416,51 @@
       });
       const dialog = node('[data-raffle-dialog]'), opForm = node('[data-raffle-operation-form]');
       let selected = null, busy = false;
+      const readyStates=new WeakMap();
+      const readyCheckButton=()=>'<button type="button" class="compact-button" data-ready-delivery-check>查回結果（不重送）</button>';
+      const readySummary=(box,data,state)=>{
+        const n=data?.notice;
+        if(data?.testOnly!==true||data.campaignId!==state.campaignId||!n||n.id!==state.noticeId||n.claimId!==state.claimId||n.readConfirmed!==false||!n.channels||['line','ob','email'].some(k=>!['pending','sending','accepted','rejected','unknown','skipped'].includes(n.channels[k])))throw Error('結果資料不完整，請查回結果，不要重送。');
+        const names={pending:'待處理',sending:'處理中，請核對',accepted:'服務已接受',rejected:'服務拒絕',unknown:'結果未確認',skipped:'不需發送'};
+        box.innerHTML=`<p>${n.status==='accepted'?'服務已接受通知，不代表學生已讀。':'通知尚待核對。'}</p><p>LINE：${names[n.channels.line]}<br>OB：${names[n.channels.ob]}<br>Email：${names[n.channels.email]}</p>${readyCheckButton()}${['line','ob','email'].includes(n.nextAction)?'<p>仍有後續通道待處理；請重新預覽後確認，不會自動發送。</p>':''}`;
+      };
       const requestId = () => global.crypto && global.crypto.randomUUID ? global.crypto.randomUUID() : `raffle_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       node('[data-raffle-cancel]').addEventListener('click', () => { if (!busy) dialog.close(); });
       dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
       result.addEventListener('click', async event => {
+        const delivery=event.target.closest('[data-ready-delivery]'),deliverySend=event.target.closest('[data-ready-delivery-send]'),deliveryCheck=event.target.closest('[data-ready-delivery-check]');
+        if(delivery||deliverySend||deliveryCheck){
+          if(busy)return;
+          const button=delivery||deliverySend||deliveryCheck,generation=serial;
+          let box=delivery?delivery.parentElement.querySelector('[data-ready-delivery-box]'):button.closest('[data-ready-delivery-box]');
+          if(!box&&delivery){box=document.createElement('div');box.dataset.readyDeliveryBox='';box.setAttribute('role','status');delivery.parentElement.appendChild(box);}
+          if(!box)return;
+          const state=delivery?{campaignId:delivery.dataset.campaignId,claimId:delivery.dataset.readyDelivery}:readyStates.get(box);
+          if(!state)return;
+          busy=true;button.disabled=true;box.textContent=delivery?'核對通知內容中…':'核對處理結果中…';
+          try{
+            if(delivery){
+              readyStates.delete(box);
+              const p=await options.api('previewRaffleReadyAppDelivery',{campaignId:state.campaignId,claimId:state.claimId});
+              if(disposed||generation!==serial)return;
+              if(p?.testOnly!==true||p.dryRun!==true||p.campaignId!==state.campaignId||p.claimId!==state.claimId||typeof p.sendEnabled!=='boolean'||typeof p.previewToken!=='string'||!p.previewToken||! /^[A-Za-z0-9_-]{1,100}$/.test(p.noticeId||'')||!Number.isSafeInteger(p.remaining)||p.remaining<1||!p.content||['prizeName','venue','pickupDeadline'].some(k=>typeof p.content[k]!=='string'))throw Error('預覽資料不完整，尚未發送。');
+              if(typeof p.actor!=='string'||!p.actor)throw Error('無法確認目前老師，請重新登入。');
+              Object.assign(state,{actor:p.actor,noticeId:p.noticeId,previewToken:p.previewToken,canSend:p.sendEnabled});readyStates.set(box,state);
+              box.innerHTML=`<p><strong>限定測試，尚未發送</strong></p><p>${escape(p.content.prizeName)}｜${escape(p.content.venue)}｜尚可領 ${p.remaining} 件</p><p>領取期限：${escape(p.content.pickupDeadline||'待確認')}</p><p>優先 LINE；只有明確拒絕或未綁定才使用備援，每次確認只處理一個通道。</p>${p.sendEnabled?'<button type="button" class="compact-button" data-ready-delivery-send>確認發送測試通知</button>':'<p>發送開關尚未開放。</p>'}${readyCheckButton()}`;
+            }else{
+              if(deliverySend&&!state.canSend)throw Error('請重新預覽後確認。');
+              state.canSend=false;
+              const action=deliverySend?'dispatchRaffleReadyAppDelivery':'reconcileRaffleReadyAppDelivery';
+              const operation=deliverySend?{claimId:state.claimId,previewToken:state.previewToken}:{noticeId:state.noticeId};
+              const data=await options.api(action,{expectedActor:state.actor,campaignId:state.campaignId,operation:JSON.stringify(operation)});
+              if(disposed||generation!==serial)return;
+              readySummary(box,data,state);
+            }
+          }catch(error){
+            if(!disposed&&generation===serial){box.textContent=error.message||'結果尚未確認，請查回結果，不要重送。';if(state.noticeId)box.insertAdjacentHTML('beforeend',readyCheckButton());}
+          }finally{busy=false;if(!disposed&&generation===serial&&delivery)delivery.disabled=false;}
+          return;
+        }
         const readyPreviewButton=event.target.closest('[data-raffle-ready-preview]');
         if(readyPreviewButton){
           if(busy)return;

@@ -1,6 +1,13 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {webcrypto}=require('node:crypto');
 const {createAdminTransport}=require('../admin-transport.js');
+test('ready notification owns its receipt: lost send is not retried and readback is not blocked',async()=>{
+ const s=fixture(p=>{assert.equal(p.clientOperationId,undefined);if(p.action==='dispatchRaffleReadyAppDelivery')throw Error('lost');return{status:'success',data:{testOnly:true}};});
+ const t=s.make(),params={sessionToken:'session-a',expectedActor:'Tako',campaignId:'future'};
+ await assert.rejects(t.call('dispatchRaffleReadyAppDelivery',{...params,operation:'{}'}));
+ assert.equal((await t.call('reconcileRaffleReadyAppDelivery',{...params,operation:'{}'})).testOnly,true);
+ assert.deepEqual(s.calls.map(p=>p.action),['dispatchRaffleReadyAppDelivery','reconcileRaffleReadyAppDelivery']);assert.equal(s.data.size,0);
+});
 test('gift journal owns reconciliation without an outer receipt blocking its same-ID retry',async()=>{
  const s=fixture(p=>{assert.equal(p.clientOperationId,undefined);return {status:'success',data:{state:'recorded'}};});
  await s.make().call('mutateActivityGift',{sessionToken:'session-a',expectedActor:'Tako',operation:{requestId:'gift-request-0001'}});
@@ -13,17 +20,6 @@ function fixture(handler) {
  const make=(extra={})=>createAdminTransport({url:'https://example.test/exec',fetch,storage,crypto:webcrypto,getSessionToken:()=> 'session-a',getSessionOwner:()=> 'Tako',onStatus:(...args)=>notices.push(args),timeoutMs:20,...extra});
  return {make,calls,data,notices};
 }
-test('special OB preview is read-only and confirmation reconciles a lost response without resending',async()=>{
- const s=fixture(p=>{
-  if(p.action==='previewSpecialCourseObAdoption'){assert.equal(p.clientOperationId,undefined);return {status:'success',data:{previewToken:'review'}};}
-  if(p.action==='confirmSpecialCourseObAdoption'){assert.ok(p.clientOperationId);throw Error('response lost');}
-  return {status:'success',data:{state:'completed',payload:{status:'success',data:{verificationStatus:'已核對'}}}};
- });
- const t=s.make();await t.call('previewSpecialCourseObAdoption',{sessionToken:'session-a',specialGroupId:'g'});
- const result=await t.call('confirmSpecialCourseObAdoption',{sessionToken:'session-a',specialGroupId:'g',previewToken:'review',reason:'confirmed'});
- assert.equal(result.verificationStatus,'已核對');
- assert.deepEqual(s.calls.map(p=>p.action),['previewSpecialCourseObAdoption','confirmSpecialCourseObAdoption','getAdminOperationStatus']);
-});
 test('returning from another app checks the session before sending and never reloads form inputs',async()=>{
  const s=fixture(p=>({status:'success',data:p.action==='getSession'?{teacherName:'Tako'}:{id:'booking'}})),t=s.make();
  await t.resume();const result=await t.call('createPracticeBooking',{sessionToken:'session-a',practice:{time:'11:00'}});

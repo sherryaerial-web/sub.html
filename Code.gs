@@ -9465,6 +9465,13 @@ function doPost(e) {
       confirmRaffleInvitations: function() {
         return confirmRaffleInvitations_(session, parseJsonObject_(parameters.operation, '抽獎待寄確認'));
       },
+      getRaffleReadyLineSource: function() { return getRaffleReadyLineSource_(session, parameters.campaignId, parameters.claimId); },
+      previewRaffleReadyAppDelivery: function() { return previewRaffleReadyAppDelivery_(session, parameters.sessionToken, parameters.campaignId, parameters.claimId); },
+      dispatchRaffleReadyAppDelivery: function() { if (parameters.expectedActor !== getSessionTeacherName_(session)) throw new Error('登入帳號已變更。'); return raffleReadyAppOperation_(session, parameters.sessionToken, parameters.campaignId, 'dispatch', parameters.operation); },
+      reconcileRaffleReadyAppDelivery: function() { if (parameters.expectedActor !== getSessionTeacherName_(session)) throw new Error('登入帳號已變更。'); return raffleReadyAppOperation_(session, parameters.sessionToken, parameters.campaignId, 'reconcile', parameters.operation); },
+      reserveRaffleReadyLine: function() { return reserveRaffleReadyLine_(session, parseJsonObject_(parameters.operation, '限定測試通知保留')); },
+      sendRaffleReadyFallback: function() { return sendRaffleReadyFallback_(session, parseJsonObject_(parameters.operation, '限定測試備援通知'), parameters.bridgeSecret); },
+      getRaffleReadyFallbackStatus: function() { return getRaffleReadyFallbackStatus_(session, parameters.campaignId, parameters.claimId); },
       previewRaffleReadyAppNotice: function() { return previewRaffleReadyAppNotice_(session, parameters.campaignId, parameters.claimId); },
       previewRaffleReadyNotifications: function() { return previewRaffleReadyNotifications_(session, parameters.campaignId); },
       confirmRaffleReadyNotifications: function() { return confirmRaffleReadyNotifications_(session, parseJsonObject_(parameters.operation, '領獎通知待寄')); },
@@ -22817,6 +22824,7 @@ function getRaffleWorkspace_(session, query) {
   var result = { enabled: config.enabled, readOnly: true, campaigns: config.campaigns.map(function(c) { return { id: c.id, name: c.name }; }), claims: [] };
   result.activityGiftTestEnabled = activityGiftAppAvailable_(session);
   if (getSessionManagementCapabilities_(session).indexOf('raffle_admin') >= 0 && !raffleReadyLegacyOwner_()) result.readyPreviewCampaign = PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_SOURCE_TEST_CAMPAIGN') || '';
+  if (result.readyPreviewCampaign && PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_APP_BRIDGE_ENABLED') === 'true') result.readyDeliveryCampaign = result.readyPreviewCampaign;
   if (!config.enabled) return result;
   result.readOnly = PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED') !== 'true';
   var caps = getSessionManagementCapabilities_(session);
@@ -22912,7 +22920,7 @@ function raffleReadyNotificationPlan_(campaign, state, selectedIds) {
 function previewRaffleReadyNotifications_(session, campaignId) {
   assertCapabilitySession_(session,'raffle_admin');
   var campaign = raffleMailCampaign_(campaignId), plan = raffleReadyNotificationPlan_(campaign,readRaffleMailState_()), props = PropertiesService.getScriptProperties();
-  return {kind:'ready',dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:props.getProperty('RAFFLE_WRITES_ENABLED') !== 'true' || props.getProperty('RAFFLE_MAIL_QUEUE_ENABLED') !== 'true' || props.getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true',
+  return {kind:'ready',dryRun:true,deliveryChecked:true,sendEnabled:false,readOnly:!raffleReadyLegacyOwner_() || props.getProperty('RAFFLE_WRITES_ENABLED') !== 'true' || props.getProperty('RAFFLE_MAIL_QUEUE_ENABLED') !== 'true' || props.getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true',
     previewToken:plan.token,batchCount:Math.min(5,plan.preview.jobs.length),candidateCount:plan.preview.jobs.length,skipped:plan.preview.skipped,
     previews:plan.preview.jobs.slice(0,20).map(function(j) { return {email:j.email,subject:j.subject,body:j.body}; })};
 }
@@ -22922,7 +22930,7 @@ function confirmRaffleReadyNotifications_(session, operation) {
   return withScriptLock_(function() {
     var context = raffleWriteContext_(session,operation,'queue-ready');
     var props = PropertiesService.getScriptProperties();
-    if (props.getProperty('RAFFLE_MAIL_QUEUE_ENABLED') !== 'true' || props.getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true') throw new Error('領獎通知待寄寫入尚未啟用。');
+    if (!raffleReadyLegacyOwner_() || props.getProperty('RAFFLE_MAIL_QUEUE_ENABLED') !== 'true' || props.getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true') throw new Error('領獎通知待寄寫入尚未啟用，或已交接其他通知流程。');
     var campaign = raffleMailCampaign_(operation.campaignId), state = readRaffleMailState_(), prior = rafflePriorResult_(state,context);
     if (prior) return prior;
     var plan = raffleReadyNotificationPlan_(campaign,state);
@@ -23223,7 +23231,7 @@ function raffleMailSendPlan_(campaign, state, kind) {
 
 function previewRaffleMailSend_(session, campaignId, kind) {
   assertCapabilitySession_(session, 'raffle_admin');
-  var campaign = raffleMailCampaign_(campaignId), enabled = raffleMailSendEnabled_(campaign) && (kind !== 'ready' || PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_MAIL_ENABLED') === 'true');
+  var campaign = raffleMailCampaign_(campaignId), enabled = raffleMailSendEnabled_(campaign) && (kind !== 'ready' || (raffleReadyLegacyOwner_() && PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_MAIL_ENABLED') === 'true'));
   var plan = raffleMailSendPlan_(campaign, readRaffleMailState_(), kind);
   var obConfigured = !!cleanText_(PropertiesService.getScriptProperties().getProperty('OMCEAN_API_TOKEN'));
   var obLengthValid = plan.jobs.every(function(job) { return (job.subject + '\n\n' + job.body).length <= 1500; });
@@ -23250,7 +23258,7 @@ function sendRaffleMailBatch_(session, operation, kind) {
       if (prior.requestHash !== context.requestHash || prior.event.action !== 'send-start') throw new Error('操作識別碼已被不同內容使用。');
       return raffleMailAttemptResult_(state, context.requestId);
     }
-    if (!raffleMailSendEnabled_(campaign) || (kind === 'ready' && PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true')) throw new Error('正式寄信尚未啟用，或尚未確認此來源的舊寄信程式已停用及交接。');
+    if (!raffleMailSendEnabled_(campaign) || (kind === 'ready' && (!raffleReadyLegacyOwner_() || PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_MAIL_ENABLED') !== 'true'))) throw new Error('正式寄信尚未啟用，或尚未確認此來源的舊寄信程式已停用及交接。');
     var plan = raffleMailSendPlan_(campaign, state, kind);
     if (!operation.previewToken || operation.previewToken !== plan.token) throw new Error('来源或寄信紀錄已變更，請重新預覽。');
     if (!plan.jobs.length) throw new Error('目前沒有可寄送的待寄信件。');
@@ -23641,5 +23649,101 @@ function reserveRaffleReadyLine_(session, operation) {
     var result = {reserved:true,reservationId:context.requestId,noticeId:source.claim.noticeId};
     appendRaffleMailEvent_(state, context, {action:'line-reserve',actor:context.actor,campaignId:operation.campaignId,claimId:operation.claimId,qualificationId:source.claim.noticeId,fingerprint:source.sourceFingerprint,result:result});
     return result;
+  });
+}
+
+
+function previewRaffleReadyAppDelivery_(session, sessionToken, campaignId, claimId) {
+  getRaffleReadyLineSource_(session, campaignId, claimId);
+  var data = raffleReadyAppRequest_(session, sessionToken, campaignId, 'preview', {claimId:claimId});
+  if (data.claimId !== claimId || !/^[A-Za-z0-9_-]{1,100}$/.test(data.noticeId || '') || typeof data.previewToken !== 'string' || !data.previewToken || data.previewToken.length > 200 || !Number.isSafeInteger(data.remaining) || data.remaining < 1 || !data.content || ['prizeName','venue','pickupDeadline'].some(function(k) { return typeof data.content[k] !== 'string' || data.content[k].length > 200; })) throw new Error('預覽資料不完整，請重新核對。');
+  return {actor:getSessionTeacherName_(session),testOnly:true,dryRun:true,sendEnabled:PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_APP_SEND_ENABLED') === 'true',campaignId:campaignId,claimId:claimId,noticeId:data.noticeId,remaining:data.remaining,
+    previewToken:data.previewToken,content:{prizeName:data.content.prizeName,venue:data.content.venue,pickupDeadline:data.content.pickupDeadline}};
+}
+
+
+function raffleReadyAppRequest_(session, sessionToken, campaignId, action, input) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  var props = PropertiesService.getScriptProperties(), secret = props.getProperty('RAFFLE_READY_APP_BRIDGE_SECRET');
+  if (props.getProperty('RAFFLE_READY_APP_BRIDGE_ENABLED') !== 'true' || typeof secret !== 'string' || secret.length < 32) throw new Error('通知串接測試尚未開放。');
+  if (!campaignId || props.getProperty('RAFFLE_READY_SOURCE_TEST_CAMPAIGN') !== campaignId || props.getProperty('RAFFLE_READY_NOTIFICATION_OWNER') !== 'line' || ['preview','dispatch','reconcile'].indexOf(action) < 0) throw new Error('通知串接範圍不符。');
+  if (action === 'dispatch' && props.getProperty('RAFFLE_READY_APP_SEND_ENABLED') !== 'true') throw new Error('測試發送尚未開放。');
+  if (typeof sessionToken !== 'string' || !/^[A-Za-z0-9_.-]{12,300}$/.test(sessionToken)) throw new Error('請重新登入。');
+  var data;
+  try {
+    var response = UrlFetchApp.fetch('https://sherry-activity-pilot.sherry-line-ai.workers.dev/internal/ready-app', {
+      method:'post', contentType:'application/json', followRedirects:false, muteHttpExceptions:true,
+      headers:{'x-ready-app-secret':secret},
+      payload:JSON.stringify({action:action,sessionToken:sessionToken,input:input})
+    });
+    if (response.getResponseCode() !== 200) throw new Error('bridge_failed');
+    var text = response.getContentText();
+    if (text.length > 16384) throw new Error('bridge_failed');
+    data = JSON.parse(text);
+    if (data.testOnly !== true) throw new Error('bridge_failed');
+  } catch (e) { throw new Error(action === 'preview' ? '通知預覽暫時無法取得；本次未發送通知，請稍後再查。' : '通知結果尚未確認，請查回結果；不要重複發送。'); }
+  return data;
+}
+
+
+function raffleReadyAppOperation_(session, sessionToken, campaignId, action, rawOperation) {
+  assertCapabilitySession_(session, 'raffle_admin');
+  var input;
+  try { input = JSON.parse(rawOperation); } catch(e) { throw new Error('操作資料有誤。'); }
+  var reconcile = action === 'reconcile', keys = reconcile ? ['noticeId'] : ['claimId','previewToken'];
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(function(k) { return keys.indexOf(k) < 0; }) || !/^[A-Za-z0-9_-]{1,100}$/.test(input[reconcile ? 'noticeId' : 'claimId'] || '') || (!reconcile && (typeof input.previewToken !== 'string' || !input.previewToken || input.previewToken.length > 200))) throw new Error('操作資料有誤。');
+  if (!reconcile) getRaffleReadyLineSource_(session, campaignId, input.claimId);
+  var data = raffleReadyAppRequest_(session, sessionToken, campaignId, action, input), n = data.notice;
+  if (!n || !/^[A-Za-z0-9_-]{1,100}$/.test(n.id || '') || !/^[A-Za-z0-9_-]{1,100}$/.test(n.claimId || '') || (reconcile ? n.id !== input.noticeId : n.claimId !== input.claimId) || !Number.isSafeInteger(n.revision) || n.revision < 0 || ['pending','sending','accepted','review'].indexOf(n.status) < 0 || n.readConfirmed !== false || !n.channels || ['line','ob','email'].some(function(k) { return ['pending','sending','accepted','rejected','unknown','skipped'].indexOf(n.channels[k]) < 0; }) || (n.nextAction !== null && ['line','ob','email'].indexOf(n.nextAction) < 0)) throw new Error('通知結果尚未確認，請查回結果；不要重複發送。');
+  return {testOnly:true,campaignId:campaignId,notice:{id:n.id,claimId:n.claimId,revision:n.revision,status:n.status,readConfirmed:false,nextAction:n.nextAction,channels:{line:n.channels.line,ob:n.channels.ob,email:n.channels.email}}};
+}
+
+
+function getRaffleReadyFallbackStatus_(session, campaignId, claimId) {
+  assertCapabilitySession_(session,'raffle_admin');
+  var props=PropertiesService.getScriptProperties();
+  if (props.getProperty('RAFFLE_READY_FALLBACK_TEST_ENABLED')!=='true'||!campaignId||campaignId!==props.getProperty('RAFFLE_READY_SOURCE_TEST_CAMPAIGN')||!/^[A-Za-z0-9_-]{1,100}$/.test(claimId||'')) throw new Error('限定測試查詢未開放。');
+  // Read the durable receipt even after pickup/source changes. Never resend.
+  var reservation=readRaffleMailState_().lineReservations.filter(function(r){return r.campaignId===campaignId&&r.claimId===claimId;})[0];
+  return {testOnly:true,campaignId:campaignId,claimId:claimId,noticeId:reservation?reservation.qualificationId:null,reservationId:reservation?reservation.requestId:null,
+    channels:{ob:reservation&&reservation.channels.ob?reservation.channels.ob.status:'missing',email:reservation&&reservation.channels.email?reservation.channels.email.status:'missing'}};
+}
+
+
+function sendRaffleReadyFallback_(session, operation, bridgeSecret) {
+  assertCapabilitySession_(session,'raffle_admin');
+  var expected=PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_FALLBACK_SECRET');
+  if (typeof expected!=='string'||expected.length<32||typeof bridgeSecret!=='string'||bridgeSecret!==expected) throw new Error('通知橋接尚未授權。');
+  return withScriptLock_(function() {
+    var context=raffleWriteContext_(session,operation,'line-fallback'),props=PropertiesService.getScriptProperties(),emails;
+    if (props.getProperty('RAFFLE_READY_FALLBACK_TEST_ENABLED') !== 'true') throw new Error('備援通知限定測試未啟用。');
+    if (Object.keys(operation).some(function(k) { return ['campaignId','claimId','reservationId','channel','requestId'].indexOf(k)<0; }) || ['ob','email'].indexOf(operation.channel)<0) throw new Error('通知欄位有誤。');
+    try { emails=JSON.parse(props.getProperty('RAFFLE_READY_LINE_TEST_EMAILS_JSON') || '[]'); } catch(e) { throw new Error('測試收件人未設定。'); }
+    if (!Array.isArray(emails)||emails.length<1||emails.length>2||new Set(emails).size!==emails.length||emails.some(function(e){return typeof e!=='string'||e!==e.trim().toLowerCase()||!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(e);})) throw new Error('測試收件人未設定。');
+    var source=raffleReadyLineSourceUnlocked_(operation.campaignId,operation.claimId);
+    if (!source.reservationId||source.reservationId!==operation.reservationId||emails.indexOf(source.claim.email.toLowerCase())<0) throw new Error('未核對通知保留或收件人。');
+    var state=readRaffleMailState_(),reservation=state.lineReservations.filter(function(r){return r.requestId===source.reservationId;})[0],existing=reservation.channels[operation.channel];
+    if (existing) return {outcome:existing.status==='sending'?'unknown':existing.status};
+    // Only the trusted Worker may authorize fallback after LINE. Independently
+    // enforce OB completion here so direct bridge calls cannot bypass a hold.
+    if (operation.channel==='email' && (!reservation.channels.ob||reservation.channels.ob.status!=='accepted')) return {outcome:'unknown'};
+    if (state.requests[context.requestId]) throw new Error('操作識別碼已使用。');
+    if (operation.channel==='email' && MailApp.getRemainingDailyQuota()<1) return {outcome:'rejected'};
+    var token=props.getProperty('OMCEAN_API_TOKEN');
+    if (operation.channel==='ob' && !token) throw new Error('OB 通知尚未設定。');
+    var claim=source.claim,subject='【限定測試】獎品可領取通知',body='【限定測試】您的「'+claim.prizeName+'」已備妥，請至'+claim.venue+'找老師核對領取。\n尚可領取 '+claim.remaining+' 件。'+(claim.pickupDeadline?'\n領取期限：'+claim.pickupDeadline:'')+'\n此為測試通知，不可實際兌領。\n此為系統訊息，請勿直接回覆；如有問題請洽工作人員。';
+    var start={action:'line-channel-start',actor:context.actor,campaignId:operation.campaignId,reservationId:source.reservationId,channel:operation.channel};
+    appendRaffleMailEvent_(state,context,start);
+    var outcome='unknown';
+    try {
+      if (operation.channel==='email') { MailApp.sendEmail({to:claim.email,subject:subject,body:body,name:'Sherry Aerial Studio'}); outcome='accepted'; }
+      else {
+        var response=UrlFetchApp.fetch('https://api.omceanbooking.com/v1/messages',{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+token},muteHttpExceptions:true,followRedirects:false,payload:JSON.stringify({email:claim.email,message:subject+'\n\n'+body,pushNotification:true,lineNotification:false})});
+        if (response.getResponseCode()===200) { var data=JSON.parse(response.getContentText()); if(data&&data.recipientCount===1&&Array.isArray(data.messageIds)&&data.messageIds.length===1&&Number.isSafeInteger(data.messageIds[0])&&data.messageIds[0]>0) outcome='accepted'; }
+      }
+    } catch(e) { /* Ambiguous outcome: never resend. */ }
+    var result={action:'line-channel-result',actor:context.actor,campaignId:operation.campaignId,reservationId:source.reservationId,channel:operation.channel,attemptId:context.requestId,outcome:outcome};
+    appendRaffleMailEvent_(readRaffleMailState_(),{requestId:'line_result_'+raffleHash_(JSON.stringify([source.reservationId,operation.channel,context.requestId])),requestHash:raffleHash_(JSON.stringify(result))},result);
+    return {outcome:outcome};
   });
 }

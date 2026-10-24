@@ -19,6 +19,7 @@
         ${item.claimedAt ? `<p class="item-meta">領取：${escape(item.claimedAt)}｜經手：${escape(item.claimedBy)}</p>` : ''}
         ${item.pickupBlocked && ['waiting','ready','partial'].includes(item.status) ? `<p class="state error">已過領取期限／期限需核對：${escape(item.pickupDeadline)}；暫停備貨與交付，原紀錄保留。</p>` : ''}
         <div class="admin-item-actions">
+          ${permissions.readyPreviewCampaign && permissions.readyPreviewCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-ready-preview="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">預覽到館通知（不寄送）</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">這一筆已備妥到館</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && ['waiting','ready','partial'].includes(item.status) && Number(item.claimedQuantity) < Number(item.quantity) ? `<button type="button" class="compact-button" data-raffle-action="revoke" data-claim-id="${escape(item.id)}">撤銷未領部分</button>` : ''}
@@ -78,10 +79,16 @@
   }
   function renderMailRecords(data) {
     if (!data || !Number.isInteger(data.total) || !Array.isArray(data.records)) throw Error('未收到完整寄信紀錄。');
+    let handoffHtml='';
+    if(data.lineHandoff!==undefined){
+      const h=data.lineHandoff,keys=['missing','sending','accepted','rejected','unknown'];
+      if(!h||!Number.isSafeInteger(h.total)||h.total<0||h.lineDeliveryChecked!==false||!['ob','email'].every(c=>h[c]&&keys.every(k=>Number.isSafeInteger(h[c][k])&&h[c][k]>=0)&&keys.reduce((n,k)=>n+h[c][k],0)===h.total))throw Error('通知交接紀錄不完整，請重新核對。');
+      if(h.total)handoffHtml=`<section class="admin-control" aria-label="LINE 通知交接"><h3>LINE 流程已保留 ${escape(h.total)} 筆獎品</h3><p>以下是本活動的交接與備援紀錄，不包含在舊流程信件數。已保留不代表已寄出；此頁尚未核對 LINE 發送結果，不能當作未發送或已送達。</p>${[['ob','OB'],['email','Email']].map(([key,label])=>`<p>${label} 備援：服務已接受 ${h[key].accepted} 筆、結果待確認 ${h[key].sending+h[key].unknown} 筆、明確拒絕 ${h[key].rejected} 筆、無發送紀錄 ${h[key].missing} 筆。</p>`).join('')}<p>無備援紀錄可能是未執行或不需備援，請勿據此重送。待確認項目須核對原通知紀錄；服務接受不代表學生已讀。</p></section>`;
+    }
     const channelLabels = {not_sent:'尚未發送',sending:'結果待確認',sent:'服務已接受',uncertain:'結果待確認'};
     const labels = {queued:'待寄（尚未寄出）',sending:'寄送已保留／結果待確認',sent:'已送出／已核對',uncertain:'寄送結果待確認',closed:'結案（不重寄）'};
     const offset = Number.isInteger(data.offset) ? data.offset : 0;
-    const pages = `<div class="admin-item-actions">${offset > 0 ? `<button type="button" class="compact-button" data-raffle-mail-page="${Math.max(0,offset-50)}">上一頁</button>` : ''}${data.hasMore === true ? `<button type="button" class="compact-button" data-raffle-mail-page="${offset+50}">下一頁</button>` : ''}</div>`;
+    const pages = `<div class="admin-item-actions">${offset > 0 ? `<button type="button" class="compact-button" data-raffle-mail-page="${Math.max(0,offset-50)}">上一頁</button>` : ''}${data.hasMore === true ? `<button type="button" class="compact-button" data-raffle-mail-page="${offset+50}">下一頁</button>` : ''}</div>${handoffHtml}`;
     return `<div class="admin-control"><h3>寄信紀錄</h3><p class="state">待寄不等於已寄出；Email／OB 接受發送不代表收件人已收到或手機已跳提醒。結果待確認時不會自動重寄，請先核對執行紀錄或向收件人確認。</p><p>共 ${escape(data.total)} 封，待核對 ${escape(data.reviewCount || 0)} 封。待核對優先顯示，每頁最多 50 封，第 ${Math.floor(offset/50)+1} 頁。</p>${data.records.map(item => `<article class="raffle-prize" style="overflow-wrap:anywhere"><strong>${escape(item.email)}</strong><p>${item.kind === 'ready' ? '領獎通知' : '抽獎邀請'}｜${escape(item.closedBeforeSend ? '停止待寄（未寄出，不重排）' : labels[item.status] || '狀態待核對')}｜${escape(item.qualificationCount)} 筆${item.kind === 'ready' ? '獎品' : '資格'}</p><p>${escape(item.createdAt)}｜${escape(item.actor)}</p>${item.channels ? `<p>Email：${escape(channelLabels[item.channels.email?.status] || '待核對')} · OB：${escape(channelLabels[item.channels.ob?.status] || '待核對')}${item.channels.ob?.status === 'sent' ? '（手機推播已要求）' : ''}</p>` : item.status === 'queued' ? '<p>發送管道：OB＋Email</p>' : '<p>舊版紀錄：僅 Email，沒有補發 OB。</p>'}${item.updatedAt ? `<p>更新：${escape(item.updatedAt)}｜${escape(item.updatedBy)}</p>` : ''}${item.reason ? `<p>核對理由：${escape(item.reason)}</p>` : ''}${data.canCloseQueued === true && item.status === 'queued' ? `<button type="button" class="compact-button" data-raffle-close-queued="${escape(item.id)}">停止這封待寄（不重排）</button>` : ''}${data.canReconcile === true && ['sending','uncertain'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-reconcile="${escape(item.id)}">人工核對結果（不重寄）</button>` : ''}</article>`).join('') || '<p>本頁沒有寄信紀錄。</p>'}${pages}</div>`;
   }
   function renderMailSendPreview(data) {
@@ -412,6 +419,23 @@
       node('[data-raffle-cancel]').addEventListener('click', () => { if (!busy) dialog.close(); });
       dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
       result.addEventListener('click', async event => {
+        const readyPreviewButton=event.target.closest('[data-raffle-ready-preview]');
+        if(readyPreviewButton){
+          if(busy)return;
+          const claimId=readyPreviewButton.dataset.raffleReadyPreview,campaignId=readyPreviewButton.dataset.campaignId,generation=serial;
+          busy=true;readyPreviewButton.disabled=true;
+          let box=readyPreviewButton.parentElement.querySelector('[data-ready-app-preview]');
+          if(!box){box=document.createElement('div');box.dataset.readyAppPreview='';box.setAttribute('role','status');readyPreviewButton.parentElement.appendChild(box);}
+          box.textContent='核對獎品來源中…';
+          try{
+            const p=await options.api('previewRaffleReadyAppNotice',{campaignId,claimId});
+            if(disposed||generation!==serial)return;
+            if(!p||p.testOnly!==true||p.dryRun!==true||p.sendEnabled!==false||p.campaignId!==campaignId||p.claimId!==claimId||!Number.isSafeInteger(p.remaining)||p.remaining<1||[p.prizeName,p.venue,p.pickupDeadline].some(v=>typeof v!=='string')||typeof p.alreadyReserved!=='boolean')throw Error('預覽資料不完整，請重新核對。');
+            box.innerHTML=`<p><strong>限定測試預覽，尚未寄送</strong></p><p>${escape(p.prizeName)}｜${escape(p.venue)}｜尚可領 ${p.remaining} 件</p><p>領取期限：${escape(p.pickupDeadline||'待確認')}</p><p>${p.alreadyReserved?'此筆已有通知保留紀錄，請先核對寄送結果，勿重送。':'本次只核對獎品資料；尚未核對 LINE 綁定與傳送結果。'}</p>`;
+          }catch(error){if(!disposed&&generation===serial)box.textContent=error.message||'目前無法預覽，尚未寄送。';}
+          finally{busy=false;if(!disposed&&generation===serial)readyPreviewButton.disabled=false;}
+          return;
+        }
         const groupButton = event.target.closest('[data-raffle-fulfillment-group]');
         const fulfillmentPage = event.target.closest('[data-raffle-fulfillment-page]');
         if (!busy && (groupButton || fulfillmentPage)) { read('fulfillment', fulfillmentPage ? Number(fulfillmentPage.dataset.raffleFulfillmentPage) : 0, groupButton ? groupButton.dataset.raffleFulfillmentGroup : fulfillmentPage.dataset.groupId); return; }

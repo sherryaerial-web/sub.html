@@ -3,6 +3,11 @@
   const escape = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const statuses = { waiting: '待備貨', ready: '可領取', partial: '部分領取', claimed: '已領取', digital: '電子獎項', cancelled: '已撤銷／取消' };
   const status = value => statuses[value] || '狀態待核對';
+  function renderBallInventory(data) {
+    if(!data||data.readOnly!==true||data.canCollect!==false||typeof data.prizeName!=='string'||typeof data.catalogEnabled!=='boolean'||
+       !['total','reserved','claimed','available'].every(k=>Number.isSafeInteger(data[k])&&data[k]>=0)||data.reserved+data.claimed+data.available!==data.total)throw Error('庫存資料尚未核對，請重新查詢。');
+    return `<h3>${escape(data.prizeName)} · 庫存唯讀</h3><p>總量 ${data.total} 顆｜待領 ${data.reserved} 顆｜已領 ${data.claimed} 顆｜可用 ${data.available} 顆</p><p class="item-meta">${data.catalogEnabled?'目錄已啟用':'目錄尚未啟用'}。此處僅查詢，不會發放或登記領取；球不必選館。</p>`;
+  }
   function renderClaims(claims, campaigns, permissions = { readOnly: true }) {
     if (!claims.length) return '<div class="state">查無符合的領獎紀錄。請確認姓名或完整 Email。</div>';
     const groups = new Map();
@@ -308,7 +313,19 @@
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
     let settingsCleanup=null,obCleanup=null,giftCleanup=null;
-    function giftPanel(data){if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement('section');panel.dataset.activityGiftPanel='';root.appendChild(panel);giftCleanup=mountActivityGifts(panel,options);}
+    function giftPanel(data){
+      if(admin&&data.ballInventoryPreviewEnabled===true){
+        const panel=document.createElement('section');panel.className='admin-control';
+        panel.innerHTML='<button type="button" class="compact-button">查看球庫存（唯讀）</button><div aria-live="polite"></div>';root.appendChild(panel);
+        const button=panel.querySelector('button'),body=panel.querySelector('div');
+        button.addEventListener('click',async()=>{
+          button.disabled=true;body.textContent='查詢中…';
+          try{const r=await options.api('getRaffleBallInventory',{});if(!disposed)body.innerHTML=renderBallInventory(r);}
+          catch(e){if(!disposed)body.textContent=e.message||'庫存讀取失敗，請重新查詢。';}
+          finally{if(!disposed)button.disabled=false;}
+        });
+      }
+if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement('section');panel.dataset.activityGiftPanel='';root.appendChild(panel);giftCleanup=mountActivityGifts(panel,options);}
     function settingsButton() {
       if(!admin)return;
       const button=document.createElement('button');button.type='button';button.className='compact-button';button.textContent='活動設定／草稿';button.dataset.raffleSettings='';root.appendChild(button);
@@ -614,5 +631,5 @@
     });
     return cleanup;
   }
-  global.SherryRaffle = { mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

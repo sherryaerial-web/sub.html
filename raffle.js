@@ -446,7 +446,7 @@
               if(p?.testOnly!==true||p.dryRun!==true||p.campaignId!==state.campaignId||p.claimId!==state.claimId||typeof p.sendEnabled!=='boolean'||typeof p.previewToken!=='string'||!p.previewToken||! /^[A-Za-z0-9_-]{1,100}$/.test(p.noticeId||'')||!Number.isSafeInteger(p.remaining)||p.remaining<1||!p.content||['prizeName','venue','pickupDeadline'].some(k=>typeof p.content[k]!=='string'))throw Error('預覽資料不完整，尚未發送。');
               if(typeof p.actor!=='string'||!p.actor)throw Error('無法確認目前老師，請重新登入。');
               Object.assign(state,{actor:p.actor,noticeId:p.noticeId,previewToken:p.previewToken,canSend:p.sendEnabled});readyStates.set(box,state);
-              box.innerHTML=`<p><strong>限定測試，尚未發送</strong></p><p>${escape(p.content.prizeName)}｜${escape(p.content.venue)}｜尚可領 ${p.remaining} 件</p><p>領取期限：${escape(p.content.pickupDeadline||'待確認')}</p><p>優先 LINE；只有明確拒絕或未綁定才使用備援，每次確認只處理一個通道。</p>${p.sendEnabled?'<button type="button" class="compact-button" data-ready-delivery-send>確認發送測試通知</button>':'<p>發送開關尚未開放。</p>'}${readyCheckButton()}`;
+              box.innerHTML=`<p><strong>限定測試，尚未發送</strong></p><p>${escape(p.content.prizeName)}｜${escape(p.content.venue)}｜尚可領 ${p.remaining} 件</p><p>領取期限：${escape(p.content.pickupDeadline||'待確認')}</p><p>${p.transport==='ob'?'本次只發 OB 站內信＋手機推播，不發 LINE 或 Email；結果不明時不自動重送。':'優先 LINE；只有明確拒絕或未綁定才使用備援，每次確認只處理一個通道。'}</p>${p.sendEnabled?'<button type="button" class="compact-button" data-ready-delivery-send>確認發送測試通知</button>':'<p>發送開關尚未開放。</p>'}${readyCheckButton()}`;
             }else{
               if(deliverySend&&!state.canSend)throw Error('請重新預覽後確認。');
               state.canSend=false;

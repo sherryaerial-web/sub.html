@@ -93,7 +93,7 @@
       const token = params.sessionToken || '';
       // Isolated gifts persist their own request ID and reconcile against their own journal.
       // A second generic uncertain receipt would prevent a safe same-ID retry.
-      if (['mutateActivityGift','dispatchRaffleReadyAppDelivery','reconcileRaffleReadyAppDelivery'].includes(action)) {
+      if (['mutateActivityGift','dispatchRaffleReadyAppDelivery','reconcileRaffleReadyAppDelivery','productionTaskApp'].includes(action)) {
         if (!token || !account() || params.expectedActor !== account()) throw Error('登入帳號已變更，請重新開啟測試送球頁。');
         if (needsHealth) await ensureHealth(token);
         if (params.expectedActor !== account()) throw Error('登入帳號已變更，本次尚未送出。');

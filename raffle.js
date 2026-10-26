@@ -312,8 +312,13 @@
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
-    let settingsCleanup=null,obCleanup=null,giftCleanup=null;
+    let settingsCleanup=null,obCleanup=null,giftCleanup=null,taskCleanup=null;
     function giftPanel(data){
+      if(admin&&data.productionTaskReviewEnabled===true&&['冠蓉','Tako'].includes(data.productionTaskActor)){
+        const panel=document.createElement('section');root.appendChild(panel);
+        try{if(!global.SherryProductionTasks)throw Error('活動審核畫面未載入，請重新整理。');taskCleanup=global.SherryProductionTasks.mount(panel,{...options,actor:data.productionTaskActor});}
+        catch(e){panel.className='state error';panel.textContent=e.message||'活動審核暫時無法載入。';}
+      }
       if(admin&&data.ballInventoryPreviewEnabled===true){
         const panel=document.createElement('section');panel.className='admin-control';
         panel.innerHTML='<button type="button" class="compact-button">查看球庫存（唯讀）</button><div aria-live="polite"></div>';root.appendChild(panel);
@@ -339,7 +344,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
       });
     }
-    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); root.replaceChildren(); };
+    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); if(taskCleanup)taskCleanup(); root.replaceChildren(); };
     initial.then(data => {
       if (disposed) return;
       if (!data.enabled || !data.campaigns.length) {

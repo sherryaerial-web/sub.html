@@ -8,6 +8,10 @@
        !['total','reserved','claimed','available'].every(k=>Number.isSafeInteger(data[k])&&data[k]>=0)||data.reserved+data.claimed+data.available!==data.total)throw Error('庫存資料尚未核對，請重新查詢。');
     return `<h3>${escape(data.prizeName)} · 庫存唯讀</h3><p>總量 ${data.total} 顆｜待領 ${data.reserved} 顆｜已領 ${data.claimed} 顆｜可用 ${data.available} 顆</p><p class="item-meta">${data.catalogEnabled?'目錄已啟用':'目錄尚未啟用'}。此處僅查詢，不會發放或登記領取；球不必選館。</p>`;
   }
+  function renderPickupVenue(claim) {
+    if (claim.venue === '教室現貨') return '<p class="item-meta">教室現貨直接領取，不必選館；請先核對學生與獎品。</p><input data-raffle-venue type="hidden" value="教室現貨">';
+    return `<label>確認實際所在館別<select data-raffle-venue class="admin-select" required><option value="">請選擇</option><option value="${escape(claim.venue)}">${escape(claim.venue)}</option><option value="wrong-venue">其他館別（不可交付）</option></select></label>`;
+  }
   function renderClaims(claims, campaigns, permissions = { readOnly: true }) {
     if (!claims.length) return '<div class="state">查無符合的領獎紀錄。請確認姓名或完整 Email。</div>';
     const groups = new Map();
@@ -21,6 +25,7 @@
       ${items.map(item => `<div class="raffle-prize">
         <div><strong>${escape(item.prizeName)}</strong><span class="status-pill">${escape(status(item.status))}</span></div>
         <p class="item-meta">${escape((campaigns.find(c => c.id === item.campaignId) || {}).name || '')}｜${escape(item.venue || '非實體領取／待確認館別')}｜${escape(item.claimedQuantity || 0)}／${escape(item.quantity || 1)} 件已領</p>
+        <p><strong>${['ready','partial'].includes(item.status) ? `尚可領取 ${escape(Number(item.quantity) - Number(item.claimedQuantity || 0))} 件` : item.status === 'waiting' ? '尚未備妥，請先等到館確認' : escape(status(item.status))}</strong> · 已領取 ${escape(item.claimedQuantity || 0)} 件</p>
         ${item.claimedAt ? `<p class="item-meta">領取：${escape(item.claimedAt)}｜經手：${escape(item.claimedBy)}</p>` : ''}
         ${item.pickupBlocked && ['waiting','ready','partial'].includes(item.status) ? `<p class="state error">已過領取期限／期限需核對：${escape(item.pickupDeadline)}；暫停備貨與交付，原紀錄保留。</p>` : ''}
         <div class="admin-item-actions">
@@ -565,7 +570,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
           const title = { collect:'確認交付獎品', prepare:'確認這一筆已到館', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
           const maximum = selected.action === 'correct' ? Number(claim.claimedQuantity) - 1 : Number(claim.quantity) - Number(claim.claimedQuantity);
           node('[data-raffle-dialog-body]').innerHTML = `<h3>${escape(title)}</h3><p><strong>${escape(claim.studentName)}</strong>｜${escape(claim.maskedEmail)}</p><p>${escape(claim.prizeName)}｜登記館別：${escape(claim.venue || '—')}</p>
-            ${['collect','prepare','restore'].includes(selected.action) ? `<label>確認實際所在館別<select data-raffle-venue class="admin-select" required><option value="">請選擇</option><option value="${escape(claim.venue)}">${escape(claim.venue)}</option><option value="wrong-venue">其他館別（不可交付）</option></select></label>` : ''}
+            ${['collect','prepare','restore'].includes(selected.action) ? renderPickupVenue(claim) : ''}
             ${['collect','correct'].includes(selected.action) ? `<label>${selected.action === 'correct' ? '更正後已領數量' : '本次領取數量'}<input data-raffle-quantity class="text-input" type="number" min="${selected.action === 'correct' ? 0 : 1}" max="${escape(maximum)}" step="1" value="${selected.action === 'correct' ? 0 : 1}" required></label>` : ''}
             ${selected.action === 'revoke' ? `<p>停止剩餘 ${escape(maximum)} 件的交付，已領取 ${escape(claim.claimedQuantity)} 件及原紀錄會保留。恢復須由管理員重新核對；不會回補來源庫存、不寄信，也不撤銷學生其他獎品。</p>` : ''}
             ${selected.action === 'restore' ? '<p>重新核對來源與期限；保留原紀錄，不寄信、不增減來源庫存。恢復為待備貨，須重新標記到館後才能交付。</p>' : ''}
@@ -636,5 +641,5 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
     });
     return cleanup;
   }
-  global.SherryRaffle = { renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { renderPickupVenue, renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

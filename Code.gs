@@ -23277,7 +23277,7 @@ function sendRaffleMailBatch_(session, operation, kind) {
         appendRaffleChannelEvent_(start);
         var result = Object.assign({},start,{action:'channel-result',status:'sent'});
         try {
-          if (channel === 'email') MailApp.sendEmail({to:job.email,subject:job.subject,body:job.body,name:'Sherry Aerial Studio'});
+          if (channel === 'email') MailApp.sendEmail({to:job.email,subject:job.subject,body:job.body,htmlBody:renderRaffleEmailHtml_(job.subject,job.body),name:'Sherry Aerial Studio'});
           else {
             var response = UrlFetchApp.fetch('https://api.omceanbooking.com/v1/messages', {
               method:'post',contentType:'application/json',headers:{Authorization:'Bearer ' + obToken},muteHttpExceptions:true,followRedirects:false,
@@ -23736,7 +23736,7 @@ function sendRaffleReadyFallback_(session, operation, bridgeSecret) {
     appendRaffleMailEvent_(state,context,start);
     var outcome='unknown';
     try {
-      if (operation.channel==='email') { MailApp.sendEmail({to:claim.email,subject:subject,body:body,name:'Sherry Aerial Studio'}); outcome='accepted'; }
+      if (operation.channel==='email') { MailApp.sendEmail({to:claim.email,subject:subject,body:body,htmlBody:renderRaffleEmailHtml_(subject,body),name:'Sherry Aerial Studio'}); outcome='accepted'; }
       else {
         var response=UrlFetchApp.fetch('https://api.omceanbooking.com/v1/messages',{method:'post',contentType:'application/json',headers:{Authorization:'Bearer '+token},muteHttpExceptions:true,followRedirects:false,payload:JSON.stringify({email:claim.email,message:subject+'\n\n'+body,pushNotification:true,lineNotification:false})});
         if (response.getResponseCode()===200) { var data=JSON.parse(response.getContentText()); if(data&&data.recipientCount===1&&Array.isArray(data.messageIds)&&data.messageIds.length===1&&Number.isSafeInteger(data.messageIds[0])&&data.messageIds[0]>0) outcome='accepted'; }
@@ -23746,4 +23746,14 @@ function sendRaffleReadyFallback_(session, operation, bridgeSecret) {
     appendRaffleMailEvent_(readRaffleMailState_(),{requestId:'line_result_'+raffleHash_(JSON.stringify([source.reservationId,operation.channel,context.requestId])),requestHash:raffleHash_(JSON.stringify(result))},result);
     return {outcome:outcome};
   });
+}
+
+function renderRaffleEmailHtml_(subject, body) {
+  var escape = function(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+  var content = String(body || '').split('\n').map(function(line) {
+    var link = /^(?:活動網站[：:]\s*|抽獎網站[：:]\s*)?(https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:[/?#][^\s<>"']*)?)$/.exec(line.trim());
+    if (link) return '<p style="margin:22px 0"><a href="' + escape(link[1]) + '" style="display:inline-block;background:#24584b;color:#ffffff;text-decoration:none;padding:14px 22px;border-radius:8px;font-weight:bold">開啟活動連結 →</a></p>';
+    return line ? '<div style="margin:0 0 8px;overflow-wrap:anywhere">' + escape(line) + '</div>' : '<div style="height:12px"></div>';
+  }).join('');
+  return '<!doctype html><html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#f5f2e9;color:#263b35;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border:1px solid #ded8c8;border-radius:16px"><tr><td style="padding:26px;background:#24584b;color:#fff;border-radius:16px 16px 0 0"><div style="color:#f0d392;font-size:13px;letter-spacing:2px">SHERRY AERIAL STUDIO · ✦</div><h1 style="font-size:24px;line-height:1.5;margin:14px 0 0">' + escape(subject) + '</h1></td></tr><tr><td style="padding:26px;font-size:16px;line-height:1.8">' + content + '</td></tr><tr><td style="padding:18px 26px;border-top:1px solid #eee7d9;color:#61736c;font-size:13px;line-height:1.7">此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。<br>Sherry Aerial Studio</td></tr></table></td></tr></table></body></html>';
 }

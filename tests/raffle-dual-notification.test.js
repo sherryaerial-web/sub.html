@@ -19,6 +19,9 @@ test('manual invitation confirmation sends both channels once with push and pers
  assert.equal(s.ob[0].email,'student0@example.com');assert.match(s.ob[0].message,/CODE-0/);
  assert.ok(s.ob[0].message.endsWith('\n\n此為系統自動通知，請勿直接回覆。如有問題，請透過官方 LINE 聯繫我們。'));
  assert.ok(!s.mails[0].body.includes('請勿直接回覆'));
+ assert.match(s.mails[0].htmlBody, /SHERRY AERIAL STUDIO/);
+ assert.match(s.mails[0].htmlBody, /CODE-0/);
+ assert.match(s.mails[0].htmlBody, /請勿直接回覆/);
  const record=s.c.getRaffleMailRecords_(admin,'future').records[0];assert.equal(record.channels.email.status,'sent');assert.equal(record.channels.ob.status,'sent');assert.deepEqual(Array.from(record.channels.ob.messageIds),[101]);
  s.c.sendRaffleMailBatch_(admin,op);assert.equal(s.ob.length,1);assert.equal(s.mails.length,1);
 });

@@ -402,6 +402,11 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         ['ob-sync','preview','mail-preview','mail-send','mail-records','ready-preview','ready-send'].forEach(name=>{const button=node('[data-raffle-'+name+']');if(button)actions.appendChild(button);});
         form.appendChild(tools);
       }
+      if(data.canPrepare){
+        const guide=document.createElement('section');guide.className='admin-control';
+        guide.innerHTML='<h3>店長：獎品到館與通知</h3><p>① 開啟「獎品／館別備貨清單」 → ② 查看學生／逐筆到館 → ③ 核對實物並標記「這一筆已備妥到館」。</p><p>到館登記與寄送通知是分開的操作。通知管道為 OB 站內信＋Email。</p><p class="item-meta">'+(data.readOnly!==false?'目前為預覽／限定測試：正式到館登記與通知尚未開放。看到「通知學生（限定測試）」只可用於指定測試紀錄。':'完成到館後，至「管理工具：同步資料與通知」預覽領獎通知，再按「領獎通知寄送前確認」，核對名單後寄送。')+'</p>';
+        form.after(guide);
+      }
       settingsButton();
       giftPanel(data);
       async function read(isPreview, offset = 0, groupId = '') {

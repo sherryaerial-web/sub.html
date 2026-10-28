@@ -267,6 +267,7 @@
 
   function mountActivityGifts(root, options) {
     let disposed=false,busy=false,controller=null,controllerActor='',claims=[],readOnly=true;
+    root.classList.add('raffle-gift-workspace');
     root.innerHTML='<h3>活動獎品（限定測試）</h3><p>沿用目前老師登入。僅測試紀錄，不發放正式獎品或通知。</p><button type="button" class="compact-button" data-gift-load>查看／更新測試獎品</button><label>搜尋學生<input class="text-input" data-gift-search placeholder="姓名或 Email"></label><label>篩選獎品<select class="text-input" data-gift-prize><option value="">全部獎品</option></select></label><p data-gift-message role="status" aria-live="polite"></p><div data-gift-recovery hidden><button type="button" class="compact-button" data-gift-check>核對上一筆</button><button type="button" class="compact-button" data-gift-retry>以原操作重試</button></div><div data-gift-claims></div>';
     const node=s=>root.querySelector(s),message=text=>{if(!disposed)node('[data-gift-message]').textContent=text;};
     const outcome=r=>r?.state==='recorded'?'已核對完成，不會重複領取。':r?.state==='superseded'?'資料已有更新；這筆未重複寫入，請依最新紀錄操作。':'未查到完成紀錄；可再次核對，或以原操作重試。';
@@ -278,14 +279,18 @@
       node('[data-gift-retry]').disabled=busy||readOnly;
       const query=node('[data-gift-search]').value.trim().toLowerCase();
       const prize=node('[data-gift-prize]').value;
-      node('[data-gift-claims]').innerHTML=claims.filter(c=>(!prize||c.prizeName===prize)&&[c.studentName,c.email].some(v=>v.toLowerCase().includes(query))).map(c=>{
+      const filtered=claims.filter(c=>(!prize||c.prizeName===prize)&&[c.studentName,c.email].some(v=>v.toLowerCase().includes(query)));
+      const card=c=>{
         const remaining=c.quantity-c.claimedQuantity;
         const unit=c.directPickup?'顆':'件';
         const collectible=remaining>0&&(['ready','partial'].includes(c.status)||(c.directPickup&&c.status==='waiting'));
         const disabled=busy||pending||readOnly?' disabled':'';
         const button=(label,action,quantity)=>`<button type="button" class="compact-button" data-gift-id="${escape(c.id)}" data-gift-action="${action}" data-gift-quantity="${quantity||''}"${disabled}>${label}</button>`;
         return `<section class="admin-item"><strong>${escape(c.studentName)}</strong><p>${escape(c.email)} · ${escape(c.prizeName)}</p><p>${escape(c.directPickup?'教室現貨':c.venue)} · 已領 ${c.claimedQuantity}／共 ${c.quantity} ${unit} · 剩餘 ${remaining} ${unit}</p>${collectible?button('登記領取 1 '+unit+'（測試）','collect',1)+(remaining>=2?button('登記領取 2 '+unit+'（測試）','collect',2):''):''}${c.status==='waiting'&&!c.directPickup?button('標記已到館（測試）','prepare'):''}</section>`;
-      }).join('')||'<p>查無符合條件的測試獎品，請調整學生搜尋或獎品篩選。</p>';
+      };
+      const outstanding=filtered.filter(c=>c.claimedQuantity<c.quantity),completed=filtered.filter(c=>c.claimedQuantity>=c.quantity);
+      const historyOpen=!!node('[data-gift-history]')?.open;
+      node('[data-gift-claims]').innerHTML='<h4>待領取 · '+outstanding.length+' 筆</h4><div class="raffle-gift-grid">'+(outstanding.map(card).join('')||'<p>目前沒有符合條件的待領獎品。</p>')+'</div>'+(completed.length?'<details data-gift-history'+(historyOpen?' open':'')+'><summary>已領完紀錄 · '+completed.length+' 筆</summary><div class="raffle-gift-grid">'+completed.map(card).join('')+'</div></details>':'');
     }
     async function load(){
       const data=await options.api('getActivityGiftWorkspace',{});if(disposed)return;
@@ -313,6 +318,10 @@
 
   function mount(root, options) {
     let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, fulfillmentView = null, pending = null;
+    if(!document.getElementById('raffle-workspace-style')){
+      const style=document.createElement('style');style.id='raffle-workspace-style';
+      style.textContent='.raffle-gift-workspace{padding:24px;margin-top:24px;border:1px solid #ddd3c8;border-radius:14px;background:#fffdf9}.raffle-gift-workspace>label{display:block;margin:16px 0 0}.raffle-gift-workspace h3{margin-top:0}.raffle-gift-workspace [data-gift-message]{padding:12px;background:#f5f1e9;border-radius:8px}.raffle-gift-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}.raffle-gift-grid .admin-item{border:1px solid #ddd3c8;border-radius:12px;padding:18px;overflow-wrap:anywhere}.raffle-gift-grid .compact-button{margin:4px 6px 4px 0}.raffle-tools,[data-gift-history]{border-top:1px solid #ddd3c8;margin-top:20px;padding-top:16px}.raffle-tools summary,[data-gift-history] summary{cursor:pointer;font-weight:600;padding:8px 0}.raffle-tools[open] summary,[data-gift-history][open] summary{margin-bottom:12px}';document.head.appendChild(style);
+    }
     const admin = options.mode === 'admin';
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
@@ -360,9 +369,15 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
       }
       campaigns = data.campaigns;
       workspace = data;
+      if(campaigns.length!==1){
+        root.innerHTML='<div class="state" role="status">本次活動尚未設定完成，請由管理者確認唯一活動後再操作。</div>';
+        settingsButton();
+        return;
+      }
+      const currentCampaign=campaigns[0];
       root.innerHTML = `<div class="state">${data.readOnly !== false ? '目前為核對預覽版：可查詢、核對來源，尚不能登記領取或寄信。' : '逐筆核對學生、獎品與館別後再交付。備貨、領取都有紀錄；匯入不會自動寄信。'}</div>
         <form class="admin-control raffle-search">
-          <label>活動<select class="admin-select" data-raffle-campaign>${admin ? '' : '<option value="">全部活動</option>'}${campaigns.map(c => `<option value="${escape(c.id)}">${escape(c.name)}</option>`).join('')}</select></label>
+          <p class="item-meta">本次活動 · <strong>${escape(currentCampaign.name)}</strong></p>
           <label>學生姓名或完整 Email<input class="text-input" data-raffle-query maxlength="100" placeholder="姓名至少 2 個字，或輸入完整 Email" autocomplete="off"></label>
           <div class="admin-item-actions"><button type="submit" class="compact-button">查詢學生</button>${data.canPrepare ? '<button type="button" class="compact-button" data-raffle-fulfillment>獎品／館別備貨清單</button>' : ''}${admin ? '<button type="button" class="compact-button" data-raffle-preview>同步領獎資料</button><button type="button" class="compact-button" data-raffle-mail-preview>預覽邀請信（不寄出）</button><button type="button" class="compact-button" data-raffle-mail-send>寄送前確認</button><button type="button" class="compact-button" data-raffle-mail-records>寄信紀錄</button>' : ''}</div>
         </form><div data-raffle-notice aria-live="polite"></div><div data-raffle-result aria-live="polite"><div class="state">請先搜尋學生，不會列出全部名單。</div></div>
@@ -371,7 +386,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
       if(admin){
         form.querySelector('.admin-item-actions').insertAdjacentHTML('afterbegin','<button type="button" class="compact-button" data-raffle-ob-sync>同步 OB 購課名單</button>');
         node('[data-raffle-ob-sync]').addEventListener('click',()=>{
-          const campaignId=node('[data-raffle-campaign]').value;
+          const campaignId=currentCampaign.id;
           const dialog=document.createElement('dialog');dialog.style.cssText='width:min(680px,calc(100vw - 32px));max-height:85vh;overflow:auto;box-sizing:border-box';dialog.innerHTML='<button type="button" data-ob-close>關閉同步</button><div data-ob-content></div>';root.appendChild(dialog);
           const disposePanel=mountObSync(dialog.querySelector('[data-ob-content]'),options,campaignId);
           let closed=false;const close=()=>{if(closed)return;closed=true;disposePanel();dialog.remove();if(obCleanup===close)obCleanup=null;};
@@ -380,6 +395,13 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
       }
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('beforeend','<button type="button" class="compact-button" data-raffle-ready-preview>預覽領獎通知（不寄出）</button><button type="button" class="compact-button" data-raffle-ready-send>領獎通知寄送前確認</button>');
       if(admin) form.querySelector('.admin-item-actions').insertAdjacentHTML('afterbegin','<button type="button" class="compact-button" data-raffle-overview>活動總覽（唯讀）</button>');
+      if(admin){
+        const tools=document.createElement('details');tools.className='raffle-tools';
+        tools.innerHTML='<summary>管理工具：同步資料與通知</summary><p class="item-meta">需要同步或寄送時再展開；通知仍須完成寄送前確認。</p><div class="admin-item-actions"></div>';
+        const actions=tools.querySelector('div');
+        ['ob-sync','preview','mail-preview','mail-send','mail-records','ready-preview','ready-send'].forEach(name=>{const button=node('[data-raffle-'+name+']');if(button)actions.appendChild(button);});
+        form.appendChild(tools);
+      }
       settingsButton();
       giftPanel(data);
       async function read(isPreview, offset = 0, groupId = '') {
@@ -389,7 +411,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         const mailRecords = isPreview === 'mailRecords';
         const mailSend = isPreview === 'mailSend' || isPreview === 'readySend';
         const fulfillment = isPreview === 'fulfillment';
-        const campaignId = node('[data-raffle-campaign]').value;
+        const campaignId = currentCampaign.id;
         const query = node('[data-raffle-query]').value.trim();
         if (!isPreview && query.length < 2) { result.innerHTML = '<div class="state">請輸入至少 2 個字的姓名或完整 Email。</div>'; return; }
         if (fulfillment && !campaignId) { result.innerHTML = '<div class="state">請先選擇一個活動，再查看備貨清單。</div>'; return; }
@@ -431,16 +453,6 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
       if (admin) node('[data-raffle-ready-preview]').addEventListener('click', () => read('ready'));
       if (admin) node('[data-raffle-ready-send]').addEventListener('click', () => read('readySend'));
       node('[data-raffle-fulfillment]')?.addEventListener('click', () => read('fulfillment'));
-      node('[data-raffle-campaign]').addEventListener('change', () => {
-        serial++;
-        preview = null;
-        mailPlan = null;
-        sendPlan = null;
-        mailRecordsData = null;
-        fulfillmentView = null;
-        form.querySelectorAll('button').forEach(b => { b.disabled = false; });
-        result.innerHTML = '<div class="state">活動已切換，請重新查詢或核對。</div>';
-      });
       const dialog = node('[data-raffle-dialog]'), opForm = node('[data-raffle-operation-form]');
       let selected = null, busy = false;
       const readyStates=new WeakMap();

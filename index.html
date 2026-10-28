@@ -4594,7 +4594,7 @@
       });
       const desktopDestination = viewId === "view-myleaves" ? "view-leave"
         : viewId === "view-mysubs" ? "view-claim"
-          : ["view-payroll", "view-inbox", "view-raffle"].includes(viewId) ? "view-account" : viewId;
+          : ["view-payroll", "view-inbox"].includes(viewId) ? "view-account" : viewId;
       document.querySelectorAll(".nav-item[data-view]").forEach((button) => {
         const active = button.dataset.view === desktopDestination;
         button.classList.toggle("active", active);
@@ -8374,7 +8374,7 @@
     }
 
     function renderAdminTab(fromDashboard = false) {
-      if (activeAdminTab !== "raffle") clearRaffleWorkspace();
+      if (activeAdminTab !== "raffle" && raffleMountedRoot === byId("admin-tab-content")) clearRaffleWorkspace();
       // Older deep links and internal refresh paths set only activeAdminTab.
       // Keep those paths working while the new management home controls its
       // own section explicitly through renderAdminDashboard().

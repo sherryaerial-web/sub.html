@@ -44,3 +44,11 @@ test('expired, evicted or failed results never imply a safe retry',()=>{
 test('status lookup of an absent operation does not create a receipt or execute a write',()=>{
   const s=backend();assert.equal(s.c.getAdminOperationStatus_(s.params).state,'not_received');assert.equal(s.properties.size,0);assert.equal(s.writes(),0);
 });
+
+test('old completed receipt remains readable after the mutation deadline; absent old receipt is expired, never not_received',()=>{
+ const s=backend(),old=Date.now()-25*3600000,id=old.toString(36)+'_old-receipt-test';
+ s.properties.set('ADMIN_OP_'+id,JSON.stringify({owner:s.c.raffleHash_('Tako'),state:'completed',startedAt:old}));
+ assert.equal(s.c.getAdminOperationStatus_({...s.params,clientOperationId:id}).state,'completed');
+ assert.throws(()=>s.run({...s.params,clientOperationId:id}),/過期/);
+ s.properties.delete('ADMIN_OP_'+id);assert.equal(s.c.getAdminOperationStatus_({...s.params,clientOperationId:id}).state,'expired');
+});

@@ -9849,20 +9849,20 @@ function doPost(e) {
 
 // Authenticated POST receipts: bounded metadata only, no tokens or form content.
 // The result cache may expire; absence of a cached result NEVER permits replay.
-function adminOperationIdentity_(parameters) {
+function adminOperationIdentity_(parameters, statusOnly) {
   var id = cleanText_(parameters.clientOperationId);
   if (!/^[a-z0-9]{8,12}_[A-Za-z0-9_-]{8,80}$/.test(id)) throw Error('操作查詢編號不正確。');
   var createdAt = parseInt(id.split('_')[0], 36), now = Date.now();
-  if (createdAt > now + 300000 || createdAt < now - 86400000) throw Error('操作查詢編號已過期，請核對原操作結果，不可直接重送。');
+  if (createdAt > now + 300000 || (!statusOnly && createdAt < now - 86400000)) throw Error('操作查詢編號已過期，請核對原操作結果，不可直接重送。');
   var session = requireSession_(parameters.sessionToken);
   if (!session.teacherName) throw Error('無法確認操作帳號。');
   return { key: 'ADMIN_OP_' + id, createdAt: createdAt, owner: raffleHash_(session.teacherName) };
 }
 
 function getAdminOperationStatus_(parameters) {
-  var identity = adminOperationIdentity_(parameters);
+  var identity = adminOperationIdentity_(parameters, true);
   var raw = PropertiesService.getScriptProperties().getProperty(identity.key);
-  if (!raw) return { state: 'not_received' };
+  if (!raw) return { state: identity.createdAt < Date.now() - 86400000 ? 'expired' : 'not_received' };
   var record = JSON.parse(raw);
   if (record.owner !== identity.owner) throw Error('操作查詢權限不符。');
   var state = record.state;

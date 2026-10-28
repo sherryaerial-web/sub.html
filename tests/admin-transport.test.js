@@ -68,3 +68,11 @@ test('evicted result requires explicit reconciliation and never resends in the a
  assert.equal(JSON.parse([...s.data.values()][0]).length,0);
  assert.equal(s.calls.filter(p=>p.action==='syncInvoicePurchases').length,1);
 });
+
+test('resume identifies the original action and its time instead of blaming the current page',async()=>{
+ const s=fixture(p=>{if(p.action==='createPracticeBooking')throw Error('lost');return {status:'success',data:{state:'expired'}};});const t=s.make();
+ await assert.rejects(t.call('createPracticeBooking',{sessionToken:'session-a'}));
+ await t.resume();
+ const notice=s.notices.at(-1);assert.match(notice[0],/自主練習/);assert.match(notice[0],/確認期限/);assert.match(notice[0],/\d{4}/);
+ assert.equal(s.calls.filter(p=>p.action==='createPracticeBooking').length,1);assert.equal(JSON.parse([...s.data.values()][0]).length,1);
+});

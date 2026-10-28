@@ -52,7 +52,15 @@
     async function status(record, token) {
       return unwrap(await post('getAdminOperationStatus', {sessionToken:token,clientOperationId:record.id}, 15000));
     }
+    const actionNames = {createPracticeBooking:'自主練習登記',confirmStudentPracticeQualification:'自主練習資格確認',issueInvoiceBatch:'發票開立',syncInvoicePurchases:'發票購課同步',confirmRaffleImport:'同步領獎資料',mutateRaffleClaim:'獎品到館／領取',sendRaffleMailBatch:'抽獎邀請通知',sendRaffleReadyMailBatch:'領獎通知',executeNextDayClosures:'關課作業'};
+    function recordLabel(record){
+      const action=actionNames[record.action]||'先前系統操作';
+      const at=parseInt(String(record.id).split('_')[0],36);
+      const stamp=Number.isFinite(at)?new Date(at).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'時間待核對';
+      return '先前「'+action+'」（'+stamp+'）：';
+    }
     function statusMessage(state) {
+      if (state === 'expired') return '已超過確認期限，原操作結果需查閱清單核對；這次沒有重新送出。';
       if (state === 'completed') return '上次送出已取得處理結果，請更新清單查看成功或待確認項目；不要重複送出。';
       if (state === 'running') return '操作仍在處理中，請稍後再確認；不要重複送出。';
       if (state === 'not_received') return '尚未確認系統收到這次操作，內容已保留；再次按送出會沿用原編號確認，避免重複操作。';
@@ -156,7 +164,7 @@
             try { result = await status(record, token); } catch (_) { result = {state:'uncertain'}; }
             const slot = active.get(record.signature);
             if (slot && result.state === 'completed' && result.payload) slot.resolveRecovered(result.payload);
-            else notice(statusMessage(result.state), result.state);
+            else notice(recordLabel(record) + (result.state === 'completed' && !result.payload ? '系統已執行完成，完整回覆已過期；請核對原清單，勿重複送出。' : statusMessage(result.state)), result.state);
           }
         } catch (error) { notice(error.message, 'uncertain'); }
       })().finally(() => { resumePromise = null; });

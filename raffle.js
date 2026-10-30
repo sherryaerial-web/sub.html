@@ -21,7 +21,7 @@
       groups.get(key).push(claim);
     });
     return [...groups.entries()].map(([key, items]) => `<article class="raffle-student admin-control" data-raffle-student="${escape(key)}">
-      <h3>${escape(items[0].studentName)}</h3><p class="item-meta">${escape(items[0].maskedEmail)} · 請核對學生身分，同名不代表同一人</p>
+      <h3>${escape(items[0].studentName)}</h3><p class="item-meta">${escape(permissions.canCorrect && items[0].email ? items[0].email : items[0].maskedEmail)} · 請核對學生身分，同名不代表同一人</p>
       ${items.map(item => `<div class="raffle-prize">
         <div><strong>${escape(item.prizeName)}</strong><span class="status-pill">${escape(status(item.status))}</span></div>
         <p class="item-meta">${escape((campaigns.find(c => c.id === item.campaignId) || {}).name || '')}｜${escape(item.venue || '非實體領取／待確認館別')}｜${escape(item.claimedQuantity || 0)}／${escape(item.quantity || 1)} 件已領</p>
@@ -32,7 +32,7 @@
           ${permissions.readyDeliveryCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-ready-delivery="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">通知學生（限定測試）</button>` : ''}
           ${permissions.readyPreviewCampaign && permissions.readyPreviewCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-ready-preview="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">預覽到館通知（不寄送）</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
-          ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">這一筆已備妥到館</button>` : ''}
+          ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">確認到館並通知學生</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && ['waiting','ready','partial'].includes(item.status) && Number(item.claimedQuantity) < Number(item.quantity) ? `<button type="button" class="compact-button" data-raffle-action="revoke" data-claim-id="${escape(item.id)}">撤銷未領部分</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && !item.pickupBlocked && item.status==='cancelled' && item.venue && Number(item.quantity)===1 && Number(item.claimedQuantity)===0 ? `<button type="button" class="compact-button" data-raffle-action="restore" data-claim-id="${escape(item.id)}">核對並恢復未領部分</button>` : ''}
           ${permissions.canCorrect && item.status==='cancelled' && Number(item.quantity)>1 ? '<p class="item-meta">舊式多件紀錄須人工核對；現有來源每資格一件，不提供自動恢復。</p>' : ''}
@@ -414,7 +414,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
       }
       if(data.canPrepare){
         const guide=document.createElement('section');guide.className='admin-control';
-        guide.innerHTML='<h3>店長：獎品到館與通知</h3><p>① 開啟「獎品／館別備貨清單」 → ② 查看學生／逐筆到館 → ③ 核對實物並標記「這一筆已備妥到館」。</p><p>到館登記與寄送通知是分開的操作。請依寄送前確認顯示的通知方式核對；LINE 結果不明時請先查回紀錄。</p><p class="item-meta">'+(data.readOnly!==false?'目前為預覽／限定測試：正式到館登記與通知尚未開放。看到「通知學生（限定測試）」只可用於指定測試紀錄。':'完成到館後，至「管理工具：同步資料與通知」預覽領獎通知，再按「領獎通知寄送前確認」，核對名單後寄送。')+'</p>';
+        guide.innerHTML='<h3>店長：備貨、到館與通知</h3><p>學生選好需要送館的獎品後，Tako 會在 App 收到備貨提醒，附學生姓名、完整 Email、獎品與館別。</p><p>備貨送到後，開啟「獎品／館別備貨清單」→「查看學生／逐筆到館」→「確認到館並通知學生」。只處理這筆獎品；結果不明時先查寄信紀錄，不要重送。</p>';
         form.after(guide);
       }
       settingsButton();lineTestPanel(data);
@@ -596,12 +596,13 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
           const claim = (workspace.claims || []).find(c => c.id === button.dataset.claimId);
           if (!claim) return;
           selected = { action: button.dataset.raffleAction, claim };
-          const title = { collect:'確認交付獎品', prepare:'確認這一筆已到館', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
+          const title = { collect:'確認交付獎品', prepare:'確認到館並通知學生', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
           const maximum = selected.action === 'correct' ? Number(claim.claimedQuantity) - 1 : Number(claim.quantity) - Number(claim.claimedQuantity);
           node('[data-raffle-dialog-body]').innerHTML = `<h3>${escape(title)}</h3><p><strong>${escape(claim.studentName)}</strong>｜${escape(claim.maskedEmail)}</p><p>${escape(claim.prizeName)}｜登記館別：${escape(claim.venue || '—')}</p>
             ${['collect','prepare','restore'].includes(selected.action) ? renderPickupVenue(claim) : ''}
             ${['collect','correct'].includes(selected.action) ? `<label>${selected.action === 'correct' ? '更正後已領數量' : '本次領取數量'}<input data-raffle-quantity class="text-input" type="number" min="${selected.action === 'correct' ? 0 : 1}" max="${escape(maximum)}" step="1" value="${selected.action === 'correct' ? 0 : 1}" required></label>` : ''}
             ${selected.action === 'revoke' ? `<p>停止剩餘 ${escape(maximum)} 件的交付，已領取 ${escape(claim.claimedQuantity)} 件及原紀錄會保留。恢復須由管理員重新核對；不會回補來源庫存、不寄信，也不撤銷學生其他獎品。</p>` : ''}
+            ${selected.action === 'prepare' ? '<p>確認實物已放在指定館別後，會逐筆通知這位學生；沿用目前通知方式，結果不明不重送。</p>' : ''}
             ${selected.action === 'restore' ? '<p>重新核對來源與期限；保留原紀錄，不寄信、不增減來源庫存。恢復為待備貨，須重新標記到館後才能交付。</p>' : ''}
             ${['correct','revoke','restore'].includes(selected.action) ? '<label>操作理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>' : ''}`;
         }
@@ -651,7 +652,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
           const imported = selected.action === 'import';
           const queued = selected.action === 'queue';
           const mailOperation = ['send','reconcile'].includes(selected.action);
-          node('[data-raffle-notice]').innerHTML = `<div class="state">${selected.action === 'send' ? `本批 ${escape(response.total)} 封：已送出／核對 ${escape(response.sent)} 封，待確認 ${escape(response.pendingReview)} 封。待確認不會自動重寄；已完成表示兩個管道都已接受／人工核對，仍不保證收件匣送達或手机跳提醒；各管道結果請看下方紀錄。` : selected.action === 'reconcile' ? '已保存核對結論與理由，沒有重寄。' : queued ? `已排入待寄 ${escape(response.queued)} 封，尚未寄出；可到寄信紀錄查看。` : imported ? `已同步 ${escape(response.imported)} 筆，剩餘 ${escape(response.remaining || 0)} 筆；沒有寄信。` : '這一筆已更新，已保留操作紀錄。'}</div>`;
+          node('[data-raffle-notice]').innerHTML = `<div class="state">${selected.action === 'send' ? `本批 ${escape(response.total)} 封：已送出／核對 ${escape(response.sent)} 封，待確認 ${escape(response.pendingReview)} 封。待確認不會自動重寄；已完成表示兩個管道都已接受／人工核對，仍不保證收件匣送達或手机跳提醒；各管道結果請看下方紀錄。` : selected.action === 'reconcile' ? '已保存核對結論與理由，沒有重寄。' : queued ? `已排入待寄 ${escape(response.queued)} 封，尚未寄出；可到寄信紀錄查看。` : imported ? `已同步 ${escape(response.imported)} 筆，剩餘 ${escape(response.remaining || 0)} 筆；沒有寄信。` : selected.action === 'prepare' ? (response.notification?.status === 'sent' ? '已登記到館，學生通知已送出。' : '已登記到館；通知尚未確認送出，請至寄信紀錄核對，勿重複操作。') : '這一筆已更新，已保留操作紀錄。'}</div>`;
           pending = null; dialog.close();
           if (fulfillmentView) await read('fulfillment', fulfillmentView.offset, fulfillmentView.groupId);
           else await read(mailOperation ? 'mailRecords' : queued ? (selected.preview?.kind === 'ready' ? 'ready' : 'mail') : imported || selected.action === 'resolve');

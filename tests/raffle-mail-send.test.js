@@ -20,7 +20,7 @@ test('uncertain queued closure flush preserves same request and invalid transiti
 });
 test('sending reserves before delivery, sends only reviewed batch and never repeats request',()=>{
  const s=setup(7),source=JSON.stringify(s.rows);s.queue();s.queue();const p=s.c.previewRaffleMailSend_(admin,'future');assert.equal(p.batchCount,5);assert.equal(p.quota,100);assert.equal(s.mails.length,0);
- const op=s.operation(),r=s.c.sendRaffleMailBatch_(admin,op);assert.equal(r.sent,5);assert.equal(r.pendingReview,0);assert.equal(r.total,5);assert.equal(s.mails.length,5);assert.deepEqual(Object.keys(s.mails[0]).sort(),['body','name','subject','to']);assert.match(s.mails[0].body,/CODE-0/);
+ const op=s.operation(),r=s.c.sendRaffleMailBatch_(admin,op);assert.equal(r.sent,5);assert.equal(r.pendingReview,0);assert.equal(r.total,5);assert.equal(s.mails.length,5);assert.deepEqual(Object.keys(s.mails[0]).sort(),['body','htmlBody','name','subject','to']);assert.match(s.mails[0].body,/CODE-0/);
  assert.equal(s.c.sendRaffleMailBatch_(admin,op).sent,5);assert.equal(s.mails.length,5);assert.equal(s.c.previewRaffleMailSend_(admin,'future').batchCount,2);assert.equal(JSON.stringify(s.rows),source);
  assert.throws(()=>s.c.sendRaffleMailBatch_(admin,{...op,requestId:'request-send-00002'}),/變更/);assert.equal(s.mails.length,5);
 });

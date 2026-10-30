@@ -32,7 +32,7 @@
           ${permissions.readyDeliveryCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-ready-delivery="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">通知學生（限定測試）</button>` : ''}
           ${permissions.readyPreviewCampaign && permissions.readyPreviewCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-ready-preview="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">預覽到館通知（不寄送）</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
-          ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">確認到館並通知學生</button>` : ''}
+          ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">${permissions.canCorrect ? '確認到館並通知學生' : '確認到館'}</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && ['waiting','ready','partial'].includes(item.status) && Number(item.claimedQuantity) < Number(item.quantity) ? `<button type="button" class="compact-button" data-raffle-action="revoke" data-claim-id="${escape(item.id)}">撤銷未領部分</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && !item.pickupBlocked && item.status==='cancelled' && item.venue && Number(item.quantity)===1 && Number(item.claimedQuantity)===0 ? `<button type="button" class="compact-button" data-raffle-action="restore" data-claim-id="${escape(item.id)}">核對並恢復未領部分</button>` : ''}
           ${permissions.canCorrect && item.status==='cancelled' && Number(item.quantity)>1 ? '<p class="item-meta">舊式多件紀錄須人工核對；現有來源每資格一件，不提供自動恢復。</p>' : ''}
@@ -596,13 +596,13 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
           const claim = (workspace.claims || []).find(c => c.id === button.dataset.claimId);
           if (!claim) return;
           selected = { action: button.dataset.raffleAction, claim };
-          const title = { collect:'確認交付獎品', prepare:'確認到館並通知學生', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
+          const title = { collect:'確認交付獎品', prepare:workspace.canCorrect ? '確認到館並通知學生' : '確認到館', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
           const maximum = selected.action === 'correct' ? Number(claim.claimedQuantity) - 1 : Number(claim.quantity) - Number(claim.claimedQuantity);
           node('[data-raffle-dialog-body]').innerHTML = `<h3>${escape(title)}</h3><p><strong>${escape(claim.studentName)}</strong>｜${escape(claim.maskedEmail)}</p><p>${escape(claim.prizeName)}｜登記館別：${escape(claim.venue || '—')}</p>
             ${['collect','prepare','restore'].includes(selected.action) ? renderPickupVenue(claim) : ''}
             ${['collect','correct'].includes(selected.action) ? `<label>${selected.action === 'correct' ? '更正後已領數量' : '本次領取數量'}<input data-raffle-quantity class="text-input" type="number" min="${selected.action === 'correct' ? 0 : 1}" max="${escape(maximum)}" step="1" value="${selected.action === 'correct' ? 0 : 1}" required></label>` : ''}
             ${selected.action === 'revoke' ? `<p>停止剩餘 ${escape(maximum)} 件的交付，已領取 ${escape(claim.claimedQuantity)} 件及原紀錄會保留。恢復須由管理員重新核對；不會回補來源庫存、不寄信，也不撤銷學生其他獎品。</p>` : ''}
-            ${selected.action === 'prepare' ? '<p>確認實物已放在指定館別後，會逐筆通知這位學生；沿用目前通知方式，結果不明不重送。</p>' : ''}
+            ${selected.action === 'prepare' ? (workspace.canCorrect ? '<p>確認實物已放在指定館別後，會逐筆通知這位學生；沿用目前通知方式，結果不明不重送。</p>' : '<p>只登記實物已到館；學生通知請由管理者核對發送。</p>') : ''}
             ${selected.action === 'restore' ? '<p>重新核對來源與期限；保留原紀錄，不寄信、不增減來源庫存。恢復為待備貨，須重新標記到館後才能交付。</p>' : ''}
             ${['correct','revoke','restore'].includes(selected.action) ? '<label>操作理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>' : ''}`;
         }

@@ -52,7 +52,7 @@
     async function status(record, token) {
       return unwrap(await post('getAdminOperationStatus', {sessionToken:token,clientOperationId:record.id}, 15000));
     }
-    const actionNames = {createPracticeBooking:'自主練習登記',confirmStudentPracticeQualification:'自主練習資格確認',issueInvoiceBatch:'發票開立',syncInvoicePurchases:'發票購課同步',confirmRaffleImport:'同步領獎資料',mutateRaffleClaim:'獎品到館／領取',sendRaffleMailBatch:'抽獎邀請通知',sendRaffleReadyMailBatch:'領獎通知',executeNextDayClosures:'關課作業'};
+    const actionNames = {prepareActivityArrival:'勾選獎品到館',saveActivityInventory:'庫存提醒設定',saveActivityTemplate:'保存活動草稿',createPracticeBooking:'自主練習登記',confirmStudentPracticeQualification:'自主練習資格確認',issueInvoiceBatch:'發票開立',syncInvoicePurchases:'發票購課同步',confirmRaffleImport:'同步領獎資料',mutateRaffleClaim:'獎品到館／領取',sendRaffleMailBatch:'抽獎邀請通知',sendRaffleReadyMailBatch:'領獎通知',executeNextDayClosures:'關課作業'};
     function recordLabel(record){
       const action=actionNames[record.action]||'先前系統操作';
       const at=parseInt(String(record.id).split('_')[0],36);

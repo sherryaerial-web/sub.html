@@ -37,7 +37,8 @@ function runRaffleStockAppSync() {
   });
   var saved=0;pending.forEach(function(c){if(!raffleStockAppNotice_(c).duplicate)saved++;p.setProperty('RAFFLE_STOCK_RECEIPT_'+raffleHash_(JSON.stringify([c.campaignId,c.id,c.sourceFingerprint])),new Date().toISOString());});
   p.setProperty('RAFFLE_STOCK_APP_LAST_SUCCESS',new Date().toISOString());
-  return {scanned:pending.length,newNotices:saved};
+  var lowStock=runActivityLowStock_(campaign);
+  return {scanned:pending.length,newNotices:saved,lowStock:lowStock};
 }
 
 function installRaffleStockAppSync() {

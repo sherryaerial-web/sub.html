@@ -1,6 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const {setup,admin,campaign}=require('./helpers/raffle-ready-fixture');
-function env(n=2,sameEmail=false){const s=setup(n,sameEmail);vm.runInContext(fs.readFileSync('RaffleStockInbox.gs','utf8'),s.c);return s;}
+function env(n=2,sameEmail=false){const s=setup(n,sameEmail);vm.runInContext(fs.readFileSync('RaffleStockInbox.gs','utf8'),s.c);vm.runInContext(fs.readFileSync('ActivityTools.gs','utf8'),s.c);return s;}
 test('prepared notice queues and sends exactly one claim, never other queued awards',()=>{
  const s=env(3,true);s.c.confirmRaffleReadyNotifications_(admin,{campaignId:'future',previewToken:s.c.previewRaffleReadyNotifications_(admin,'future').previewToken,requestId:'other-queue-00001'});
  // An existing multi-item batch is never silently sent by preparing a single claim.

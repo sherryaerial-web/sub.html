@@ -355,7 +355,7 @@
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
-    let settingsCleanup=null,obCleanup=null,giftCleanup=null,taskCleanup=null;
+    let settingsCleanup=null,obCleanup=null,giftCleanup=null,taskCleanup=null,toolsCleanup=null;
     function giftPanel(data){
       if(admin&&data.productionTaskReviewEnabled===true&&['冠蓉','Tako'].includes(data.productionTaskActor)){
         const panel=document.createElement('section');root.appendChild(panel);
@@ -396,7 +396,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
       });
     }
-    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); if(taskCleanup)taskCleanup(); root.replaceChildren(); };
+    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); if(taskCleanup)taskCleanup(); if(toolsCleanup)toolsCleanup(); root.replaceChildren(); };
     initial.then(data => {
       if (disposed) return;
       if (!data.enabled || !data.campaigns.length) {
@@ -421,6 +421,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         </form><div data-raffle-notice aria-live="polite"></div><div data-raffle-result aria-live="polite"><div class="state">請先搜尋學生，不會列出全部名單。</div></div>
         <dialog data-raffle-dialog><form class="dialog-body raffle-search" data-raffle-operation-form><div data-raffle-dialog-body></div><div data-raffle-operation-error class="item-meta" role="alert"></div><div class="admin-item-actions"><button type="submit" class="compact-button" data-raffle-save>確認</button><button type="button" class="compact-button" data-raffle-cancel>取消</button></div></form></dialog>`;
       const form = node('form'), result = node('[data-raffle-result]');
+      if(admin && global.SherryActivityTools){const toolsRoot=document.createElement('section');form.after(toolsRoot);toolsCleanup=global.SherryActivityTools.mount(toolsRoot,{api:options.api,campaignId:currentCampaign.id,readOnly:data.readOnly!==false});}
       if(admin){
         const panel=document.createElement('section');panel.className='admin-control raffle-ops';
         panel.innerHTML='<div class="admin-item-actions"><h3 style="flex:1;margin:0">同步與通知狀態</h3><button type="button" class="compact-button">更新狀態</button></div><div data-ops-content aria-live="polite">讀取執行紀錄中…</div>';

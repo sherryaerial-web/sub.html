@@ -1349,6 +1349,8 @@ test('teacher inbox exposes an unread badge history filters and mark-all control
   assert.match(html, /data-view=["']view-inbox["']/);
   assert.match(html, /id=["']inbox-mark-all["']/);
   assert.match(html, /data-inbox-filter=["']unread["']/);
+  assert.match(html, /查看最近 30 天系統通知/);
+  assert.match(html, /僅顯示最近 30 天的系統通知/);
 
   const { context, requestActions, getElement } = createFrontendRuntime({
     getNotificationInbox: {

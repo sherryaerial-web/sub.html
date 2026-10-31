@@ -2329,7 +2329,7 @@
 
         <section id="view-inbox" class="view">
           <div class="view-header inbox-header">
-            <div><span class="eyebrow">Inbox</span><h2 class="section-heading">訊息</h2><p class="section-copy">推播沒有收到也沒關係，系統通知都會保留在這裡。</p></div>
+            <div><span class="eyebrow">Inbox</span><h2 class="section-heading">訊息</h2><p class="section-copy">僅顯示最近 30 天的系統通知；超過期限的未讀訊息也會自動隱藏。</p></div>
             <button id="inbox-mark-all" class="compact-button" type="button"><i data-lucide="check-check"></i>全部標為已讀</button>
           </div>
           <div class="inbox-filter-bar" role="tablist" aria-label="篩選訊息">
@@ -2343,7 +2343,7 @@
           <div class="view-header account-view-header"><div><span class="eyebrow">Account</span><h2 class="section-heading">我的</h2><p id="account-teacher-name" class="section-copy"></p></div></div>
           <div class="account-menu">
             <button type="button" data-view="view-payroll"><span class="account-menu-icon"><i data-lucide="receipt-text"></i></span><span><strong>我的薪資</strong><small>核對明細與確認薪資</small></span><i data-lucide="chevron-right"></i></button>
-            <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 45 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
+            <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 30 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
             <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>學生領獎</strong><small>查詢學生獎品、確認領取</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle" data-capability="raffle_fulfillment" hidden><span class="account-menu-icon"><i data-lucide="package-check"></i></span><span><strong>獎品備貨／到館</strong><small>依獎品館別查看、逐筆確認到館</small></span><i data-lucide="chevron-right"></i></button>

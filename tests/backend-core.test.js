@@ -15738,15 +15738,15 @@ test('notification inbox event keys prevent duplicate messages and recipient row
 test('notification inbox returns only the logged-in teacher and supports read controls', () => {
   const fixture = createNotificationInboxBackend({
     messages: [
-      ['msg-cutoff', 'event-cutoff', '自主練習', '期限內訊息', '仍需顯示。', '?view=practice', 'practice-1', '2026-07-20 12:00:00', '系統'],
+      ['msg-cutoff', 'event-cutoff', '自主練習', '期限內訊息', '仍需顯示。', '?view=practice', 'practice-1', '2026-08-04 12:00:00', '系統'],
       ['msg-newest', 'event-newest', '代課邀請', '新的代課邀請', '請查看課程。', '?view=claim', 'leave-1', '2026-09-03 10:00:00', '系統'],
-      ['msg-expired', 'event-expired', '管理提醒', '超過期限的未讀訊息', '不應顯示。', '?view=admin', '', '2026-07-20 11:59:59', '系統'],
+      ['msg-expired', 'event-expired', '管理提醒', '超過期限的未讀訊息', '不應顯示。', '?view=admin', '', '2026-08-04 11:59:59', '系統'],
     ],
     recipients: [
-      ['recipient-cutoff', 'msg-cutoff', 'Vivi', '未讀', '', '2026-07-20 12:00:00'],
+      ['recipient-cutoff', 'msg-cutoff', 'Vivi', '未讀', '', '2026-08-04 12:00:00'],
       ['recipient-newest', 'msg-newest', 'Vivi', '未讀', '', '2026-09-03 10:00:00'],
-      ['recipient-expired', 'msg-expired', 'Vivi', '未讀', '', '2026-07-20 11:59:59'],
-      ['recipient-other', 'msg-cutoff', 'Tako', '未讀', '', '2026-07-20 12:00:00'],
+      ['recipient-expired', 'msg-expired', 'Vivi', '未讀', '', '2026-08-04 11:59:59'],
+      ['recipient-other', 'msg-cutoff', 'Tako', '未讀', '', '2026-08-04 12:00:00'],
     ],
   });
   const vivi = { teacherName: 'Vivi', role: '老師', managementCapabilities: [] };
@@ -15766,6 +15766,42 @@ test('notification inbox returns only the logged-in teacher and supports read co
   assert.equal(fixture.recipientSheet.values[4][3], '未讀');
   assert.equal(fixture.backend.getNotificationInbox_(vivi).unreadCount, 0);
 });
+
+for (const session of [
+  { teacherName: 'Vivi', role: '老師', managementCapabilities: [] },
+  { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['course_admin'] },
+]) {
+  test(`notification inbox expires read and unread messages after 30 days for ${session.role} without changing stored history`, () => {
+    const dates = [
+      '2026-10-31 16:21:00',
+      '2026/10/1 16:22:00',
+      new Date('2026-10-01T16:22:00+08:00'),
+      '2026-10-01 16:21:59',
+      new Date('2026-10-01T16:21:59+08:00'),
+      '2026-09-16 22:35:00',
+    ];
+    const fixture = createNotificationInboxBackend({
+      messages: dates.map((date, i) => [`msg-${i}`, `event-${i}`, '管理提醒', `通知 ${i}`, '內容', '?view=admin', '', date, '系統']),
+      recipients: [
+        ...dates.map((date, i) => [`recipient-${i}`, `msg-${i}`, session.teacherName, i === 2 || i === 4 ? '已讀' : '未讀', '', date]),
+        ['other-recipient', 'msg-0', '其他老師', '未讀', '', dates[0]],
+      ],
+    });
+    fixture.backend.currentTimeMs_ = () => new Date('2026-10-31T16:22:00+08:00').getTime();
+    const storedBefore = JSON.stringify([fixture.messageSheet.values, fixture.recipientSheet.values]);
+
+    const inbox = fixture.backend.getNotificationInbox_(session);
+
+    assert.deepEqual(Array.from(inbox.items, item => item.messageId).sort(), ['msg-0', 'msg-1', 'msg-2']);
+    assert.equal(inbox.unreadCount, 2);
+    assert.equal(JSON.stringify([fixture.messageSheet.values, fixture.recipientSheet.values]), storedBefore);
+
+    fixture.backend.currentTimeMs_ = () => new Date('2026-10-31T16:23:00+08:00').getTime();
+    const later = fixture.backend.getNotificationInbox_(session);
+    assert.deepEqual(Array.from(later.items, item => item.messageId), ['msg-0']);
+    assert.equal(later.unreadCount, 1);
+  });
+}
 
 test('notification inbox normalizes Sheet date values and sorts every message newest first', () => {
   const fixture = createNotificationInboxBackend({

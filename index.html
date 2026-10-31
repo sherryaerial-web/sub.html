@@ -2642,6 +2642,7 @@
     let myLeavesRecordMonth = "";
     let mySubsRecordMonth = "";
     const myPayrollSnapshotHtml = new Map();
+    let myPayrollRequestSerial = 0;
     let raffleCleanup = null;
     let raffleMountedRoot = null;
     const ADMIN_TAB_SECTIONS = {
@@ -2755,7 +2756,7 @@
       "claimSpecialCourse", "cancelLeave", "requestLeaveCancellation", "requestClaimWithdrawal",
       "getPracticeDay", "getMyPracticeBookings", "createPracticeBooking", "createPracticeWaitlist",
       "joinPracticeBooking", "leavePracticeBooking", "getRentalCatalog", "previewTeacherRental",
-      "createTeacherRental", "getMyRentalRequests", "cancelTeacherRental"
+      "createTeacherRental", "getMyRentalRequests", "cancelTeacherRental", "getMyPayroll"
     ]);
 
     async function callApi(action, params = {}) {
@@ -2804,6 +2805,9 @@
     window.addEventListener("online", resumeAppConnection);
 
     async function callPostApi(action, params = {}) {
+      if (authState.actingTeacherName && ["confirmPayroll", "submitPayrollDispute"].includes(action)) {
+        throw new Error("代查看薪資為唯讀，請由老師本人確認或提出異議。");
+      }
       const requestParams = { ...params };
       if (authState.actingTeacherName && TEACHER_ACTING_ACTIONS.has(action)) {
         requestParams.actingTeacherName = authState.actingTeacherName;
@@ -3994,6 +3998,10 @@
 
     function resetTeacherViewSnapshots() {
       clearRaffleWorkspace();
+      myPayrollRequestSerial++;
+      myPayrollSnapshotHtml.clear();
+      byId("my-payroll-content").innerHTML = "";
+      if (requestDialogState && requestDialogState.action === "payroll-dispute") closeRequestDialog();
       globalCourseList = [];
       teacherHomeDashboard = null;
       teacherHomeSelectedDate = "";
@@ -4480,6 +4488,8 @@
       myLeavesRecordMonth = "";
       mySubsRecordMonth = "";
       myPayrollSnapshotHtml.clear();
+      myPayrollRequestSerial++;
+      byId("my-payroll-content").innerHTML = "";
       selectedLeaveDates = new Set();
       selectedLeaveCourses = new Set();
       rentalState = { catalog: null, catalogFetchedAt: 0, preview: null, previewSignature: "", loading: false };
@@ -7201,29 +7211,41 @@
     async function fetchMyPayroll() {
       const content = byId("my-payroll-content");
       const month = byId("payroll-month").value;
-      const cachedHtml = myPayrollSnapshotHtml.get(month);
+      const identity = JSON.stringify([authState.sessionToken, authState.teacherName, authState.actingTeacherName]);
+      const snapshotKey = JSON.stringify([identity, month]);
+      const requestSerial = ++myPayrollRequestSerial;
+      const isCurrent = () => requestSerial === myPayrollRequestSerial &&
+        identity === JSON.stringify([authState.sessionToken, authState.teacherName, authState.actingTeacherName]) &&
+        month === byId("payroll-month").value;
+      const cachedHtml = myPayrollSnapshotHtml.get(snapshotKey);
       const hadSnapshot = cachedHtml !== undefined;
       if (hadSnapshot) content.innerHTML = cachedHtml;
       beginReadRefresh(content, hadSnapshot, '<div class="state">載入薪資中...</div>');
       try {
         const data = await callApi("getMyPayroll", { month });
+        if (!isCurrent()) return;
+        if (data.summary && data.summary.teacherName !== (authState.actingTeacherName || authState.teacherName)) {
+          throw new Error("薪資查詢身分不符，請重新載入後再查詢。");
+        }
         if (!data.summary) {
           content.innerHTML = '<div class="state">這個月份尚未發布薪資</div>';
-          myPayrollSnapshotHtml.set(month, content.innerHTML);
+          myPayrollSnapshotHtml.set(snapshotKey, content.innerHTML);
           return;
         }
         const summary = data.summary;
-        const canDispute = summary.status !== "管理員已確認";
+        const readOnly = !!authState.actingTeacherName || data.readOnly === true;
+        const canDispute = !readOnly && summary.status !== "管理員已確認";
         const lines = (data.lines || []).map((line) => `<article class="list-item payroll-line"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(line.date)} ${escapeHtml(line.time)}</div><div class="item-course">${escapeHtml(line.courseName)}</div><div class="item-meta">${escapeHtml(line.ruleDetail)}${line.attendanceCount !== "" ? `｜出席 ${escapeHtml(line.attendanceCount)} 人` : ""}</div></div><strong class="money">${formatMoney(line.amount + line.manualAdjustment)}</strong>${canDispute ? `<button class="icon-button" type="button" data-payroll-dispute="${escapeHtml(line.lineId)}" title="回報這筆明細" aria-label="回報這筆明細"><i data-lucide="message-circle-warning"></i></button>` : ""}</article>`).join("");
         const disputes = payrollDeductionSummaryHtml(summary) + (data.disputes || []).map((item) => `<div class="payroll-note"><strong>${escapeHtml(item.status)}</strong> ${escapeHtml(item.message)}${item.reply ? `<br>回覆：${escapeHtml(item.reply)}` : ""}</div>`).join("");
-        content.innerHTML = `<div class="payroll-hero"><span>${escapeHtml(summary.month)} 應領薪資</span><strong>${formatMoney(summary.totalSalary)}</strong><div class="payroll-breakdown"><span>鐘點費 ${formatMoney(summary.subtotal)}</span><span>獎金 ${formatMoney(summary.bonusAmount)}</span><span>固定加扣 ${formatMoney(summary.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(summary.adminAdjustment)}</span></div>${summary.adjustmentReason ? `<div class="payroll-note">調整原因：${escapeHtml(summary.adjustmentReason)}</div>` : ""}<span class="status-pill ${payrollStatusClass(summary.status)}">${escapeHtml(summary.status)}</span>${summary.status === "管理員已確認" ? `<span class="payroll-final-meta">管理員已確認${summary.adminConfirmedAt ? `｜${escapeHtml(summary.adminConfirmedAt)}` : ""}</span>` : ""}</div><div class="list">${lines || '<div class="state">沒有薪資明細</div>'}</div>${disputes}<div class="payroll-actions">${summary.status === "待確認" ? `<button class="primary-button" type="button" data-payroll-confirm="${escapeHtml(summary.version)}"><i data-lucide="badge-check"></i>我已核對，確認薪資</button>` : ""}</div>`;
-        myPayrollSnapshotHtml.set(month, content.innerHTML);
+        content.innerHTML = `<div class="payroll-hero"><span>${escapeHtml(summary.teacherName)}｜${escapeHtml(summary.month)} 應領薪資</span>${readOnly ? '<div class="payroll-note">代查看（唯讀），薪資確認及異議請由老師本人操作。</div>' : ""}<strong>${formatMoney(summary.totalSalary)}</strong><div class="payroll-breakdown"><span>鐘點費 ${formatMoney(summary.subtotal)}</span><span>獎金 ${formatMoney(summary.bonusAmount)}</span><span>固定加扣 ${formatMoney(summary.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(summary.adminAdjustment)}</span></div>${summary.adjustmentReason ? `<div class="payroll-note">調整原因：${escapeHtml(summary.adjustmentReason)}</div>` : ""}<span class="status-pill ${payrollStatusClass(summary.status)}">${escapeHtml(summary.status)}</span>${summary.status === "管理員已確認" ? `<span class="payroll-final-meta">管理員已確認${summary.adminConfirmedAt ? `｜${escapeHtml(summary.adminConfirmedAt)}` : ""}</span>` : ""}</div><div class="list">${lines || '<div class="state">沒有薪資明細</div>'}</div>${disputes}<div class="payroll-actions">${!readOnly && summary.status === "待確認" ? `<button class="primary-button" type="button" data-payroll-confirm="${escapeHtml(summary.version)}"><i data-lucide="badge-check"></i>我已核對，確認薪資</button>` : ""}</div>`;
+        myPayrollSnapshotHtml.set(snapshotKey, content.innerHTML);
         refreshIcons();
       } catch (error) {
+        if (!isCurrent()) return;
         if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
         else setNotice(`薪資更新失敗：${error.message}`, "error");
       } finally {
-        endReadRefresh(content);
+        if (isCurrent()) endReadRefresh(content);
       }
     }
 
@@ -10097,6 +10119,9 @@ https://sherryaerial-web.github.io/sub.html/
         if (confirmButton) await confirmMyPayroll(confirmButton.dataset.payrollConfirm);
         if (disputeButton && payrollDashboard !== false) {
           const data = await callApi("getMyPayroll", { month: byId("payroll-month").value });
+          if (authState.actingTeacherName || data.readOnly || !data.summary || data.summary.teacherName !== authState.teacherName) {
+            throw new Error("請由老師本人提出薪資異議。");
+          }
           openRequestDialog({
             action: "payroll-dispute",
             month: data.summary.month,

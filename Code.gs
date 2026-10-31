@@ -9459,7 +9459,7 @@ function doPost(e) {
         return getMyLeaves_(actingSession(), parameters.recordMonth);
       },
       getMyPayroll: function() {
-        return getMyPayroll_(session, parameters.month);
+        return getMyPayroll_(resolveActingTeacherSession_(session, parameters.actingTeacherName, 'payroll_admin'), parameters.month);
       },
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
@@ -9817,10 +9817,10 @@ function doPost(e) {
         return publishPayroll_(session, parameters.month, parameters.version);
       },
       confirmPayroll: function() {
-        return confirmPayroll_(session, parameters.month, parameters.version);
+        return confirmPayroll_(resolveActingTeacherSession_(session, parameters.actingTeacherName, 'payroll_admin'), parameters.month, parameters.version);
       },
       submitPayrollDispute: function() {
-        return submitPayrollDispute_(session, {
+        return submitPayrollDispute_(resolveActingTeacherSession_(session, parameters.actingTeacherName, 'payroll_admin'), {
           month: parameters.month,
           version: parameters.version,
           lineId: parameters.lineId,
@@ -13578,7 +13578,7 @@ function getMyPayroll_(session, monthValue) {
     return cleanText_(row[1]) === teacher && cleanText_(row[9]) !== CONFIG.PAYROLL_DRAFT_STATUS &&
       (!month || normalizePayrollMonthValue_(row[0]) === month);
   });
-  if (!summaries.length) return { month: month, summary: null, lines: [], disputes: [] };
+  if (!summaries.length) return { month: month, summary: null, lines: [], disputes: [], readOnly: !!session.impersonatedBy };
   var summaryRow = summaries[summaries.length - 1];
   var summary = getPayrollSummaryObject_(summaryRow);
   var lines = lineSheet.getDataRange().getValues().slice(1).filter(function(row) {
@@ -13594,10 +13594,11 @@ function getMyPayroll_(session, monthValue) {
       createdAt: cleanText_(row[7]), resolvedAt: cleanText_(row[9])
     };
   });
-  return { month: summary.month, summary: summary, lines: lines, disputes: disputes };
+  return { month: summary.month, summary: summary, lines: lines, disputes: disputes, readOnly: !!session.impersonatedBy };
 }
 
 function confirmPayroll_(session, monthValue, versionValue) {
+  if (session && session.impersonatedBy) throw new Error('代查看薪資為唯讀，請由老師本人確認。');
   var teacher = getSessionTeacherName_(session);
   var month = getPayrollMonthRange_(monthValue).month;
   var version = cleanText_(versionValue);
@@ -13631,6 +13632,7 @@ function confirmPayroll_(session, monthValue, versionValue) {
 }
 
 function submitPayrollDispute_(session, payload) {
+  if (session && session.impersonatedBy) throw new Error('代查看薪資為唯讀，請由老師本人提出異議。');
   var teacher = getSessionTeacherName_(session);
   var item = payload || {};
   var month = getPayrollMonthRange_(item.month).month;
@@ -14364,11 +14366,11 @@ function assertCapabilitySession_(session, capability) {
   return teacher;
 }
 
-function resolveActingTeacherSession_(session, actingTeacherName) {
+function resolveActingTeacherSession_(session, actingTeacherName, capability) {
   var administrator = getSessionTeacherName_(session);
   var target = cleanText_(actingTeacherName);
   if (!target || target === administrator) return session;
-  assertCapabilitySession_(session, 'course_admin');
+  assertCapabilitySession_(session, capability || 'course_admin');
   assertTeacherExists_(target);
   return Object.assign({}, session, {
     teacherName: target,

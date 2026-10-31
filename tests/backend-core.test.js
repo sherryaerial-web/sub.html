@@ -11671,6 +11671,53 @@ test('legacy zero-dollar payroll reads as no-confirmation and adjustments restor
   assert.equal(summaries.values[1][9], '無需確認');
 });
 
+test('payroll impersonation reads the selected teacher with payroll permission and never writes confirmations', () => {
+  const f = createInvitationBackend();
+  f.backend.console = { ...console, error() {} };
+  const lines = createSheetFixture('薪資明細', [EXPECTED_PAYROLL_LINE_HEADERS,
+    ...Array.from({ length: 7 }, (_, i) => ['2026-10', `mia-${i}`, 'oct', `cal-${i}`, '老師甲',
+      '2026/10/01', '10:00', '香氛瑜伽', '人數階梯', 4, '', '人數階梯', '4 人', 900, 0, '', '待確認', 'now']),
+  ]);
+  const summaries = createSheetFixture('薪資結算', [EXPECTED_PAYROLL_SUMMARY_HEADERS,
+    ['2026-10', '老師甲', 6300, 0, 0, 0, 5600, 0, 'oct', '待確認', '', 'now', 0, '', '', '', 700, '缺席扣款', '["deduction-1"]'],
+    ['2026-10', '管理員甲', 0, 0, 0, 30000, 30000, 0, 'oct', '待確認', '', 'now'],
+  ]);
+  const disputes = createSheetFixture('薪資異議', [EXPECTED_PAYROLL_DISPUTE_HEADERS]);
+  f.spreadsheet.sheets.push(lines, summaries, disputes);
+  f.accountSheet.values.push(createAccount(f.backend, '課程管理者', '1357').concat('', 'course_admin'));
+  const courseToken = f.backend.authenticate_('課程管理者', '1357').sessionToken;
+  const read = (token, target) => JSON.parse(f.backend.doPost({ parameter: {
+    action: 'getMyPayroll', sessionToken: token, actingTeacherName: target, month: '2026-10',
+  } }).text);
+  const before = JSON.stringify(f.spreadsheet.sheets.map(sheet => sheet.values));
+  const acting = read(f.adminToken, '老師甲');
+  assert.equal(acting.status, 'success');
+  assert.equal(acting.data.summary.teacherName, '老師甲');
+  assert.equal(acting.data.summary.totalSalary, 5600);
+  assert.equal(acting.data.lines.length, 7);
+  assert.equal(acting.data.readOnly, true);
+  const own = read(f.adminToken, '');
+  assert.equal(own.data.summary.totalSalary, 30000);
+  assert.equal(own.data.lines.length, 0);
+  assert.equal(own.data.readOnly, false);
+  const teacher = read(f.teacherAToken, '');
+  assert.equal(teacher.data.summary.totalSalary, 5600);
+  assert.equal(teacher.data.lines.length, 7);
+  assert.equal(teacher.data.readOnly, false);
+  assert.match(read(courseToken, '老師甲').message, /薪資管理權限/);
+  assert.match(read(f.teacherAToken, '老師乙').message, /薪資管理權限/);
+  assert.equal(read(f.adminToken, '不存在的老師').status, 'error');
+  for (const action of ['confirmPayroll', 'submitPayrollDispute']) {
+    const result = JSON.parse(f.backend.doPost({ parameter: {
+      action, sessionToken: f.adminToken, actingTeacherName: '老師甲', month: '2026-10',
+      version: 'oct', lineId: 'mia-0', message: '不應代送',
+    } }).text);
+    assert.equal(result.status, 'error');
+    assert.match(result.message, /本人|代查看/);
+  }
+  assert.equal(JSON.stringify(f.spreadsheet.sheets.map(sheet => sheet.values)), before);
+});
+
 test('payroll publish is capability-scoped and teachers can only view confirm or dispute their own salary', () => {
   const augustSheetDate = new Date('2026-08-01T00:00:00+08:00');
   const lines = createSheetFixture('薪資明細', [

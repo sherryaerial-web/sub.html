@@ -1415,8 +1415,69 @@ test('course-admin acting mode is sent only to teacher self-service actions', as
   const payrollRequest = submittedForms.find((item) => item.fields.action === 'getMyPayroll');
   const inboxRequest = submittedForms.find((item) => item.fields.action === 'getNotificationInbox');
   assert.equal(courseRequest.fields.actingTeacherName, 'Jina');
-  assert.equal(payrollRequest.fields.actingTeacherName, undefined);
+  assert.equal(payrollRequest.fields.actingTeacherName, 'Jina');
   assert.equal(inboxRequest.fields.actingTeacherName, undefined);
+});
+
+test('acting payroll shows the selected teacher and cannot confirm or dispute as that teacher', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({
+    getMyPayroll: { month: '2026-10', readOnly: true,
+      summary: { teacherName: '妙妙 簡', month: '2026-10', version: 'oct', totalSalary: 5600,
+        subtotal: 6300, oneTimeDeduction: 700, status: '待確認' },
+      lines: [{ lineId: 'mia-1', date: '2026/10/01', time: '10:00', courseName: '香氛瑜伽',
+        ruleDetail: '4 人', attendanceCount: 4, amount: 900, manualAdjustment: 0 }], disputes: [] },
+  });
+  vm.runInContext("authState.teacherName = '冠蓉'; authState.actingTeacherName = '妙妙 簡'; authState.managementCapabilities = ['course_admin', 'payroll_admin'];", context);
+  getElement('payroll-month').value = '2026-10';
+  await context.fetchMyPayroll();
+  const rendered = getElement('my-payroll-content').innerHTML;
+  assert.match(rendered, /妙妙 簡/);
+  assert.match(rendered, /5,600/);
+  assert.match(rendered, /香氛瑜伽/);
+  assert.match(rendered, /唯讀/);
+  assert.doesNotMatch(rendered, /data-payroll-confirm|data-payroll-dispute/);
+  for (const action of ['confirmPayroll', 'submitPayrollDispute']) {
+    await assert.rejects(context.callPostApi(action, { month: '2026-10', version: 'oct' }), /本人|代查看/);
+  }
+  assert.equal(submittedForms.some(item => ['confirmPayroll', 'submitPayrollDispute'].includes(item.fields.action)), false);
+});
+
+test('payroll switching teachers clears old salary and ignores an earlier in-flight result', async () => {
+  let finishOld;
+  const fixtures = { getMyPayroll: new Promise(resolve => { finishOld = resolve; }) };
+  const { context, getElement } = createFrontendRuntime(fixtures);
+  vm.runInContext("authState.teacherName = '冠蓉'; authState.managementCapabilities = ['course_admin', 'payroll_admin'];", context);
+  getElement('payroll-month').value = '2026-10';
+  const oldRead = context.fetchMyPayroll();
+  await new Promise(resolve => setImmediate(resolve));
+  getElement('my-payroll-content').innerHTML = '冠蓉 $30,000';
+  context.startActingAsTeacher('妙妙 簡');
+  assert.doesNotMatch(getElement('my-payroll-content').innerHTML, /30,000/);
+  fixtures.getMyPayroll = { summary: { teacherName: '妙妙 簡', month: '2026-10', totalSalary: 5600, status: '待確認' }, lines: [], disputes: [], readOnly: true };
+  await context.fetchMyPayroll();
+  finishOld({ summary: { teacherName: '冠蓉', month: '2026-10', totalSalary: 30000, status: '待確認' }, lines: [], disputes: [] });
+  await oldRead;
+  assert.match(getElement('my-payroll-content').innerHTML, /5,600/);
+  assert.doesNotMatch(getElement('my-payroll-content').innerHTML, /30,000/);
+  context.stopActingAsTeacher();
+  assert.doesNotMatch(getElement('my-payroll-content').innerHTML, /5,600/);
+});
+
+test('own payroll retains confirmation and rejects a response belonging to another teacher', async () => {
+  const fixtures = { getMyPayroll: { summary: { teacherName: '妙妙 簡', month: '2026-10',
+    totalSalary: 5600, version: 'oct', status: '待確認' },
+    lines: [{ lineId: 'mia-1', amount: 900, manualAdjustment: 0 }], disputes: [] } };
+  const { context, getElement } = createFrontendRuntime(fixtures);
+  vm.runInContext("authState.teacherName = '妙妙 簡';", context);
+  getElement('payroll-month').value = '2026-10';
+  await context.fetchMyPayroll();
+  assert.match(getElement('my-payroll-content').innerHTML, /data-payroll-confirm="oct"/);
+  assert.match(getElement('my-payroll-content').innerHTML, /data-payroll-dispute="mia-1"/);
+  vm.runInContext("myPayrollSnapshotHtml.clear();", context);
+  fixtures.getMyPayroll = { summary: { teacherName: '冠蓉', totalSalary: 30000 }, lines: [] };
+  await context.fetchMyPayroll();
+  assert.match(getElement('my-payroll-content').innerHTML, /身分不符/);
+  assert.doesNotMatch(getElement('my-payroll-content').innerHTML, /30,000/);
 });
 
 test('course admins can enter and leave a clearly labelled teacher acting mode', () => {

@@ -9460,6 +9460,7 @@ function doPost(e) {
       },
       getRaffleCampaignSettings: function() { return getRaffleCampaignSettings_(session); },
       getActivityProductionReadiness: function() { return getActivityProductionReadiness_(session); },
+      getActivityOperations: function() { return getActivityOperations_(session); },
       saveRaffleCampaign: function() { return saveRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動草稿')); },
       manageRaffleCampaign: function() { return manageRaffleCampaign_(session, parseJsonObject_(parameters.operation, '活動維護')); },
       previewRaffleMailReopen: function() { return previewRaffleMailReopen_(session, parameters.campaignId, parameters.jobId); },
@@ -24109,7 +24110,7 @@ function raffleReadyLineTestContext_(session){
  var actor=assertCapabilitySession_(session,'raffle_admin'),email=actor==='冠蓉'?'m605330912@icloud.com':actor==='Tako'?'takochang68@gmail.com':null;
  if(!email)throw Error('此測試僅開放冠蓉與 Tako。');
  var campaign={id:'christmas-2026'},job={id:'raffle_mail_'+raffleHash_('ready-line-app-20261030-flex-v1:'+email),email:email,subject:"【限定測試】聖誕圖文通知",body:"這是圖片版通知測試，沒有新增實體獎品，也不用領取。請確認聖誕圖片與下方按鈕能正常顯示。\n\n預覽圖片：https://sherry-activity-production.sherry-line-ai.workers.dev/assets/christmas-line-2026-v2.png"};
- return {actor:actor,email:email,campaign:campaign,job:job,key:'READY_LINE_APP_TEST_20261030_FLEX_'+raffleHash_(email),available:raffleReadyLineFirstMode_(campaign,[job])};
+ return {actor:actor,email:email,campaign:campaign,job:job,key:'READY_LINE_APP_TEST_20261030_FLEX_'+raffleHash_(email),available:PropertiesService.getScriptProperties().getProperty('RAFFLE_READY_LINE_FIRST_TEST_ONLY')==='true'&&raffleReadyLineFirstMode_(campaign,[job])};
 }
 function getRaffleReadyLineTest_(session){
  var c=raffleReadyLineTestContext_(session),p=PropertiesService.getScriptProperties(),saved=p.getProperty(c.key),receipt=saved?JSON.parse(saved):null;

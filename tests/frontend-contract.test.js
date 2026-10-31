@@ -7,6 +7,42 @@ const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
+test('substitute change lock explains disabled cancellation for ordinary and special teacher records', () => {
+  const { context } = createFrontendRuntime();
+  const hint = '本月代課／特別課已結束，如需取消或退出請聯絡管理者。';
+  const ordinary = context.renderMySubGroup({ items: [{
+    '日期': '2026/11/10', '時段': '09:00', '課程': '空環', '可申請退出': false,
+    '異動鎖定提示': hint, '異動紀錄': [],
+  }] });
+  assert.ok(ordinary.includes(hint));
+  assert.doesNotMatch(ordinary, /data-sub-action="withdraw"/);
+  const special = context.renderMySubGroup({ specialGroupId: 'locked-group', items: [{
+    '紀錄類型': '特別課安排', '日期': '2026/11/10', '時段': '09:00', '課程': '特別課',
+    '可申請取消特別課': false, '可申請退出': false, '異動鎖定提示': hint, '異動紀錄': [],
+  }] });
+  assert.ok(special.includes(hint));
+  assert.doesNotMatch(special, /data-sub-action="cancel-special"|若要退出，請依/);
+});
+
+test('substitute change lock is disclosed before confirming the existing close action', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({
+    getNotificationAdminDashboard: {
+      teachers: ['冠蓉'], administrators: ['冠蓉'], schedules: [], history: [], closureWindows: [],
+      monthlyOperations: {
+        month: '2026-10', now: '2026-10-15 21:00', schedule: {}, systemState: {}, automaticReminders: [],
+        operations: [{ id: 'close_substitute', label: '結束代課／特別課並通知', canExecute: true,
+          status: 'pending', early: false, notificationIds: ['close_substitute'] }],
+        templates: { close_substitute: { heading: '結束代課', content: '領取已結束。', audienceMode: 'all' } },
+      },
+    },
+  });
+  vm.runInContext("authState.sessionToken = 'session'; authState.managementCapabilities = ['course_admin'];", context);
+  await context.fetchNotificationAdminDashboard();
+  await context.executeMonthlyOperation('close_substitute');
+  assert.match(getElement('notification-preview-copy').textContent, /鎖定.*取消.*退出/);
+  assert.equal(submittedForms.filter(form => form.fields.action === 'executeMonthlyOperation').length, 0);
+});
+
 test('ninety-minute single-source special draft accepts a delayed own continuation without merging it', () => {
   const { context } = createFrontendRuntime();
   const availability = {

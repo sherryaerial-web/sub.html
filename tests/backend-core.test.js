@@ -4,6 +4,146 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+function createClosedSubstituteLockFixture(operationMonth = '2026-07', courseDate = '2026/08/10') {
+  const f = createInvitationBackend({
+    leaveRows: [
+      ['stamp', '老師甲', courseDate, '09:00', '空環 Lv.1', '確認中', '', '', '', 'lock-pending', 'calendar-a'],
+      ['stamp', '老師甲', courseDate, '10:00', '空環 Lv.1', '已領取', '老師乙', '', '', 'lock-claimed', 'calendar-b'],
+      ['stamp', '老師甲', '2026/09/10', '10:00', '空環 Lv.1', '已領取', '老師乙', '', '', 'lock-other', 'calendar-c'],
+    ],
+    specialRequestRows: [[
+      'stamp', 'lock-special', '老師甲', courseDate, 'A',
+      JSON.stringify([{ sourceType: 'own', date: courseDate, time: '16:00', room: 'A', courseName: '空環', originalTeacher: '老師甲', calendarId: 'own-special' }]),
+      '[]', '16:00', '空環特別課', '', 90, '17:30', '使用後方空堂', '', '已完成', '已核對', 'stamp', '', 'special-calendar',
+    ]],
+  });
+  f.backend.getCurrentMonthlyOperationsMonthKey_ = () => operationMonth;
+  f.accountSheet.values.push(createAccount(f.backend, 'Tako', '2222').concat('空環', 'course_admin'));
+  f.notices = [];
+  f.backend.sendPushNotificationSafely_ = (names, message) => {
+    f.notices.push(message);
+    return { attempted: true, accepted: true, delivered: names.length, messageId: 'lock-test', error: '' };
+  };
+  f.backend.saveMonthlyOperationsState_(operationMonth, {
+    operations: { open_substitute: { completedAt: `${operationMonth}-12 21:00:00` } },
+  });
+  f.closeResult = f.backend.executeMonthlyOperation_(f.adminSession, 'close_substitute');
+  return f;
+}
+
+for (const [method, role, id] of [
+  ['cancelLeave_', 'teacherASession', 'lock-pending'],
+  ['requestLeaveCancellation_', 'teacherASession', 'lock-claimed'],
+  ['requestClaimWithdrawal_', 'teacherBSession', 'lock-claimed'],
+  ['requestSpecialCourseCancellation_', 'teacherASession', 'lock-special'],
+]) {
+  test(`substitute change lock blocks ${method} after monthly closing without writes or notices`, () => {
+    const f = createClosedSubstituteLockFixture();
+    const before = JSON.stringify([f.leaveSheet.values, f.specialRequestSheet.values, f.auditSheet.values]);
+    const noticesBefore = f.notices.length;
+    assert.throws(() => f.backend[method](f[role], id, '行程變更'), /代課.*已結束|已鎖定/);
+    assert.equal(JSON.stringify([f.leaveSheet.values, f.specialRequestSheet.values, f.auditSheet.values]), before);
+    assert.equal(f.notices.length, noticesBefore);
+  });
+}
+
+test('substitute change lock suppresses teacher actions but preserves authenticated manager impersonation', () => {
+  const f = createClosedSubstituteLockFixture();
+  const leaves = f.backend.getMyLeaves_(f.teacherASession, '2026-08');
+  assert.ok(leaves.every(row => !row['可自行取消'] && !row['可申請取消']));
+  assert.match(leaves[0]['異動鎖定提示'], /管理/);
+  const subs = f.backend.getMySubs_('老師乙', '2026-08', f.teacherBSession);
+  assert.equal(subs[0]['可申請退出'], false);
+  const specials = f.backend.getMySubs_('老師甲', '2026-08', f.teacherASession);
+  assert.equal(specials.find(row => row['特別課群組 ID'] === 'lock-special')['可申請取消特別課'], false);
+
+  const acting = f.backend.resolveActingTeacherSession_(f.adminSession, '老師乙');
+  assert.equal(f.backend.getMySubs_('老師乙', '2026-08', acting)[0]['可申請退出'], true);
+  assert.equal(f.backend.requestClaimWithdrawal_(acting, 'lock-claimed', '管理者核對後代辦').status, '申請退出中');
+  assert.equal(f.auditSheet.values.at(-1)[1], '管理員甲（代 老師乙 操作）');
+});
+
+test('substitute change lock follows the course month across reopening and year boundaries', () => {
+  const f = createClosedSubstituteLockFixture();
+  f.backend.pauseClaims_(f.adminSession, false);
+  assert.throws(() => f.backend.requestClaimWithdrawal_(f.teacherBSession, 'lock-claimed', '不能退出'), /代課.*已結束|已鎖定/);
+  assert.equal(f.backend.requestClaimWithdrawal_(f.teacherBSession, 'lock-other', '尚未結束的另一月份').status, '申請退出中');
+  const yearEnd = createClosedSubstituteLockFixture('2026-12', '2027/01/10');
+  assert.throws(() => yearEnd.backend.cancelLeave_(yearEnd.teacherASession, 'lock-pending'), /代課.*已結束|已鎖定/);
+});
+
+test('substitute change lock remains active when completed close notifications are retried', () => {
+  const f = createClosedSubstituteLockFixture();
+  const before = JSON.stringify([f.leaveSheet.values, f.specialRequestSheet.values, f.auditSheet.values]);
+  const noticesBefore = f.notices.length;
+  const repeat = f.backend.executeMonthlyOperation_(f.adminSession, 'close_substitute');
+  assert.equal(repeat.alreadyCompleted, true);
+  assert.equal(f.notices.length, noticesBefore);
+  assert.equal(JSON.stringify([f.leaveSheet.values, f.specialRequestSheet.values, f.auditSheet.values]), before);
+  assert.throws(() => f.backend.cancelLeave_(f.teacherASession, 'lock-pending'), /代課.*已結束|已鎖定/);
+});
+
+test('substitute change lock rejects corrupt state before any teacher write', () => {
+  const f = createClosedSubstituteLockFixture();
+  f.services.__properties.set('MONTHLY_OPERATIONS_V1_2026_07', '{broken');
+  const before = JSON.stringify(f.leaveSheet.values);
+  assert.throws(() => f.backend.cancelLeave_(f.teacherASession, 'lock-pending'), /狀態.*無法|狀態.*異常/);
+  assert.equal(JSON.stringify(f.leaveSheet.values), before);
+});
+
+test('substitute change lock permits changes before the monthly close is completed', () => {
+  const f = createClosedSubstituteLockFixture();
+  f.backend.saveMonthlyOperationsState_('2026-07', { operations: { close_substitute: { status: 'running' } } });
+  assert.equal(f.backend.cancelLeave_(f.teacherASession, 'lock-pending').status, '已取消');
+});
+
+test('substitute change lock rejects an empty persisted monthly record rather than treating it as missing', () => {
+  const f = createClosedSubstituteLockFixture();
+  f.services.__properties.set('MONTHLY_OPERATIONS_V1_2026_07', '');
+  assert.throws(() => f.backend.cancelLeave_(f.teacherASession, 'lock-pending'), /狀態.*異常/);
+  assert.equal(f.leaveSheet.values[1][5], '確認中');
+});
+
+test('substitute change lock cannot be bypassed with client-supplied administrator fields', () => {
+  const f = createClosedSubstituteLockFixture();
+  f.backend.console = { ...console, error() {} };
+  f.backend.ContentService = { MimeType: { JSON: 'json' }, createTextOutput(text) { return { text, setMimeType() { return this; } }; } };
+  const response = JSON.parse(f.backend.doPost({ parameter: {
+    action: 'requestClaimWithdrawal', sessionToken: f.teacherBToken,
+    substituteId: 'lock-claimed', reason: '試圖繞過',
+    role: '管理員', managementCapabilities: 'course_admin', impersonatedBy: '管理員甲',
+  } }).text);
+  assert.equal(response.status, 'error');
+  assert.match(response.message, /已結束|已鎖定/);
+  assert.notEqual(f.leaveSheet.values.find(row => row[9] === 'lock-claimed')[18], '申請退出中');
+});
+
+for (const source of ['scheduled reminder', 'operation notification']) {
+  test(`substitute change lock survives a concurrent close during ${source}`, () => {
+    const f = createClosedSubstituteLockFixture();
+    const state = f.backend.getMonthlyOperationsState_('2026-07');
+    delete state.operations.close_substitute;
+    f.backend.saveMonthlyOperationsState_('2026-07', state);
+    let completedDuringSend = false;
+    f.backend.sendPushNotificationSafely_ = names => {
+      if (!completedDuringSend) {
+        completedDuringSend = true;
+        f.backend.executeMonthlyOperation_(f.adminSession, 'close_substitute');
+        assert.throws(() => f.backend.cancelLeave_(f.teacherASession, 'lock-pending'), /已結束|已鎖定/);
+      }
+      return { attempted: true, accepted: true, delivered: names.length, messageId: 'concurrent-lock', error: '' };
+    };
+    if (source === 'scheduled reminder') {
+      f.backend.runMonthlyOperationsNotifications_('2026-07-01', '21:00');
+    } else {
+      f.backend.deliverMonthlyOperationNotifications_('2026-07', f.backend.getMonthlyOperationDefinition_('open_leave'), '管理員甲');
+    }
+    assert.equal(completedDuringSend, true);
+    assert.throws(() => f.backend.cancelLeave_(f.teacherASession, 'lock-pending'), /已結束|已鎖定/);
+    assert.ok(f.backend.getMonthlyOperationsState_('2026-07').operations.close_substitute.completedAt);
+  });
+}
+
 function loadBackend(overrides = {}) {
   const file = path.join(__dirname, '..', 'Code.gs');
   const source = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
@@ -415,7 +555,7 @@ function createAuthServices() {
     PropertiesService: {
       getScriptProperties() {
         return {
-          getProperty(key) { return properties.get(key) || null; },
+          getProperty(key) { return properties.has(key) ? properties.get(key) : null; },
           setProperty(key, value) { properties.set(key, value); },
           deleteProperty(key) { properties.delete(key); },
           getProperties() { return Object.fromEntries(properties); },

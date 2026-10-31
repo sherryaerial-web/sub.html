@@ -3582,6 +3582,7 @@
           <article class="monthly-operation-row${completed ? " is-completed" : ""}${!item.canExecute ? " is-blocked" : ""}">
             <div>
               <strong>${escapeHtml(item.label)}</strong>
+              ${item.id === "close_substitute" ? '<div class="item-meta">同時鎖定對應課程月份的取消／退出申請；臨時異動改由管理者處理。</div>' : ""}
               <div class="item-meta">建議時間：${escapeHtml(formatMonthlyOperationsAt(item.recommendedAt))}</div>
               <div class="monthly-operation-status">
                 <span class="status-pill">${escapeHtml(monthlyOperationStatusLabel(item))}</span>
@@ -3635,6 +3636,7 @@
                 <span class="monthly-summary-chip">預約日 ${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</span>
                 <span class="monthly-summary-chip">請假 ${system.leavePaused ? "已關閉" : "開放中"}</span>
                 <span class="monthly-summary-chip">代課 ${system.claimsPaused ? "已關閉" : "開放中"}</span>
+                ${system.substituteChangeMonth ? `<span class="monthly-summary-chip">${escapeHtml(system.substituteChangeMonth)} 取消／退出 ${system.substituteChangesLocked ? "已鎖定" : "未鎖定"}</span>` : ""}
                 <span class="monthly-summary-chip">邀請中 ${Number(system.openInvitationCount) || 0}</span>
               </div>
             </div>
@@ -3902,9 +3904,11 @@
       });
       openNotificationPreview({
         title: `預覽「${retry ? `${operation.label}（重試通知）` : operation.label}」`,
-        copy: operation.early && !retry
+        copy: (operation.early && !retry
           ? "目前仍在建議時間前；確認後會提前執行操作並送出下列通知。"
-          : "確認後會執行操作並送出下列通知。",
+          : "確認後會執行操作並送出下列通知。") + (operationId === "close_substitute"
+          ? " 同時鎖定對應課程月份的取消與退出申請；臨時異動改由管理者處理。"
+          : ""),
         confirmLabel: retry ? "確認重試通知" : "確認執行並送出",
         messages,
         onConfirm: async (editedMessages) => {
@@ -5830,6 +5834,7 @@
                 <div class="item-meta">異動狀態：${escapeHtml(changeState)}</div>
                 ${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}
                 ${renderAuditHistory(item["異動紀錄"])}
+                ${item["異動鎖定提示"] ? `<div class="hint">${escapeHtml(item["異動鎖定提示"])}</div>` : ""}
                 <div class="record-actions">
                   ${item["可自行取消"] ? `<button class="danger-button" type="button" data-leave-action="cancel" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="calendar-x"></i>取消請假</button>` : ""}
                   ${item["可申請取消"] ? `<button class="danger-button" type="button" data-leave-action="request-cancel" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="message-square-warning"></i>申請取消</button>` : ""}
@@ -6904,11 +6909,14 @@
     function renderMySubGroup(group) {
       const rows = group.items || [];
       const item = rows[0] || {};
+      const changeLockHint = item["異動鎖定提示"]
+        ? `<div class="hint">${escapeHtml(item["異動鎖定提示"])}</div>`
+        : "";
       if (!group.specialGroupId) {
         const timeChange = Number(item["延後分鐘數"]) !== 0
           ? `<div class="item-meta">調整開始時間：${escapeHtml(item["時段"])} → ${escapeHtml(item["實際開始時間"])}</div>`
           : "";
-        return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div><div class="item-course">${escapeHtml(item["課程"])}</div><div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>${timeChange}<div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div><div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>${renderAuditHistory(item["異動紀錄"])}<div class="record-actions">${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="log-out"></i>申請退出代課</button>` : ""}</div></div></article>`;
+        return `<article class="list-item single-column"><div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["時段"])}</div><div class="item-course">${escapeHtml(item["課程"])}</div><div class="item-meta">原老師：${escapeHtml(item["原老師"])}</div>${timeChange}<div class="item-meta">處理方式：${escapeHtml(item["處理類型"] || "尚未填寫")}</div><div class="item-meta">實際課程：${escapeHtml(item["實際課程名稱"] || item["課程"])}</div>${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}<div class="item-meta">異動狀態：${escapeHtml(item["異動狀態"] || "無")}</div>${renderAuditHistory(item["異動紀錄"])}${changeLockHint}<div class="record-actions">${item["可申請退出"] ? `<button class="danger-button" type="button" data-sub-action="withdraw" data-substitute-id="${escapeHtml(item["代課編號"])}"><i data-lucide="log-out"></i>申請退出代課</button>` : ""}</div></div></article>`;
       }
 
       const isOwnCourseRequest = item["紀錄類型"] === "特別課安排";
@@ -6929,11 +6937,11 @@
         ? `<button class="danger-button" type="button" data-sub-action="cancel-special" data-special-group-id="${escapeHtml(group.specialGroupId)}"><i data-lucide="calendar-x"></i>申請取消特別課</button>`
         : "";
       const sourceCount = isOwnCourseRequest ? sourceSlots.length : rows.length;
-      const exitHint = isOwnCourseRequest
+      const exitHint = changeLockHint || (isOwnCourseRequest
         ? item["取消方式"] === "保留空堂"
           ? '<div class="hint">此筆取消後，請讓 A 教室 10/11 16:00–17:00 保持空堂，並保留 17:00–18:30 的另一堂特別課；完成 OB 核對前不會釋放時段。</div>'
           : '<div class="hint">取消需由管理員審核；OB 原課程回復核對前不會釋放時段。</div>'
-        : '<div class="hint">若要退出，請依原始時段分別提出申請。</div>';
+        : '<div class="hint">若要退出，請依原始時段分別提出申請。</div>');
       return `<article class="list-item single-column special-record-group"><div><div class="special-record-heading"><i data-lucide="sparkles"></i> 特別課群組｜${escapeHtml(item["特別課模式"] || "特別課")}</div><div class="item-date"><i data-lucide="calendar-clock"></i>${escapeHtml(formatDateWithWeekday(item["日期"]))} ${escapeHtml(item["特別課實際開始時間"] || item["時段"])}–${escapeHtml(item["特別課結束時間"] || "待確認")}</div><div class="item-course">${escapeHtml(item["實際課程名稱"] || item["課程"])}</div><div class="item-meta">課程長度：${escapeHtml(item["特別課分鐘數"] || "待確認")} 分鐘｜原始時段 ${sourceCount} 堂</div>${continuationRow}${item["預計難度"] ? `<div class="item-meta">難度：${escapeHtml(item["預計難度"])}</div>` : ""}${item["備註"] ? `<div class="item-meta">備註：${escapeHtml(item["備註"])}</div>` : ""}${isOwnCourseRequest ? `<div class="item-meta">狀態：${escapeHtml(item["異動狀態"] || "待處理")}</div>` : ""}<details class="special-source-list"><summary>查看來源課程與編號（${sourceCount}）</summary>${sourceRows}</details>${exitHint}<div class="record-actions">${specialCancellationAction}${actions}</div></div></article>`;
     }
 

@@ -41,6 +41,7 @@ GitHub Pages 前端搭配 Google Apps Script、Google Sheets 與 Omcean Booking 
 - 代課／特別課原則上至少保留 5 天，可與 VVIP 階段重疊，但會在一般預約當週星期三前提示建議結束時間。
 - 通知文字可由管理員編輯，但「全部在職老師」或「具 `course_admin` 權限的管理員」的收件規則不可改。
 - 月度狀態與文字範本保存在版本化 Script Properties：`MONTHLY_OPERATIONS_V1_<YYYY_MM>` 與 `MONTHLY_OPERATIONS_TEMPLATES_V1`，不新增、搬動或改寫正式試算表欄位。
+- 「結束代課／特別課並通知」完成後，對應下個月課程的撤回請假、退出代課及取消特別課申請一併鎖定。例如 10 月營運流程完成結束後，鎖定 11 月課程；跨年同樣適用。已完成的既有月度紀錄也適用，不會重寄通知或改動課程。重新開放領課不會解除既有月份的取消鎖定；臨時異動由具 `course_admin` 權限的管理者使用「代老師操作」處理，保留原有稽核紀錄。
 - 既有的唯一 `runCourseClosureScheduler` 每 5 分鐘觸發條件同時服務關課、月度提醒與其他已整合排程；不要再安裝第二個觸發條件。
 
 ## 試算表契約

@@ -1989,14 +1989,18 @@ function runMonthlyOperationsNotifications_(dateKeyValue, timeValue) {
       eventKey
     );
     var attemptedAt = dateKey + ' ' + time + ':00';
-    state.events[eventId] = {
+    var nextEventState = {
       eventKey: eventKey,
       lastAttemptAt: attemptedAt,
       sentAt: delivery.accepted ? attemptedAt : '',
       lastError: delivery.accepted ? '' : (delivery.error || '通知服務未接受本次發送。'),
       recipientCount: delivery.recipientCount || 0
     };
-    saveMonthlyOperationsState_(month, state);
+    state = withScriptLock_(function() {
+      var latest = getMonthlyOperationsState_(month);
+      if (!cleanText_((latest.events[eventId] || {}).sentAt)) latest.events[eventId] = nextEventState;
+      return saveMonthlyOperationsState_(month, latest);
+    });
     result.items.push({ scheduleId: eventId, result: delivery });
     if (delivery.accepted) result.sentCount += 1;
     else result.failedCount += 1;
@@ -2304,9 +2308,18 @@ function deliverMonthlyOperationNotifications_(monthKey, definition, actor, over
     notificationState.lastAttemptAt = getTimestamp_();
     notificationState.sentAt = delivery.accepted ? notificationState.lastAttemptAt : '';
     notificationState.lastError = delivery.accepted ? '' : (delivery.error || '通知服務未接受本次發送。');
-    operation.notifications[notificationId] = notificationState;
-    state.operations[definition.id] = operation;
-    saveMonthlyOperationsState_(monthKey, state);
+    withScriptLock_(function() {
+      var latest = getMonthlyOperationsState_(monthKey);
+      var latestOperation = latest.operations[definition.id] || {};
+      latestOperation.notifications = latestOperation.notifications && typeof latestOperation.notifications === 'object'
+        ? latestOperation.notifications
+        : {};
+      if (!cleanText_((latestOperation.notifications[notificationId] || {}).sentAt)) {
+        latestOperation.notifications[notificationId] = notificationState;
+      }
+      latest.operations[definition.id] = latestOperation;
+      saveMonthlyOperationsState_(monthKey, latest);
+    });
     deliveries.push(Object.assign({ id: notificationId, skipped: false }, delivery));
   });
   return deliveries;
@@ -2687,7 +2700,9 @@ function getMonthlyOperationsDashboard_(session) {
     systemState: {
       leavePaused: liveLeavePaused,
       claimsPaused: liveClaimsPaused,
-      openInvitationCount: openInvitationCount
+      openInvitationCount: openInvitationCount,
+      substituteChangeMonth: shiftMonthKey_(month, 1),
+      substituteChangesLocked: Boolean(state.operations.close_substitute && state.operations.close_substitute.completedAt)
     }
   };
 }
@@ -9316,7 +9331,8 @@ function doPost(e) {
         return getClaimOptions_(actingSession());
       },
       getMySubs: function() {
-        return getMySubs_(getSessionTeacherName_(actingSession()), parameters.recordMonth);
+        var acting = actingSession();
+        return getMySubs_(getSessionTeacherName_(acting), parameters.recordMonth, acting);
       },
       getMyCourses: function() {
         return getMyCourses_(actingSession());
@@ -14282,7 +14298,7 @@ function getMyLeaves_(session, recordMonth) {
     return cleanText_(r[1]) === teacher &&
       recordMonths.indexOf(getVvipMonthFromDate_(r[2])) !== -1;
   }).map(function(r) {
-    return {
+    return applySubstituteChangeLock_({
       '登記時間': cleanText_(r[0]),
       '代課編號': cleanText_(r[9]),
       '日期': formatMyDate(r[2]),
@@ -14301,7 +14317,7 @@ function getMyLeaves_(session, recordMonth) {
       '可自行取消': canSelfCancelLeaveRow_(r),
       '可申請取消': canRequestLeaveCancellationRow_(r),
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
-    };
+    }, r[2], session);
   }).sort(function(a, b) {
     return [a['日期'], a['時段'], a['登記時間']].join('|')
       .localeCompare([b['日期'], b['時段'], b['登記時間']].join('|'));
@@ -18288,7 +18304,7 @@ function getSpecialCourseActualStartTime_(durationMinutes, endTime) {
   return minutesToTimeText_(endMinutes - duration);
 }
 
-function getMySubs_(teacherName, recordMonth) {
+function getMySubs_(teacherName, recordMonth, session) {
   var name = cleanText_(teacherName);
   if (!name) throw new Error('請選擇查詢老師。');
   assertTeacherExists_(name);
@@ -18303,7 +18319,7 @@ function getMySubs_(teacherName, recordMonth) {
       cleanText_(r[5]) === '已領取' &&
       recordMonths.indexOf(getVvipMonthFromDate_(r[2])) !== -1;
   }).map(function(r) {
-    return {
+    return applySubstituteChangeLock_({
       '代課編號': cleanText_(r[9]),
       'OB Calendar ID': cleanText_(r[10]),
       '日期': formatMyDate(r[2]),
@@ -18327,7 +18343,7 @@ function getMySubs_(teacherName, recordMonth) {
       '異動狀態': cleanText_(r[18]),
       '可申請退出': ['申請退出中', '退出後待回復 OB'].indexOf(cleanText_(r[18])) === -1,
       '異動紀錄': auditByTarget[cleanText_(r[9])] || []
-    };
+    }, r[2], session);
   });
   var specialRequestSheet = ss.getSheetByName(SHEETS.SPECIAL_COURSE_REQUESTS);
   if (!specialRequestSheet) return sortTeacherSubstituteRecords_(substituteItems);
@@ -18340,7 +18356,7 @@ function getMySubs_(teacherName, recordMonth) {
     var sourceSlots = getSpecialRequestCourseSlots_(row);
     var continuation = getSpecialRequestContinuation_(row);
     var groupId = cleanText_(row[1]);
-    return {
+    return applySubstituteChangeLock_({
       '紀錄類型': '特別課安排',
       '代課編號': '',
       'OB Calendar ID': cleanText_(row[18]),
@@ -18370,7 +18386,7 @@ function getMySubs_(teacherName, recordMonth) {
         name === 'Liz 🌰' && formatMyDate(row[3]) === '2026/10/11' &&
         cleanText_(row[4]) === 'A' ? '保留空堂' : '',
       '異動紀錄': auditByTarget[groupId] || []
-    };
+    }, row[3], session);
   });
   return sortTeacherSubstituteRecords_(substituteItems.concat(specialItems));
 }
@@ -19278,6 +19294,7 @@ function cancelLeave_(session, substituteId) {
   return withScriptLock_(function() {
     var record = getLeaveRecordByIdUnlocked_(id);
     if (cleanText_(record.row[1]) !== teacher) throw new Error('只能取消自己的請假。');
+    assertSubstituteChangesAllowed_(session, record.row[2]);
     if (!canSelfCancelLeaveRow_(record.row)) {
       throw new Error('這堂課已有人領取或已開始處理 OB，請改用申請取消。');
     }
@@ -19466,6 +19483,7 @@ function requestLeaveCancellation_(session, substituteId, reason) {
   return withScriptLock_(function() {
     var record = getLeaveRecordByIdUnlocked_(id);
     if (cleanText_(record.row[1]) !== teacher) throw new Error('只能申請取消自己的請假。');
+    assertSubstituteChangesAllowed_(session, record.row[2]);
     if (cleanText_(record.row[18]) === '退出後待回復 OB') throw new Error('整組退出正在等待 OB 回復，暫時不能取消請假。');
     if (canSelfCancelLeaveRow_(record.row)) throw new Error('這堂課目前可以直接取消。');
     if (!canRequestLeaveCancellationRow_(record.row)) throw new Error('目前狀態無法申請取消。');
@@ -19522,6 +19540,7 @@ function requestClaimWithdrawal_(session, substituteId, reason) {
     if (cleanText_(record.row[5]) !== '已領取' || cleanText_(record.row[6]) !== teacher) {
       throw new Error('只有目前的代課老師可以申請退出。');
     }
+    assertSubstituteChangesAllowed_(session, record.row[2]);
     if (cleanText_(record.row[18]) === '申請退出中') throw new Error('退出申請已送出，請等待處理。');
     if (cleanText_(record.row[18]) === '退出後待回復 OB') throw new Error('退出已核准，請等待整組 OB 回復核對。');
     if (cleanText_(record.row[18]) === '申請取消中') throw new Error('原老師已申請取消，請等待處理。');
@@ -19574,6 +19593,7 @@ function requestSpecialCourseCancellation_(session, specialGroupId, reason) {
     if (cleanText_(record.row[2]) !== teacher) {
       throw new Error('只能申請取消自己的特別課。');
     }
+    assertSubstituteChangesAllowed_(session, record.row[3]);
     var status = cleanText_(record.row[14]);
     if (status === '申請取消中') throw new Error('取消申請已送出，請等待處理。');
     if (status === '退出後待回復 OB') throw new Error('退出已核准，請等待整組 OB 回復核對。');
@@ -21558,6 +21578,59 @@ function getLeaveRecordByIdUnlocked_(substituteId) {
     }
   }
   throw new Error('找不到指定的請假代課紀錄，請重新整理。');
+}
+
+function getSubstituteChangeLock_(dateValue) {
+  var courseMonth = getVvipMonthFromDate_(dateValue);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(courseMonth)) {
+    throw new Error('課程日期狀態異常，請聯絡管理者核對。');
+  }
+  // Monthly operations prepare the following month's courses, including December/January.
+  var operationMonth = shiftMonthKey_(courseMonth, -1);
+  var properties = getScriptProperties_();
+  if (!properties) throw new Error('代課鎖定狀態無法讀取，請稍後再試。');
+  var raw = properties.getProperty(CONFIG.MONTHLY_OPERATIONS_PROPERTY_PREFIX + operationMonth.replace('-', '_'));
+  if (raw == null) return { locked: false, courseMonth: courseMonth };
+  var state;
+  try {
+    state = JSON.parse(raw);
+  } catch (error) {
+    throw new Error('代課鎖定狀態異常，請聯絡管理者核對。');
+  }
+  if (!state || typeof state !== 'object' || Array.isArray(state) ||
+      (state.operations != null && (typeof state.operations !== 'object' || Array.isArray(state.operations)))) {
+    throw new Error('代課鎖定狀態異常，請聯絡管理者核對。');
+  }
+  var closing = (state.operations || {}).close_substitute;
+  if (closing != null && (typeof closing !== 'object' || Array.isArray(closing))) {
+    throw new Error('代課鎖定狀態異常，請聯絡管理者核對。');
+  }
+  var locked = Boolean(closing && closing.completedAt);
+  return { locked: locked, courseMonth: courseMonth };
+}
+
+function canAdminOverrideSubstituteChangeLock_(session) {
+  if (!session) return false;
+  var actor = cleanText_(session.impersonatedBy);
+  if (!actor) return getSessionManagementCapabilities_(session).indexOf('course_admin') !== -1;
+  var account = findAccount_(actor);
+  return !!account && isAccountActive_(account.active) &&
+    getAccountManagementCapabilities_(account).indexOf('course_admin') !== -1;
+}
+
+function assertSubstituteChangesAllowed_(session, dateValue) {
+  if (getSubstituteChangeLock_(dateValue).locked && !canAdminOverrideSubstituteChangeLock_(session)) {
+    throw new Error('本月代課／特別課已結束，取消與退出申請已鎖定；如需異動請聯絡管理者。');
+  }
+}
+
+function applySubstituteChangeLock_(item, dateValue, session) {
+  if (!getSubstituteChangeLock_(dateValue).locked || canAdminOverrideSubstituteChangeLock_(session)) return item;
+  ['可自行取消', '可申請取消', '可申請退出', '可申請取消特別課'].forEach(function(key) {
+    if (Object.prototype.hasOwnProperty.call(item, key)) item[key] = false;
+  });
+  item['異動鎖定提示'] = '本月代課／特別課已結束，如需取消或退出請聯絡管理者。';
+  return item;
 }
 
 function canSelfCancelLeaveRow_(row) {

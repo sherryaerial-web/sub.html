@@ -3,7 +3,7 @@ const source=fs.readFileSync(require('node:path').join(__dirname,'../raffle.js')
 const claims=[{id:'ball',studentName:'Ivy',email:'ivy@example.test',prizeId:'ball',prizeName:'球',quantity:2,claimedQuantity:0,status:'waiting',directPickup:true,version:1},{id:'bag',studentName:'Ivy',email:'ivy@example.test',prizeId:'bag',prizeName:'提袋',quantity:1,claimedQuantity:0,status:'waiting',directPickup:false,venue:'A館',version:1}];
 function panel(api){
   const nodes=new Map(),storage=new Map();
-  const root={innerHTML:'',querySelector(s){if(!nodes.has(s))nodes.set(s,{value:'',textContent:'',innerHTML:'',hidden:false,disabled:false});return nodes.get(s);},querySelectorAll(){return[];},replaceChildren(){}};
+  const root={innerHTML:'',classList:{add(){}},querySelector(s){if(!nodes.has(s))nodes.set(s,{value:'',textContent:'',innerHTML:'',hidden:false,disabled:false});return nodes.get(s);},querySelectorAll(){return[];},replaceChildren(){}};
   const window={confirm:()=>true,crypto:{randomUUID:()=> 'test-request-12345'},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)}};
   vm.runInNewContext(source,{window});window.SherryRaffle.mountActivityGifts(root,{api});return{root,n:s=>root.querySelector(s)};
 }
@@ -18,7 +18,7 @@ test('prize filter combines with student search and explicitly reports no matche
   assert.match(p.n('[data-gift-prize]').innerHTML,/球/);assert.match(p.n('[data-gift-prize]').innerHTML,/提袋/);
   p.n('[data-gift-prize]').value='提袋';p.n('[data-gift-prize]').onchange();
   assert.match(p.n('[data-gift-claims]').innerHTML,/提袋/);assert.doesNotMatch(p.n('[data-gift-claims]').innerHTML,/data-gift-id="ball"/);
-  p.n('[data-gift-search]').value='nobody';p.n('[data-gift-search]').oninput();assert.match(p.n('[data-gift-claims]').innerHTML,/查無/);
+  p.n('[data-gift-search]').value='nobody';p.n('[data-gift-search]').oninput();assert.match(p.n('[data-gift-claims]').innerHTML,/查無|沒有符合條件/);
 });
 test('remaining quantities and non-ball units are distinct without enabling unavailable prizes',async()=>{
   const p=panel(async()=>workspace());await p.n('[data-gift-load]').onclick();const html=p.n('[data-gift-claims]').innerHTML;

@@ -34,7 +34,13 @@
   Expected: new review adjustment and explicit reason-label tests fail for the observed bug; guards pass.
 - [x] Remove only the review-state rejection, preserve review in the status transition, restore the button and add accurate dialog/notice copy.
 - [x] Run the targeted tests. Expected: all selected tests pass.
-- [ ] Commit the complete fix locally.
-- [ ] Run `node --test tests/*.test.js` and `git diff --check`. Expected: all tests pass, no whitespace errors.
-- [ ] Request one read-only fresh-context review of this task.
-- [ ] Package full updated source files and verification results; request explicit release authorization after all checks.
+- [x] Commit the complete fix locally.
+- [x] Run `node --test tests/*.test.js` and `git diff --check`. Expected: all tests pass, no whitespace errors.
+- [x] Request one read-only fresh-context review of this task.
+- [x] Package full updated source files and verification results. Release remains pending explicit authorization after all checks.
+
+## Verification
+
+Baseline 1272/1272. New tests reproduced four defects before implementation. Targeted tests after the review fix: 13/13. Final full suite: 1278/1278; no failures, skipped or cancelled tests. Formal Sheet writes and notifications: zero.
+
+Fresh-context review found no calculation or permission regressions. The review's zero-dollar copy finding was fixed with a failing regression test followed by the final green suite. See ../reviews/2026-11-04-payroll-dispute-adjustment.md.

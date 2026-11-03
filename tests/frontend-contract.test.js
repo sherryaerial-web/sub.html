@@ -4437,6 +4437,21 @@ test('payroll review adjustment notice requires a dispute reply before teacher c
   assert.equal(request.fields.reason, '補算漏登學生');
 });
 
+test('payroll review guidance keeps zero-dollar salaries exempt from confirmation', async () => {
+  const { context, getElement } = createFrontendRuntime({ adjustPayrollSummary: { status: '有異議', totalSalary: 0 } });
+  vm.runInContext("authState.teacherName = '冠蓉'; authState.sessionToken = 'admin-session';", context);
+  context.fetchPayrollAdminDashboard = async () => {};
+  getElement('payroll-admin-month').value = '2026-10';
+  const button = { dataset: { adminAction: 'adjust-payroll', teacherName: 'Sue', version: 'oct', status: '有異議' } };
+  await getElement('admin-tab-content').__listeners.get('click')[0]({ target: {
+    closest(selector) { return selector === '[data-admin-action]' ? button : null; },
+  } });
+  assert.match(getElement('request-dialog-copy').textContent, /零元.*免確認/);
+  await context.adjustPayrollSummary('Sue', 'oct', -900, '核對後調整');
+  assert.match(getElement('notice').textContent, /先回覆異議/);
+  assert.match(getElement('notice').textContent, /零元.*免確認/);
+});
+
 test('payroll admin chooses one of the latest twenty-four months from a select', () => {
   const { context, getElement } = createFrontendRuntime();
   vm.runInContext(`payrollDashboard = {

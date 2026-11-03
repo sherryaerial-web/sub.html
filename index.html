@@ -9438,7 +9438,7 @@
       const month = byId("payroll-admin-month").value;
       const result = await callPostApi("adjustPayrollSummary", { month, version, teacherName, adjustment, reason });
       setNotice(result.status === "有異議"
-        ? `${teacherName} 的薪資已調整，請先回覆異議，再請老師重新確認。`
+        ? `${teacherName} 的薪資已調整，請先回覆異議，再請老師重新確認（零元薪資免確認）。`
         : `${teacherName} 的薪資已調整，需由老師重新確認。`);
       await fetchPayrollAdminDashboard();
     }
@@ -9969,7 +9969,7 @@ https://sherryaerial-web.github.io/sub.html/
             reasonLabel: "調整原因（必填）",
             reasonRequired: true,
             copy: button.dataset.status === "有異議"
-              ? "正數為補發，負數為扣除；調整後仍保留「有異議」，請再按「回覆異議」，完成後由老師重新確認。"
+              ? "正數為補發，負數為扣除；調整後仍保留「有異議」，請再按「回覆異議」，完成後由老師重新確認（零元薪資免確認）。"
               : "正數為補發，負數為扣除；調整後會請老師重新確認。"
           });
         }

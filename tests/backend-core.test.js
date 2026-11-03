@@ -11757,6 +11757,57 @@ test('payroll publish is capability-scoped and teachers can only view confirm or
   assert.equal(disputes.values[1][5], '已回覆');
 });
 
+test('payroll review adjustments preserve open disputes and all other payroll components', () => {
+  const f = createOneTimeDeductionFixture();
+  f.backend.recordPayrollDeduction_(f.adminSession, f.input);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'v-oct', 'now', [], f.draft);
+  const summaries = f.spreadsheet.getSheetByName('薪資結算');
+  const row = summaries.values[1];
+  row[4] = 50;
+  row[5] = 20;
+  row[6] = 270;
+  row[9] = '有異議';
+  summaries.values.push([...row.slice(0, 1), '其他老師', ...row.slice(2)]);
+  const otherBefore = [...summaries.values[2]];
+  const disputes = f.spreadsheet.getSheetByName('薪資異議');
+  disputes.values.push(
+    ['review-1', '2026-10', 'Jina', 'line-1', '少算一位學生', '待處理', '', 'now', '', ''],
+    ['review-2', '2026-10', 'Jina', 'line-2', '課程金額有誤', '待處理', '', 'now', '', '']
+  );
+  const disputesBefore = JSON.stringify(disputes.values);
+  const linesBefore = JSON.stringify(f.spreadsheet.getSheetByName('薪資明細').values);
+  const input = { month: '2026-10', version: 'v-oct', teacherName: 'Jina', reason: '補算漏登學生' };
+  for (const adjustment of [100, -270, -300]) {
+    const result = f.backend.adjustPayrollSummary_(f.adminSession, { ...input, adjustment });
+    assert.equal(result.totalSalary, 270 + adjustment);
+    assert.equal(result.status, '有異議');
+    assert.equal(result.oneTimeDeduction, 700);
+    assert.equal(result.adminAdjustment, adjustment);
+    assert.equal(summaries.values[1][4], 50);
+    assert.equal(summaries.values[1][5], 20);
+    assert.equal(summaries.values[1][10], '');
+    assert.equal(summaries.values[1][13], input.reason);
+    assert.deepEqual(summaries.values[2], otherBefore);
+    assert.equal(JSON.stringify(disputes.values), disputesBefore);
+    assert.equal(JSON.stringify(f.spreadsheet.getSheetByName('薪資明細').values), linesBefore);
+    assert.throws(() => f.backend.confirmPayroll_({ teacherName: 'Jina' }, '2026-10', 'v-oct'), /異議尚未處理/);
+  }
+  const audits = f.auditSheet.values.filter(item => item[2] === '管理員調整薪資');
+  assert.equal(audits.length, 3);
+  assert.ok(audits.every(item => item[4] === '有異議' && item[5] === '有異議' && item[6].includes(input.reason)));
+});
+
+test('payroll dispute reason is mandatory before any sheet writes', () => {
+  const f = createOneTimeDeductionFixture();
+  const before = JSON.stringify(f.spreadsheet.sheets.map(sheet => sheet.values));
+  for (const message of ['', '   ', '\n\t']) {
+    assert.throws(() => f.backend.submitPayrollDispute_({ teacherName: 'Jina' }, {
+      month: '2026-10', version: 'v-oct', lineId: 'line-1', message,
+    }), /填寫問題說明/);
+    assert.equal(JSON.stringify(f.spreadsheet.sheets.map(sheet => sheet.values)), before);
+  }
+});
+
 test('payroll manager adjustments require teacher reconfirmation and finalization updates Sherry bank format', () => {
   const lines = createSheetFixture('薪資明細', [
     EXPECTED_PAYROLL_LINE_HEADERS,

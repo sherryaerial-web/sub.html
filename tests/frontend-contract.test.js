@@ -4367,6 +4367,76 @@ test('payroll admin can adjust salaries without a second admin confirmation', ()
   assert.doesNotMatch(rendered, /已結案/);
 });
 
+test('payroll review keeps the adjustment button while finalized payroll stays locked', async () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext(`payrollDashboard = {
+    month: '2026-10', lines: [], disputes: [],
+    summaries: ['有異議', '管理員已確認'].map((status, index) => ({
+      teacherName: '老師' + index, status, version: 'oct', adminAdjustment: 100,
+      subtotal: 900, totalSalary: 1000
+    })), metrics: {}
+  }`, context);
+  context.renderPayrollAdminTab();
+  const cards = getElement('admin-tab-content').innerHTML.match(/<article class="list-item payroll-admin-card">[\s\S]*?<\/article>/g);
+  assert.match(cards[0], /data-admin-action="adjust-payroll"/);
+  assert.match(cards[0], /data-status="有異議"/);
+  assert.doesNotMatch(cards[1], /data-admin-action="adjust-payroll"/);
+  const button = { dataset: { adminAction: 'adjust-payroll', teacherName: '老師0', version: 'oct', adjustment: '100', status: '有異議' } };
+  await getElement('admin-tab-content').__listeners.get('click')[0]({ target: {
+    closest(selector) { return selector === '[data-admin-action]' ? button : null; },
+  } });
+  assert.equal(getElement('request-dialog').open, true);
+  assert.equal(getElement('request-amount').value, '100');
+  assert.equal(getElement('request-reason').required, true);
+  assert.match(getElement('request-dialog-copy').textContent, /保留.*有異議.*回覆異議/);
+});
+
+test('payroll dispute dialog explicitly requires a reason and rejects blank submissions', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({
+    getMyPayroll: { summary: { month: '2026-10', version: 'oct', teacherName: 'Sue', status: '待確認' }, lines: [], disputes: [] },
+    submitPayrollDispute: { id: 'dispute-1', status: '待處理' },
+  });
+  vm.runInContext("authState.teacherName = 'Sue'; authState.sessionToken = 'teacher-session';", context);
+  getElement('payroll-month').value = '2026-10';
+  const button = { dataset: { payrollDispute: 'cal-1:Sue' } };
+  await getElement('my-payroll-content').__listeners.get('click')[0]({ target: {
+    closest(selector) { return selector === '[data-payroll-dispute]' ? button : null; },
+  } });
+  assert.equal(getElement('request-dialog').open, true);
+  assert.equal(getElement('request-reason').required, true);
+  assert.equal(getElement('request-reason-label').textContent, '異議原因（必填）');
+  assert.match(getElement('request-dialog-copy').textContent, /填寫.*異議原因/);
+  for (const reason of ['', '   ', '\n\t']) {
+    getElement('request-reason').value = reason;
+    await context.submitRequestDialog({ preventDefault() {} });
+    assert.equal(submittedForms.some(form => form.fields.action === 'submitPayrollDispute'), false);
+    assert.equal(getElement('request-dialog').open, true);
+  }
+  getElement('request-reason').value = '  少算一位學生  ';
+  await context.submitRequestDialog({ preventDefault() {} });
+  const requests = submittedForms.filter(form => form.fields.action === 'submitPayrollDispute');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].fields.month, '2026-10');
+  assert.equal(requests[0].fields.version, 'oct');
+  assert.equal(requests[0].fields.lineId, 'cal-1:Sue');
+  assert.equal(requests[0].fields.message, '少算一位學生');
+  assert.equal(getElement('request-dialog').open, false);
+});
+
+test('payroll review adjustment notice requires a dispute reply before teacher confirmation', async () => {
+  const { context, getElement, submittedForms } = createFrontendRuntime({
+    adjustPayrollSummary: { status: '有異議' },
+  });
+  vm.runInContext("authState.teacherName = '冠蓉'; authState.sessionToken = 'admin-session';", context);
+  context.fetchPayrollAdminDashboard = async () => {};
+  getElement('payroll-admin-month').value = '2026-10';
+  await context.adjustPayrollSummary('Sue', 'oct', 100, '補算漏登學生');
+  assert.match(getElement('notice').textContent, /先回覆異議.*老師重新確認/);
+  const request = submittedForms.find(form => form.fields.action === 'adjustPayrollSummary');
+  assert.equal(request.fields.adjustment, '100');
+  assert.equal(request.fields.reason, '補算漏登學生');
+});
+
 test('payroll admin chooses one of the latest twenty-four months from a select', () => {
   const { context, getElement } = createFrontendRuntime();
   vm.runInContext(`payrollDashboard = {

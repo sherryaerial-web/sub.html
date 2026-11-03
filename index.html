@@ -8796,8 +8796,8 @@
       const summaries = (data.summaries || []).map((item) => {
         const teacherLines = linesByTeacher[item.teacherName] || [];
         const details = payrollDeductionSummaryHtml(item) + (teacherLines.map((line) => `<div class="payroll-detail-row"><span>${escapeHtml(line.date)} ${escapeHtml(line.time)}｜${escapeHtml(line.courseName)}</span><strong>${formatMoney(line.amount + line.manualAdjustment)}</strong></div>`).join("") || '<div class="item-meta">沒有薪資明細</div>');
-        const canAdjust = item.status !== "管理員已確認" && item.status !== "有異議";
-        const actions = canAdjust ? `<button class="compact-button" type="button" data-admin-action="adjust-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}" data-adjustment="${escapeHtml(item.adminAdjustment)}"><i data-lucide="calculator"></i>調整薪資</button>` : "";
+        const canAdjust = item.status !== "管理員已確認";
+        const actions = canAdjust ? `<button class="compact-button" type="button" data-admin-action="adjust-payroll" data-teacher-name="${escapeHtml(item.teacherName)}" data-version="${escapeHtml(item.version)}" data-adjustment="${escapeHtml(item.adminAdjustment)}" data-status="${escapeHtml(item.status)}"><i data-lucide="calculator"></i>調整薪資</button>` : "";
         return `<article class="list-item payroll-admin-card"><div class="payroll-admin-head"><div><div class="item-course">${escapeHtml(item.teacherName)}</div><div class="payroll-admin-breakdown"><span>鐘點費 ${formatMoney(item.subtotal)}</span><span>獎金 ${formatMoney(item.bonusAmount)}</span><span>固定加扣 ${formatMoney(item.fixedAdjustment)}</span><span>管理員加扣 ${formatMoney(item.adminAdjustment)}</span></div></div><strong class="money">${formatMoney(item.totalSalary)}</strong><span class="status-pill ${payrollStatusClass(item.status)}">${escapeHtml(item.status)}</span></div>${item.adjustmentReason ? `<div class="payroll-admin-note">調整原因：${escapeHtml(item.adjustmentReason)}</div>` : ""}${item.status === "管理員已確認" ? `<div class="payroll-final-meta">由 ${escapeHtml(item.adminConfirmedBy || "管理員")} 於 ${escapeHtml(item.adminConfirmedAt || "已確認")} 完成確認</div>` : ""}<details class="payroll-detail"><summary>查看課程明細（${teacherLines.length}）</summary><div class="payroll-detail-list">${details}</div></details>${actions ? `<div class="admin-item-actions payroll-admin-actions">${actions}</div>` : ""}</article>`;
       }).join("") || '<div class="state">此月份尚無薪資草稿</div>';
       const disputes = (data.disputes || []).map((item) => `<article class="list-item single-column"><div><div class="item-course">${escapeHtml(item.teacherName)}｜${escapeHtml(item.status)}</div><div class="item-meta">${escapeHtml(item.message)}</div>${item.reply ? `<div class="item-meta">回覆：${escapeHtml(item.reply)}</div>` : ""}${item.status === "待處理" ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="resolve-payroll-dispute" data-dispute-id="${escapeHtml(item.id)}"><i data-lucide="message-square-reply"></i>回覆異議</button></div>` : ""}</div></article>`).join("") || '<div class="state">目前沒有薪資異議</div>';
@@ -9436,8 +9436,10 @@
 
     async function adjustPayrollSummary(teacherName, version, adjustment, reason) {
       const month = byId("payroll-admin-month").value;
-      await callPostApi("adjustPayrollSummary", { month, version, teacherName, adjustment, reason });
-      setNotice(`${teacherName} 的薪資已調整，需由老師重新確認。`);
+      const result = await callPostApi("adjustPayrollSummary", { month, version, teacherName, adjustment, reason });
+      setNotice(result.status === "有異議"
+        ? `${teacherName} 的薪資已調整，請先回覆異議，再請老師重新確認。`
+        : `${teacherName} 的薪資已調整，需由老師重新確認。`);
       await fetchPayrollAdminDashboard();
     }
 
@@ -9964,7 +9966,11 @@ https://sherryaerial-web.github.io/sub.html/
             amount: Number(button.dataset.adjustment) || 0,
             showAmount: true,
             title: `調整 ${button.dataset.teacherName} 的薪資`,
-            copy: "正數為補發，負數為扣除；調整後會請老師重新確認。"
+            reasonLabel: "調整原因（必填）",
+            reasonRequired: true,
+            copy: button.dataset.status === "有異議"
+              ? "正數為補發，負數為扣除；調整後仍保留「有異議」，請再按「回覆異議」，完成後由老師重新確認。"
+              : "正數為補發，負數為扣除；調整後會請老師重新確認。"
           });
         }
         if (action === "cancel-payroll-deduction") {
@@ -10128,7 +10134,10 @@ https://sherryaerial-web.github.io/sub.html/
             version: data.summary.version,
             lineId: disputeButton.dataset.payrollDispute,
             title: "回報薪資問題",
-            copy: "請說明這筆課程需要核對的地方。"
+            copy: "請填寫異議原因，說明這筆課程需要核對的地方，送出後由管理員處理。",
+            reasonLabel: "異議原因（必填）",
+            reasonPlaceholder: "例如：少算一位學生，或課程金額需要核對。",
+            reasonRequired: true
           });
         }
       } catch (error) { setNotice(error.message, "error"); }

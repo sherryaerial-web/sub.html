@@ -13752,13 +13752,12 @@ function adjustPayrollSummary_(session, payload) {
       if (normalizePayrollMonthValue_(row[0]) !== month || cleanText_(row[1]) !== teacher || cleanText_(row[8]) !== version) continue;
       var status = cleanText_(row[9]);
       if (status === CONFIG.PAYROLL_FINALIZED_STATUS) throw new Error('薪資已完成管理員確認，不能再調整。');
-      if (status === CONFIG.PAYROLL_REVIEW_STATUS) throw new Error('請先處理這位老師尚未完成的薪資異議。');
       while (row.length < SHEET_HEADERS.PAYROLL_SUMMARIES.length) row.push('');
       var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
       row[6] = (Number(row[2]) || 0) + (Number(row[4]) || 0) +
         (Number(row[5]) || 0) + adjustment - (Number(row[16]) || 0);
-      var nextStatus = status === CONFIG.PAYROLL_DRAFT_STATUS
-        ? CONFIG.PAYROLL_DRAFT_STATUS
+      var nextStatus = status === CONFIG.PAYROLL_DRAFT_STATUS || status === CONFIG.PAYROLL_REVIEW_STATUS
+        ? status
         : (Number(row[6]) === 0 ? CONFIG.PAYROLL_NO_CONFIRM_STATUS : CONFIG.PAYROLL_PUBLISHED_STATUS);
       row[9] = nextStatus;
       row[10] = '';

@@ -11537,6 +11537,255 @@ test('payroll sync fetches one extra day but only drafts courses inside the requ
   assert.equal(snapshot.values.some((row) => row[1] === '2026-09'), false);
 });
 
+function payrollReportRow(overrides = {}) {
+  return { classScheduleId: 501, classId: 42, classRoomId: 3, locationId: 2,
+    instructorId: 7, instructorId1: null, instructorId2: null,
+    classScheduleTime: '2026-11-30T15:30:00Z', numberCustomersAttended: 4,
+    numberCustomersNotRecorded: 0, passRevenue: 1760.4, cancellationRevenue: 180,
+    instructorSalary: 1200, ...overrides };
+}
+
+function payrollReportCalendar(overrides = {}) {
+  return { id: 501, class: { id: 42, nameZhHant: 'A－空環 Lv.1' },
+    classTime: '2026-11-30T15:30:00Z', classRoom: { id: 3, nameZhHant: 'A' },
+    customersAttended: 9, instructors: [{ id: 7, firstName: '老師甲' }], ...overrides };
+}
+
+function payrollReportFixture({ report = [payrollReportRow()], calendar = [payrollReportCalendar()], status = '', month = '2026-11' } = {}) {
+  const services = createAuthServices();
+  services.Utilities.formatDate = formatTaipeiDate;
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-only-secret');
+  const definitions = [
+    ['薪項設定', EXPECTED_PAYROLL_RULE_HEADERS, [['預設值', '', '人數階梯', 4, 900]]],
+    ['薪資來源資料', EXPECTED_PAYROLL_SOURCE_HEADERS, [[month, 501, '2026/11/30 23:30', 'A－空環 Lv.1', '老師甲', '9/10', 0, 99999, 99999, 'A', '晴光', 'old']]],
+    ['薪資同步快照', EXPECTED_PAYROLL_SNAPSHOT_HEADERS, []],
+    ['薪資明細', EXPECTED_PAYROLL_LINE_HEADERS, []],
+    ['薪資結算', EXPECTED_PAYROLL_SUMMARY_HEADERS, status ? [[month, '老師甲', 900, 0, 0, 0, 900, 0, 'previous-version', status]] : []],
+    ['薪資異議', EXPECTED_PAYROLL_DISPUTE_HEADERS, []],
+    ['薪資付款設定', EXPECTED_PAYROLL_PAYMENT_HEADERS, []],
+    ['操作紀錄', ['操作時間', '操作者', '操作類型', '目標編號', '舊狀態', '新狀態', '原因'], []],
+  ];
+  const sheets = definitions.map(([name, headers, rows]) => createSheetFixture(name, [headers, ...rows]));
+  const spreadsheet = createSpreadsheetFixture(sheets);
+  const calls = [];
+  const backend = loadBackend({ ...services, SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    UrlFetchApp: { fetch(url, options) {
+      calls.push({ url, options });
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({
+        from: `${month}-01`, to: backend.getPayrollMonthRange_(month).calendarDateTo,
+        timezone: 'Asia/Taipei', total: report.length, offset: 0, limit: 200, hasMore: false, data: report,
+      }) };
+    } } });
+  backend.fetchCalendarPages_ = () => calendar;
+  return { backend, spreadsheet, calls, services, admin: { teacherName: '冠蓉', role: '管理員', managementCapabilities: ['payroll_admin'] },
+    saved: () => JSON.stringify(sheets.map(sheet => sheet.values)) };
+}
+
+test('payroll reports API supplies November attendance and revenue without legacy Excel or OB salary overriding rules', () => {
+  const f = payrollReportFixture();
+  const result = f.backend.syncPayrollMonth_(f.admin, '2026-11');
+  assert.equal(result.source, 'ob_attendance_report');
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.publishable, true);
+  assert.equal(f.calls.length, 1);
+  assert.match(f.calls[0].url, /\/v1\/reports\/attendance\/details\?from=2026-11-01&to=2026-11-30/);
+  assert.equal(f.calls[0].options.headers.Authorization, 'Bearer test-only-secret');
+  const snapshot = f.spreadsheet.getSheetByName('薪資同步快照').values[1];
+  assert.equal(snapshot[7], 4);
+  assert.equal(snapshot[9], 1760);
+  assert.ok(Math.abs(snapshot[10] - 740.4) < 0.001);
+  assert.equal(f.spreadsheet.getSheetByName('薪資明細').values[1][13], 900);
+  assert.equal(f.spreadsheet.getSheetByName('薪資結算').values[1][9], '草稿');
+  assert.equal(f.spreadsheet.getSheetByName('薪資來源資料').values[1][7], 99999);
+});
+
+test('payroll reports API joins all instructors and retains Excel-compatible special income rounding', () => {
+  const backend = loadBackend();
+  const range = backend.getPayrollMonthRange_('2026-11');
+  const courses = backend.mergePayrollAttendanceReport_([
+    payrollReportCalendar({ class: { id: 42, nameZhHant: 'A－雙人合作特別課' },
+      instructors: [{ id: 7, name: 'Sherry❤雪莉' }, { id: 8, name: '合作老師' }] }),
+  ], [payrollReportRow({ instructorId1: 8, passRevenue: 9790.56 })], range);
+  assert.equal(courses[0].courseIncome, 9791);
+  assert.equal(courses[0].instructors.length, 2);
+  assert.equal(backend.calculatePayrollLinesForCourse_(courses[0], [])[0].amount, Math.round(9791 * 0.6));
+});
+
+for (const instructors of [
+  [{ id: 7, name: '老師甲' }, { id: 8, name: '' }],
+  [{ id: 7, name: '老師甲' }, { id: 8, name: '老師甲' }],
+  [{ id: 7, name: '老師甲' }, { id: 7, name: '老師甲' }],
+]) {
+  test(`payroll reports API never hides incomplete or duplicate raw instructors: ${JSON.stringify(instructors)}`, () => {
+    const f = payrollReportFixture({ calendar: [payrollReportCalendar({ instructors })] });
+    const before = f.saved();
+    assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /老師/);
+    assert.equal(f.saved(), before);
+  });
+}
+
+test('payroll reports API paginates by returned row count through year-end with exact metadata', () => {
+  const calls = [];
+  const backend = loadBackend({ UrlFetchApp: { fetch(url) {
+    calls.push(url);
+    const second = url.includes('offset=1&');
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({
+      from: '2026-12-01', to: '2026-12-31', timezone: 'Asia/Taipei', total: 2,
+      offset: second ? 1 : 0, limit: 200, hasMore: !second,
+      data: [payrollReportRow({ classScheduleId: second ? 502 : 501 })],
+    }) };
+  } } });
+  assert.equal(backend.fetchPayrollAttendanceReport_('test', backend.getPayrollMonthRange_('2026-12')).length, 2);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /from=2026-12-01&to=2026-12-31&offset=1&limit=200/);
+});
+
+for (const status of ['待確認', '已確認', '有異議', '管理員已確認', '無需確認']) {
+  test(`payroll reports API preserves ${status} payroll before network or data writes`, () => {
+    const f = payrollReportFixture({ status });
+    const before = f.saved();
+    assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /已發布|人工|結算/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.saved(), before);
+  });
+}
+
+test('payroll reports API freezes October Excel and existing no-show handling even if no summary row exists', () => {
+  const f = payrollReportFixture({ month: '2026-10' });
+  const before = f.saved();
+  f.backend.fetchCalendarPages_ = () => { throw new Error('must not contact OB'); };
+  assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-10'), /十月|2026-10/);
+  assert.equal(f.saved(), before);
+});
+
+for (const patch of [
+  { classScheduleId: 502 }, { classId: 99 }, { instructorId: 8 }, { instructorId1: 8 },
+  { classRoomId: 4 }, { classScheduleTime: '2026-11-30T15:45:00Z' },
+  { numberCustomersAttended: null }, { numberCustomersAttended: '4' }, { numberCustomersAttended: -1 },
+  { numberCustomersNotRecorded: 1 }, { numberCustomersNotRecorded: null },
+  { passRevenue: null }, { passRevenue: '' }, { cancellationRevenue: null }, { instructorSalary: null },
+]) {
+  test(`payroll reports API rejects incomplete or conflicting source before writes: ${JSON.stringify(patch)}`, () => {
+    const f = payrollReportFixture({ report: [payrollReportRow(patch)] });
+    const before = f.saved();
+    assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /OB|報表|出席|收入|老師|課程/);
+    assert.equal(f.saved(), before);
+  });
+}
+
+for (const [name, report, calendar] of [
+  ['missing report', [], [payrollReportCalendar()]],
+  ['missing calendar', [payrollReportRow()], []],
+  ['duplicate report', [payrollReportRow(), payrollReportRow()], [payrollReportCalendar()]],
+  ['duplicate calendar', [payrollReportRow()], [payrollReportCalendar(), payrollReportCalendar()]],
+]) {
+  test(`payroll reports API requires complete unique coverage: ${name}`, () => {
+    const f = payrollReportFixture({ report, calendar });
+    const before = f.saved();
+    assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /OB|報表|課程|有效/);
+    assert.equal(f.saved(), before);
+  });
+}
+
+test('payroll reports API detects payroll changes during fetch and preserves the other operator result', () => {
+  const f = payrollReportFixture();
+  f.backend.fetchCalendarPages_ = () => {
+    f.spreadsheet.getSheetByName('薪資同步快照').values.push(['newer-version', '2026-11', 501]);
+    return [payrollReportCalendar()];
+  };
+  assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /變動|重新/);
+  assert.equal(f.spreadsheet.getSheetByName('薪資明細').values.length, 1);
+});
+
+test('payroll reports API excludes next-month and canceled calendar entries but keeps the last local day', () => {
+  const f = payrollReportFixture({ calendar: [payrollReportCalendar(),
+    payrollReportCalendar({ id: 502, classTime: '2026-11-30T16:00:00Z' }),
+    payrollReportCalendar({ id: 503, cancelled: true }),
+  ] });
+  const result = f.backend.syncPayrollMonth_(f.admin, '2026-11');
+  assert.equal(result.courseCount, 1);
+  assert.equal(f.spreadsheet.getSheetByName('薪資同步快照').values[1][3], '2026/11/30');
+});
+
+test('payroll reports API treats a recorded zero as zero rather than calendar enrollment or Excel fallback', () => {
+  const backend = loadBackend();
+  const courses = backend.mergePayrollAttendanceReport_([payrollReportCalendar()], [payrollReportRow({
+    numberCustomersAttended: 0, passRevenue: 0, cancellationRevenue: 0, instructorSalary: 0,
+  })], backend.getPayrollMonthRange_('2026-11'));
+  assert.equal(courses[0].attendanceCount, 0);
+  assert.equal(courses[0].courseIncome, 0);
+  assert.equal(courses[0].profit, 0);
+});
+
+test('payroll reports API blocks manual adjustments on draft lines and summaries, including zero adjustments with reasons', () => {
+  for (const [sheetName, row] of [
+    ['薪資明細', ['2026-11', '501:老師甲', 'v1', 501, '老師甲', '2026/11/30', '23:30', '空環', '', 4, 0, '', '', 900, -700, '已處理', '草稿']],
+    ['薪資結算', ['2026-11', '老師甲', 900, 0, 0, 0, 900, 0, 'v1', '草稿', '', '', 0, '人工已確認維持原額']],
+  ]) {
+    const f = payrollReportFixture();
+    f.spreadsheet.getSheetByName(sheetName).values.push(row);
+    const before = f.saved();
+    assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /人工調整/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.saved(), before);
+  }
+});
+
+test('payroll reports API preserves historical deductions without carrying October into November', () => {
+  const f = payrollReportFixture();
+  f.backend.ensurePayrollStructureUnlocked_(f.spreadsheet);
+  const deductions = f.spreadsheet.getSheetByName('薪資單月扣款');
+  deductions.values.push(['noshow-october-manual', '2026-10', '老師甲', '2026/10/19', 700, '既有處理', '有效', 'now', '冠蓉', '', '', '']);
+  deductions.values.push(['noshow-november-event', '2026-11', '老師甲', '2026/11/01', 100, '單月扣款', '有效', 'now', '冠蓉', '', '', '']);
+  const before = JSON.stringify(deductions.values);
+  f.backend.syncPayrollMonth_(f.admin, '2026-11');
+  assert.equal(f.spreadsheet.getSheetByName('薪資結算').values[1][6], 800);
+  assert.equal(f.spreadsheet.getSheetByName('薪資結算').values[1][16], 100);
+  assert.equal(JSON.stringify(deductions.values), before);
+});
+
+test('payroll reports API denies teachers before any source reads or writes', () => {
+  const f = payrollReportFixture();
+  const before = f.saved();
+  assert.throws(() => f.backend.syncPayrollMonth_({ teacherName: '老師甲', role: '老師', managementCapabilities: [] }, '2026-11'), /薪資|權限/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.saved(), before);
+});
+
+test('payroll reports API rejects an empty month before creating payroll structure', () => {
+  const f = payrollReportFixture({ report: [], calendar: [] });
+  f.backend.ensurePayrollStructureUnlocked_ = () => { throw new Error('must not initialize any sheet'); };
+  assert.throws(() => f.backend.syncPayrollMonth_(f.admin, '2026-11'), /沒有取得有效課程/);
+});
+
+for (const status of [401, 403, 429, 500]) {
+  test(`payroll reports API stops HTTP ${status} without retry, secret leakage or fallback`, () => {
+    let calls = 0;
+    const backend = loadBackend({ UrlFetchApp: { fetch() {
+      calls++;
+      return { getResponseCode: () => status, getContentText: () => 'private-response-secret' };
+    } } });
+    assert.throws(() => backend.fetchPayrollAttendanceReport_('secret', backend.getPayrollMonthRange_('2026-11')),
+      error => error.message.includes(String(status)) && !error.message.includes('secret'));
+    assert.equal(calls, 1);
+  });
+}
+
+for (const patch of [
+  { total: 2 }, { hasMore: true, data: [] }, { offset: 1 }, { timezone: 'UTC' },
+  { from: '2026-10-01' }, { hasMore: 'false' }, { data: null }, { total: 100000 },
+]) {
+  test(`payroll reports API rejects malformed pagination: ${JSON.stringify(patch)}`, () => {
+    const backend = loadBackend({ UrlFetchApp: { fetch() {
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({
+        from: '2026-11-01', to: '2026-11-30', timezone: 'Asia/Taipei', total: 1,
+        offset: 0, limit: 200, hasMore: false, data: [payrollReportRow()], ...patch,
+      }) };
+    } } });
+    assert.throws(() => backend.fetchPayrollAttendanceReport_('secret', backend.getPayrollMonthRange_('2026-11')), /報表|分頁/);
+  });
+}
+
 test('payroll dashboard recognizes month cells stored as Google Sheets dates', () => {
   const augustSheetDate = new Date('2026-08-01T00:00:00+08:00');
   const rules = createSheetFixture('薪項設定', [EXPECTED_PAYROLL_RULE_HEADERS]);

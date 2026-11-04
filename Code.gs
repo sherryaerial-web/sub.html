@@ -13264,19 +13264,148 @@ function mergePayrollSource_(course, sourceMap) {
   return item;
 }
 
+// Read only: never replace a published/manual result with a fresh source snapshot.
+function getPayrollSyncState_(spreadsheet, month) {
+  if (month === '2026-10') throw new Error('2026-10 十月薪資已沿用 Excel 結算，禁止重新同步；既有手動扣款保持原狀。');
+  var definitions = [
+    [SHEETS.PAYROLL_SNAPSHOT, SHEET_HEADERS.PAYROLL_SNAPSHOT, 1],
+    [SHEETS.PAYROLL_LINES, SHEET_HEADERS.PAYROLL_LINES, 0],
+    [SHEETS.PAYROLL_SUMMARIES, SHEET_HEADERS.PAYROLL_SUMMARIES, 0],
+    [SHEETS.PAYROLL_DEDUCTIONS, SHEET_HEADERS.PAYROLL_DEDUCTIONS, 1]
+  ];
+  var state = definitions.map(function(definition) {
+    var sheet = spreadsheet.getSheetByName(definition[0]);
+    if (!sheet) return [];
+    assertHeaders_(sheet, definition[1]);
+    return sheet.getDataRange().getValues().slice(1).filter(function(row) {
+      return normalizePayrollMonthValue_(row[definition[2]]) === month;
+    });
+  });
+  state[1].forEach(function(row) {
+    if (cleanText_(row[16]) !== CONFIG.PAYROLL_DRAFT_STATUS || Number(row[14]) || cleanText_(row[15])) {
+      throw new Error('該月份已有已發布或人工調整的薪資明細，請從既有結算更正，不能重新同步。');
+    }
+  });
+  state[2].forEach(function(row) {
+    if (cleanText_(row[9]) !== CONFIG.PAYROLL_DRAFT_STATUS || Number(row[12]) || cleanText_(row[13])) {
+      throw new Error('該月份已有已發布或人工調整的薪資結算，請從既有結算更正，不能重新同步。');
+    }
+  });
+  return JSON.stringify(state);
+}
+
+function fetchPayrollAttendanceReport_(token, range) {
+  var rows = [];
+  var total = null;
+  // At most 25 requests / 5,000 rows. No automatic retry of rate limits or timeouts.
+  for (var page = 0; page < 25; page += 1) {
+    var url = 'https://api.omceanbooking.com/v1/reports/attendance/details?from=' + encodeURIComponent(range.dateFrom) +
+      '&to=' + encodeURIComponent(range.calendarDateTo) + '&offset=' + rows.length + '&limit=200';
+    var response = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + token } });
+    var status = response.getResponseCode();
+    if (status !== 200) throw new Error('OB 薪資報表讀取失敗（HTTP ' + status + '），未寫入薪資草稿；請稍後確認 API 權限或額度。');
+    var body;
+    try { body = JSON.parse(response.getContentText()); }
+    catch (error) { throw new Error('OB 薪資報表不是有效 JSON，已停止同步。'); }
+    if (!body || !Array.isArray(body.data) || body.from !== range.dateFrom || body.to !== range.calendarDateTo ||
+        body.timezone !== getTimeZone_() || !Number.isSafeInteger(body.total) || body.total < 0 || body.total > 5000 ||
+        body.offset !== rows.length || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 200 ||
+        typeof body.hasMore !== 'boolean' || body.data.length > body.limit ||
+        (body.hasMore && !body.data.length) || (total !== null && total !== body.total)) {
+      throw new Error('OB 薪資報表分頁資料不完整或已變動，已停止同步，請重新確認。');
+    }
+    total = body.total;
+    rows = rows.concat(body.data);
+    if (rows.length > total || (body.hasMore && rows.length >= total) || (!body.hasMore && rows.length !== total)) {
+      throw new Error('OB 薪資報表分頁總數不一致，已停止同步。');
+    }
+    if (!body.hasMore) return rows;
+  }
+  throw new Error('OB 薪資報表超過單次同步分頁上限，未寫入薪資草稿。');
+}
+
+function mergePayrollAttendanceReport_(rawItems, reportRows, range) {
+  var reportById = Object.create(null);
+  var seen = Object.create(null);
+  function idOf(value) {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? String(value) : '';
+  }
+  reportRows.forEach(function(row) {
+    var id = row && idOf(row.classScheduleId);
+    if (!id || reportById[id]) throw new Error('OB 薪資報表課程編號缺漏或重複，已停止同步。');
+    reportById[id] = row;
+  });
+  var courses = [];
+  rawItems.forEach(function(raw, index) {
+    if (raw && raw.cancelled === true) return;
+    var course = normalizePayrollCalendarItem_(raw);
+    if (!course) throw new Error('OB 第 ' + (index + 1) + ' 筆薪資課程資料不完整，已停止同步。');
+    if (!isDateWithinApiWindow_(course.date, range.dateFrom, range.calendarDateTo)) return;
+    if (seen[course.calendarId]) throw new Error('OB 課表課程編號重複：' + course.calendarId + '，已停止同步。');
+    seen[course.calendarId] = true;
+    var row = reportById[course.calendarId];
+    function fail(message) { throw new Error('OB 課程 ' + course.calendarId + '：' + message + '，已停止薪資同步。'); }
+    if (!row) fail('找不到對應薪資報表');
+    var classId = cleanText_((raw['class'] || raw.course || {}).id);
+    var reportTime = new Date(row.classScheduleTime);
+    if (!idOf(row.classId) || classId !== String(row.classId) || !row.classScheduleTime || isNaN(reportTime.getTime()) ||
+        reportTime.getTime() !== new Date(raw.classTime || raw.startAt || raw.startTime).getTime()) fail('報表課程或時間不一致');
+    // Validate raw instructors before the legacy normalizer can drop unnamed/duplicate people.
+    var rawInstructors = Array.isArray(raw.instructors) ? raw.instructors : [raw.instructor];
+    var rawNames = Object.create(null);
+    var rawIds = Object.create(null);
+    var calendarIds = rawInstructors.map(function(person) {
+      var id = cleanText_(person && (person.id || person.instructorId));
+      var name = getPayrollInstructorName_(person);
+      if (!id || !name || rawIds[id] || rawNames[name]) fail('課表老師姓名或編號缺漏、重複，請先確認');
+      rawIds[id] = true;
+      rawNames[name] = true;
+      return id;
+    }).sort();
+    var reportIds = [row.instructorId, row.instructorId1, row.instructorId2].filter(function(id) { return id != null; })
+      .map(function(id) { if (!idOf(id)) fail('報表老師編號不完整'); return String(id); }).sort();
+    if (calendarIds.some(function(id) { return !id; }) || JSON.stringify(calendarIds) !== JSON.stringify(reportIds)) fail('報表老師與課表不一致');
+    if (raw.classRoom && raw.classRoom.id != null && cleanText_(raw.classRoom.id) !== idOf(row.classRoomId)) fail('報表教室不一致');
+    if (raw.location && raw.location.id != null && cleanText_(raw.location.id) !== idOf(row.locationId)) fail('報表館別不一致');
+    if (!Number.isSafeInteger(row.numberCustomersAttended) || row.numberCustomersAttended < 0 ||
+        !Number.isSafeInteger(row.numberCustomersNotRecorded) || row.numberCustomersNotRecorded !== 0) fail('出席資料尚未記錄完成或不正確');
+    ['passRevenue', 'cancellationRevenue', 'instructorSalary'].forEach(function(key) {
+      if (typeof row[key] !== 'number' || !isFinite(row[key])) fail('報表收入或盈利資料不完整');
+    });
+    course.attendanceCount = row.numberCustomersAttended;
+    // Excel source income is rounded before special-course revenue sharing.
+    course.courseIncome = Math.round(row.passRevenue);
+    course.profit = row.passRevenue + row.cancellationRevenue - row.instructorSalary;
+    // instructorSalary is OB's comparison value; the existing school rules calculate actual pay.
+    courses.push(course);
+  });
+  if (courses.length !== reportRows.length) throw new Error('OB 薪資報表與本月課表筆數不一致，已停止同步。');
+  return courses;
+}
+
 function syncPayrollMonth_(session, monthValue) {
   assertCapabilitySession_(session, 'payroll_admin');
   var range = getPayrollMonthRange_(monthValue);
+  var initialState = withScriptLock_(function() {
+    return getPayrollSyncState_(SpreadsheetApp.getActiveSpreadsheet(), range.month);
+  });
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) throw new Error('請先在指令碼屬性設定 OMCEAN_API_TOKEN。');
   var rawItems = fetchCalendarPages_(token, range.dateFrom, range.dateTo);
+  var useReport = range.month >= '2026-11';
+  var reportCourses = useReport ? mergePayrollAttendanceReport_(rawItems, fetchPayrollAttendanceReport_(token, range), range) : null;
+  if (useReport && !reportCourses.length) throw new Error('該月份沒有取得有效課程，未寫入薪資草稿。');
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (getPayrollSyncState_(ss, range.month) !== initialState) {
+      throw new Error('同步期間薪資資料已有變動，未建立新草稿；請重新查詢結算後再決定。');
+    }
     ensurePayrollStructureUnlocked_(ss);
-    var sourceMap = getPayrollSourceMapUnlocked_(ss, range.month);
-    var normalized = [];
+    var sourceMap = useReport ? null : getPayrollSourceMapUnlocked_(ss, range.month);
+    var normalized = reportCourses || [];
     var seen = {};
-    rawItems.forEach(function(rawItem, index) {
+    if (!useReport) rawItems.forEach(function(rawItem, index) {
       var item = normalizePayrollCalendarItem_(rawItem);
       if (!item) throw new Error('OB 第 ' + (index + 1) + ' 筆薪資課程資料不完整，已停止同步。');
       if (!isDateWithinApiWindow_(item.date, range.dateFrom, range.calendarDateTo || range.dateTo)) return;
@@ -13297,10 +13426,11 @@ function syncPayrollMonth_(session, monthValue) {
       targetId: range.month,
       before: '',
       after: draft.errors.length ? '草稿有 ' + draft.errors.length + ' 筆錯誤' : '草稿完成',
-      reason: '版本 ' + version
+      reason: '版本 ' + version + '；來源：' + (useReport ? 'OB 營運報表＋課表 API' : '既有 Excel＋課表 API')
     }]);
     return {
       month: range.month,
+      source: useReport ? 'ob_attendance_report' : 'legacy_excel',
       version: version,
       courseCount: normalized.length,
       lineCount: draft.lines.length,

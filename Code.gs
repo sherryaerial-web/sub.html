@@ -12893,8 +12893,31 @@ function normalizePayrollRule_(rule) {
     courseKeyword: keyword,
     billingType: cleanText_(source.billingType == null ? source['計費類型'] : source.billingType),
     threshold: Number(source.threshold == null ? source['人數門檻'] : source.threshold) || 0,
-    amount: Number(source.amount == null ? source['金額'] : source.amount)
+    amount: Number(source.amount == null ? source['金額'] : source.amount),
+    effectiveMonth: normalizePayrollRuleMonth_(source.effectiveMonth == null ? source['生效月份'] : source.effectiveMonth),
+    throughMonth: normalizePayrollRuleMonth_(source.throughMonth == null ? source['截止月份'] : source.throughMonth)
   };
+}
+
+function normalizePayrollRuleMonth_(value) {
+  if (value == null || value === '') return '';
+  var month = value instanceof Date
+    ? Utilities.formatDate(value, getTimeZone_(), 'yyyy-MM') : cleanText_(value).replace('/', '-');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('薪項生效／截止月份格式應為 YYYY-MM。');
+  return month;
+}
+
+function selectPayrollRulesForMonth_(ruleValues, monthValue) {
+  var rules = (ruleValues || []).map(normalizePayrollRule_);
+  var hasDatedRules = rules.some(function(rule) { return rule.effectiveMonth || rule.throughMonth; });
+  var month = hasDatedRules ? normalizePayrollRuleMonth_(monthValue) : '';
+  if (hasDatedRules && !month) throw new Error('有生效月份的薪項必須提供課程或結算月份。');
+  return rules.filter(function(rule) {
+    if (rule.effectiveMonth && rule.throughMonth && rule.effectiveMonth > rule.throughMonth) {
+      throw new Error('薪項生效月份不可晚於截止月份。');
+    }
+    return (!rule.effectiveMonth || rule.effectiveMonth <= month) && (!rule.throughMonth || rule.throughMonth >= month);
+  });
 }
 
 function normalizePayrollInstructors_(course) {
@@ -12988,21 +13011,47 @@ function calculatePayrollLinesForCourse_(course, ruleValues) {
   if (!hasAttendance || !isFinite(attendance) || attendance < 0 || Math.floor(attendance) !== attendance) {
     throw new Error('課程缺少有效出席人數。');
   }
-  var rules = (ruleValues || []).map(normalizePayrollRule_).filter(function(rule) {
+  var allRules = (ruleValues || []).map(normalizePayrollRule_);
+  var lessonMonth = cleanText_(item.date).slice(0, 7).replace('/', '-');
+  var rules = selectPayrollRulesForMonth_(allRules, lessonMonth).filter(function(rule) {
     return rule.teacherName && rule.billingType && isFinite(rule.amount);
   });
   var teacherRules = rules.filter(function(rule) {
-    return rule.teacherName === teacherName && rule.billingType === '標準時薪' &&
+    return rule.teacherName === teacherName && ['標準時薪', '每小時計薪'].indexOf(rule.billingType) !== -1 &&
       (!rule.courseKeyword || courseName.indexOf(rule.courseKeyword) !== -1);
   }).sort(function(a, b) { return b.courseKeyword.length - a.courseKeyword.length; });
   if (teacherRules.length) {
+    var selected = teacherRules[0];
+    var equalPriority = teacherRules.filter(function(rule) { return rule.courseKeyword.length === selected.courseKeyword.length; });
+    if (equalPriority.length > 1 && equalPriority.some(function(rule) { return rule.effectiveMonth || rule.throughMonth; })) {
+      throw new Error(teacherName + ' 該月份的專屬薪項重複或重疊，請核對生效月份。');
+    }
+    var multiplier = 1;
+    if (selected.billingType === '每小時計薪') {
+      var minutes = Number(item.durationMinutes);
+      if (!isFinite(minutes) || minutes <= 0 || minutes > 1440 || Math.floor(minutes) !== minutes) {
+        throw new Error(teacherName + ' 課程時長缺少或不正確，未套用每小時計薪。');
+      }
+      multiplier = minutes / 60;
+    }
     return [{
       teacherName: teacherName,
-      amount: Math.round(teacherRules[0].amount),
+      amount: Math.round(selected.amount * multiplier),
       ruleType: '老師專屬薪項',
-      ruleDetail: teacherRules[0].courseKeyword || '老師固定時薪'
+      ruleDetail: selected.billingType === '每小時計薪'
+        ? selected.amount + '／小時 × ' + item.durationMinutes + ' 分鐘 ÷ 60'
+        : selected.courseKeyword || '老師固定時薪'
     }];
   }
+  var datedTeacherRules = allRules.filter(function(rule) {
+    return rule.teacherName === teacherName && (rule.effectiveMonth || rule.throughMonth) &&
+      ['標準時薪', '每小時計薪', '人數階梯'].indexOf(rule.billingType) !== -1 &&
+      (!rule.courseKeyword || courseName.indexOf(rule.courseKeyword) !== -1);
+  });
+  if (datedTeacherRules.length && !rules.some(function(rule) {
+    return rule.teacherName === teacherName && rule.billingType === '人數階梯' &&
+      (!rule.courseKeyword || courseName.indexOf(rule.courseKeyword) !== -1);
+  })) throw new Error(teacherName + ' 該月份沒有有效的專屬薪項，請核對生效月份。');
   var teacherTierRules = rules.filter(function(rule) {
     return rule.teacherName === teacherName && rule.billingType === '人數階梯' &&
       (!rule.courseKeyword || courseName.indexOf(rule.courseKeyword) !== -1);
@@ -13036,7 +13085,7 @@ function calculatePayrollLinesForCourse_(course, ruleValues) {
   }];
 }
 
-function calculatePayrollSummary_(teacherNameValue, lines, ruleValues) {
+function calculatePayrollSummary_(teacherNameValue, lines, ruleValues, monthValue) {
   var teacherName = cleanText_(teacherNameValue);
   if (!teacherName) throw new Error('薪資結算缺少老師姓名。');
   var subtotal = (lines || []).filter(function(line) {
@@ -13047,7 +13096,10 @@ function calculatePayrollSummary_(teacherNameValue, lines, ruleValues) {
     return total + amount;
   }, 0);
   subtotal = Math.round(subtotal);
-  var fixedAdjustment = (ruleValues || []).map(normalizePayrollRule_).filter(function(rule) {
+  var adjustmentRules = (ruleValues || []).map(normalizePayrollRule_).filter(function(rule) {
+    return rule.teacherName === teacherName && ['固定加給', '固定扣項', '固定月薪'].indexOf(rule.billingType) !== -1;
+  });
+  var fixedAdjustment = selectPayrollRulesForMonth_(adjustmentRules, monthValue).filter(function(rule) {
     return rule.teacherName === teacherName &&
       ['固定加給', '固定扣項', '固定月薪'].indexOf(rule.billingType) !== -1;
   }).reduce(function(total, rule) {
@@ -13123,10 +13175,14 @@ function normalizePayrollCalendarItem_(item) {
   var attended = item.customersAttended;
   if (attended == null) attended = item.customersAttending;
   var timezone = getTimeZone_();
+  var durationMinutes = null;
+  try { durationMinutes = getPracticeCalendarTiming_(item).minutes; }
+  catch (error) { durationMinutes = null; }
   return {
     calendarId: cleanText_(item.id),
     date: Utilities.formatDate(parsedTime, timezone, 'yyyy/MM/dd'),
     time: Utilities.formatDate(parsedTime, timezone, 'HH:mm'),
+    durationMinutes: durationMinutes,
     courseName: courseName,
     instructors: instructors,
     attendanceCount: attended == null || attended === '' ? null : Number(attended),
@@ -13196,7 +13252,7 @@ function buildPayrollDraft_(monthValue, courses, ruleValues) {
     if (rule.teacherName && rule.teacherName !== '預設值') teachers[rule.teacherName] = true;
   });
   var summaries = Object.keys(teachers).sort().map(function(teacherName) {
-    var summary = calculatePayrollSummary_(teacherName, lines, ruleValues);
+    var summary = calculatePayrollSummary_(teacherName, lines, ruleValues, month);
     summary.profit = lines.filter(function(line) { return line.teacherName === teacherName; })
       .reduce(function(total, line) { return total + Number(line.profit || 0); }, 0);
     return summary;
@@ -13213,9 +13269,20 @@ function parsePayrollAttendance_(value) {
 function getPayrollRulesUnlocked_(spreadsheet) {
   var sheet = requireSheet_(spreadsheet, SHEETS.PAYROLL_RULES);
   assertHeaders_(sheet, SHEET_HEADERS.PAYROLL_RULES);
-  return sheet.getDataRange().getValues().slice(1).map(function(row) {
+  var values = sheet.getDataRange().getValues();
+  var headers = values[0] || [];
+  var hasMonths = cleanText_(headers[5]) || cleanText_(headers[6]);
+  if (hasMonths && (cleanText_(headers[5]) !== '生效月份' || cleanText_(headers[6]) !== '截止月份')) {
+    throw new Error('薪項設定 F、G 欄標題應為「生效月份」、「截止月份」。');
+  }
+  if (!hasMonths && values.slice(1).some(function(row) { return cleanText_(row[5]) || cleanText_(row[6]); })) {
+    throw new Error('薪項設定 F、G 欄有資料但缺少生效／截止月份標題。');
+  }
+  return values.slice(1).map(function(row) {
     return {
-      teacherName: row[0], courseKeyword: row[1], billingType: row[2], threshold: row[3], amount: row[4]
+      teacherName: row[0], courseKeyword: row[1], billingType: row[2], threshold: row[3], amount: row[4],
+      effectiveMonth: hasMonths ? normalizePayrollRuleMonth_(row[5]) : '',
+      throughMonth: hasMonths ? normalizePayrollRuleMonth_(row[6]) : ''
     };
   }).filter(function(rule) { return cleanText_(rule.teacherName) && cleanText_(rule.billingType); });
 }

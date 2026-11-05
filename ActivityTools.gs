@@ -140,3 +140,17 @@ function saveActivityTemplate_(session,op){
   });
 }
 function getActivityTemplates_(session,q){activityToolCampaign_(session,q.campaignId);return{drafts:activityToolEvents_().filter(function(e){return e.event.kind==='template';}).map(function(e){return{id:e.id,at:e.at,draft:e.event.payload};}).reverse().slice(0,30)};}
+
+// Server-to-server read only; never accepts browser sessions or changes claims.
+function productionStudentPrizes_(input){
+ var props=PropertiesService.getScriptProperties(),secret=props.getProperty('PRODUCTION_TASK_APP_SECRET');
+ if(ScriptApp.getScriptId()!=='16OHrdGSCR9sDXkbyttJK7_y4QVg7Hela1fhs4hiIPFgUHwQ-Q2NunnsW'||typeof secret!=='string'||secret.length<32||secret.length>256||!input||input.secret!==secret)throw Error('prizes_unavailable');
+ if(Object.keys(input).some(function(k){return ['secret','campaignId','email','offset'].indexOf(k)<0;})||input.campaignId!=='christmas-2026'||typeof input.email!=='string'||input.email.length>100||input.email!==input.email.trim().toLowerCase()||!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(input.email)||!Number.isSafeInteger(input.offset)||input.offset<0||input.offset>10000)throw Error('invalid_lookup');
+ var config=getRaffleConfiguration_(),campaign=config.enabled&&config.campaigns.filter(function(c){return c.id===input.campaignId;})[0];
+ if(!campaign||campaign.sourceSpreadsheetId!=='1Sdi96hIru-Vag8hFl6bEo6xMhpjgVkro75dH1PNvpRM')throw Error('prizes_unavailable');
+ var rows=readRaffleClaims_().filter(function(c){return c.campaignId===campaign.id&&c.email.toLowerCase()===input.email;}).sort(function(a,b){
+  var ranks={ready:0,partial:1,waiting:2,digital:3,claimed:4,cancelled:5};return ranks[a.status]-ranks[b.status]||a.id.localeCompare(b.id);
+ });
+ return {ok:true,campaignId:campaign.id,rows:rows.slice(input.offset,input.offset+10).map(function(c){return{id:c.id,prizeName:c.prizeName,venue:c.venue||'',quantity:c.quantity,claimed:c.claimedQuantity,status:c.status};}),nextOffset:rows.length>input.offset+10?input.offset+10:null};
+}
+function getActivityIncompleteDraws_(session,q){activityToolCampaign_(session,q.campaignId);if(q.campaignId!=='christmas-2026')throw Error('此活動不提供星星抽獎清單。');var offset=Number(q.offset||0);if(!Number.isSafeInteger(offset)||offset<0||offset>10000)throw Error('頁碼不正確。');return activityToolBridge_({action:'incomplete',offset:offset});}

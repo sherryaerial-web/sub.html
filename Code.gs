@@ -9218,6 +9218,10 @@ function doPost(e) {
       return createPostResponse_(parameters, { status:'success', data:productionIdentityRequest_(JSON.parse(parameters.payload)) });
     }
 
+    if (action === 'productionStudentPrizes') {
+      if(typeof parameters.payload !== 'string' || parameters.payload.length > 2048) throw Error('invalid_lookup');
+      return createPostResponse_(parameters, {status:'success',data:productionStudentPrizes_(JSON.parse(parameters.payload))});
+    }
     if (action === 'productionBallBridge') {
       if (typeof productionBallRequest_ !== 'function' || typeof parameters.payload !== 'string' || parameters.payload.length > 12288) throw Error('ball_bridge_disabled');
       return createPostResponse_(parameters, { status:'success', data:productionBallRequest_(JSON.parse(parameters.payload)) });
@@ -9482,6 +9486,7 @@ function doPost(e) {
       getActivityOperations: function() { return getActivityOperations_(session); },
       getActivityPacking: function() { return getActivityPacking_(session, parameters); },
       getActivityInventory: function() { return getActivityInventory_(session, parameters); },
+      getActivityIncompleteDraws: function() { return getActivityIncompleteDraws_(session, parameters); },
       getActivityStudentHistory: function() { return getActivityStudentHistory_(session, parameters); },
       getActivityTemplates: function() { return getActivityTemplates_(session, parameters); },
       previewActivityTemplate: function() { return previewActivityTemplate_(session, parameters); },

@@ -2623,6 +2623,10 @@
     let vvipDashboard = null;
     let vvipAdminFilter = "pending";
     let payrollDashboard = null;
+    let payrollNoShowPreview = null;
+    let payrollNoShowPending = null;
+    let payrollNoShowRevision = 0;
+    let payrollNoShowCourseRequest = 0;
     let invoiceDashboard = null;
     let notificationDashboard = null;
     let notificationInbox = null;
@@ -2805,7 +2809,7 @@
     window.addEventListener("online", resumeAppConnection);
 
     async function callPostApi(action, params = {}) {
-      if (authState.actingTeacherName && ["confirmPayroll", "submitPayrollDispute"].includes(action)) {
+      if (authState.actingTeacherName && ["confirmPayroll", "submitPayrollDispute", "getPayrollNoShowCourses", "previewPayrollNoShow", "recordPayrollNoShow", "cancelPayrollNoShow"].includes(action)) {
         throw new Error("代查看薪資為唯讀，請由老師本人確認或提出異議。");
       }
       const requestParams = { ...params };
@@ -7085,9 +7089,9 @@
           await resolvePayrollDispute(state.disputeId, reason);
         } else if (state.action === "adjust-payroll") {
           await adjustPayrollSummary(state.teacherName, state.version, adjustment, reason);
-        } else if (state.action === "cancel-payroll-deduction") {
-          await callPostApi("cancelPayrollDeduction", { deductionId: state.deductionId, reason });
-          setNotice("單月待扣款已取消。");
+        } else if (["cancel-payroll-deduction", "cancel-payroll-noshow"].includes(state.action)) {
+          await callPostApi(state.action === "cancel-payroll-noshow" ? "cancelPayrollNoShow" : "cancelPayrollDeduction", { deductionId: state.deductionId, reason });
+          setNotice("扣款已取消；已有草稿者須重新試算後再發布。");
           await fetchPayrollAdminDashboard();
         } else if (state.action === "confirm-special-ob") {
           await callPostApi("confirmSpecialCourseObAdoption", {
@@ -7178,9 +7182,135 @@
       const rows = (data.deductions || []).map(item => `<article class="notification-history-row">
         <div class="notification-schedule-head"><strong>${escapeHtml(item.teacherName)} -${formatMoney(item.amount)}</strong><span class="status-pill">${item.status === "已取消" ? "已取消" : applied.has(item.id) ? "已納入本月試算" : "待試算"}</span></div>
         <div class="item-meta">${escapeHtml(item.eventDate)}｜${escapeHtml(item.reason)}</div>
-        ${!data.version && item.status === "有效" ? `<button class="danger-button" type="button" data-admin-action="cancel-payroll-deduction" data-deduction-id="${escapeHtml(item.id)}"><i data-lucide="x"></i>取消扣款</button>` : ""}
+        ${item.event ? `<div class="item-meta">${item.event.input.mode === "replacement" ? `代課老師：${escapeHtml(item.event.input.replacementTeacher)}` : `原退還 ${escapeHtml(item.event.input.refundPoints)} 點｜額外補償 ${escapeHtml(item.event.input.extraPoints)} 點 × ${escapeHtml(item.event.input.pointPrice)} 元`}｜原老師該堂不計薪</div>` : ""}
+        ${item.status === "有效" && (item.event ? data.noShowEditable && !authState.actingTeacherName : !data.version) ? `<button class="danger-button" type="button" data-admin-action="${item.event ? "cancel-payroll-noshow" : "cancel-payroll-deduction"}" data-deduction-id="${escapeHtml(item.id)}"><i data-lucide="x"></i>取消扣款</button>` : ""}
         </article>`).join("");
       return form + (rows ? `<section><h3>${escapeHtml(data.month)} 單月扣款紀錄</h3>${rows}</section>` : "");
+    }
+
+    function renderPayrollNoShowForm(data) {
+      if (authState.actingTeacherName) return "";
+      if (payrollNoShowPending) {
+        if (payrollNoShowPending.owner !== authState.teacherName) return '<div class="state error">先前帳號有待確認的 No Show 登記，請切回原帳號核對。</div>';
+        return `<form id="payroll-noshow-form" class="admin-control"><strong>No Show 登記結果待確認</strong><div class="item-meta">${escapeHtml(payrollNoShowPending.preview.input.month)}｜${escapeHtml(payrollNoShowPending.preview.input.teacherName)}｜確認編號 ${escapeHtml(payrollNoShowPending.id)}</div><button id="payroll-noshow-register" class="compact-button" type="button" data-admin-action="record-payroll-noshow"><i data-lucide="refresh-cw"></i>確認登記結果</button></form>`;
+      }
+      if (!data.noShowEditable) return "";
+      const teachers = `<option value="">請選擇老師</option>${(data.deductionTeachers || []).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}`;
+      return `<details class="admin-control"><summary>登記 No Show Fee</summary>
+        <form id="payroll-noshow-form" class="notification-form-grid">
+          <label class="notification-field">事件日期<input id="payroll-noshow-date" class="text-input" type="date" min="${escapeHtml(data.month)}-01" max="${escapeHtml(data.month)}-${new Date(Number(data.month.slice(0, 4)), Number(data.month.slice(5)), 0).getDate()}" required></label>
+          <button id="payroll-noshow-load" class="compact-button" type="button" data-admin-action="load-payroll-noshow-courses"><i data-lucide="search"></i>查詢當日課程</button>
+          <label class="notification-field">課程<select id="payroll-noshow-course" class="text-input"><option value="">請先查詢當日課程</option></select></label>
+          <details class="notification-field"><summary>找不到已取消的課程</summary><label>OB 課程編號<input id="payroll-noshow-calendar" class="text-input" type="text" inputmode="numeric" maxlength="15"></label></details>
+          <label class="notification-field">原老師<select id="payroll-noshow-teacher" class="text-input" required>${teachers}</select></label>
+          <label class="notification-field">授課處理<select id="payroll-noshow-mode" class="text-input"><option value="replacement">有代課</option><option value="noReplacement">無代課</option></select></label>
+          <label class="notification-field" data-noshow-replacement>代課老師<select id="payroll-noshow-replacement" class="text-input">${teachers}</select></label>
+          <label class="notification-field" data-noshow-replacement>計薪出席人數<input id="payroll-noshow-attendance" class="text-input" type="number" min="0" max="1000" step="1"></label>
+          <label class="notification-field" data-noshow-points hidden>原退還點數總計<input id="payroll-noshow-points" class="text-input" type="number" min="0.01" max="100000" step="0.01"></label>
+          <label class="notification-field" data-noshow-points hidden>事件當時單點價格<input id="payroll-noshow-price" class="text-input" type="number" min="0.01" max="100000" step="0.01" value="180"></label>
+          <label class="notification-field">事件原因<input id="payroll-noshow-reason" class="text-input" type="text" maxlength="500" required></label>
+          <label class="checkbox-line"><input id="payroll-noshow-confirmed" type="checkbox" required>已確認原老師該堂未授課</label>
+          <button id="payroll-noshow-preview-button" class="compact-button" type="submit"><i data-lucide="calculator"></i>試算 No Show Fee</button>
+          <div id="payroll-noshow-preview" class="notification-field" aria-live="polite"></div>
+        </form></details>`;
+    }
+
+    function invalidatePayrollNoShow() {
+      if (payrollNoShowPending) return;
+      payrollNoShowRevision++;
+      payrollNoShowPreview = null;
+      const form = byId("payroll-noshow-form");
+      if (!form) return;
+      delete form.dataset.eventId;
+      byId("payroll-noshow-preview").innerHTML = "";
+      const replacement = byId("payroll-noshow-mode").value === "replacement";
+      form.querySelectorAll("[data-noshow-replacement]").forEach(node => { node.hidden = !replacement; });
+      form.querySelectorAll("[data-noshow-points]").forEach(node => { node.hidden = replacement; });
+    }
+
+    function readPayrollNoShowInput() {
+      const points = Number(byId("payroll-noshow-points").value);
+      const replacement = byId("payroll-noshow-mode").value === "replacement";
+      return { month: payrollDashboard.month,
+        calendarId: byId("payroll-noshow-calendar").value.trim() || byId("payroll-noshow-course").value,
+        teacherName: byId("payroll-noshow-teacher").value, mode: replacement ? "replacement" : "noReplacement",
+        replacementTeacher: replacement ? byId("payroll-noshow-replacement").value : "",
+        attendanceCount: replacement ? byId("payroll-noshow-attendance").value : 0,
+        refundPoints: replacement ? 0 : points, extraPoints: replacement ? 0 : points,
+        pointPrice: replacement ? 0 : Number(byId("payroll-noshow-price").value),
+        reason: byId("payroll-noshow-reason").value.trim(), confirmed: byId("payroll-noshow-confirmed").checked };
+    }
+
+    async function loadPayrollNoShowCourses() {
+      const form = byId("payroll-noshow-form");
+      const date = byId("payroll-noshow-date").value;
+      const month = payrollDashboard.month;
+      if (!date || !date.startsWith(`${month}-`)) return setNotice("請選擇本薪資月份內的事件日期。", "error");
+      invalidatePayrollNoShow();
+      const serial = ++payrollNoShowCourseRequest;
+      const button = byId("payroll-noshow-load");
+      setButtonBusy(button, true, "查詢中...");
+      try {
+        const courses = await callPostApi("getPayrollNoShowCourses", { month, date });
+        if (serial !== payrollNoShowCourseRequest || form !== byId("payroll-noshow-form") || date !== byId("payroll-noshow-date").value) return;
+        byId("payroll-noshow-course").innerHTML = `<option value="">請選擇課程</option>${courses.map(course =>
+          `<option value="${escapeHtml(course.calendarId)}">${escapeHtml(course.time)} ${escapeHtml(course.courseName)}｜${escapeHtml(course.instructors.map(person => person.name).join("、"))}${course.sourceCancelled ? "（已取消）" : ""}</option>`).join("")}`;
+        byId("payroll-noshow-calendar").value = "";
+        if (!courses.length) setNotice("當日查無課程，已取消課程可改填 OB 課程編號。", "error");
+      } catch (error) { setNotice(error.message, "error"); }
+      finally { setButtonBusy(button, false, ""); }
+    }
+
+    async function previewPayrollNoShow() {
+      if (payrollNoShowPending || !payrollDashboard?.noShowEditable || byId("payroll-noshow-preview-button").disabled) return;
+      invalidatePayrollNoShow();
+      const input = readPayrollNoShowInput();
+      const form = byId("payroll-noshow-form");
+      const date = byId("payroll-noshow-date").value.replace(/-/g, "/");
+      const revision = payrollNoShowRevision;
+      const button = byId("payroll-noshow-preview-button");
+      setButtonBusy(button, true, "試算中...");
+      try {
+        const quote = await callPostApi("previewPayrollNoShow", { event: input });
+        if (revision !== payrollNoShowRevision || form !== byId("payroll-noshow-form")) return;
+        if (quote.event.course.date !== date) throw Error("課程日期與事件日期不符，請重新選擇。");
+        payrollNoShowPreview = { quote, input, inputKey: JSON.stringify(input), date };
+        const course = quote.event.course;
+        byId("payroll-noshow-preview").innerHTML = `<div class="payroll-note"><strong>${escapeHtml(course.date)} ${escapeHtml(course.time)}｜${escapeHtml(course.courseName)}</strong><br>${escapeHtml(input.teacherName)} 該堂鐘點費：0 元<br>另扣 No Show Fee：<strong>${formatMoney(quote.amount)}</strong><br>${input.mode === "replacement" ? `原應領鐘點費 ${formatMoney(quote.event.originalWage)}；代課老師 ${escapeHtml(input.replacementTeacher)} 正常計薪` : `原退還 ${escapeHtml(input.refundPoints)} 點，額外補償 ${escapeHtml(input.extraPoints)} 點 × ${formatMoney(input.pointPrice)}；原退還點數不重複計入扣款`}<br>僅登記本月薪資事件；不執行學生退點或補點。</div><button id="payroll-noshow-register" class="primary-button inline-button" type="button" data-admin-action="record-payroll-noshow"><i data-lucide="check"></i>確認登記</button>`;
+        refreshIcons();
+      } catch (error) { setNotice(error.message, "error"); }
+      finally { setButtonBusy(button, false, ""); }
+    }
+
+    async function recordPayrollNoShow() {
+      const preview = payrollNoShowPending?.preview || payrollNoShowPreview;
+      const form = byId("payroll-noshow-form");
+      const button = byId("payroll-noshow-register");
+      if (!preview || !form || !button || button.disabled || authState.actingTeacherName ||
+          (payrollNoShowPending ? payrollNoShowPending.owner !== authState.teacherName : !payrollDashboard?.noShowEditable)) return;
+      if (!payrollNoShowPending && JSON.stringify(readPayrollNoShowInput()) !== preview.inputKey) { invalidatePayrollNoShow(); return; }
+      if (!window.confirm(`確認 ${preview.input.teacherName} 的 ${preview.input.month} 薪資：\n${preview.quote.event.course.date} ${preview.quote.event.course.time} ${preview.quote.event.course.courseName}\n該堂不計薪，另扣 ${formatMoney(preview.quote.amount)}。\n已有草稿須重新試算。未發布薪資，也不會操作 OB 退點或發通知。`)) return;
+      const id = payrollNoShowPending?.id || window.crypto.randomUUID();
+      payrollNoShowPending = { id, preview, owner: authState.teacherName };
+      form.querySelectorAll("input,select,button").forEach(control => { if (control !== button) control.disabled = true; });
+      setButtonBusy(button, true, "登記中...");
+      try {
+        const result = await callPostApi("recordPayrollNoShow", { event: { ...preview.input, id, quoteKey: preview.quote.quoteKey } });
+        payrollNoShowPending = null;
+        if (result.notRecorded) {
+          form.querySelectorAll("input,select,button").forEach(control => { control.disabled = false; });
+          if (byId("payroll-noshow-preview")) invalidatePayrollNoShow();
+          else await fetchPayrollAdminDashboard();
+          setNotice(`本次未登記：${result.message}`, "error");
+          return;
+        }
+        setNotice(result.status === "已取消" ? "此 No Show 事件已取消，沒有重新登記。" : "No Show Fee 已登記，請重新同步並試算後核對薪資。未發布或發通知。");
+        await fetchPayrollAdminDashboard();
+      } catch (error) { setNotice(error.message || "登記結果待確認，請先查詢紀錄，勿另建重複事件。", "error"); }
+      finally {
+        setButtonBusy(button, false, "");
+        if (payrollNoShowPending && button.isConnected) button.textContent = "確認登記結果";
+      }
     }
 
     async function submitPayrollDeduction() {
@@ -8785,6 +8915,9 @@
     }
 
     function renderPayrollAdminTab() {
+      payrollNoShowPreview = null;
+      payrollNoShowRevision++;
+      payrollNoShowCourseRequest++;
       const content = byId("admin-tab-content");
       const data = payrollDashboard;
       if (!data) {
@@ -8805,7 +8938,14 @@
       const confirmedCount = (data.metrics.teacherConfirmed || 0) + (data.metrics.finalized || 0);
       const monthOptions = renderPayrollMonthOptions(data.month);
       content.innerHTML = `<div class="admin-control payroll-toolbar"><label for="payroll-admin-month">薪資月份</label><select id="payroll-admin-month" class="text-input month-input">${monthOptions}</select><button class="compact-button" type="button" data-admin-action="refresh-payroll"><i data-lucide="search"></i>查詢</button><button class="compact-button" type="button" data-admin-action="sync-payroll"><i data-lucide="refresh-cw"></i>同步並試算</button>${data.version && allDraft && !data.metrics.errors ? `<button class="primary-button inline-button" type="button" data-admin-action="publish-payroll" data-version="${escapeHtml(data.version)}"><i data-lucide="send"></i>發布薪資</button>` : ""}<button id="payroll-export" class="compact-button payroll-export-button" type="button" data-admin-action="export-payroll"><i data-lucide="file-spreadsheet"></i>匯出本月薪資 Excel</button></div><div class="admin-summary"><div class="summary-item"><span>老師</span><strong>${data.metrics.teachers}</strong></div><div class="summary-item"><span>薪資總額</span><strong>${formatMoney(data.metrics.totalSalary)}</strong></div><div class="summary-item"><span>待老師確認</span><strong>${data.metrics.pendingConfirmations}</strong></div><div class="summary-item"><span>老師已確認</span><strong>${confirmedCount}</strong></div><div class="summary-item"><span>異議</span><strong>${data.metrics.openDisputes}</strong></div></div>${data.metrics.errors ? `<div class="state error">有 ${data.metrics.errors} 堂課資料不完整，請先到「薪資來源資料」補齊後重新同步。</div>` : ""}<div class="admin-control"><strong>月結名單</strong></div><div class="payroll-admin-list">${summaries}</div><div class="admin-control"><strong>薪資異議</strong></div>${disputes}`;
-      content.innerHTML += renderPayrollDeductionRegistry(data);
+      if (data.deductionDraftError) {
+        content.querySelector('[data-admin-action="publish-payroll"]')?.remove();
+        const warning = document.createElement("div");
+        warning.className = "state error";
+        warning.textContent = data.deductionDraftError;
+        content.querySelector(".payroll-toolbar").after(warning);
+      }
+      content.innerHTML += renderPayrollNoShowForm(data) + renderPayrollDeductionRegistry(data);
       refreshIcons();
     }
 
@@ -9958,6 +10098,8 @@ https://sherryaerial-web.github.io/sub.html/
         if (action === "sync-payroll") await syncPayrollMonth();
         if (action === "export-payroll") await exportAdminExcel("payroll", button);
         if (action === "publish-payroll") await publishPayroll(button.dataset.version);
+        if (action === "load-payroll-noshow-courses") await loadPayrollNoShowCourses();
+        if (action === "record-payroll-noshow") await recordPayrollNoShow();
         if (action === "adjust-payroll") {
           openRequestDialog({
             action: "adjust-payroll",
@@ -9976,6 +10118,10 @@ https://sherryaerial-web.github.io/sub.html/
         if (action === "cancel-payroll-deduction") {
           openRequestDialog({ action: "cancel-payroll-deduction", deductionId: button.dataset.deductionId,
             title: "取消單月待扣款", copy: "請填寫取消原因，原扣款紀錄會保留。" });
+        }
+        if (action === "cancel-payroll-noshow") {
+          openRequestDialog({ action: "cancel-payroll-noshow", deductionId: button.dataset.deductionId,
+            title: "取消 No Show Fee", copy: "原事件與價格快照會保留。已有草稿須重新試算後才能發布。", reasonRequired: true });
         }
         if (action === "finalize-payroll") {
           if (window.confirm(`確認 ${button.dataset.teacherName} 的薪資已核對完成？`)) {
@@ -10063,6 +10209,16 @@ https://sherryaerial-web.github.io/sub.html/
     });
     byId("admin-tab-content").addEventListener("change", (event) => {
       if (!event.target.matches) return;
+      if (event.target.closest("#payroll-noshow-form")) {
+        invalidatePayrollNoShow();
+        if (event.target.id === "payroll-noshow-date") {
+          payrollNoShowCourseRequest++;
+          byId("payroll-noshow-course").innerHTML = '<option value="">請先查詢當日課程</option>';
+          byId("payroll-noshow-calendar").value = "";
+        }
+        if (event.target.id === "payroll-noshow-course") byId("payroll-noshow-calendar").value = "";
+        return;
+      }
       if (event.target.matches('[data-invoice-field="invoiceKind"]')) {
         const invoiceId = event.target.dataset.invoiceId;
         const companyFields = document.querySelector(`[data-invoice-company-fields="${CSS.escape(invoiceId)}"]`);
@@ -10085,6 +10241,7 @@ https://sherryaerial-web.github.io/sub.html/
       if (event.target.name === "schedule-recipient") syncNotificationRecipientPicker("schedule");
     });
     byId("admin-tab-content").addEventListener("input", (event) => {
+      if (event.target.closest("#payroll-noshow-form")) invalidatePayrollNoShow();
       if (event.target.id === "manual-recipient-search") filterNotificationRecipients("manual", event.target.value);
       if (event.target.id === "schedule-recipient-search") filterNotificationRecipients("schedule", event.target.value);
     });
@@ -10098,6 +10255,7 @@ https://sherryaerial-web.github.io/sub.html/
         if (event.target.id === "manual-notification-form") await submitManualNotification();
         if (event.target.id === "notification-schedule-form") await submitNotificationSchedule();
         if (event.target.id === "payroll-deduction-form") await submitPayrollDeduction();
+        if (event.target.id === "payroll-noshow-form") await previewPayrollNoShow();
         if (event.target.id === "monthly-operations-template-form") await submitMonthlyOperationsTemplates();
         if (event.target.id === "practice-admin-filter-form") await fetchPracticeAdminDashboard();
       } catch (error) { setNotice(error.message, "error"); }

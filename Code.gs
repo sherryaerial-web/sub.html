@@ -9279,6 +9279,9 @@ function doPost(e) {
     }
 
     var session = requireSession_(parameters.sessionToken);
+    if (cleanText_(parameters.actingTeacherName) && ['getPayrollNoShowCourses', 'previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow'].indexOf(action) !== -1) {
+      throw new Error('代查看薪資為唯讀，不能登記或取消 No Show Fee。');
+    }
     if (action === 'getAdminOperationStatus') {
       return createPostResponse_(parameters, { status: 'success', data: getAdminOperationStatus_(parameters) });
     }
@@ -9844,6 +9847,18 @@ function doPost(e) {
       },
       recordPayrollDeduction: function() {
         return recordPayrollDeduction_(session, parseJsonObject_(parameters.deduction, '單月扣款'));
+      },
+      getPayrollNoShowCourses: function() {
+        return getPayrollNoShowCourses_(session, parameters.month, parameters.date);
+      },
+      previewPayrollNoShow: function() {
+        return previewPayrollNoShow_(session, parseJsonObject_(parameters.event, 'No Show'));
+      },
+      recordPayrollNoShow: function() {
+        return recordPayrollNoShowRequest_(session, parseJsonObject_(parameters.event, 'No Show'));
+      },
+      cancelPayrollNoShow: function() {
+        return cancelPayrollNoShow_(session, parameters.deductionId, parameters.reason);
       },
       cancelPayrollDeduction: function() {
         return cancelPayrollDeduction_(session, parameters.deductionId, parameters.reason);
@@ -13206,7 +13221,10 @@ function buildPayrollDraft_(monthValue, courses, ruleValues) {
         throw new Error('課程基本資料不完整。');
       }
       if (cleanText_(item.date).substring(0, 7).replace('/', '-') !== month) return;
-      var calculated = calculatePayrollLinesForCourse_(item, ruleValues);
+      var noShow = item.payrollNoShow;
+      var calculated = noShow && noShow.mode === 'noReplacement' ? [] : calculatePayrollLinesForCourse_(item, ruleValues);
+      if (noShow) calculated.push({ teacherName: noShow.teacherName, amount: 0,
+        ruleType: '老師 No Show 不計薪', ruleDetail: 'No Show 事件 ' + noShow.id + '；原老師該堂不計薪' });
       var courseProfit = Number(item.profit);
       if (!isFinite(courseProfit)) {
         courseProfit = 0;
@@ -13392,9 +13410,13 @@ function fetchPayrollAttendanceReport_(token, range) {
   throw new Error('OB 薪資報表超過單次同步分頁上限，未寫入薪資草稿。');
 }
 
-function mergePayrollAttendanceReport_(rawItems, reportRows, range) {
+function mergePayrollAttendanceReport_(rawItems, reportRows, range, deductions) {
   var reportById = Object.create(null);
   var seen = Object.create(null);
+  var noReplacementById = Object.create(null);
+  (deductions || []).filter(function(item) {
+    return item.event && item.status === '有效' && item.event.input.mode === 'noReplacement';
+  }).forEach(function(item) { noReplacementById[item.event.input.calendarId] = item; });
   function idOf(value) {
     return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? String(value) : '';
   }
@@ -13405,6 +13427,17 @@ function mergePayrollAttendanceReport_(rawItems, reportRows, range) {
   });
   var courses = [];
   rawItems.forEach(function(raw, index) {
+    var noReplacement = raw && noReplacementById[cleanText_(raw.id)];
+    if (noReplacement) {
+      var noShowPeople = Array.isArray(raw.instructors) ? raw.instructors : [raw.instructor];
+      if (noShowPeople.length !== 1 || !noShowPeople[0] || !getPayrollInstructorName_(noShowPeople[0]) ||
+          !cleanText_(noShowPeople[0].id || noShowPeople[0].instructorId)) throw new Error('No Show 原課程老師資料缺漏或有多位老師，已停止同步。');
+      var cancelledCourse = normalizePayrollCalendarItem_(Object.assign({}, raw, { cancelled: false }));
+      if (!cancelledCourse || seen[cancelledCourse.calendarId]) throw new Error('No Show 原課程資料不完整或重複，已停止同步。');
+      applyPayrollNoShows_([cancelledCourse], [noReplacement]);
+      seen[cancelledCourse.calendarId] = true;
+      return;
+    }
     if (raw && raw.cancelled === true) return;
     var course = normalizePayrollCalendarItem_(raw);
     if (!course) throw new Error('OB 第 ' + (index + 1) + ' 筆薪資課程資料不完整，已停止同步。');
@@ -13447,22 +13480,29 @@ function mergePayrollAttendanceReport_(rawItems, reportRows, range) {
     // instructorSalary is OB's comparison value; the existing school rules calculate actual pay.
     courses.push(course);
   });
-  if (courses.length !== reportRows.length) throw new Error('OB 薪資報表與本月課表筆數不一致，已停止同步。');
+  if (courses.length !== reportRows.filter(function(row) { return !noReplacementById[String(row.classScheduleId)]; }).length) {
+    throw new Error('OB 薪資報表與本月課表筆數不一致，已停止同步。');
+  }
   return courses;
 }
 
 function syncPayrollMonth_(session, monthValue) {
   assertCapabilitySession_(session, 'payroll_admin');
   var range = getPayrollMonthRange_(monthValue);
+  var initialDeductions;
   var initialState = withScriptLock_(function() {
-    return getPayrollSyncState_(SpreadsheetApp.getActiveSpreadsheet(), range.month);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    initialDeductions = getPayrollDeductions_(ss, range.month);
+    return getPayrollSyncState_(ss, range.month);
   });
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) throw new Error('請先在指令碼屬性設定 OMCEAN_API_TOKEN。');
   var rawItems = fetchCalendarPages_(token, range.dateFrom, range.dateTo);
   var useReport = range.month >= '2026-11';
-  var reportCourses = useReport ? mergePayrollAttendanceReport_(rawItems, fetchPayrollAttendanceReport_(token, range), range) : null;
-  if (useReport && !reportCourses.length) throw new Error('該月份沒有取得有效課程，未寫入薪資草稿。');
+  var reportCourses = useReport ? mergePayrollAttendanceReport_(rawItems, fetchPayrollAttendanceReport_(token, range), range, initialDeductions) : null;
+  if (useReport && !reportCourses.length && !initialDeductions.some(function(item) {
+    return item.status === '有效' && item.event && item.event.input.mode === 'noReplacement';
+  })) throw new Error('該月份沒有取得有效課程，未寫入薪資草稿。');
   return withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (getPayrollSyncState_(ss, range.month) !== initialState) {
@@ -13480,6 +13520,7 @@ function syncPayrollMonth_(session, monthValue) {
       seen[item.calendarId] = true;
       normalized.push(mergePayrollSource_(item, sourceMap));
     });
+    normalized = applyPayrollNoShows_(normalized, initialDeductions);
     if (!normalized.length) throw new Error('該月份沒有取得有效課程，未寫入薪資草稿。');
     var rules = getPayrollRulesUnlocked_(ss);
     if (!rules.length) throw new Error('「薪項設定」尚未填入任何計費規則。');
@@ -13509,19 +13550,290 @@ function syncPayrollMonth_(session, monthValue) {
   });
 }
 
+function assertPayrollNoShowSession_(session) {
+  var actor = assertCapabilitySession_(session, 'payroll_admin');
+  if (session.impersonatedBy || session.readOnly) throw new Error('代查看為唯讀，不能登記 No Show Fee。');
+  return actor;
+}
+
+function payrollNoShowDigest_(value) {
+  return bytesToHex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(value), Utilities.Charset.UTF_8));
+}
+
+function normalizePayrollNoShowInput_(input) {
+  var item = input || {};
+  var month = getPayrollMonthRange_(item.month).month;
+  if (month < '2026-11') throw new Error('No Show 專用登記自 2026-11 起；已結算歷史月份不得重扣。');
+  var result = { month: month, calendarId: cleanText_(item.calendarId), teacherName: cleanText_(item.teacherName),
+    mode: cleanText_(item.mode), replacementTeacher: cleanText_(item.replacementTeacher),
+    attendanceCount: Number(item.attendanceCount), refundPoints: Number(item.refundPoints),
+    extraPoints: Number(item.extraPoints), pointPrice: Number(item.pointPrice), reason: cleanText_(item.reason),
+    confirmed: item.confirmed === true };
+  if (!/^[1-9]\d{0,14}$/.test(result.calendarId) || !result.teacherName || !result.reason || result.reason.length > 500 || !result.confirmed) {
+    throw new Error('請選擇課程、原老師並填寫原因，確認老師該堂未授課。');
+  }
+  if (['replacement', 'noReplacement'].indexOf(result.mode) === -1) throw new Error('請選擇有代課或無代課。');
+  if (result.mode === 'replacement') {
+    if (!result.replacementTeacher || result.replacementTeacher === result.teacherName ||
+        item.attendanceCount === '' || item.attendanceCount == null ||
+        !Number.isSafeInteger(result.attendanceCount) || result.attendanceCount < 0 || result.attendanceCount > 1000) {
+      throw new Error('請選擇不同的代課老師及確認計薪人數。');
+    }
+    result.refundPoints = 0; result.extraPoints = 0; result.pointPrice = 0;
+  } else {
+    result.replacementTeacher = ''; result.attendanceCount = 0;
+    if (![result.refundPoints, result.extraPoints, result.pointPrice].every(function(number) {
+      return isFinite(number) && number > 0 && number <= 100000 && Math.abs(number * 100 - Math.round(number * 100)) < 0.000001;
+    }) || result.extraPoints !== result.refundPoints) throw new Error('額外補償點數須等於原退還點數，點數及事件當時單點價格須為正數（至小數兩位）。');
+  }
+  return result;
+}
+
+function fetchPayrollNoShowCourse_(calendarId) {
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!cleanText_(token)) throw new Error('請先設定 OMCEAN_API_TOKEN。');
+  var raw = getObApiJson_('https://api.omceanbooking.com/v1/calendar/' + calendarId,
+    { method: 'get', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + token } }, 'No Show 課程讀取');
+  if (!raw || cleanText_(raw.id) !== calendarId) throw new Error('No Show 課程編號與 OB 回傳不一致。');
+  var people = Array.isArray(raw.instructors) ? raw.instructors : [raw.instructor];
+  if (people.length !== 1 || !people[0] || !getPayrollInstructorName_(people[0]) ||
+      !cleanText_(people[0].id || people[0].instructorId)) throw new Error('No Show 課程老師資料缺漏或有多位老師，請先人工核對。');
+  var copy = Object.assign({}, raw, { cancelled: false });
+  var course = normalizePayrollCalendarItem_(copy);
+  if (!course) throw new Error('No Show 課程資料不完整。');
+  course.sourceCancelled = raw.cancelled === true;
+  return course;
+}
+
+function getPayrollNoShowCourses_(session, monthValue, dateValue) {
+  assertPayrollNoShowSession_(session);
+  var month = getPayrollMonthRange_(monthValue).month;
+  var date = cleanText_(dateValue).replace(/-/g, '/');
+  var start = parsePracticeDateTime_(date, '00:00');
+  if (month < '2026-11' || date.substring(0, 7).replace('/', '-') !== month) throw new Error('請選擇本薪資月份內的日期（2026-11 起）。');
+  var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  if (!cleanText_(token)) throw new Error('請先設定 OMCEAN_API_TOKEN。');
+  var nextDate = Utilities.formatDate(new Date(start.getTime() + 86400000), getTimeZone_(), 'yyyy-MM-dd');
+  return fetchCalendarPages_(token, date.replace(/\//g, '-'), nextDate).map(function(raw) {
+    var course = normalizePayrollCalendarItem_(Object.assign({}, raw, { cancelled: false }));
+    if (course) course.sourceCancelled = raw.cancelled === true;
+    return course;
+  }).filter(function(course) { return course && course.date === date; }).map(function(course) {
+    return { calendarId: course.calendarId, courseName: course.courseName, date: course.date, time: course.time,
+      instructors: course.instructors, sourceCancelled: course.sourceCancelled };
+  }).sort(function(a, b) { return a.time.localeCompare(b.time) || a.courseName.localeCompare(b.courseName); });
+}
+
+function buildPayrollNoShowQuote_(input, course, rules) {
+  if (!course || course.calendarId !== input.calendarId || course.date.substring(0, 7).replace('/', '-') !== input.month ||
+      parsePracticeDateTime_(course.date, course.time).getTime() > Date.now()) throw new Error('課程月份不符或尚未開始，不能登記 No Show。');
+  if (!Array.isArray(course.instructors) || course.instructors.length !== 1 ||
+      [input.teacherName, input.replacementTeacher].indexOf(course.instructors[0].name) === -1) {
+    throw new Error('OB 老師與原老師／代課老師不符，或為多老師課程，請先人工核對。');
+  }
+  if (/自主練習|場地租借/.test(course.courseName)) throw new Error('自主練習或場地租借不能登記老師 No Show。');
+  var originalWage = 0;
+  var wageDetail = '';
+  if (input.mode === 'replacement') {
+    if (course.sourceCancelled) throw new Error('有代課的課程在 OB 已取消，請先核對。');
+    var expected = calculatePayrollLinesForCourse_(Object.assign({}, course, {
+      instructors: [{ name: input.teacherName }], attendanceCount: input.attendanceCount
+    }), rules);
+    if (expected.length !== 1 || expected[0].teacherName !== input.teacherName) throw new Error('無法確認原老師應領鐘點費。');
+    originalWage = expected[0].amount;
+    wageDetail = expected[0].ruleDetail;
+  }
+  var amount = input.mode === 'replacement' ? originalWage : Math.round(input.extraPoints * input.pointPrice);
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('No Show Fee 必須大於零，請核對原應領鐘點費或補償點數。');
+  var event = { schema: 1, input: input, course: course, originalWage: originalWage, wageDetail: wageDetail,
+    pointPrice: input.pointPrice, refundPoints: input.refundPoints, extraPoints: input.extraPoints, amount: amount };
+  return { amount: amount, event: event, quoteKey: payrollNoShowDigest_(event) };
+}
+
+function previewPayrollNoShow_(session, input) {
+  assertPayrollNoShowSession_(session);
+  var normalized = normalizePayrollNoShowInput_(input);
+  var names = getActiveAccountTeacherNames_();
+  if (names.indexOf(normalized.teacherName) === -1 || (normalized.mode === 'replacement' && names.indexOf(normalized.replacementTeacher) === -1)) {
+    throw new Error('找不到在職的原老師或代課老師。');
+  }
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  getPayrollSyncState_(ss, normalized.month);
+  return buildPayrollNoShowQuote_(normalized, fetchPayrollNoShowCourse_(normalized.calendarId), getPayrollRulesUnlocked_(ss));
+}
+
+function recordPayrollNoShowRequest_(session, input) {
+  assertPayrollNoShowSession_(session);
+  var normalized = normalizePayrollNoShowInput_(input);
+  var id = cleanText_(input.id);
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('缺少有效 No Show 編號。');
+  try { return recordPayrollNoShow_(session, input); }
+  catch (error) {
+    if (getErrorMessage_(error).indexOf('資料回復失敗') !== -1) throw error;
+    var absent = withScriptLock_(function() {
+      return !getPayrollDeductions_(SpreadsheetApp.getActiveSpreadsheet(), normalized.month).some(function(item) { return item.id === id; });
+    });
+    if (!absent) throw error;
+    // A completed, unwritten request can release the UI; uncertain writes retain their original ID.
+    return { notRecorded: true, message: getErrorMessage_(error) };
+  }
+}
+
+function recordPayrollNoShow_(session, input) {
+  var actor = assertPayrollNoShowSession_(session);
+  var normalized = normalizePayrollNoShowInput_(input);
+  var id = cleanText_(input.id);
+  var quoteKey = cleanText_(input.quoteKey);
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !/^[a-f0-9]{64}$/.test(quoteKey)) throw new Error('請先試算 No Show Fee 並確認。');
+  // Reconcile uncertain retries before any external read; never resurrect a cancelled event.
+  var existing = withScriptLock_(function() {
+    var records = getPayrollDeductions_(SpreadsheetApp.getActiveSpreadsheet(), normalized.month);
+    var found = records.filter(function(item) { return item.id === id; })[0];
+    if (found && (!found.event || JSON.stringify(found.event.input) !== JSON.stringify(normalized) || found.event.quoteKey !== quoteKey)) {
+      throw new Error('扣款編號已存在但內容不同，請先核對紀錄。');
+    }
+    return found;
+  });
+  if (existing) return existing;
+  var quote = previewPayrollNoShow_(session, normalized);
+  if (quote.quoteKey !== quoteKey) throw new Error('課程、薪項或輸入已有變動，請重新試算及確認 No Show Fee。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    getPayrollSyncState_(ss, normalized.month);
+    // Salary rules may change while the OB read is in flight.
+    if (buildPayrollNoShowQuote_(normalized, quote.event.course, getPayrollRulesUnlocked_(ss)).quoteKey !== quoteKey) {
+      throw new Error('薪項已有變動，請重新試算。');
+    }
+    ensurePayrollStructureUnlocked_(ss);
+    var sheet = requireSheet_(ss, SHEETS.PAYROLL_DEDUCTIONS);
+    var records = getPayrollDeductions_(ss, normalized.month);
+    var sameId = records.filter(function(item) { return item.id === id; })[0];
+    if (sameId) {
+      if (!sameId.event || sameId.event.quoteKey !== quoteKey) throw new Error('扣款編號內容不同。');
+      return sameId;
+    }
+    if (sheet.getDataRange().getValues().slice(1).some(function(row) { return cleanText_(row[0]) === id; })) throw new Error('扣款編號已存在於其他月份。');
+    if (records.some(function(item) {
+      return item.status === '有效' && (item.event ? item.event.input.calendarId === normalized.calendarId :
+        item.teacherName === normalized.teacherName && item.eventDate === quote.event.course.date);
+    })) throw new Error('已有此課程 No Show 或同日原老師扣款，請先核對，勿重複登記。');
+    var event = Object.assign({}, quote.event, { quoteKey: quoteKey });
+    var reason = 'No Show Fee｜' + quote.event.course.courseName + '｜' + (normalized.mode === 'replacement' ?
+      '代課：' + normalized.replacementTeacher + '；原應領 ' + quote.event.originalWage :
+      '額外補償 ' + normalized.extraPoints + ' 點 × ' + normalized.pointPrice + ' 元') + '｜' + normalized.reason;
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      ensureSheetHeaders_(sheet, SHEET_HEADERS.PAYROLL_DEDUCTIONS.concat(['No Show 事件 JSON']));
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, 13).setValues([[id, normalized.month, normalized.teacherName,
+        quote.event.course.date, quote.amount, reason, '有效', getTimestamp_(), actor, '', '', '', JSON.stringify(event)]]);
+      appendAudits([{ actor: actor, action: '登記 No Show Fee', targetId: id, before: '', after: '-' + quote.amount,
+        reason: normalized.month + '；Calendar ' + normalized.calendarId + '；' + normalized.reason }]);
+      return getPayrollDeductions_(ss, normalized.month).filter(function(item) { return item.id === id; })[0];
+    });
+  });
+}
+
+function cancelPayrollNoShow_(session, idValue, reasonValue) {
+  var actor = assertPayrollNoShowSession_(session);
+  var id = cleanText_(idValue), reason = cleanText_(reasonValue);
+  if (!id || !reason) throw new Error('請填寫取消原因。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = requireSheet_(ss, SHEETS.PAYROLL_DEDUCTIONS);
+    var row = sheet.getDataRange().getValues().slice(1).filter(function(item) { return cleanText_(item[0]) === id; });
+    if (row.length !== 1) throw new Error('找不到唯一 No Show 紀錄。');
+    var item = getPayrollDeductions_(ss, normalizePayrollMonthValue_(row[0][1])).filter(function(record) { return record.id === id; })[0];
+    if (!item || !item.event) throw new Error('這不是 No Show 專用紀錄。');
+    if (item.status === '已取消') return item;
+    getPayrollSyncState_(ss, item.month);
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(item.rowNumber, 7).setValue('已取消');
+      sheet.getRange(item.rowNumber, 10, 1, 3).setValues([[getTimestamp_(), actor, reason]]);
+      appendAudits([{ actor: actor, action: '取消 No Show Fee', targetId: id, before: '有效', after: '已取消', reason: reason }]);
+      return { id: id, status: '已取消' };
+    });
+  });
+}
+
+function applyPayrollNoShows_(courses, deductions) {
+  var result = courses.map(function(course) { return Object.assign({}, course); });
+  (deductions || []).filter(function(item) { return item.event && item.status === '有效'; }).forEach(function(item) {
+    var event = item.event, input = event.input;
+    var matches = result.filter(function(course) { return course.calendarId === input.calendarId; });
+    if (matches.length > 1) throw new Error('No Show 課程重複，請核對。');
+    var course = matches[0];
+    if (!course && input.mode === 'replacement') throw new Error('No Show 代課課程不在本月報表，請核對。');
+    if (!course) { course = Object.assign({}, event.course); result.push(course); }
+    if (course.date !== event.course.date || course.time !== event.course.time || course.courseName !== event.course.courseName ||
+        course.durationMinutes !== event.course.durationMinutes) throw new Error('No Show 課程日期、時間或內容已變動，請取消原登記後重新確認。');
+    if (course.instructors.length !== 1 || [input.teacherName, input.replacementTeacher].indexOf(course.instructors[0].name) === -1) {
+      throw new Error('No Show 課程老師已變動，請核對。');
+    }
+    if (input.mode === 'replacement' && course.attendanceCount !== input.attendanceCount) throw new Error('No Show 課程出席人數已變動，請取消原登記後重新試算。');
+    course.instructors = input.mode === 'replacement' ? [{ name: input.replacementTeacher, isSubstitute: true }] : [];
+    course.payrollNoShow = { id: item.id, teacherName: item.teacherName, mode: input.mode };
+    if (input.mode === 'noReplacement') { course.attendanceCount = 0; course.courseIncome = 0; course.profit = 0; }
+  });
+  return result;
+}
+
+function getPayrollNoShowRevision_(deductions) {
+  var events = deductions.filter(function(item) { return item.event; }).map(function(item) {
+    return [item.id, item.event.quoteKey, item.status, item.cancelledAt, item.cancellationReason];
+  }).sort(function(a, b) { return a[0].localeCompare(b[0]); });
+  return events.length ? payrollNoShowDigest_(events) : '';
+}
+
+function getPayrollDeductionDraftError_(spreadsheet, month, version) {
+  var allRecords = getPayrollDeductions_(spreadsheet, month);
+  var revision = getPayrollNoShowRevision_(allRecords);
+  var records = allRecords.filter(function(item) { return item.status === '有效'; });
+  var summaryRows = requireSheet_(spreadsheet, SHEETS.PAYROLL_SUMMARIES).getDataRange().getValues().slice(1).filter(function(row) {
+    return normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[8]) === version;
+  });
+  var summaries = summaryRows.map(getPayrollSummaryObject_);
+  var expected = Object.create(null), actual = Object.create(null);
+  records.forEach(function(item) { expected[item.id] = item.teacherName; });
+  try {
+    if (summaryRows.some(function(row) { return cleanText_(row[19]) !== revision; })) throw new Error('stale');
+    summaries.forEach(function(summary) {
+      var total = 0;
+      summary.oneTimeDeductionIds.forEach(function(id) {
+        if (actual[id] || expected[id] !== summary.teacherName) throw new Error('stale');
+        actual[id] = summary.teacherName;
+        total += records.filter(function(item) { return item.id === id; })[0].amount;
+      });
+      if (total !== summary.oneTimeDeduction) throw new Error('stale');
+    });
+    if (Object.keys(expected).length !== Object.keys(actual).length) throw new Error('stale');
+    var lines = requireSheet_(spreadsheet, SHEETS.PAYROLL_LINES).getDataRange().getValues().slice(1).filter(function(row) {
+      return normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[2]) === version;
+    });
+    records.filter(function(item) { return item.event; }).forEach(function(item) {
+      var matching = lines.filter(function(row) { return cleanText_(row[3]) === item.event.input.calendarId && cleanText_(row[4]) === item.teacherName; });
+      if (matching.length !== 1 || Number(matching[0][13]) !== 0 || Number(matching[0][14]) !== 0 ||
+          cleanText_(matching[0][12]).indexOf('No Show 事件 ' + item.id + '；') !== 0) throw new Error('stale');
+    });
+  } catch (error) { return 'No Show／單月扣款已有變動，請重新試算後再發布薪資。'; }
+  return '';
+}
+
 function getPayrollDeductions_(spreadsheet, month) {
   var sheet = spreadsheet.getSheetByName(SHEETS.PAYROLL_DEDUCTIONS);
   if (!sheet) return [];
   assertHeaders_(sheet, SHEET_HEADERS.PAYROLL_DEDUCTIONS);
+  var values = sheet.getDataRange().getValues();
+  if ((cleanText_(values[0][12]) || values.slice(1).some(function(row) { return cleanText_(row[12]); })) &&
+      cleanText_(values[0][12]) !== 'No Show 事件 JSON') throw new Error('No Show 事件欄標題不正確，請先核對，未覆蓋原欄位。');
   var seen = Object.create(null);
   var activeEvents = Object.create(null);
-  return sheet.getDataRange().getValues().slice(1).map(function(row, index) {
+  return values.slice(1).map(function(row, index) {
     if (row.every(function(value) { return value === '' || value == null; })) return null;
     return { rowNumber: index + 2, id: cleanText_(row[0]), month: normalizePayrollMonthValue_(row[1]),
       teacherName: cleanText_(row[2]), eventDate: formatMyDate(row[3]), amount: Number(row[4]),
       reason: cleanText_(row[5]), status: cleanText_(row[6]), createdAt: cleanText_(row[7]),
       createdBy: cleanText_(row[8]), cancelledAt: cleanText_(row[9]),
-      cancelledBy: cleanText_(row[10]), cancellationReason: cleanText_(row[11]) };
+      cancelledBy: cleanText_(row[10]), cancellationReason: cleanText_(row[11]), eventJson: cleanText_(row[12]) };
   }).filter(function(item) {
     if (!item) return false;
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(item.id) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(item.month) ||
@@ -13529,14 +13841,30 @@ function getPayrollDeductions_(spreadsheet, month) {
         ['有效', '已取消'].indexOf(item.status) === -1) throw new Error('單月扣款資料不完整，已停止薪資試算。');
     try { parsePracticeDateTime_(item.eventDate, '00:00'); }
     catch (error) { throw new Error('單月扣款事由日期不正確，已停止薪資試算。'); }
-    var signature = JSON.stringify([item.month, item.teacherName, item.eventDate, item.amount, item.reason, item.status]);
+    if (!item.eventJson && item.reason.indexOf('No Show Fee｜') === 0) throw new Error('No Show 事件快照遺失，已停止薪資試算。');
+    if (item.eventJson) {
+      try {
+        var event = JSON.parse(item.eventJson);
+        var key = event.quoteKey;
+        var copy = Object.assign({}, event); delete copy.quoteKey;
+        var input = normalizePayrollNoShowInput_(event.input);
+        if (event.schema !== 1 || payrollNoShowDigest_(copy) !== key || JSON.stringify(input) !== JSON.stringify(event.input) ||
+            input.month !== item.month || input.teacherName !== item.teacherName || event.amount !== item.amount ||
+            !event.course || event.course.calendarId !== input.calendarId || event.course.date !== item.eventDate ||
+            item.eventDate.substring(0, 7).replace('/', '-') !== item.month ||
+            event.amount !== (input.mode === 'replacement' ? event.originalWage : Math.round(input.extraPoints * input.pointPrice))) throw new Error('invalid');
+        item.event = event;
+      } catch (error) { throw new Error('No Show 事件快照不完整或已變動，已停止薪資試算。'); }
+    }
+    delete item.eventJson;
+    var signature = JSON.stringify([item.month, item.teacherName, item.eventDate, item.amount, item.reason, item.status, item.event || null]);
     if (seen[item.id]) {
       if (seen[item.id] !== signature) throw new Error('單月扣款編號重複且資料衝突，已停止薪資試算。');
       return false;
     }
     seen[item.id] = signature;
     if (item.status === '有效') {
-      var eventKey = JSON.stringify([item.month, item.teacherName, item.eventDate, item.amount, item.reason]);
+      var eventKey = item.event ? 'noshow:' + item.event.input.calendarId : JSON.stringify([item.month, item.teacherName, item.eventDate, item.amount, item.reason]);
       if (activeEvents[eventKey]) throw new Error('已有相同單月扣款的不同編號，已停止薪資試算。');
       activeEvents[eventKey] = item.id;
     }
@@ -13583,6 +13911,9 @@ function recordPayrollDeduction_(session, input) {
       throw new Error('扣款編號已存在於不同月份，請先核對紀錄。');
     }
     assertPayrollDeductionMonthEditable_(ss, month);
+    if (records.some(function(row) { return row.status === '有效' && row.event && row.teacherName === teacher && row.eventDate === date; })) {
+      throw new Error('同日已有此老師 No Show Fee，請先核對，避免重複扣款。');
+    }
     if (records.some(function(row) { return row.status === '有效' && row.teacherName === teacher &&
       row.eventDate === date && row.amount === amount && row.reason === reason; })) throw new Error('已有相同單月扣款紀錄，請勿重複登記。');
     var now = getTimestamp_();
@@ -13610,6 +13941,7 @@ function cancelPayrollDeduction_(session, idValue, reasonValue) {
     }).filter(function(item) { return cleanText_(item.row[0]) === id; });
     if (matches.length !== 1) throw new Error('找不到唯一的單月扣款紀錄。');
     var target = matches[0];
+    if (cleanText_(target.row[12])) throw new Error('請使用 No Show 專用取消流程。');
     if (cleanText_(target.row[6]) === '已取消') return { id: id, status: '已取消' };
     assertPayrollDeductionMonthEditable_(ss, normalizePayrollMonthValue_(target.row[1]));
     return runStateTransitionUnlocked_([sheet], function(appendAudits) {
@@ -13629,7 +13961,20 @@ function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
   assertHeaders_(lineSheet, SHEET_HEADERS.PAYROLL_LINES);
   assertHeaders_(summarySheet, SHEET_HEADERS.PAYROLL_SUMMARIES);
   var deductionByTeacher = {};
-  if (!draft.errors.length) getPayrollDeductions_(spreadsheet, draft.month).filter(function(item) {
+  var deductionsForMonth = !draft.errors.length ? getPayrollDeductions_(spreadsheet, draft.month) : [];
+  var noShowRevision = getPayrollNoShowRevision_(deductionsForMonth);
+  if (!draft.errors.length) deductionsForMonth.filter(function(item) {
+    return item.event && item.status === '有效';
+  }).forEach(function(item) {
+    var matches = draft.lines.filter(function(line) {
+      return line.calendarId === item.event.input.calendarId && line.teacherName === item.teacherName;
+    });
+    if (matches.length !== 1 || matches[0].amount !== 0 || Number(matches[0].manualAdjustment) !== 0 ||
+        matches[0].ruleDetail.indexOf('No Show 事件 ' + item.id + '；') !== 0) {
+      throw new Error('No Show 未完成原老師不計薪核對，請重新試算。');
+    }
+  });
+  if (!draft.errors.length) deductionsForMonth.filter(function(item) {
     return item.status === '有效';
   }).forEach(function(item) {
     if (!deductionByTeacher[item.teacherName]) deductionByTeacher[item.teacherName] = [];
@@ -13673,12 +14018,13 @@ function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
       CONFIG.PAYROLL_DRAFT_STATUS, '', now, 0, '', '', '', deduction,
       deductions.map(function(item) { return item.eventDate + ' ' + item.reason + '（-' + item.amount + '）'; }).join('；'),
       JSON.stringify(deductions.map(function(item) { return item.id; }))
-    ];
+    ].concat(noShowRevision ? [noShowRevision] : []);
   });
   if (summaryRows.length) {
-    ensureSheetHeaders_(summarySheet, SHEET_HEADERS.PAYROLL_SUMMARIES.concat(SHEET_HEADERS.PAYROLL_DEDUCTION_EXTENSION));
-    summarySheet.getRange(summarySheet.getLastRow() + 1, 1, summaryRows.length,
-      SHEET_HEADERS.PAYROLL_SUMMARIES.length + SHEET_HEADERS.PAYROLL_DEDUCTION_EXTENSION.length).setValues(summaryRows);
+    var headers = SHEET_HEADERS.PAYROLL_SUMMARIES.concat(SHEET_HEADERS.PAYROLL_DEDUCTION_EXTENSION)
+      .concat(noShowRevision ? ['No Show 事件版本'] : []);
+    ensureSheetHeaders_(summarySheet, headers);
+    summarySheet.getRange(summarySheet.getLastRow() + 1, 1, summaryRows.length, headers.length).setValues(summaryRows);
   }
 }
 
@@ -13712,6 +14058,8 @@ function publishPayroll_(session, monthValue, versionValue) {
       }
     });
     if (!summaryRows.length || !lineRows.length) throw new Error('找不到可發布的薪資草稿，或此版本已發布。');
+    var deductionError = getPayrollDeductionDraftError_(ss, month, version);
+    if (deductionError) throw new Error(deductionError);
     var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
     summaryRows.forEach(function(item) {
       summarySheet.getRange(item.rowNumber, 10).setValue(item.status);
@@ -14175,9 +14523,16 @@ function getPayrollAdminDashboard_(session, monthValue) {
       createdAt: cleanText_(row[7]), handler: cleanText_(row[8]), resolvedAt: cleanText_(row[9])
     };
   });
+  var noShowEditable = month >= '2026-11' && !session.impersonatedBy && !session.readOnly;
+  if (noShowEditable) {
+    try { getPayrollSyncState_(ss, month); } catch (error) { noShowEditable = false; }
+  }
   return {
     month: month,
     version: version,
+    noShowEditable: noShowEditable,
+    deductionDraftError: version && summaries.every(function(item) { return item.status === CONFIG.PAYROLL_DRAFT_STATUS; })
+      ? getPayrollDeductionDraftError_(ss, month, version) : '',
     summaries: summaries,
     deductions: getPayrollDeductions_(ss, month),
     deductionTeachers: ss.getSheetByName(SHEETS.ACCOUNTS) ? getActiveAccountTeacherNames_() : [],

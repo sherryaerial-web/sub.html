@@ -11223,6 +11223,322 @@ test('payroll summary includes special lines in bonus subtotal before fixed addi
   });
 });
 
+function createPayrollNoShowFixture() {
+  const f = createOneTimeDeductionFixture();
+  let uuid = 0;
+  f.services.Utilities.getUuid = () => `noshow-test-uuid-${++uuid}`;
+  f.backend.getActiveAccountTeacherNames_ = () => ['Jina', 'Tako'];
+  f.raw = { id: 60001, class: { id: 10, nameZhHant: 'A－空環 Lv.1', duration: 60 },
+    classTime: '2026-11-04T10:00:00Z', classEndTime: '2026-11-04T11:00:00Z',
+    customersAttended: 2, instructors: [{ id: 1, firstName: 'Jina' }] };
+  f.readCourse = f.backend.fetchPayrollNoShowCourse_;
+  f.backend.fetchPayrollNoShowCourse_ = () => f.backend.normalizePayrollCalendarItem_(f.raw);
+  f.rules = [{ teacherName: '預設值', billingType: '人數階梯', threshold: 2, amount: 700 },
+    { teacherName: 'Tako', billingType: '標準時薪', amount: 900 }];
+  f.backend.getPayrollRulesUnlocked_ = () => f.rules;
+  f.input = { id: 'noshow-fixture-60001', month: '2026-11', calendarId: '60001', teacherName: 'Jina',
+    mode: 'replacement', replacementTeacher: 'Tako', attendanceCount: 2,
+    refundPoints: 0, extraPoints: 0, pointPrice: 180, reason: '管理員確認老師未到', confirmed: true };
+  f.quote = () => f.backend.previewPayrollNoShow_(f.adminSession, f.input);
+  f.record = () => f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, quoteKey: f.quote().quoteKey });
+  return f;
+}
+
+test('No Show quotes calculate original expected wage or extra points only, with immutable price snapshot', () => {
+  const f = createPayrollNoShowFixture();
+  const quote = f.quote();
+  assert.equal(quote.amount, 700);
+  assert.equal(quote.event.originalWage, 700);
+  assert.equal(quote.event.course.calendarId, '60001');
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+  f.input = { ...f.input, mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 8 };
+  assert.equal(f.quote().amount, 1440);
+  f.input.pointPrice = 200;
+  const event = f.record();
+  assert.equal(event.amount, 1600);
+  assert.equal(event.event.pointPrice, 200);
+  const ledger = f.spreadsheet.getSheetByName('薪資單月扣款').values;
+  assert.equal(ledger[0][12], 'No Show 事件 JSON');
+  assert.equal(JSON.parse(ledger[1][12]).extraPoints, 8);
+  assert.equal(f.auditSheet.values.filter(row => row[2] === '登記 No Show Fee').length, 1);
+});
+
+test('No Show original wage uses date-effective hourly duration and never trusts an OB salary override', () => {
+  const f = createPayrollNoShowFixture();
+  f.raw.classEndTime = '2026-11-04T11:30:00Z';
+  f.raw.instructorSalary = 9999;
+  f.rules = [{ teacherName: 'Jina', billingType: '每小時計薪', amount: 1000, effectiveMonth: '2026-11' },
+    { teacherName: 'Jina', billingType: '標準時薪', amount: 1500, throughMonth: '2026-10' }];
+  assert.equal(f.quote().amount, 1500);
+  assert.equal(f.quote().event.course.durationMinutes, 90);
+  f.raw.classEndTime = '2026-11-04T10:40:00Z';
+  assert.equal(f.quote().amount, 667);
+  f.raw.classEndTime = 'invalid'; delete f.raw.class.duration;
+  assert.throws(() => f.quote(), /時長/);
+});
+
+test('No Show rejects readonly, invalid confirmation, historical month, mismatched points and teacher identities', () => {
+  const f = createPayrollNoShowFixture();
+  for (const session of [{ teacherName: 'Tako', managementCapabilities: [] },
+    { ...f.adminSession, impersonatedBy: '管理員' }, { ...f.adminSession, readOnly: true }]) {
+    assert.throws(() => f.backend.previewPayrollNoShow_(session, f.input));
+  }
+  for (const patch of [{ confirmed: false }, { month: '2026-10' }, { teacherName: '不存在' },
+    { replacementTeacher: 'Jina' }, { calendarId: '../60001' }, { attendanceCount: -1 },
+    { mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 16 },
+    { mode: 'noReplacement', replacementTeacher: '', refundPoints: 0, extraPoints: 0 },
+    { reason: '' }, { mode: 'unknown' }]) {
+    assert.throws(() => f.backend.previewPayrollNoShow_(f.adminSession, { ...f.input, ...patch }));
+  }
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+});
+
+test('No Show POST routes reject acting-teacher context before preview or write handlers', () => {
+  const f = createPayrollNoShowFixture();
+  f.backend.requireSession_ = () => f.adminSession;
+  f.backend.previewPayrollNoShow_ = () => { throw Error('unexpected preview reached'); };
+  f.backend.recordPayrollNoShow_ = () => { throw Error('unexpected write reached'); };
+  f.backend.cancelPayrollNoShow_ = () => { throw Error('unexpected cancel reached'); };
+  for (const action of ['previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow']) {
+    const response = JSON.parse(f.backend.doPost({ parameter: { action, sessionToken: 'fixture',
+      actingTeacherName: 'Jina', event: JSON.stringify(f.input), deductionId: f.input.id, reason: 'test' } }).text);
+    assert.equal(response.status, 'error');
+    assert.match(response.message, /代查看.*唯讀/);
+  }
+});
+
+test('No Show POST can release a confirmed unwritten request, never an unknown or already-written request', () => {
+  const f = createPayrollNoShowFixture();
+  f.backend.requireSession_ = () => f.adminSession;
+  const quote = f.quote();
+  const params = { action: 'recordPayrollNoShow', sessionToken: 'fixture',
+    event: JSON.stringify({ ...f.input, quoteKey: quote.quoteKey }) };
+  f.rules[0].amount = 800;
+  const rejected = JSON.parse(f.backend.doPost({ parameter: params }).text);
+  assert.equal(rejected.status, 'success');
+  assert.equal(rejected.data.notRecorded, true);
+  assert.match(rejected.data.message, /重新試算/);
+  assert.equal(f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11').length, 0);
+  f.rules[0].amount = 700;
+  const realRecord = f.backend.recordPayrollNoShow_;
+  f.backend.recordPayrollNoShow_ = (session, input) => { realRecord(session, input); throw Error('unknown after write'); };
+  const uncertain = JSON.parse(f.backend.doPost({ parameter: params }).text);
+  assert.equal(uncertain.status, 'error');
+  assert.equal(f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11').length, 1);
+});
+
+test('No Show rechecks stale quotes, deduplicates calendar events and safely retries without another OB read', () => {
+  const f = createPayrollNoShowFixture();
+  const quote = f.quote();
+  f.rules[0].amount = 800;
+  assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, quoteKey: quote.quoteKey }), /變動|重新/);
+  const saved = f.record();
+  const savedInput = { ...f.input, quoteKey: f.quote().quoteKey };
+  f.backend.fetchPayrollNoShowCourse_ = () => { throw Error('OB unavailable'); };
+  assert.equal(f.backend.recordPayrollNoShow_(f.adminSession, savedInput).id, saved.id);
+  assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...savedInput, reason: 'different' }), /編號|內容/);
+  f.backend.fetchPayrollNoShowCourse_ = () => f.backend.normalizePayrollCalendarItem_(f.raw);
+  assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...savedInput, id: 'other-noshow-id' }), /已有|重複/);
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 2);
+});
+
+test('No Show allows draft-stage registration and cancellation but protects published and adjusted months', () => {
+  const f = createPayrollNoShowFixture();
+  const summaries = f.spreadsheet.getSheetByName('薪資結算');
+  const row = ['2026-11', 'Jina', 700, 0, 0, 0, 700, 0, 'old-draft', '草稿', '', 'now', 0, '', '', '', 0, '', '[]'];
+  summaries.values.push(row);
+  f.record();
+  assert.equal(row[6], 700);
+  f.backend.cancelPayrollNoShow_(f.adminSession, f.input.id, '確認登記錯誤');
+  assert.equal(f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11')[0].status, '已取消');
+  const retry = f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, quoteKey: f.quote().quoteKey });
+  assert.equal(retry.status, '已取消');
+  for (const patch of [{ 9: '待確認' }, { 12: 100 }, { 13: '人工更正' }]) {
+    const original = [...row]; Object.assign(row, patch);
+    assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, id: 'different-event-id', quoteKey: f.quote().quoteKey }));
+    row.splice(0, row.length, ...original);
+  }
+});
+
+test('No Show payroll makes original wage zero and replacement normal, while keeping one penalty per month', () => {
+  const f = createPayrollNoShowFixture();
+  const saved = f.record();
+  const courses = [f.backend.normalizePayrollCalendarItem_(f.raw)];
+  const adjusted = f.backend.applyPayrollNoShows_(courses, [saved]);
+  const draft = f.backend.buildPayrollDraft_('2026-11', adjusted, f.rules);
+  assert.equal(draft.errors.length, 0);
+  assert.equal(draft.lines.find(row => row.teacherName === 'Jina').amount, 0);
+  assert.equal(draft.lines.find(row => row.teacherName === 'Tako').amount, 900);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'noshow-v1', 'now', adjusted, draft);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'noshow-v2', 'now', adjusted, draft);
+  const summaries = f.spreadsheet.getSheetByName('薪資結算').values.slice(1);
+  assert.deepEqual(summaries.filter(row => row[1] === 'Jina').map(row => row[6]), [-700, -700]);
+  assert.deepEqual(summaries.filter(row => row[1] === 'Tako').map(row => row[6]), [900, 900]);
+  f.backend.publishPayroll_(f.adminSession, '2026-11', 'noshow-v2');
+  assert.throws(() => f.backend.cancelPayrollNoShow_(f.adminSession, saved.id, 'too late'), /發布|人工/);
+});
+
+test('No Show stale draft cannot publish after register or cancel, and corrupted metadata fails closed', () => {
+  const f = createPayrollNoShowFixture();
+  const original = [f.backend.normalizePayrollCalendarItem_(f.raw)];
+  const draft = f.backend.buildPayrollDraft_('2026-11', original, f.rules);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'before-event', 'now', original, draft);
+  const saved = f.record();
+  assert.throws(() => f.backend.publishPayroll_(f.adminSession, '2026-11', 'before-event'), /重新試算/);
+  const adjusted = f.backend.applyPayrollNoShows_(original, [saved]);
+  const fresh = f.backend.buildPayrollDraft_('2026-11', adjusted, f.rules);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'after-event', 'now', adjusted, fresh);
+  f.backend.cancelPayrollNoShow_(f.adminSession, saved.id, '取消');
+  assert.throws(() => f.backend.publishPayroll_(f.adminSession, '2026-11', 'after-event'), /重新試算/);
+  f.spreadsheet.getSheetByName('薪資單月扣款').values[1][12] = '{broken';
+  assert.throws(() => f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11'), /No Show/);
+});
+
+test('No Show missing event snapshot can never downgrade into an ordinary deduction', () => {
+  const f = createPayrollNoShowFixture();
+  f.record();
+  f.spreadsheet.getSheetByName('薪資單月扣款').values[1][12] = '';
+  assert.throws(() => f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11'), /No Show.*快照/);
+});
+
+test('No Show registration then cancellation still requires a fresh trial before publishing the original draft', () => {
+  const f = createPayrollNoShowFixture();
+  const courses = [f.backend.normalizePayrollCalendarItem_(f.raw)];
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'before-event', 'now', courses,
+    f.backend.buildPayrollDraft_('2026-11', courses, f.rules));
+  const saved = f.record();
+  f.backend.cancelPayrollNoShow_(f.adminSession, saved.id, '取消');
+  assert.throws(() => f.backend.publishPayroll_(f.adminSession, '2026-11', 'before-event'), /重新試算/);
+  f.backend.writePayrollDraftUnlocked_(f.spreadsheet, 'after-cancel', 'now', courses,
+    f.backend.buildPayrollDraft_('2026-11', courses, f.rules));
+  f.backend.publishPayroll_(f.adminSession, '2026-11', 'after-cancel');
+});
+
+test('No Show no-replacement report exceptions apply only to confirmed exact ids, not other incomplete attendance', () => {
+  const f = createPayrollNoShowFixture();
+  f.input = { ...f.input, mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 8 };
+  const saved = f.record();
+  const range = f.backend.getPayrollMonthRange_('2026-11');
+  const report = payrollReportRow({ classScheduleId: 60001, classId: 10, instructorId: 1,
+    classScheduleTime: f.raw.classTime, numberCustomersNotRecorded: 2 });
+  for (const calendar of [[f.raw], [{ ...f.raw, cancelled: true }], []]) {
+    const merged = f.backend.mergePayrollAttendanceReport_(calendar, [report], range, [saved]);
+    const adjusted = f.backend.applyPayrollNoShows_(merged, [saved]);
+    const draft = f.backend.buildPayrollDraft_('2026-11', adjusted, f.rules);
+    assert.equal(draft.errors.length, 0);
+    assert.equal(draft.lines.length, 1);
+    assert.equal(draft.lines[0].amount, 0);
+  }
+  assert.throws(() => f.backend.mergePayrollAttendanceReport_([f.raw], [report], range, []), /出席/);
+  assert.throws(() => f.backend.mergePayrollAttendanceReport_([f.raw, payrollReportCalendar()],
+    [report, payrollReportRow({ numberCustomersNotRecorded: 1 })], range, [saved]), /出席/);
+  assert.throws(() => f.backend.mergePayrollAttendanceReport_([{ ...f.raw, classTime: '2026-11-04T09:00:00Z' }], [report], range, [saved]), /變動/);
+  assert.throws(() => f.backend.mergePayrollAttendanceReport_([{ ...f.raw,
+    instructors: [{ id: 1, firstName: 'Jina' }, { id: 2 }] }], [report], range, [saved]), /老師/);
+});
+
+test('No Show full monthly sync records zero original wages and only one extra-points deduction, without OB writes', () => {
+  const f = createPayrollNoShowFixture();
+  f.input = { ...f.input, mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 8 };
+  f.record();
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  f.backend.fetchCalendarPages_ = () => [{ ...f.raw, cancelled: true }];
+  f.backend.fetchPayrollAttendanceReport_ = () => [];
+  const first = f.backend.syncPayrollMonth_(f.adminSession, '2026-11');
+  const second = f.backend.syncPayrollMonth_(f.adminSession, '2026-11');
+  assert.equal(first.publishable, true);
+  assert.equal(second.lineCount, 1);
+  const ledger = f.spreadsheet.getSheetByName('薪資單月扣款').values;
+  assert.equal(ledger.length, 2);
+  const summaries = f.spreadsheet.getSheetByName('薪資結算').values.slice(1).filter(row => row[1] === 'Jina');
+  assert.deepEqual(summaries.map(row => row[6]), [-1440, -1440]);
+  assert.deepEqual(summaries.map(row => row[2]), [0, 0]);
+  assert.equal(f.backend.getPayrollDeductionDraftError_(f.spreadsheet, '2026-11', second.version), '');
+  f.backend.publishPayroll_(f.adminSession, '2026-11', second.version);
+});
+
+test('No Show full sync applies replacement teacher rules instead of the original OB instructor salary', () => {
+  const f = createPayrollNoShowFixture();
+  f.record();
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  f.backend.fetchCalendarPages_ = () => [f.raw];
+  f.backend.fetchPayrollAttendanceReport_ = () => [payrollReportRow({ classScheduleId: 60001, classId: 10,
+    instructorId: 1, classRoomId: null, classScheduleTime: f.raw.classTime, numberCustomersAttended: 2, instructorSalary: 9999 })];
+  const result = f.backend.syncPayrollMonth_(f.adminSession, '2026-11');
+  assert.equal(result.publishable, true);
+  const summaries = f.spreadsheet.getSheetByName('薪資結算').values.slice(1);
+  assert.equal(summaries.find(row => row[1] === 'Jina')[6], -700);
+  assert.equal(summaries.find(row => row[1] === 'Tako')[6], 900);
+  assert.equal(f.backend.getPayrollDeductionDraftError_(f.spreadsheet, '2026-11', result.version), '');
+  f.backend.fetchPayrollAttendanceReport_ = () => [payrollReportRow({ classScheduleId: 60001, classId: 10,
+    instructorId: 1, classRoomId: null, classScheduleTime: f.raw.classTime, numberCustomersAttended: 3 })];
+  assert.throws(() => f.backend.syncPayrollMonth_(f.adminSession, '2026-11'), /人數.*變動/);
+});
+
+test('No Show cancellation followed by fresh sync restores normal wages, but never leaks into another month', () => {
+  const f = createPayrollNoShowFixture();
+  const saved = f.record();
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  f.backend.fetchCalendarPages_ = () => [f.raw];
+  f.backend.fetchPayrollAttendanceReport_ = () => [payrollReportRow({ classScheduleId: 60001, classId: 10,
+    instructorId: 1, classRoomId: null, classScheduleTime: f.raw.classTime, numberCustomersAttended: 2 })];
+  f.backend.syncPayrollMonth_(f.adminSession, '2026-11');
+  f.backend.cancelPayrollNoShow_(f.adminSession, saved.id, '誤登');
+  const result = f.backend.syncPayrollMonth_(f.adminSession, '2026-11');
+  const summaries = f.spreadsheet.getSheetByName('薪資結算').values.slice(1).filter(row => row[8] === result.version);
+  assert.equal(summaries.find(row => row[1] === 'Jina')[6], 700);
+  assert.equal(summaries.find(row => row[1] === 'Jina')[16], 0);
+  assert.equal(f.backend.getPayrollDeductions_(f.spreadsheet, '2026-12').length, 0);
+});
+
+test('No Show snapshots cannot bypass source changes, duplicate IDs, generic cancellation or double manual deductions', () => {
+  const f = createPayrollNoShowFixture();
+  const saved = f.record();
+  assert.throws(() => f.backend.cancelPayrollDeduction_(f.adminSession, saved.id, 'bypass'), /專用/);
+  assert.throws(() => f.backend.recordPayrollDeduction_(f.adminSession, { id: 'manual-duplicate-noshow', month: '2026-11',
+    teacherName: 'Jina', eventDate: '2026/11/04', amount: 700, reason: 'manual duplicate' }), /已有.*No Show/);
+  for (const patch of [{ instructors: [{ name: 'someone else' }] }, { date: '2026/11/03' }, { durationMinutes: 90 }]) {
+    assert.throws(() => f.backend.applyPayrollNoShows_([{ ...f.backend.normalizePayrollCalendarItem_(f.raw), ...patch }], [saved]), /變動/);
+  }
+  assert.throws(() => f.backend.applyPayrollNoShows_([], [saved]), /不在/);
+  const ledger = f.spreadsheet.getSheetByName('薪資單月扣款');
+  const copy = [...ledger.values[1]]; copy[0] = 'another-noshow-same-class'; ledger.values.push(copy);
+  assert.throws(() => f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11'), /相同|重複/);
+});
+
+test('No Show exact-course reader rejects raw unnamed or duplicate instructors before normalization drops them', () => {
+  const f = createPayrollNoShowFixture();
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'test-token');
+  const calls = [];
+  f.backend.UrlFetchApp = { fetch(url, options) {
+    calls.push({ url, options });
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify(f.raw) };
+  } };
+  const valid = f.readCourse('60001');
+  assert.equal(valid.calendarId, '60001');
+  assert.equal(calls[0].url, 'https://api.omceanbooking.com/v1/calendar/60001');
+  assert.equal(calls[0].options.method, 'get');
+  for (const instructors of [[{ id: 1, firstName: 'Jina' }, { id: 2 }],
+    [{ id: 1, firstName: 'Jina' }, { id: 1, firstName: 'Jina' }], [{ firstName: 'Jina' }]]) {
+    f.raw.instructors = instructors;
+    assert.throws(() => f.readCourse('60001'), /老師/);
+  }
+});
+
+test('No Show metadata column must have the dedicated header and audit failures roll back only event writes', () => {
+  const f = createPayrollNoShowFixture();
+  f.record();
+  const ledger = f.spreadsheet.getSheetByName('薪資單月扣款');
+  ledger.values[0][12] = '其他備註';
+  assert.throws(() => f.backend.getPayrollDeductions_(f.spreadsheet, '2026-11'), /No Show.*標題/);
+  const g = createPayrollNoShowFixture();
+  const before = JSON.stringify(g.spreadsheet.getSheetByName('薪資單月扣款').values);
+  g.backend.appendAuditEventsUnlocked_ = () => { throw Error('fixture audit failed'); };
+  assert.throws(() => g.record(), /audit failed/);
+  assert.equal(g.backend.getPayrollDeductions_(g.spreadsheet, '2026-11').length, 0);
+  assert.equal(g.spreadsheet.getSheetByName('薪資單月扣款').values[0].slice(0, 12).join('|'), JSON.parse(before)[0].join('|'));
+});
+
 function createOneTimeDeductionFixture() {
   const f = createNotificationBackend();
   f.services.Utilities.formatDate = formatTaipeiDate;

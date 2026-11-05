@@ -66,23 +66,56 @@
     return record.channels?'本筆使用 OB＋Email，必須分別核對兩個管道都已送出／收到，才可標記完成。':'本筆是舊版 Email 通知，請核對 Email 寄送結果。';
   }
   function renderOperations(data) {
-    if(data?.ok!==true||!data.sources||!data.queues||!Array.isArray(data.tasks))throw Error('狀態回應不完整，請更新查看。');
+    if(data?.ok!==true||!data.sources?.purchases||!data.sources?.classes||!data.queues||!Object.values(data.queues).every(Array.isArray)||!Array.isArray(data.tasks))throw Error('狀態回應不完整，請更新查看。');
     const date=v=>Number.isFinite(v)&&v>0?new Date(v).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'尚無完成紀錄';
     const labels={sync:'購卡與上課同步',identity:'OB 身分驗證',line:'活動對話回覆',tasks:'照片與推薦審核'};
     const statuses={idle:'等待新資料',closed:'不在活動同步期間',paused:'依設定暫停',disabled:'未啟動',complete:'完成本次工作',completed:'完成本次工作',continuing:'分批處理中',processed:'已處理',reconciled:'已核對',waiting:'等待來源或額度',deferred:'稍後續處理',busy:'上一筆處理中',queued:'已排入',pending:'待處理',working:'處理中',accepted:'服務已接受',sent:'服務已接受',skipped:'略過',ready:'已備妥',reserved:'已保留',delivered:'已交付',awarded:'已入帳',retained:'已保存',ineligible:'不符合資格',manual:'待人工確認',review:'待核對',blocked:'需要檢查設定',stale:'資料需重新核對',unknown:'結果待核對',uncertain:'結果待核對',rejected:'已拒絕／需核對',failed:'失敗待處理',conflict:'資料衝突',exception:'執行異常',invalid_result:'回應異常',missing:'沒有排程回報',lookup:'查詢中',unavailable:'查詢未完成',unbound:'未綁定',sending:'結果待核對'};
     const source=(name,s)=>`<div><strong>${name}</strong><p>最近整批同步：${date(s.lastCompletedAt)}</p><p>處理中 ${escape(s.pending)} 批 · 待核對 ${escape(s.blocked)} 批${s.oldestPendingAt?' · 最早待處理 '+date(s.oldestPendingAt):''}</p></div>`;
     const queueNames={intakes:'活動申請',purchases:'購卡獎勵',purchaseIntakes:'購卡資格暫存',identity:'身分查詢',identityDelivery:'驗證通知',ready:'LINE 領獎通知',line:'活動回覆'};
-    const queueRows=Object.entries(data.queues).flatMap(([key,rows])=>rows.filter(r=>r.count>0&&!['accepted','unbound','rejected'].includes(key==='ready'?r.state:'')).map(r=>`<li>${escape(r.kind==='photo'?'照片':r.kind==='referral'?'推薦':queueNames[key]||'待處理')} · ${escape(statuses[r.state]||'待核對')} ${escape(r.count)} 筆${r.oldestAt?' · 最早 '+date(r.oldestAt):''}</li>`));
-    data.tasks.filter(t=>t.attention||t.stale).forEach(t=>queueRows.push(`<li>${escape(labels[t.id]||'排程')} · ${escape(t.stale?(t.lastTickAt?'超過 5 分鐘未回報，請檢查排程':'尚未收到排程回報'):statuses[t.state]||'需要核對')}</li>`));
+    const items=Object.entries(data.queues).flatMap(([key,rows])=>rows.filter(r=>r.count>0&&!['accepted','unbound','rejected'].includes(key==='ready'?r.state:'')).map(r=>({key:key+':'+r.state+':'+(r.kind||''),at:r.oldestAt,go:key==='intakes'?'tasks':key==='ready'?'mail':'schedule',text:`${r.kind==='photo'?'照片':r.kind==='referral'?'推薦':queueNames[key]||'待處理'} · ${statuses[r.state]||'待核對'} ${r.count} 筆`})));
+    for(const [key,label] of [['purchases','購卡'],['classes','上課']]){const s=data.sources[key];if(s.pending||s.blocked)items.push({key:'source:'+key,at:s.oldestPendingAt,go:'schedule',text:`${label}同步 · 處理中 ${s.pending} 批 · 待核對 ${s.blocked} 批`});}
+    // A last error is not necessarily the start of the current incident: do not invent its age.
+    data.tasks.filter(t=>t.attention||t.stale).forEach(t=>items.push({key:'task:'+t.id,go:'schedule',text:`${labels[t.id]||'排程'} · ${t.stale?(t.lastTickAt?'超過 5 分鐘未回報，請檢查排程':'尚未收到排程回報'):statuses[t.state]||'需要核對'}`}));
     const mail=data.classroom?.mail;
-    if(mail?.available===false)queueRows.push('<li>教室通知紀錄暫時無法讀取，請查寄信紀錄。</li>');
-    else if(mail&&(mail.queued||mail.uncertain))queueRows.push(`<li>教室通知：待寄 ${escape(mail.queued)} 封 · 結果待核對 ${escape(mail.uncertain)} 封${mail.oldestPendingAt?' · 最早 '+date(mail.oldestPendingAt):''}</li>`);
+    if(mail?.available===false)items.push({key:'mail',go:'mail',text:'教室通知紀錄暫時無法讀取，請查寄信紀錄。'});
+    else if(mail&&(mail.queued||mail.uncertain))items.push({key:'mail',go:'mail',at:mail.oldestPendingAt,text:`教室通知：待寄 ${mail.queued} 封 · 結果待核對 ${mail.uncertain} 封`});
+    const known=at=>Number.isFinite(at)&&at>0&&at<=8640000000000000;
+    items.sort((a,b)=>(known(a.at)?a.at:Infinity)-(known(b.at)?b.at:Infinity));
+    const destinations={tasks:'前往活動審核',mail:'查看寄送紀錄',schedule:'查看排程詳情'};
+    const queueRows=items.map(r=>`<li class="raffle-ops-item"><div><strong>${escape(r.text)}</strong><p class="item-meta">${known(r.at)?'最早待處理：'+date(r.at):'待處理起始時間未提供；請查看詳情'}</p></div><button type="button" class="compact-button" data-ops-go="${r.go}" data-ops-key="${escape(r.key)}">${destinations[r.go]}</button></li>`);
     const general=data.readyLineEnabled&&!data.readyTestOnly&&data.classroom?.lineFirst&&!data.classroom?.testOnly;
     return `<p class="item-meta">${data.phase==='upcoming'?'活動尚未開始，資格自 '+date(data.startsAt)+' 起算。':data.phase==='ended'?'活動同步期間已結束。':'活動同步進行中。'} 活動回覆：${data.activityRepliesPaused?'暫停，等管理者通知開放':'已開放'}。</p>
       <div class="raffle-ops-grid">${source('購卡',data.sources.purchases)}${source('上課',data.sources.classes)}</div>
       <p class="item-meta">領獎通知：${general?'LINE 優先；未綁定或明確失敗才用 OB＋Email':'通知範圍／接線尚待核對'} · ${data.imageTextEnabled?'聖誕圖＋文字':'文字格式'}。結果不明先核對，不自動重寄。</p>
-      ${queueRows.length?'<div class="state error"><strong>待處理與核對</strong><ul>'+queueRows.join('')+'</ul></div>':'<p>目前讀取的待辦清單沒有待處理項目。</p>'}
-      <details><summary>查看排程與備貨提醒狀態</summary><p class="item-meta">排程回報不等於資料同步完成；購卡、上課以整批同步時間為準。</p>${data.tasks.map(t=>`<p><strong>${escape(labels[t.id]||'排程')}</strong> · ${escape(statuses[t.state]||'待核對')}${t.stale?' · 超過 5 分鐘未回報，需確認':''}${t.attention?' · 需留意':''}<br><span class="item-meta">最近排程回報：${t.lastTickAt?date(t.lastTickAt):'沒有排程回報'}${t.lastErrorAt?'；最近待核對：'+date(t.lastErrorAt):''}</span></p>`).join('')}<p class="item-meta">Tako 備貨提醒同步：${date(data.classroom?.lastStockSyncAt)}。活動開始後依排程處理。</p></details><p class="item-meta">讀取時間：${date(data.checkedAt)}（台北時間）</p>`;
+      ${queueRows.length?'<div class="state error"><strong>待處理與核對</strong><p class="item-meta">依最早待處理時間排序，未提供時間的項目列於最後。按鈕只開啟核對頁，不會直接發星或重寄。</p><ul class="raffle-ops-list">'+queueRows.join('')+'</ul></div>':'<p>目前讀取的待辦清單沒有待處理項目。</p>'}
+      <details data-ops-details><summary>查看排程與備貨提醒狀態</summary><p class="item-meta">排程回報不等於資料同步完成；購卡、上課以整批同步時間為準。同步、身分驗證及活動回覆異常需由管理者檢查排程；這裡不會重跑或重寄。</p>${data.tasks.map(t=>`<p><strong>${escape(labels[t.id]||'排程')}</strong> · ${escape(statuses[t.state]||'待核對')}${t.stale?' · 超過 5 分鐘未回報，需確認':''}${t.attention?' · 需留意':''}<br><span class="item-meta">最近排程回報：${t.lastTickAt?date(t.lastTickAt):'沒有排程回報'}${t.lastErrorAt?'；最近待核對：'+date(t.lastErrorAt):''}</span></p>`).join('')}<p class="item-meta">Tako 備貨提醒同步：${date(data.classroom?.lastStockSyncAt)}。活動開始後依排程處理。</p></details><p class="item-meta">讀取時間：${date(data.checkedAt)}（台北時間）</p>`;
+  }
+  function createOperationsRefresh({read,onData,onStatus,isVisible,subscribe,schedule=setTimeout,cancel=clearTimeout,now=Date.now}) {
+    let disposed=false,busy=false,timer=null,due=0,failures=0;
+    const clear=()=>{if(timer!==null)cancel(timer);timer=null;};
+    const arm=()=>{clear();if(!disposed&&!busy&&isVisible())timer=schedule(()=>{timer=null;return refresh();},Math.max(0,due-now()));};
+    async function refresh(){
+      if(disposed||busy||!isVisible())return;
+      clear();busy=true;onStatus('loading');
+      try{const data=await read();if(disposed)return;onData(data);failures=0;onStatus('ready');}
+      catch{if(!disposed){failures++;onStatus('error');}}
+      finally{busy=false;if(!disposed){due=now()+Math.min(300000,60000*2**Math.min(failures,3));arm();}}
+    }
+    const unsubscribe=subscribe(()=>{clear();if(disposed||!isVisible()||busy)return;if(now()>=due)void refresh();else arm();});
+    return{refresh,dispose(){disposed=true;clear();unsubscribe();}};
+  }
+  function mountOperations(panel,{api,navigate}){
+    panel.innerHTML='<div class="admin-item-actions"><h3 style="flex:1;margin:0">同步與通知狀態</h3><button type="button" class="compact-button" data-ops-refresh>更新狀態</button></div><p class="item-meta">開啟時每分鐘自動更新，切到背景暫停；僅讀取狀態。</p><p data-ops-status role="status" aria-live="polite"></p><div data-ops-content>讀取執行紀錄中…</div>';
+    const body=panel.querySelector('[data-ops-content]'),button=panel.querySelector('[data-ops-refresh]'),notice=panel.querySelector('[data-ops-status]');let loaded=false;
+    const refresh=createOperationsRefresh({read:()=>api('getActivityOperations',{}),isVisible:()=>!document.hidden,subscribe:fn=>{document.addEventListener('visibilitychange',fn);return()=>document.removeEventListener('visibilitychange',fn);},onData:data=>{
+      const html=renderOperations(data),open=body.querySelector('[data-ops-details]')?.open,active=document.activeElement,key=body.contains(active)?active.dataset.opsKey:null,summary=active===body.querySelector('summary');
+      body.innerHTML=html;loaded=true;if(open)body.querySelector('[data-ops-details]').open=true;
+      if(key){const replacement=[...body.querySelectorAll('[data-ops-key]')].find(b=>b.dataset.opsKey===key);(replacement||button).focus({preventScroll:true});}
+      else if(summary)body.querySelector('summary').focus({preventScroll:true});
+    },onStatus:state=>{button.disabled=state==='loading';notice.textContent=state==='error'?(loaded?'更新失敗，以下保留上次資料，不能視為最新；稍後會自動再查詢。':'狀態讀取失敗，不能視為沒有異常；稍後會自動再查詢。'):state==='loading'?'更新狀態中…':'狀態已更新。';}});
+    button.onclick=refresh.refresh;
+    body.onclick=e=>{const b=e.target.closest('[data-ops-go]');if(!b||!body.contains(b))return;if(b.dataset.opsGo==='schedule'){const details=body.querySelector('[data-ops-details]');details.open=true;details.querySelector('summary').focus({preventScroll:true});details.scrollIntoView({block:'nearest'});}else if(navigate(b.dataset.opsGo)!==true)notice.textContent='目前無法開啟此處理區，請確認權限或等目前查詢完成後再試；沒有送出任何操作。';};
+    void refresh.refresh();return()=>{refresh.dispose();button.onclick=null;body.onclick=null;};
   }
   function renderOverview(data) {
     const claimKeys=['waiting','ready','partial','claimed','digital','cancelled'];
@@ -349,13 +382,13 @@
     let disposed = false, serial = 0, campaigns = [], workspace = {}, preview = null, mailPlan = null, sendPlan = null, mailRecordsData = null, fulfillmentView = null, pending = null;
     if(!document.getElementById('raffle-workspace-style')){
       const style=document.createElement('style');style.id='raffle-workspace-style';
-      style.textContent='.raffle-ops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}.raffle-ops-grid>div{padding:14px;border:1px solid #ddd3c8;border-radius:10px}.raffle-ops p{margin:10px 0}.raffle-ops details{margin-top:12px}.raffle-ops summary{cursor:pointer;font-weight:600}.raffle-ops li{margin:8px 0}.raffle-gift-workspace{padding:24px;margin-top:24px;border:1px solid #ddd3c8;border-radius:14px;background:#fffdf9}.raffle-gift-workspace>label{display:block;margin:16px 0 0}.raffle-gift-workspace h3{margin-top:0}.raffle-gift-workspace [data-gift-message]{padding:12px;background:#f5f1e9;border-radius:8px}.raffle-gift-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}.raffle-gift-grid .admin-item{border:1px solid #ddd3c8;border-radius:12px;padding:18px;overflow-wrap:anywhere}.raffle-gift-grid .compact-button{margin:4px 6px 4px 0}.raffle-tools,[data-gift-history]{border-top:1px solid #ddd3c8;margin-top:20px;padding-top:16px}.raffle-tools summary,[data-gift-history] summary{cursor:pointer;font-weight:600;padding:8px 0}.raffle-tools[open] summary,[data-gift-history][open] summary{margin-bottom:12px}';document.head.appendChild(style);
+      style.textContent='.raffle-ops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}.raffle-ops-grid>div{padding:14px;border:1px solid #ddd3c8;border-radius:10px}.raffle-ops p{margin:10px 0}.raffle-ops details{margin-top:12px}.raffle-ops summary{cursor:pointer;font-weight:600}.raffle-ops li{margin:8px 0}.raffle-ops-list{list-style:none;padding:0;text-align:left}.raffle-ops-item{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid #e5d8d0}.raffle-ops-item>div{flex:1 1 260px;min-width:0;overflow-wrap:anywhere}.raffle-ops-item button{white-space:normal;max-width:100%;flex-shrink:0}.raffle-ops-item:last-child{border-bottom:0}.raffle-gift-workspace{padding:24px;margin-top:24px;border:1px solid #ddd3c8;border-radius:14px;background:#fffdf9}.raffle-gift-workspace>label{display:block;margin:16px 0 0}.raffle-gift-workspace h3{margin-top:0}.raffle-gift-workspace [data-gift-message]{padding:12px;background:#f5f1e9;border-radius:8px}.raffle-gift-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}.raffle-gift-grid .admin-item{border:1px solid #ddd3c8;border-radius:12px;padding:18px;overflow-wrap:anywhere}.raffle-gift-grid .compact-button{margin:4px 6px 4px 0}.raffle-tools,[data-gift-history]{border-top:1px solid #ddd3c8;margin-top:20px;padding-top:16px}.raffle-tools summary,[data-gift-history] summary{cursor:pointer;font-weight:600;padding:8px 0}.raffle-tools[open] summary,[data-gift-history][open] summary{margin-bottom:12px}';document.head.appendChild(style);
     }
     const admin = options.mode === 'admin';
     const node = selector => root.querySelector(selector);
     root.innerHTML = '<div class="state" role="status">載入領獎工作台…</div>';
     const initial = options.api('getRaffleWorkspace', { mode: admin ? 'admin' : 'teacher' });
-    let settingsCleanup=null,obCleanup=null,giftCleanup=null,taskCleanup=null,toolsCleanup=null;
+    let settingsCleanup=null,obCleanup=null,giftCleanup=null,taskCleanup=null,toolsCleanup=null,operationsCleanup=null;
     function giftPanel(data){
       if(admin&&data.productionTaskReviewEnabled===true&&['冠蓉','Tako'].includes(data.productionTaskActor)){
         const panel=document.createElement('section');root.appendChild(panel);
@@ -396,7 +429,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         dialog.addEventListener('cancel',event=>{event.preventDefault();close();});dialog.addEventListener('close',close);dialog.showModal();
       });
     }
-    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); if(taskCleanup)taskCleanup(); if(toolsCleanup)toolsCleanup(); root.replaceChildren(); };
+    const cleanup = () => { disposed = true; serial++; if(settingsCleanup)settingsCleanup(); if(obCleanup)obCleanup(); if(giftCleanup)giftCleanup(); if(taskCleanup)taskCleanup(); if(toolsCleanup)toolsCleanup(); if(operationsCleanup)operationsCleanup(); root.replaceChildren(); };
     initial.then(data => {
       if (disposed) return;
       if (!data.enabled || !data.campaigns.length) {
@@ -424,11 +457,20 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
       if(admin && global.SherryActivityTools){const toolsRoot=document.createElement('section');form.after(toolsRoot);toolsCleanup=global.SherryActivityTools.mount(toolsRoot,{api:options.api,campaignId:currentCampaign.id,readOnly:data.readOnly!==false});}
       if(admin){
         const panel=document.createElement('section');panel.className='admin-control raffle-ops';
-        panel.innerHTML='<div class="admin-item-actions"><h3 style="flex:1;margin:0">同步與通知狀態</h3><button type="button" class="compact-button">更新狀態</button></div><div data-ops-content aria-live="polite">讀取執行紀錄中…</div>';
         form.before(panel);
-        const button=panel.querySelector('button'),body=panel.querySelector('[data-ops-content]');
-        const load=async()=>{button.disabled=true;body.textContent='讀取執行紀錄中…';try{const data=await options.api('getActivityOperations',{});if(!disposed)body.innerHTML=renderOperations(data);}catch(e){if(!disposed)body.textContent=e.message||'無法讀取狀態，請更新確認；這不代表沒有異常。';}finally{if(!disposed)button.disabled=false;}};
-        button.onclick=load;load();
+        operationsCleanup=mountOperations(panel,{api:options.api,navigate:destination=>{
+          if(disposed)return false;
+          if(destination==='tasks'){
+            const review=node('[data-production-task-review]');if(!review)return false;
+            // Keep any in-progress review, filters and confirmation intact.
+            const heading=review.querySelector('h3');heading.tabIndex=-1;heading.focus({preventScroll:true});review.scrollIntoView({block:'start'});return true;
+          }
+          if(destination==='mail'){
+            const button=node('[data-raffle-mail-records]');if(!button||button.disabled||pending||node('dialog[open]'))return false;
+            button.closest('details').open=true;button.click();result.tabIndex=-1;result.focus({preventScroll:true});result.scrollIntoView({block:'start'});return true;
+          }
+          return false;
+        }});
       }
 
       if(admin){
@@ -709,5 +751,5 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
     });
     return cleanup;
   }
-  global.SherryRaffle = { renderOperations, renderReconcileGuidance, renderPickupVenue, renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { createOperationsRefresh, mountOperations, renderOperations, renderReconcileGuidance, renderPickupVenue, renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

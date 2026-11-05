@@ -1,0 +1,52 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+const require=createRequire(import.meta.url),{chromium}=require(path.join(process.env.CODEX_NODE_MODULES,'playwright'));
+const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const html=await fs.readFile(path.join(repo,'index.html'),'utf8'),styles=[...html.matchAll(/<style[^>]*>[\s\S]*?<\/style>/g)].join('');
+const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+try{
+ const page=await browser.newPage({viewport:{width:1280,height:1000}});await page.route('**/*',r=>r.abort());
+ await page.setContent('<html><head>'+styles+'</head><body><main id="host" style="max-width:1050px;margin:auto;padding:16px"></main></body></html>');
+ await page.addScriptTag({path:path.join(repo,'raffle.js')});
+ await page.clock.install();
+ await page.evaluate(()=>{
+  window.calls=[];window.fail=false;window.ops={ok:true,checkedAt:Date.now(),phase:'upcoming',startsAt:Date.parse('2026-11-15T00:00:00+08:00'),activityRepliesPaused:true,readyLineEnabled:true,readyTestOnly:false,imageTextEnabled:true,sources:{purchases:{lastCompletedAt:Date.now(),pending:0,blocked:0},classes:{lastCompletedAt:Date.now(),pending:1,blocked:0,oldestPendingAt:Date.now()-500000}},queues:{intakes:[{kind:'photo',state:'manual',count:2,oldestAt:Date.now()-900000}],ready:[{state:'unknown',count:1,oldestAt:Date.now()-600000}],identity:[{state:'unavailable',count:1}]},tasks:[{id:'sync',state:'continuing',lastTickAt:Date.now()}],classroom:{lineFirst:true,testOnly:false,mail:{available:true,queued:0,uncertain:1,oldestPendingAt:Date.now()-600000}}};
+  window.SherryProductionTasks={mount(root){root.dataset.productionTaskReview='';root.innerHTML='<h3>活動申請審核</h3><label>測試中的審核草稿<input data-review-draft value="未送出的備註"></label>';return()=>{};}};
+  window.start=mode=>SherryRaffle.mount(document.querySelector('#host'),{mode,api:async(action,p)=>{calls.push(action);if(action==='getRaffleWorkspace')return{enabled:true,readOnly:false,productionTaskReviewEnabled:true,productionTaskActor:'冠蓉',campaigns:[{id:'fixture',name:'聖誕集星活動'}]};if(action==='getActivityOperations'){if(fail)throw Error('offline');return structuredClone(ops);}if(action==='getRaffleMailRecords')return{total:0,records:[]};throw Error('unexpected action '+action);}});
+  window.dispose=start('admin');
+ });
+ await page.locator('[data-ops-go="tasks"]').waitFor();
+ const beforePoll=await page.evaluate(()=>calls.length);
+ await page.locator('[data-ops-go="tasks"]').focus();await page.clock.fastForward(60000);
+ await page.waitForFunction(n=>calls.length===n+1,beforePoll);
+ assert.equal(await page.evaluate(()=>document.activeElement.dataset.opsGo),'tasks');
+ await page.locator('[data-raffle-query]').fill('尚未查詢');
+ await page.locator('[data-ops-go="tasks"]').click();
+ assert.equal(await page.evaluate(()=>document.activeElement.textContent),'活動申請審核');
+ assert.equal(await page.locator('[data-review-draft]').inputValue(),'未送出的備註');
+ await page.locator('[data-ops-go="mail"]').first().click();
+ await page.waitForFunction(()=>calls.includes('getRaffleMailRecords'));
+ assert.equal(await page.locator('.raffle-tools').evaluate(n=>n.open),true);
+ await page.locator('[data-ops-go="schedule"]').first().click();
+ assert.equal(await page.locator('[data-ops-details]').evaluate(n=>n.open),true);
+ await page.locator('[data-ops-refresh]').click();await page.waitForFunction(()=>document.querySelector('[data-ops-status]').textContent==='狀態已更新。');
+ assert.equal(await page.locator('[data-ops-details]').evaluate(n=>n.open),true);
+ assert.equal(await page.locator('[data-raffle-query]').inputValue(),'尚未查詢');
+ assert.equal(await page.locator('[data-review-draft]').inputValue(),'未送出的備註');
+ await page.evaluate(()=>fail=true);await page.locator('[data-ops-refresh]').click();
+ await page.getByText('更新失敗，以下保留上次資料',{exact:false}).waitFor();
+ assert.equal(await page.locator('[data-ops-go="tasks"]').count(),1);
+ await page.evaluate(()=>{fail=false;ops.queues.intakes=[];});await page.locator('[data-ops-refresh]').click();
+ await page.waitForFunction(()=>!document.querySelector('[data-ops-go="tasks"]'));
+ await page.evaluate(()=>{ops.queues.intakes=[{kind:'referral',state:'review',count:1,oldestAt:Date.now()-900000}];});await page.locator('[data-ops-refresh]').click();await page.locator('[data-ops-go="tasks"]').waitFor();
+ const output=process.env.OPS_PREVIEW_DIR||'/private/tmp/raffle-ops-preview';await fs.mkdir(output,{recursive:true});
+ for(const width of [1280,390]){await page.setViewportSize({width,height:1000});await page.evaluate(()=>window.scrollTo(0,0));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.screenshot({path:path.join(output,`operations-${width}.png`),fullPage:true});}
+ assert.ok((await page.evaluate(()=>calls)).every(a=>['getRaffleWorkspace','getActivityOperations','getRaffleMailRecords'].includes(a)));
+ await page.evaluate(()=>document.querySelector('[data-production-task-review]').remove());await page.locator('[data-ops-go="tasks"]').click();
+ await page.getByText('目前無法開啟此處理區',{exact:false}).waitFor();
+ await page.evaluate(()=>{dispose();calls=[];dispose=start('teacher');});await page.locator('[data-raffle-query]').waitFor();assert.equal(await page.locator('.raffle-ops').count(),0);assert.deepEqual(await page.evaluate(()=>calls),['getRaffleWorkspace']);await page.evaluate(()=>dispose());
+ console.log('PASS desktop/mobile routing, draft preservation, expanded details, stale warning/recovery, teacher isolation; read-only mocked API, all network blocked.');
+}finally{await browser.close();}

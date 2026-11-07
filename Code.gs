@@ -6747,6 +6747,10 @@ function recordPracticeNotificationFailure_(eventValue) {
 
 function reconcileStudentPracticeGroups_(optionsValue) {
   var options = optionsValue || {};
+  // A stale CourseList snapshot cannot prove that an OB course still occupies the room.
+  if (options.conservativeFallback === true) {
+    return { checked: 0, pending: 0, notificationFailures: 0, skipped: true, reason: 'unverified-ob-snapshot' };
+  }
   var today = cleanText_(options.today).replace(/-/g, '/');
   var throughDate = cleanText_(options.throughDate).replace(/-/g, '/');
   var currentObRows = Array.isArray(options.currentObRows) ? options.currentObRows : [];
@@ -7181,7 +7185,8 @@ function reconcilePracticeBookings_(optionsValue) {
   mutationResult.studentPractice = reconcileStudentPracticeGroups_({
     today: today,
     throughDate: throughDate,
-    currentObRows: currentObRows
+    currentObRows: currentObRows,
+    conservativeFallback: conservativeFallback
   });
   return mutationResult;
 }

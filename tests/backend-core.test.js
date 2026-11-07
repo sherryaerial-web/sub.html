@@ -14081,6 +14081,53 @@ test('hourly practice reconciliation alerts admins when an external OB rental di
   assert.equal(deliveries[0][7], 'student_practice_conflict_group-1_ob-rental-external-1');
 });
 
+test('student practice snapshot fallback never changes groups or sends conflict notices for cancelled stale courses', () => {
+  const oldCourse = ['2026/11/07', '14:30', 'D－空瑜 Lv.1~2', 'Ariel Lu', '53592', '220', '1398', '是', '2026-11-05 23:56:23'];
+  const fixture = createPracticeBackend({ courseRows: [oldCourse] });
+  const backend = fixture.backend;
+  backend.ensureStudentPracticeStructureUnlocked_(fixture.spreadsheet);
+  const groups = fixture.spreadsheet.getSheetByName('學生自主練習場次');
+  const audit = fixture.spreadsheet.getSheetByName('學生自主練習操作紀錄');
+  groups.values.push(['fallback-group', '2026/11/07', 'D', '15:00', '16:00', '已成立', '',
+    '2026-11-06 23:57:27', '2026-11-06 23:57:27', '學生甲']);
+  backend.currentTimeMs_ = () => new Date('2026-11-07T15:07:00+08:00').getTime();
+  backend.getPracticeCurrentObRowsForDayView_ = () => { throw Error('OB temporarily unavailable'); };
+  backend.getActiveCourseAdminNames_ = () => ['冠蓉', 'Tako'];
+  const notifications = [];
+  backend.sendManagedNotification_ = (...args) => { notifications.push(args); return { accepted: true }; };
+  const before = JSON.stringify([groups.values, audit.values]);
+
+  const fallback = backend.runScheduledPracticeReconciliation();
+  assert.equal(fallback.courseSource, 'snapshot');
+  assert.equal(fallback.conservativeFallback, true);
+  assert.equal(fallback.studentPractice.pending, 0);
+  assert.equal(fallback.studentPractice.skipped, true);
+  assert.equal(notifications.length, 0);
+  assert.equal(JSON.stringify([groups.values, audit.values]), before);
+
+  backend.getPracticeCurrentObRowsForDayView_ = () => [];
+  const cancelledLive = backend.runScheduledPracticeReconciliation();
+  assert.equal(cancelledLive.courseSource, 'live');
+  assert.equal(cancelledLive.studentPractice.pending, 0);
+  assert.equal(groups.values[1][6], '');
+
+  backend.getPracticeCurrentObRowsForDayView_ = () => [oldCourse];
+  const realConflict = backend.runScheduledPracticeReconciliation();
+  assert.equal(realConflict.studentPractice.pending, 1);
+  assert.equal(groups.values[1][6], '時段異動待處理');
+  assert.equal(notifications.length, 1);
+});
+
+test('student practice conservative fallback short circuits before all sheet reads and writes', () => {
+  const backend = loadBackend({ SpreadsheetApp: { getActiveSpreadsheet() { throw Error('must not access sheets'); } } });
+  const result = backend.reconcileStudentPracticeGroups_({ conservativeFallback: true });
+  assert.equal(result.checked, 0);
+  assert.equal(result.pending, 0);
+  assert.equal(result.notificationFailures, 0);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'unverified-ob-snapshot');
+});
+
 test('student practice reconciliation does not send a late conflict alert after the practice has ended', () => {
   const fixture = createStudentPracticeAdminFixture({
     groups: [[

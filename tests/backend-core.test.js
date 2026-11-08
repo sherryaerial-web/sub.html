@@ -12566,6 +12566,40 @@ test('discount courses keep the original category minimum instead of using the d
   assert.equal(silkHammock.cancelAtOrBelow, 1);
 });
 
+test('two-point discounted floor classes retain the three-person minimum at closure boundaries', () => {
+  const backend = loadBackend();
+  const detail = {
+    calendarId: '53872', date: '2026/11/09', time: '12:00',
+    courseName: 'D－柔軟度開發〈優惠〉', teacherName: '番茄🍅',
+    enrollmentCount: 1, points: 2, cancelled: false,
+  };
+  for (const enrollmentCount of [0, 1, 2, 3]) {
+    const rule = backend.getCourseClosureRule_({ ...detail, enrollmentCount }, '23:40');
+    assert.equal(rule.minimumEnrollment, 3);
+    assert.equal(rule.cancelAtOrBelow, 2);
+    assert.equal(rule.eligible, enrollmentCount < 3);
+    assert.equal(backend.getCourseClosureRule_({ ...detail, enrollmentCount }, '22:30').eligible,
+      enrollmentCount === 0);
+  }
+  assert.equal(backend.getCourseClosureRule_({ ...detail, points: null }, '23:40').manualReview, true);
+  assert.equal(backend.getCourseClosureRule_({ ...detail, points: 3 }, '23:40').minimumEnrollment, 2);
+  assert.equal(backend.getCourseClosureRule_({ ...detail, courseName: 'D－柔軟度雙人特別課〈優惠〉' }, '23:40').minimumEnrollment, 4);
+});
+
+test('discounted floor class community copy reports two short at one booking and one short at two', () => {
+  const backend = loadBackend();
+  const detail = {
+    calendarId: '53872', date: '2026/11/09', time: '12:00',
+    courseName: 'D－柔軟度開發〈優惠〉', teacherName: '番茄🍅', points: 2,
+  };
+  for (const enrollmentCount of [0, 1, 2, 3]) {
+    const copy = backend.buildCourseClosureSocialCopy_('2026/11/09', [{ ...detail, enrollmentCount }]);
+    if (enrollmentCount === 1) assert.match(copy.content, /柔軟度開發缺二，等到23:40/);
+    else if (enrollmentCount === 2) assert.match(copy.content, /柔軟度開發\n各缺一，等到23:40/);
+    else assert.equal(copy.content, '');
+  }
+});
+
 test('next-day closure policy always excludes venue rentals at both stages', () => {
   const backend = loadBackend();
   const detail = (courseName) => ({

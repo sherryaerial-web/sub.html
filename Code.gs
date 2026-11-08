@@ -10265,9 +10265,10 @@ function getCourseClosureRule_(detail, stageValue) {
       base.cancelAtOrBelow = 2;
     } else if (getCoursePromotionType_(courseName) === 'monthly-discount') {
       var discountCategory = getCourseCategory_(courseName);
-      if (discountCategory === '空瑜') {
-        base.ruleKey = 'discount-aerial-yoga';
-        base.ruleLabel = '空瑜優惠課至少 3 人';
+      if (discountCategory === '空瑜' ||
+          (discountCategory === '地板課程' && Number(detail.points) === 2)) {
+        base.ruleKey = discountCategory === '空瑜' ? 'discount-aerial-yoga' : 'discount-two-point-floor';
+        base.ruleLabel = discountCategory === '空瑜' ? '空瑜優惠課至少 3 人' : '2 點地板優惠課至少 3 人';
         base.minimumEnrollment = 3;
         base.cancelAtOrBelow = 2;
       } else {

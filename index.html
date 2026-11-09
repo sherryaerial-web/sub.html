@@ -12,6 +12,7 @@
   <link rel="apple-touch-icon" href="./assets/app-icon-180.png">
   <link rel="icon" type="image/png" sizes="192x192" href="./assets/app-icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="./assets/app-icon-512.png">
+  <link rel="stylesheet" href="./main-assurance-ui.css?v=20261109">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;600;700&amp;family=Noto+Sans+TC:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
@@ -2393,6 +2394,7 @@
                   <div id="admin-sync-status" class="admin-sync-status" role="status" aria-live="polite"></div>
                 </div>
               </div>
+              <div id="main-course-source" hidden></div>
               <div class="admin-workspace">
                 <div class="admin-tabs" id="admin-subtabs" role="tablist" aria-label="管理工作區">
               <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">—</span></button>
@@ -2409,6 +2411,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="changeRequests" data-capability="course_admin"><i data-lucide="message-square-warning"></i>取消／退出<span class="admin-tab-count" data-admin-count="changeRequests">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="exceptions" data-capability="course_admin"><i data-lucide="triangle-alert"></i>核對異常<span class="admin-tab-count" data-admin-count="exceptions">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="completed" data-capability="course_admin"><i data-lucide="circle-check-big"></i>已完成<span class="admin-tab-count" data-admin-count="completed">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="mainOperations" data-capability="course_admin"><i data-lucide="history"></i>履歷・追蹤</button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資<span class="admin-tab-count" data-admin-count="payroll">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip" data-capability="vvip_admin"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="raffle" data-capability="raffle_admin">抽獎結果核對</button>
@@ -2600,6 +2603,7 @@
   <script src="raffle-tools.js?v=raffle-experience-20261105"></script>
   <script src="raffle.js?v=ops-refresh-20261105"></script>
   <script src="admin-transport.js?v=ops-tools-20261031"></script>
+  <script src="main-assurance-ui.js?v=20261109"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -2620,6 +2624,10 @@
     let selectedLeaveDates = new Set();
     let selectedLeaveCourses = new Set();
     let adminDashboard = null;
+    const mainAssuranceState = { writes: Object.create(null), calendarId: "", history: null, historyLoading: false, historyRequest: 0, refreshError: "",
+      queryAccount: null, preferences: null, pages: Object.create(null), positions: Object.create(null), restoreTab: "",
+      openDetails: new Set(), listRenderers: Object.create(null), lazyRenderers: Object.create(null), backupRequest: null,
+      practiceRequest: 0, payrollRequest: 0, adminRequest: 0, adminUiRequest: 0 };
     let vvipDashboard = null;
     let vvipAdminFilter = "pending";
     let payrollDashboard = null;
@@ -2659,6 +2667,7 @@
       changeRequests: "courses",
       exceptions: "courses",
       completed: "courses",
+      mainOperations: "courses",
       practice: "practice",
       payroll: "payroll",
       closureManagement: "operations",
@@ -2718,13 +2727,18 @@
     };
 
     function beginReadRefresh(element, hasSnapshot, loadingHtml) {
+      const owner = {};
+      element.mainReadRefreshOwner = owner;
       if (!hasSnapshot) element.innerHTML = loadingHtml;
       element.classList.add("read-refreshing");
       element.setAttribute("aria-busy", "true");
       if (hasSnapshot) element.setAttribute("inert", "");
+      return owner;
     }
 
-    function endReadRefresh(element) {
+    function endReadRefresh(element, owner) {
+      if (arguments.length > 1 && element.mainReadRefreshOwner !== owner) return;
+      delete element.mainReadRefreshOwner;
       element.classList.remove("read-refreshing");
       element.removeAttribute("aria-busy");
       element.removeAttribute("inert");
@@ -2829,6 +2843,355 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
+    }
+
+    function renderMainDataStatus(status) {
+      return window.SherryMainAssurance ? window.SherryMainAssurance.renderDataStatus(status)
+        : '<div class="state error">資料狀態元件未載入。</div>';
+    }
+
+    function renderMainRuleCatalogue(catalogue) {
+      return window.SherryMainAssurance ? window.SherryMainAssurance.renderRuleCatalogue(catalogue)
+        : '<div class="state error">規則元件未載入。</div>';
+    }
+
+    function renderClosureAssessment(assessment) {
+      return window.SherryMainAssurance ? window.SherryMainAssurance.renderClosureAssessment(assessment)
+        : '<div class="state error">關課背景檢查元件未載入。</div>';
+    }
+
+    function renderPayrollComparison(comparison) {
+      return window.SherryMainAssurance ? window.SherryMainAssurance.renderPayrollComparison(comparison)
+        : '<div class="state error">薪資差異元件未載入。</div>';
+    }
+
+    function renderMainCourseSource() {
+      const host = byId("main-course-source");
+      host.hidden = !authState.managementCapabilities.includes("course_admin") || !["courses", "practice"].includes(activeAdminSection);
+      host.innerHTML = host.hidden ? "" : renderMainDataStatus(adminDashboard && adminDashboard.dataStatus)
+        + (mainAssuranceState.refreshError ? `<div class="main-state is-error" role="status">管理資料更新失敗：${escapeHtml(mainAssuranceState.refreshError)}；目前顯示上次資料。</div>` : "");
+    }
+
+    function getMainQueryPreferences() {
+      const account = authState.teacherName;
+      if (mainAssuranceState.queryAccount !== account) {
+        const changedAccount = mainAssuranceState.queryAccount !== null && mainAssuranceState.queryAccount !== account;
+        mainAssuranceState.queryAccount = account;
+        mainAssuranceState.pages = Object.create(null);
+        mainAssuranceState.positions = Object.create(null);
+        mainAssuranceState.openDetails.clear();
+        mainAssuranceState.listRenderers = Object.create(null);
+        mainAssuranceState.lazyRenderers = Object.create(null);
+        mainAssuranceState.restoreTab = "";
+        let storage;
+        try { storage = window.localStorage; } catch (_) { /* Querying still works without storage. */ }
+        mainAssuranceState.preferences = window.SherryMainAssurance
+          ? window.SherryMainAssurance.createQueryPreferences(storage).read(account)
+          : { practice: {}, payrollMonth: "" };
+        if (changedAccount) {
+          mainAssuranceState.history = null;
+          mainAssuranceState.calendarId = "";
+          mainAssuranceState.historyRequest++;
+          mainAssuranceState.backupRequest = null;
+          mainAssuranceState.writes = Object.create(null);
+          practiceAdminDashboard = null;
+          studentPracticeAdminDashboard = null;
+          payrollDashboard = null;
+        }
+      }
+      return mainAssuranceState.preferences;
+    }
+
+    function saveMainQueryPreferences(preferences) {
+      const ui = window.SherryMainAssurance;
+      mainAssuranceState.preferences = ui ? ui.normalizeQueryPreferences(preferences) : preferences;
+      try { if (ui) ui.createQueryPreferences(window.localStorage).save(authState.teacherName, mainAssuranceState.preferences); } catch (_) { /* Keep applied filters in memory. */ }
+    }
+
+    function getMainOperationsOptions() {
+      getMainQueryPreferences();
+      return {
+        teacherName: authState.teacherName, teachers: (adminDashboard && adminDashboard.teachers) || [],
+        payrollAdmin: authState.managementCapabilities.includes("payroll_admin"),
+        readOnly: Boolean(authState.actingTeacherName) || !authState.managementCapabilities.includes("course_admin"),
+        writes: mainAssuranceState.writes, calendarId: mainAssuranceState.calendarId,
+        history: mainAssuranceState.history, historyLoading: mainAssuranceState.historyLoading, pages: mainAssuranceState.pages,
+        fullAdmin: ["管理員", "admin", "ADMIN"].includes(authState.role) && !authState.actingTeacherName && ["course_admin", "payroll_admin"].every(capability => authState.managementCapabilities.includes(capability)),
+        backupRequest: mainAssuranceState.backupRequest
+      };
+    }
+
+    function renderMainOperationsTab() {
+      const ui = window.SherryMainAssurance;
+      const options = getMainOperationsOptions();
+      if (ui) ["operations-cases", "operations-identities", "operations-notices", "operations-history"].forEach(key => {
+        mainAssuranceState.listRenderers[key] = () => ui.renderOperationsList(key, adminDashboard && adminDashboard.operations, getMainOperationsOptions());
+      });
+      byId("admin-tab-content").innerHTML = ui ? ui.renderOperations(adminDashboard && adminDashboard.operations, options)
+        : '<div class="state error">履歷與追蹤元件未載入。</div>';
+    }
+
+    function renderMainPagedList(key, items, renderItem, emptyText) {
+      const render = () => window.SherryMainAssurance
+        ? window.SherryMainAssurance.renderPagedList(key, items, renderItem, { pages: mainAssuranceState.pages, emptyText })
+        : `<div data-main-list="${escapeHtml(key)}">${items.slice(0, 20).map(renderItem).join("") || `<div class="state">${escapeHtml(emptyText)}</div>`}${items.length > 20 ? '<div class="state error">分頁元件未載入。</div>' : ""}</div>`;
+      mainAssuranceState.listRenderers[key] = render;
+      return render();
+    }
+
+    function renderMainLazyDisclosure(key, summaryHtml, renderBody, className, attributes = "", eager = false) {
+      mainAssuranceState.lazyRenderers[key] = renderBody;
+      const open = mainAssuranceState.openDetails.has(key);
+      return `<details class="${escapeHtml(className)}" ${attributes} data-main-lazy="${escapeHtml(key)}" ${eager ? 'data-main-eager="true"' : ""} ${open ? "open" : ""}><summary>${summaryHtml}</summary><div data-main-lazy-body ${open || eager ? 'data-main-materialized="true"' : ""}>${open || eager ? renderBody() : ""}</div></details>`;
+    }
+
+    function materializeMainDisclosure(details) {
+      const key = details.dataset.mainLazy;
+      const render = mainAssuranceState.lazyRenderers[key];
+      if (!render) return;
+      const host = details.querySelector("[data-main-lazy-body]");
+      if (!host) return;
+      if (details.open) {
+        mainAssuranceState.openDetails.add(key);
+        if (host.dataset.mainMaterialized !== "true") { host.innerHTML = render(); host.dataset.mainMaterialized = "true"; refreshIcons(); }
+      } else {
+        mainAssuranceState.openDetails.delete(key);
+        if (!details.dataset.mainEager) { host.innerHTML = ""; delete host.dataset.mainMaterialized; }
+      }
+    }
+
+    function changeMainListPage(key, page) {
+      const render = mainAssuranceState.listRenderers[key];
+      if (!render || !Number.isSafeInteger(Number(page)) || Number(page) < 1) return;
+      const host = document.querySelector(`[data-main-list="${CSS.escape(key)}"]`);
+      if (!host) return;
+      mainAssuranceState.pages[key] = Number(page);
+      host.outerHTML = render();
+      const current = document.querySelector(`[data-main-list="${CSS.escape(key)}"]`);
+      current?.scrollIntoView?.({ block: "start", behavior: "auto" });
+      refreshIcons();
+    }
+
+    function captureMainWorkspacePosition() {
+      getMainQueryPreferences();
+      if (!["practice", "mainOperations", "payroll"].includes(activeAdminTab)) return;
+      mainAssuranceState.positions[activeAdminTab] = Math.max(0, Math.min(10000000, Number(window.scrollY) || 0));
+    }
+
+    function requestMainWorkspaceRestore(tab) {
+      getMainQueryPreferences();
+      mainAssuranceState.restoreTab = Object.prototype.hasOwnProperty.call(mainAssuranceState.positions, tab) ? tab : "";
+    }
+
+    function restoreMainWorkspacePosition() {
+      const tab = mainAssuranceState.restoreTab;
+      if (!tab || tab !== activeAdminTab) return;
+      mainAssuranceState.restoreTab = "";
+      const token = authState.sessionToken;
+      const scroll = () => {
+        if (token !== authState.sessionToken || tab !== activeAdminTab || (activeViewId && activeViewId !== "view-admin")) return;
+        const maximum = document.documentElement ? Math.max(0, document.documentElement.scrollHeight - window.innerHeight) : Infinity;
+        window.scrollTo({ top: Math.min(maximum, mainAssuranceState.positions[tab] || 0), behavior: "auto" });
+      };
+      if (window.requestAnimationFrame) window.requestAnimationFrame(scroll);
+      else setTimeout(scroll, 0);
+    }
+
+    function reconcileMainOperations(dashboard) {
+      const operations = dashboard && dashboard.operations;
+      if (!operations) return;
+      const request = mainAssuranceState.backupRequest;
+      const backup = operations.systemHealth && operations.systemHealth.backup;
+      if (request && request.status !== "pending" && backup && backup.operationId === request.operationId
+        && (window.SherryMainAssurance?.isBackupVerified(backup) || backup.status === "failed")) mainAssuranceState.backupRequest = null;
+      Object.entries(mainAssuranceState.writes).forEach(([key, write]) => {
+        if (write.status === "pending") return;
+        const rows = write.kind === "exception" ? operations.exceptions : operations.identities;
+        const item = (rows || []).find((entry) => String(write.kind === "exception" ? entry.key : entry.instructorId) === write.id);
+        const version = item && (write.kind === "exception" ? item.tracking && item.tracking.version : item.version);
+        if (isMainVersionValid(version) && Number(version) > write.expectedVersion) delete mainAssuranceState.writes[key];
+      });
+    }
+
+    function isMainVersionValid(version) {
+      return (typeof version === "number" || (typeof version === "string" && /^\d+$/.test(version)))
+        && Number.isSafeInteger(Number(version)) && Number(version) >= 0;
+    }
+
+    function assertMainOperator() {
+      if (!authState.sessionToken || !authState.teacherName || !authState.managementCapabilities.includes("course_admin")) throw new Error("請由具課程管理權限的本人帳號操作。");
+      if (authState.actingTeacherName) throw new Error("代老師操作期間為唯讀，請先回到本人帳號。");
+    }
+
+    async function searchMainCourseHistory(calendarId) {
+      if (!authState.managementCapabilities.includes("course_admin")) throw new Error("目前帳號沒有課程管理權限。");
+      const id = String(calendarId || "").trim();
+      if (!id) throw new Error("請填寫 OB Calendar ID。");
+      getMainQueryPreferences();
+      mainAssuranceState.pages["operations-history"] = 1;
+      const request = ++mainAssuranceState.historyRequest;
+      const token = authState.sessionToken;
+      mainAssuranceState.calendarId = id;
+      mainAssuranceState.historyLoading = true;
+      const resultHost = byId("main-course-history-results");
+      resultHost.innerHTML = '<div class="main-state" role="status">查詢履歷中...</div>';
+      resultHost.setAttribute("aria-busy", "true");
+      try {
+        const history = await callApi("getMainCourseHistory", { calendarId: id });
+        if (request !== mainAssuranceState.historyRequest || token !== authState.sessionToken) return;
+        mainAssuranceState.history = history || { error: "課程履歷資料未取得。" };
+      } catch (error) {
+        if (request !== mainAssuranceState.historyRequest || token !== authState.sessionToken) return;
+        mainAssuranceState.history = { error: `課程履歷查詢失敗：${error.message}` };
+      } finally {
+        if (request === mainAssuranceState.historyRequest && token === authState.sessionToken) {
+          mainAssuranceState.historyLoading = false;
+          const current = byId("main-course-history-results");
+          current.innerHTML = window.SherryMainAssurance ? window.SherryMainAssurance.renderHistory(mainAssuranceState.history, getMainOperationsOptions())
+            : '<div class="state error">履歷元件未載入。</div>';
+          current.removeAttribute("aria-busy");
+        }
+      }
+    }
+
+    async function runMainWrite(kind, id, expectedVersion, action, payload) {
+      const key = `${kind}:${id}`;
+      if (mainAssuranceState.writes[key]) throw new Error(mainAssuranceState.writes[key].status === "pending" ? "操作處理中，請勿重複送出。" : "操作結果待確認，請先更新資料核對；不會自動重送。");
+      const token = authState.sessionToken;
+      const write = { kind, id, expectedVersion: Number(expectedVersion), status: "pending" };
+      mainAssuranceState.writes[key] = write;
+      const form = document.querySelector(kind === "exception" ? `[data-main-case-form][data-case-key="${CSS.escape(id)}"]` : `[data-main-identity-form][data-instructor-id="${CSS.escape(id)}"]`);
+      if (form) form.querySelectorAll("input, select, textarea, button").forEach(control => { control.disabled = true; });
+      let failure = null;
+      try {
+        await callPostApi(action, payload);
+        write.status = "confirmed";
+      } catch (error) {
+        write.status = "uncertain";
+        failure = error;
+      }
+      if (token !== authState.sessionToken) return;
+      let refreshFailure = null;
+      try { await fetchAdminDashboard(true, true); } catch (error) { refreshFailure = error; }
+      if (token !== authState.sessionToken) return;
+      if (activeAdminTab === "mainOperations") { renderMainOperationsTab(); refreshIcons(); }
+      if (failure) throw new Error(`操作結果待確認：${failure.message}。${refreshFailure ? "最新清單暫時無法取得。" : "已查詢最新清單，請核對結果。"}不會自動重送。`);
+      if (refreshFailure) throw new Error(`操作已取得回覆，但清單更新失敗：${refreshFailure.message}。請更新資料核對，勿重送。`);
+      setNotice("操作已取得回覆，請核對最新清單。");
+    }
+
+    async function submitMainException(key, action, note, followAt, expectedVersion) {
+      assertMainOperator();
+      const item = (adminDashboard && adminDashboard.operations && adminDashboard.operations.exceptions || []).find(entry => entry.key === key);
+      const tracking = item && item.tracking || {};
+      if (!item) throw new Error("案件已不在目前清單，請更新資料。");
+      if (!isMainVersionValid(expectedVersion) || !isMainVersionValid(tracking.version) || Number(expectedVersion) !== Number(tracking.version)) throw new Error("案件版本已變更或未取得，請更新資料。");
+      if (!["claim", "release", "save", "close", "reopen"].includes(action)) throw new Error("不支援此案件操作。");
+      if (tracking.owner && tracking.owner !== authState.teacherName) throw new Error("此案件已由其他人承接，不能代為修改。");
+      const done = ["closed", "已結案", "結案"].includes(tracking.status);
+      if (action === "claim" && (tracking.owner || done)) throw new Error("此案件目前不能承接，請更新資料。");
+      if (action !== "claim" && tracking.owner !== authState.teacherName) throw new Error("請先由本人承接案件。");
+      if ((action === "reopen") !== done) throw new Error("案件狀態已變更，請更新資料。");
+      const cleanNote = String(note || "").trim();
+      if (cleanNote.startsWith("=") || cleanNote.length > 1000) throw new Error("備註不能以 = 開頭，且不得超過 1000 字。");
+      const cleanFollowAt = String(followAt || "").trim();
+      if (cleanFollowAt) {
+        const parts = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(cleanFollowAt);
+        const date = parts && new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]), Number(parts[4]), Number(parts[5]), Number(parts[6] || 0)));
+        const normalized = cleanFollowAt.replace(" ", "T") + (parts && !parts[6] ? ":00" : "");
+        if (!date || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 19) !== normalized) throw new Error("下次追蹤日期或時間無效。");
+      }
+      if (action === "close" && !cleanNote) throw new Error("結案需填寫備註。");
+      if (action === "close" && item.resolved !== true) throw new Error("來源異常尚未解決，不能結案。");
+      return runMainWrite("exception", String(key), expectedVersion, "updateMainException", {
+        caseUpdate: { key, action, note: cleanNote, followAt: cleanFollowAt, expectedVersion: Number(expectedVersion) }
+      });
+    }
+
+    async function submitMainTeacherIdentity(instructorId, teacherName, expectedVersion, active) {
+      assertMainOperator();
+      const operations = adminDashboard && adminDashboard.operations;
+      const identity = (operations && operations.identities || []).find(item => String(item.instructorId) === String(instructorId));
+      if (!identity) throw new Error("身分資料已不在目前清單，請更新資料。");
+      if (/重複/.test(identity.status || "")) throw new Error("老師對照重複，請先核對來源資料，未送出修改。");
+      if (!isMainVersionValid(expectedVersion) || !isMainVersionValid(identity.version) || Number(expectedVersion) !== Number(identity.version)) throw new Error("身分版本已變更或未取得，請更新資料。");
+      if (active !== true && active !== false) throw new Error("請明確選擇連結或解除連結。");
+      const name = String(teacherName || "").trim();
+      if (active && !(adminDashboard.teachers || []).includes(name)) throw new Error("請選擇正式帳號老師，不會自動猜測姓名。");
+      if (!active && (!identity.teacherName || name !== identity.teacherName)) throw new Error("目前連結已變更，請更新資料。");
+      return runMainWrite("identity", String(instructorId), expectedVersion, "saveMainTeacherIdentity", {
+        identity: { instructorId: String(instructorId), teacherName: name, expectedVersion: Number(expectedVersion), active }
+      });
+    }
+
+    async function submitMainBackup() {
+      assertMainOperator();
+      getMainQueryPreferences();
+      const ui = window.SherryMainAssurance;
+      const health = adminDashboard && adminDashboard.operations && adminDashboard.operations.systemHealth;
+      if (!ui || !["管理員", "admin", "ADMIN"].includes(authState.role) || !authState.managementCapabilities.includes("payroll_admin") || health?.backupAllowed !== true) throw new Error("目前帳號沒有完整備份權限。");
+      if (mainAssuranceState.backupRequest) throw new Error(mainAssuranceState.backupRequest.status === "pending" ? "備份處理中，請勿重複送出。" : "備份結果待確認，請更新資料核對；不會自動重送。");
+      if (ui.isBackupPending(health.backup)) throw new Error("先前備份結果待確認，請更新資料核對，勿重送。");
+      if (ui.isBackupDailyLimit(health.backup, health.checkedAt)) throw new Error("本日已執行備份，不重複建立副本。");
+      if (!window.crypto?.randomUUID) throw new Error("無法產生備份操作編號，本次未送出。");
+      const operationId = `main_backup_${Date.now().toString(36)}_${window.crypto.randomUUID()}`;
+      const token = authState.sessionToken;
+      const request = { operationId, status: "pending" };
+      mainAssuranceState.backupRequest = request;
+      document.querySelectorAll('[data-main-action="create-backup"]').forEach(button => { button.disabled = true; });
+      byId("main-backup-request-status").textContent = "備份處理中，請勿重複送出。";
+      let failure = null;
+      try { await callPostApi("createMainBackup", { operationId }); request.status = "confirmed"; }
+      catch (error) { failure = error; request.status = "uncertain"; }
+      if (token !== authState.sessionToken) return;
+      let refreshFailure = null;
+      try { await fetchAdminDashboard(true, true); } catch (error) { refreshFailure = error; }
+      if (token !== authState.sessionToken) return;
+      if (activeAdminTab === "mainOperations") {
+        const host = document.querySelector(".main-health");
+        if (host) host.outerHTML = ui.renderSystemHealth(adminDashboard?.operations?.systemHealth, getMainOperationsOptions());
+        refreshIcons();
+      }
+      if (failure || refreshFailure) throw new Error(`備份結果待確認：${(failure || refreshFailure).message}。請更新資料核對，不會自動重送。`);
+      setNotice("備份操作已取得回覆，請核對備份與還原演練狀態。");
+    }
+
+    async function handleMainAction(event) {
+      const button = event.target.closest ? event.target.closest("[data-main-action]") : null;
+      if (!button || button.disabled || ["search-history", "link-identity", "unlink-identity"].includes(button.dataset.mainAction)) return;
+      const action = button.dataset.mainAction;
+      try {
+        if (action === "page-list") { changeMainListPage(button.dataset.mainPageKey, button.dataset.mainPage); return; }
+        if (action === "create-backup") { await submitMainBackup(); return; }
+        if (action === "refresh-operations") { await fetchAdminDashboard(true); return; }
+        if (!/^(claim|release|save|close|reopen)-exception$/.test(action)) return;
+        const form = button.closest("[data-main-case-form]");
+        if (!form) return;
+        const key = form.dataset.caseKey;
+        const item = (adminDashboard && adminDashboard.operations && adminDashboard.operations.exceptions || []).find(entry => entry.key === key);
+        const tracking = item && item.tracking || {};
+        await submitMainException(key, action.replace("-exception", ""),
+          form.querySelector('[name="note"]')?.value ?? tracking.note ?? "",
+          form.querySelector('[name="followAt"]')?.value ?? tracking.followAt ?? "",
+          form.querySelector('[name="expectedVersion"]')?.value);
+      } catch (error) { setNotice(error.message, "error"); }
+    }
+
+    async function handleMainSubmit(event) {
+      const form = event.target;
+      if (!form.matches || !form.matches('[data-main-form="history"], [data-main-identity-form], [data-main-case-form]')) return;
+      event.preventDefault();
+      try {
+        if (form.matches('[data-main-form="history"]')) {
+          await searchMainCourseHistory(form.querySelector('[name="calendarId"]').value);
+        } else if (form.matches("[data-main-identity-form]")) {
+          const active = !event.submitter || event.submitter.dataset.mainAction !== "unlink-identity";
+          const identity = (adminDashboard && adminDashboard.operations && adminDashboard.operations.identities || []).find(item => String(item.instructorId) === form.dataset.instructorId);
+          await submitMainTeacherIdentity(form.dataset.instructorId,
+            active ? form.querySelector('[name="teacherName"]').value : identity && identity.teacherName,
+            form.querySelector('[name="expectedVersion"]').value, active);
+        }
+      } catch (error) { setNotice(error.message, "error"); }
     }
 
     function getTeacherHomeDateParts(dateValue) {
@@ -3992,12 +4355,19 @@
     }
 
     function applySession(session, sessionToken = "") {
+      const previousAccount = authState.teacherName;
       authState.sessionToken = sessionToken || session.sessionToken || authState.sessionToken;
       authState.teacherName = session.teacherName || "";
       authState.role = session.role || "";
       authState.managementCapabilities = Array.isArray(session.managementCapabilities)
         ? session.managementCapabilities
         : [];
+      if (previousAccount !== authState.teacherName) {
+        getMainQueryPreferences();
+        adminDashboard = null;
+        mainAssuranceState.practiceRequest++;
+        mainAssuranceState.payrollRequest++;
+      }
     }
 
     function resetTeacherViewSnapshots() {
@@ -4498,6 +4868,23 @@
       selectedLeaveCourses = new Set();
       rentalState = { catalog: null, catalogFetchedAt: 0, preview: null, previewSignature: "", loading: false };
       adminDashboard = null;
+      mainAssuranceState.writes = Object.create(null);
+      mainAssuranceState.calendarId = "";
+      mainAssuranceState.history = null;
+      mainAssuranceState.historyLoading = false;
+      mainAssuranceState.historyRequest++;
+      mainAssuranceState.refreshError = "";
+      mainAssuranceState.queryAccount = null;
+      mainAssuranceState.preferences = null;
+      mainAssuranceState.pages = Object.create(null);
+      mainAssuranceState.positions = Object.create(null);
+      mainAssuranceState.restoreTab = "";
+      mainAssuranceState.openDetails.clear();
+      mainAssuranceState.listRenderers = Object.create(null);
+      mainAssuranceState.lazyRenderers = Object.create(null);
+      mainAssuranceState.backupRequest = null;
+      mainAssuranceState.practiceRequest++;
+      mainAssuranceState.payrollRequest++;
       vvipDashboard = null;
       payrollDashboard = null;
       notificationDashboard = null;
@@ -4605,6 +4992,8 @@
       if (viewId === "view-admin" && !authState.managementCapabilities.length) {
         return setNotice("需要管理權限。", "error");
       }
+      if (activeViewId === "view-admin" && viewId !== "view-admin") captureMainWorkspacePosition();
+      if (viewId === "view-admin") requestMainWorkspaceRestore(activeAdminTab);
       clearRaffleWorkspace();
       activeViewId = viewId;
       byId("app-shell").dataset.shellMode = viewId === "view-admin" ? "admin" : "teacher";
@@ -4639,7 +5028,7 @@
         if (authState.managementCapabilities.includes("vvip_admin")) fetchVvipReminderData();
       }
       refreshIcons();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (!mainAssuranceState.restoreTab) window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
     function getTaipeiToday() {
@@ -7745,53 +8134,100 @@
       }
     }
 
-    async function fetchPayrollAdminDashboard(rethrow = false) {
+    async function fetchPayrollAdminDashboard(rethrow = false, applyMonth = true) {
       const content = byId("admin-tab-content");
-      const month = byId("payroll-admin-month")?.value || new Date().toISOString().slice(0, 7);
+      const preferences = getMainQueryPreferences();
+      const selected = applyMonth ? byId("payroll-admin-month")?.value || preferences.payrollMonth : preferences.payrollMonth;
+      const month = (window.SherryMainAssurance ? window.SherryMainAssurance.normalizeQueryPreferences({ payrollMonth: selected }).payrollMonth : selected) || new Date().toISOString().slice(0, 7);
+      const account = authState.teacherName, token = authState.sessionToken;
+      const tab = activeAdminTab, view = activeViewId;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId;
+      const request = ++mainAssuranceState.payrollRequest;
       const hadSnapshot = Boolean(payrollDashboard && payrollDashboard.month === month);
       if (hadSnapshot) renderAdminDashboard();
-      beginReadRefresh(content, hadSnapshot, '<div class="state">載入薪資後台中...</div>');
+      const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入薪資後台中...</div>');
       try {
-        payrollDashboard = await callApi("getPayrollAdminDashboard", { month });
-        renderAdminDashboard();
+        const dashboard = await callApi("getPayrollAdminDashboard", { month });
+        if (request !== mainAssuranceState.payrollRequest || account !== authState.teacherName || token !== authState.sessionToken) return;
+        payrollDashboard = dashboard;
+        saveMainQueryPreferences({ ...getMainQueryPreferences(), payrollMonth: month });
+        if (onCurrentView()) renderAdminDashboard();
       } catch (error) {
-        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        else setNotice(`薪資後台更新失敗：${error.message}`, "error");
+        if (request !== mainAssuranceState.payrollRequest || account !== authState.teacherName || token !== authState.sessionToken) return;
+        if (onCurrentView()) {
+          if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+          else setNotice(`薪資後台更新失敗：${error.message}`, "error");
+        }
         if (rethrow) throw error;
       } finally {
-        endReadRefresh(content);
+        endReadRefresh(content, refreshOwner);
       }
     }
 
-    async function fetchAdminDashboard(rethrow = false) {
+    async function fetchAdminDashboard(rethrow = false, mainSnapshotOnly = false) {
+      if (mainSnapshotOnly) {
+        const account = authState.teacherName, token = authState.sessionToken;
+        const request = ++mainAssuranceState.adminRequest;
+        try {
+          const dashboard = await callApi("getAdminDashboard");
+          if (request !== mainAssuranceState.adminRequest || account !== authState.teacherName || token !== authState.sessionToken) return;
+          adminDashboard = dashboard;
+          mainAssuranceState.refreshError = "";
+          reconcileMainOperations(adminDashboard);
+          renderMainCourseSource();
+        } catch (error) {
+          if (request !== mainAssuranceState.adminRequest || account !== authState.teacherName || token !== authState.sessionToken) return;
+          mainAssuranceState.refreshError = error.message;
+          renderMainCourseSource();
+          if (rethrow) throw error;
+        }
+        return;
+      }
       if (activeAdminTab === "raffle") return renderAdminDashboard();
-      if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow);
+      if (activeAdminTab === "payroll") return fetchPayrollAdminDashboard(rethrow, false);
       if (activeAdminTab === "vvip") return fetchVvipAdminDashboard("", rethrow);
       if (activeAdminTab === "notifications") return fetchNotificationAdminDashboard(rethrow);
-      if (activeAdminTab === "practice") return fetchPracticeAdminDashboard(rethrow);
+      if (activeAdminTab === "practice") return fetchPracticeAdminDashboard(rethrow, false);
       if (activeAdminTab === "invoices") return fetchInvoiceAdminDashboard(rethrow);
       const content = byId("admin-tab-content");
+      const account = authState.teacherName, token = authState.sessionToken;
+      const request = ++mainAssuranceState.adminRequest;
+      mainAssuranceState.adminUiRequest = request;
+      const tab = activeAdminTab, view = activeViewId;
+      const isCurrent = () => request === mainAssuranceState.adminRequest && account === authState.teacherName && token === authState.sessionToken;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId;
       const hadSnapshot = adminDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
       else setAdminCountsUnavailable();
-      beginReadRefresh(content, hadSnapshot, '<div class="state">載入中...</div>');
+      const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入中...</div>');
       ["admin-sync", "admin-reconcile", "admin-leave-pause"].forEach((id) => {
         const button = byId(id);
         if (button) button.disabled = true;
       });
       try {
-        adminDashboard = await callApi("getAdminDashboard");
-        renderAdminDashboard();
+        const dashboard = await callApi("getAdminDashboard");
+        if (!isCurrent()) return;
+        adminDashboard = dashboard;
+        mainAssuranceState.refreshError = "";
+        reconcileMainOperations(adminDashboard);
+        if (onCurrentView()) renderAdminDashboard();
       } catch (error) {
-        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        else setNotice(`管理資料更新失敗：${error.message}`, "error");
+        if (!isCurrent()) return;
+        mainAssuranceState.refreshError = error.message;
+        if (onCurrentView()) {
+          renderMainCourseSource();
+          if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+          else setNotice(`管理資料更新失敗：${error.message}`, "error");
+        }
         if (rethrow) throw error;
       } finally {
-        endReadRefresh(content);
-        ["admin-sync", "admin-reconcile", "admin-leave-pause"].forEach((id) => {
-          const button = byId(id);
-          if (button) button.disabled = false;
-        });
+        endReadRefresh(content, refreshOwner);
+        if (request === mainAssuranceState.adminUiRequest && account === authState.teacherName && token === authState.sessionToken) {
+          ["admin-sync", "admin-reconcile", "admin-leave-pause"].forEach((id) => {
+            const button = byId(id);
+            if (button) button.disabled = false;
+          });
+        }
       }
     }
 
@@ -7799,7 +8235,7 @@
       const content = byId("admin-tab-content");
       const hadSnapshot = invoiceDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
-      beginReadRefresh(content, hadSnapshot, '<div class="state">載入發票管理資料中...</div>');
+      const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入發票管理資料中...</div>');
       try {
         invoiceDashboard = await callApi("getInvoiceAdminDashboard");
         renderAdminDashboard();
@@ -7808,7 +8244,7 @@
         else setNotice(`發票管理資料更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
       } finally {
-        endReadRefresh(content);
+        endReadRefresh(content, refreshOwner);
       }
     }
 
@@ -7816,7 +8252,7 @@
       const content = byId("admin-tab-content");
       const hadSnapshot = notificationDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
-      beginReadRefresh(content, hadSnapshot, '<div class="state">載入通知中心中...</div>');
+      const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入通知中心中...</div>');
       try {
         notificationDashboard = await callApi("getNotificationAdminDashboard");
         renderAdminDashboard();
@@ -7825,40 +8261,57 @@
         else setNotice(`通知中心更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
       } finally {
-        endReadRefresh(content);
+        endReadRefresh(content, refreshOwner);
       }
     }
 
-    async function fetchPracticeAdminDashboard(rethrow = false) {
+    async function fetchPracticeAdminDashboard(rethrow = false, applyFilters = true) {
       const content = byId("admin-tab-content");
+      const preferences = getMainQueryPreferences();
       const hadSnapshot = practiceAdminDashboard !== null && studentPracticeAdminDashboard !== null;
-      const filters = {
+      const requestedFilters = applyFilters ? {
         dateFrom: byId("practice-admin-date-from")?.value || "",
         dateTo: byId("practice-admin-date-to")?.value || "",
         room: byId("practice-admin-room")?.value || "",
         status: byId("practice-admin-status")?.value || "",
         teacherName: byId("practice-admin-teacher")?.value.trim() || ""
-      };
+      } : preferences.practice;
+      const filters = window.SherryMainAssurance ? window.SherryMainAssurance.normalizeQueryPreferences({ practice: requestedFilters }).practice : requestedFilters;
+      const account = authState.teacherName, token = authState.sessionToken;
+      const tab = activeAdminTab, view = activeViewId;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId;
+      const request = ++mainAssuranceState.practiceRequest;
       if (hadSnapshot) renderAdminDashboard();
-      beginReadRefresh(content, hadSnapshot, '<div class="state">載入自主練習管理資料中...</div>');
+      const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入自主練習管理資料中...</div>');
       try {
         const dashboards = await Promise.all([
           callApi("getPracticeAdminDashboard", filters),
           callApi("getStudentPracticeAdminDashboard", {
             dateFrom: filters.dateFrom,
             dateTo: filters.dateTo
-          })
+          }),
+          fetchAdminDashboard(true, true).catch(() => null)
         ]);
+        if (request !== mainAssuranceState.practiceRequest || account !== authState.teacherName || token !== authState.sessionToken) return;
         practiceAdminDashboard = dashboards[0];
         studentPracticeAdminDashboard = dashboards[1];
         practiceAdminDashboard.filters = filters;
-        renderAdminDashboard();
+        if (JSON.stringify(preferences.practice) !== JSON.stringify(filters)) {
+          Object.keys(mainAssuranceState.pages).filter(key => key.startsWith("practice-")).forEach(key => { delete mainAssuranceState.pages[key]; });
+          mainAssuranceState.openDetails.clear();
+          delete mainAssuranceState.positions.practice;
+        }
+        saveMainQueryPreferences({ ...getMainQueryPreferences(), practice: filters });
+        if (onCurrentView()) renderAdminDashboard();
       } catch (error) {
-        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        else setNotice(`自主練習資料更新失敗：${error.message}`, "error");
+        if (request !== mainAssuranceState.practiceRequest || account !== authState.teacherName || token !== authState.sessionToken) return;
+        if (onCurrentView()) {
+          if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+          else setNotice(`自主練習資料更新失敗：${error.message}`, "error");
+        }
         if (rethrow) throw error;
       } finally {
-        endReadRefresh(content);
+        endReadRefresh(content, refreshOwner);
       }
     }
 
@@ -7872,7 +8325,7 @@
       const content = byId("admin-tab-content");
       const hadSnapshot = !email && vvipDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
-      beginReadRefresh(content, hadSnapshot, '<div class="state">載入 VVIP 選課資料中...</div>');
+      const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入 VVIP 選課資料中...</div>');
       try {
         vvipDashboard = await callApi("getVvipAdminDashboard", { email });
         renderAdminDashboard();
@@ -7881,7 +8334,7 @@
         else setNotice(`VVIP 資料更新失敗：${error.message}`, "error");
         if (rethrow) throw error;
       } finally {
-        endReadRefresh(content);
+        endReadRefresh(content, refreshOwner);
       }
     }
 
@@ -7941,9 +8394,11 @@
       byId("admin-priority").hidden = !showsPriority;
       byId("admin-tools-shell").hidden = activeAdminSection !== "tools";
       byId("admin-subtabs").hidden = ["dashboard", "tools"].includes(activeAdminSection);
+      renderMainCourseSource();
       updateAdminTabCounts(data);
       renderAdminTab(true);
       refreshIcons();
+      restoreMainWorkspacePosition();
     }
 
     function buildAdminReminderItems() {
@@ -8121,7 +8576,10 @@
           <div class="monthly-operation-status"><span class="status-pill">請確認 OB 後正式開放</span></div>
         </div>
       </article>` : `<article class="monthly-next-card"><div><div class="monthly-next-label">本月進度</div><h3 class="monthly-next-title">目前沒有待處理流程</h3></div></article>`;
-      content.innerHTML = `<div class="admin-home-grid">
+      const mainOperations = adminDashboard && adminDashboard.operations;
+      if (window.SherryMainAssurance) mainAssuranceState.listRenderers["operations-tasks"] = () => window.SherryMainAssurance.renderOperationsList("operations-tasks", adminDashboard && adminDashboard.operations, getMainOperationsOptions());
+      const mainTasks = authState.managementCapabilities.includes("course_admin") ? `<section class="main-section"><h3>待辦明細</h3>${window.SherryMainAssurance ? window.SherryMainAssurance.renderTasks(mainOperations && mainOperations.tasks, mainOperations && mainOperations.error, { pages: mainAssuranceState.pages }) : '<div class="state error">待辦元件未載入。</div>'}</section>` : "";
+      content.innerHTML = `${mainTasks}<div class="admin-home-grid">
         <section class="admin-home-card">
           <div class="admin-panel-heading"><h3>本月流程</h3><button class="compact-button" type="button" data-admin-go-section="operations">查看完整流程</button></div>
           ${monthly ? `<div class="item-meta" style="margin-bottom:10px">${escapeHtml(monthly.month)}｜一般預約日 ${escapeHtml(monthly.schedule && monthly.schedule.bookingDate)}</div>${nextAction}` : '<div class="state">載入本月流程中...</div>'}
@@ -8557,6 +9015,8 @@
         renderVvipAdminTab();
       } else if (activeAdminTab === "payroll") {
         renderPayrollAdminTab();
+      } else if (activeAdminTab === "mainOperations") {
+        renderMainOperationsTab();
       } else if (activeAdminTab === "notifications") {
         renderNotificationAdminTab();
       } else if (activeAdminTab === "practice") {
@@ -8634,9 +9094,11 @@
             </div>
           </article>`).join("");
         content.innerHTML = `
+          ${renderMainRuleCatalogue(closure.ruleCatalogue)}
+          ${renderClosureAssessment(closure.assessment)}
           ${socialCopy ? `<div class="admin-control">
             <strong>22:30 社群提醒文字</strong>
-            <div class="item-meta">已依 23:40 最低人數整理「各缺一」課程，可直接修改後複製到社群。更新：${escapeHtml(socialCopy.updatedAt || "—")}</div>
+            <div class="item-meta">依 23:40 最低人數列出缺一課程；缺二限最低 3 人或〈優惠〉課。更新：${escapeHtml(socialCopy.updatedAt || "—")}</div>
             <textarea id="closure-social-copy" class="claim-control closure-social-copy" rows="7">${escapeHtml(socialCopy.content)}</textarea>
             <div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="copy-closure-social"><i data-lucide="copy"></i>複製社群文字</button></div>
           </div>` : ""}
@@ -8644,7 +9106,7 @@
             <strong>隔天未達人數關課｜${modeLabel}</strong>
             <div class="item-meta">目標日期：${escapeHtml(closure.targetDate || "—")}｜目前排程：${Number(closure.triggerCount) || 0} 個</div>
             <div class="item-meta">22:30：隔天 0 人課程取消。</div>
-            <div class="item-meta">23:40：一般課 1 人以下；Jina／小美／卡拉／2 點課 2 人以下；課名含「雙人」3 人以下取消。</div>
+            <div class="item-meta">23:40：依上方規則的最低人數核對，未達門檻才取消；老師專屬、優惠課與雙人課依規則優先序判定。</div>
             <div class="item-meta">場地租借／場租不納入關課；私人包班不徵人也不納入關課，任何人數都會保留。</div>
             <div class="item-meta">每次取消前都會重新讀取 OB 最新人數；自動與手動執行共用同一份防重複紀錄。</div>
             ${closure.triggerInstallationRequired ? '<div class="item-meta form-error">自動排程尚未安裝，請由專案擁有者先在 Apps Script 編輯器執行 installCourseClosureScheduler（或 authorizeCourseClosureServices）一次。</div>' : ""}
@@ -8730,6 +9192,10 @@
     }
 
     function renderPracticeAdminDashboard() {
+      getMainQueryPreferences();
+      [mainAssuranceState.listRenderers, mainAssuranceState.lazyRenderers].forEach(renderers => {
+        Object.keys(renderers).filter(key => key.startsWith("practice-")).forEach(key => { delete renderers[key]; });
+      });
       const content = byId("admin-tab-content");
       const data = practiceAdminDashboard;
       const studentData = studentPracticeAdminDashboard;
@@ -8770,12 +9236,9 @@
           </div>
         </article>`;
       };
-      const studentCards = currentStudentRequests.map(renderStudentCard).join("") || '<div class="state">目前沒有進行中或即將開始的學生自主練習</div>';
-      const endedStudentCards = endedStudentRequests.length ? `
-        <details class="admin-control student-practice-history">
-          <summary>已結束紀錄（${endedStudentRequests.length} 筆）</summary>
-          <div class="practice-admin-list">${endedStudentRequests.map(renderStudentCard).join("")}</div>
-        </details>` : "";
+      const studentCards = renderMainPagedList("practice-students-current", currentStudentRequests, renderStudentCard, "目前沒有進行中或即將開始的學生自主練習");
+      const endedStudentCards = endedStudentRequests.length ? renderMainLazyDisclosure("practice-student-history", `已結束紀錄（${endedStudentRequests.length} 筆）`,
+        () => `<div class="practice-admin-list">${renderMainPagedList("practice-students-ended", endedStudentRequests, renderStudentCard)}</div>`, "admin-control student-practice-history", "", endedStudentRequests.length <= 20) : "";
       const renderBookingCard = (booking) => {
         const participants = (booking.participants || []).map((participant) => `
           <div class="practice-admin-participant">
@@ -8819,18 +9282,16 @@
       const compareBookingTime = (a, b) =>
         `${String(a.date || "").replace(/\//g, "-")}T${a.startTime || ""}`
           .localeCompare(`${String(b.date || "").replace(/\//g, "-")}T${b.startTime || ""}`);
-      const bookingCards = currentBookings.sort(compareBookingTime).map(renderBookingCard).join("")
-        || '<div class="state">目前沒有進行中或即將開始的老師自主練習</div>';
+      const bookingCards = renderMainPagedList("practice-bookings-current", currentBookings.sort(compareBookingTime), renderBookingCard, "目前沒有進行中或即將開始的老師自主練習");
       const historyCount = bookings.length - currentBookings.length;
-      const historyCards = Array.from(historicalMonths.keys()).sort((a, b) => b.localeCompare(a)).map((month) => {
+      const historyCards = renderMainPagedList("practice-history-months", Array.from(historicalMonths.keys()).sort((a, b) => b.localeCompare(a)), (month) => {
         const items = historicalMonths.get(month).sort((a, b) => compareBookingTime(b, a));
-        return `<details class="practice-admin-history-month" data-practice-admin-month="${escapeHtml(month)}">
-          <summary>${month ? `${escapeHtml(month.replace("-", " 年 "))} 月` : "日期未設定"}<span>${items.length} 筆</span></summary>
-          <div class="practice-admin-list">${items.map(renderBookingCard).join("")}</div>
-        </details>`;
-      }).join("");
-      const failures = (data.notificationFailures || []).map((item) => `
-        <article class="notification-history-row"><div class="notification-schedule-head"><strong>${escapeHtml(item.time || "時間未記錄")}</strong><span class="status-pill">推播失敗</span></div><div class="item-meta">${escapeHtml(item.reason || "原因未記錄")}｜場次 ${escapeHtml(item.targetId || "未記錄")}</div></article>`).join("") || '<div class="state">目前沒有推播失敗紀錄</div>';
+        return renderMainLazyDisclosure(`practice-month-${month}`, `${month ? `${escapeHtml(month.replace("-", " 年 "))} 月` : "日期未設定"}<span>${items.length} 筆</span>`,
+          () => `<div class="practice-admin-list">${renderMainPagedList(`practice-history-${month}`, items, renderBookingCard)}</div>`,
+          "practice-admin-history-month", `data-practice-admin-month="${escapeHtml(month)}"`, historyCount <= 20);
+      });
+      const failures = renderMainPagedList("practice-notification-failures", data.notificationFailures || [], (item) => `
+        <article class="notification-history-row"><div class="notification-schedule-head"><strong>${escapeHtml(item.time || "時間未記錄")}</strong><span class="status-pill">推播失敗</span></div><div class="item-meta">${escapeHtml(item.reason || "原因未記錄")}｜場次 ${escapeHtml(item.targetId || "未記錄")}</div></article>`, "目前沒有推播失敗紀錄");
       content.innerHTML = `
         <section class="admin-control">
           <strong>學生自主練習</strong>
@@ -8945,6 +9406,8 @@
         warning.textContent = data.deductionDraftError;
         content.querySelector(".payroll-toolbar").after(warning);
       }
+      content.innerHTML = renderMainDataStatus(data.dataStatus) + renderMainRuleCatalogue(data.ruleCatalogue)
+        + renderPayrollComparison(data.comparison) + content.innerHTML;
       content.innerHTML += renderPayrollNoShowForm(data) + renderPayrollDeductionRegistry(data);
       refreshIcons();
     }
@@ -9624,17 +10087,24 @@ https://sherryaerial-web.github.io/sub.html/
     }
 
     function openAdminTab(tab) {
+      captureMainWorkspacePosition();
+      endReadRefresh(byId("admin-tab-content"));
       activeAdminTab = tab;
       activeAdminSection = ADMIN_TAB_SECTIONS[tab] || "courses";
+      requestMainWorkspaceRestore(tab);
       if (tab === "vvip") fetchVvipAdminDashboard();
-      else if (tab === "payroll") fetchPayrollAdminDashboard();
+      else if (tab === "payroll") fetchPayrollAdminDashboard(false, false);
       else if (tab === "notifications") fetchNotificationAdminDashboard();
-      else if (tab === "practice") fetchPracticeAdminDashboard();
+      else if (tab === "practice") fetchPracticeAdminDashboard(false, false);
       else if (tab === "invoices") fetchInvoiceAdminDashboard();
+      else if (tab === "mainOperations") fetchAdminDashboard();
       else renderAdminDashboard();
     }
 
     function openAdminSection(section) {
+      captureMainWorkspacePosition();
+      endReadRefresh(byId("admin-tab-content"));
+      mainAssuranceState.restoreTab = "";
       activeAdminSection = section;
       if (section === "dashboard") {
         activeAdminTab = "pendingInvitations";
@@ -9775,6 +10245,11 @@ https://sherryaerial-web.github.io/sub.html/
     document.querySelectorAll(".admin-tab").forEach((button) => {
       button.addEventListener("click", () => openAdminTab(button.dataset.adminTab));
     });
+    byId("admin-tab-content").addEventListener("click", handleMainAction);
+    byId("admin-tab-content").addEventListener("submit", handleMainSubmit);
+    byId("admin-tab-content").addEventListener("toggle", event => {
+      if (event.target.matches?.("details[data-main-lazy]")) materializeMainDisclosure(event.target);
+    }, true);
     byId("admin-tab-content").addEventListener("click", async (event) => {
       const tabLink = event.target.closest ? event.target.closest("[data-admin-go-tab]") : null;
       if (tabLink) {

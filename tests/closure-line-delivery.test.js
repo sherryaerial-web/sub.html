@@ -46,6 +46,11 @@ test('22:35 missing result alerts but explicit no-copy nights do not',()=>{
   const empty=alertFixture();empty.c.queueCourseClosureLineCopySafely_({...result(),socialCopy:{content:''}});
   empty.time(START+60000);empty.c.monitorCourseClosureLineDeliverySafely_();assert.equal(empty.notifications.length,0);
 });
+test('combined LINE diagnostic never claims accepted when only one expected recipient is accepted',()=>{
+  const f=alertFixture();f.c.queueCourseClosureLineCopySafely_(result());
+  f.status([{role:'ivy',status:'accepted'}]);f.c.monitorCourseClosureLineDeliverySafely_();
+  assert.equal(JSON.parse(f.props.get('MAIN_LINE_DELIVERY_STATUS')).status,'unknown');
+});
 test('gateway unreachable and late pending trigger app alert, not before deadline',()=>{
   const f=alertFixture();f.c.queueCourseClosureLineCopySafely_(result());f.status([{role:'ivy',status:'pending'}]);
   f.c.monitorCourseClosureLineDeliverySafely_();assert.equal(f.notifications.length,0);

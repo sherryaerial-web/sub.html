@@ -2774,10 +2774,11 @@ function sendPushAfterMutationSafely_(teacherNames, message) {
     pushResult.inboxSaved = inboxResult.saved === true;
     pushResult.inboxMessageId = cleanText_(inboxResult.messageId);
     pushResult.inboxError = cleanText_(inboxResult.error);
+    recordMainDeliveryEvidence_(message, pushResult);
     return pushResult;
   } catch (error) {
     console.warn('操作已完成，但推播通知失敗。', error);
-    return {
+    var unknownResult = {
       attempted: true,
       accepted: false,
       delivered: 0,
@@ -2786,6 +2787,8 @@ function sendPushAfterMutationSafely_(teacherNames, message) {
       inboxMessageId: cleanText_(inboxResult.messageId),
       inboxError: cleanText_(inboxResult.error)
     };
+    recordMainDeliveryEvidence_(message, unknownResult);
+    return unknownResult;
   }
 }
 
@@ -7328,11 +7331,13 @@ function runHourlyPracticeReconciliationIfDue_() {
     return { skipped: true, reason: 'same-hour' };
   }
   if (properties) properties.setProperty(CONFIG.PRACTICE_RECONCILE_HOUR_PROPERTY, hourKey);
+  return runMainObservedOperation_('practice_reconciliation', function() {
   var rentalResult = reconcileRentalWaitlist_();
   var result = runScheduledPracticeReconciliation() || {};
   result.rentals = rentalResult;
   result.skipped = false;
   return result;
+  });
 }
 
 function ensureCourseClosureStructureUnlocked_(spreadsheet) {
@@ -9007,7 +9012,9 @@ function installInvoiceSyncScheduler_(session) {
 }
 
 function runScheduledInvoiceSync() {
-  return syncInvoicePurchasesForActor_('系統排程', {});
+  return runMainObservedOperation_('invoice_sync', function() {
+    return syncInvoicePurchasesForActor_('系統排程', {});
+  });
 }
 
 function ensureSheetHeaders_(sheet, expectedHeaders) {
@@ -9288,7 +9295,7 @@ function doPost(e) {
     }
 
     var session = requireSession_(parameters.sessionToken);
-    if (cleanText_(parameters.actingTeacherName) && ['getPayrollNoShowCourses', 'previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow'].indexOf(action) !== -1) {
+    if (cleanText_(parameters.actingTeacherName) && ['getPayrollNoShowCourses', 'previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow', 'updateMainException', 'saveMainTeacherIdentity', 'createMainBackup'].indexOf(action) !== -1) {
       throw new Error('代查看薪資為唯讀，不能登記或取消 No Show Fee。');
     }
     if (action === 'getAdminOperationStatus') {
@@ -9475,6 +9482,18 @@ function doPost(e) {
       },
       getAdminDashboard: function() {
         return getAdminDashboard_(session);
+      },
+      getMainCourseHistory: function() {
+        return getMainCourseHistory_(session, parameters.calendarId);
+      },
+      createMainBackup: function() {
+        return createMainBackup_(session, parameters.operationId);
+      },
+      updateMainException: function() {
+        return updateMainException_(session, parseJsonObject_(parameters.caseUpdate, '異常追蹤'));
+      },
+      saveMainTeacherIdentity: function() {
+        return saveMainTeacherIdentity_(session, parseJsonObject_(parameters.identity, '老師身分對照'));
       },
         getRaffleBallInventory: function() { return getRaffleBallInventory_(session); },
     getActivityGiftWorkspace: function() { return activityGiftAppRequest_(session, 'review-list'); },
@@ -10100,9 +10119,11 @@ function normalizeClosureCalendarDetail_(item) {
 
   var classInfo = item['class'] || item.course || {};
   var instructors = Array.isArray(item.instructors) ? item.instructors.filter(Boolean) : [];
-  var instructor = instructors.filter(function(person) {
+  var substitutes = instructors.filter(function(person) {
     return person.isSubstitute === true;
-  })[0] || instructors[0] || item.instructor || {};
+  });
+  var effectiveInstructors = substitutes.length ? substitutes : instructors;
+  var instructor = effectiveInstructors[0] || item.instructor || {};
   var classTime = item.classTime || item.startAt || item.startTime || '';
   var parsedTime = new Date(classTime);
   var hasTime = classTime && !isNaN(parsedTime.getTime());
@@ -10117,7 +10138,7 @@ function normalizeClosureCalendarDetail_(item) {
   }
   if (points !== null && (!isFinite(points) || points < 0)) points = null;
 
-  return {
+  var normalized = {
     calendarId: cleanText_(item.id),
     classId: cleanText_(classInfo.id || classInfo.classId || ''),
     date: hasTime ? Utilities.formatDate(parsedTime, getTimeZone_(), 'yyyy/MM/dd') : '',
@@ -10127,10 +10148,13 @@ function normalizeClosureCalendarDetail_(item) {
       instructor.name ||
       [instructor.firstName, instructor.lastName].filter(Boolean).join(' ')
     ),
+    teacherId: cleanText_(instructor.id || instructor.instructorId),
     enrollmentCount: enrollmentCount,
     points: points,
     cancelled: item.cancelled === true
   };
+  if (effectiveInstructors.length > 1) normalized.identityError = 'OB 課程有多位有效老師，開課門檻尚無唯一對應，請人工確認。';
+  return normalized;
 }
 
 function recordMonthlyDiscountClosureObservationsUnlocked_(spreadsheet, targetDate, stage, detailsValue, resultItemsValue) {
@@ -10193,6 +10217,820 @@ function recordMonthlyDiscountClosureObservationsUnlocked_(spreadsheet, targetDa
   });
 }
 
+var MAIN_EXCEPTION_SHEET = '營運異常追蹤';
+var MAIN_EXCEPTION_HEADERS = ['追蹤鍵', '負責人', '狀態', '處理備註', '下次追蹤', '更新時間', '更新者', '版本'];
+var MAIN_IDENTITY_SHEET = '老師身分對照';
+var MAIN_IDENTITY_HEADERS = ['OB 老師 ID', '系統老師', 'OB 名稱', '狀態', '核對時間', '核對者', '版本'];
+
+function readMainOptionalRows_(spreadsheet, name, headers) {
+  var sheet = spreadsheet.getSheetByName(name);
+  if (!sheet) return [];
+  if (headers) assertHeaders_(sheet, headers);
+  return sheet.getDataRange().getValues().slice(1);
+}
+
+function buildMainTeacherIdentityMap_(rows) {
+  var result = { names: {}, conflicts: {} };
+  (rows || []).forEach(function(row) {
+    if (cleanText_(row[3]) !== '啟用') return;
+    var id = cleanText_(row[0]), name = cleanText_(row[1]);
+    if (!/^[1-9]\d{0,17}$/.test(id) || !name) return;
+    if (result.names[id]) result.conflicts[id] = true;
+    result.names[id] = name;
+  });
+  return result;
+}
+
+function getMainTeacherIdentityMap_(spreadsheet) {
+  return buildMainTeacherIdentityMap_(readMainOptionalRows_(spreadsheet, MAIN_IDENTITY_SHEET, MAIN_IDENTITY_HEADERS));
+}
+
+function applyMainClosureIdentity_(detail, links) {
+  var id = cleanText_(detail.teacherId);
+  detail.canonicalTeacherName = links.names[id] || '';
+  detail.identityError = detail.identityError || (links.conflicts[id] ? '同一 OB 老師 ID 有重複啟用對照，僅暫停此老師的課程。' : '');
+  return detail;
+}
+
+function applyMainPayrollIdentities_(courses, links) {
+  return (courses || []).map(function(course) {
+    course.instructors = (course.instructors || []).map(function(person) {
+      if (!person || typeof person !== 'object') return person;
+      var id = cleanText_(person.id);
+      if (links.conflicts[id]) throw new Error('OB 老師 ID ' + id + ' 有重複啟用對照，未更新薪資草稿。');
+      if (links.names[id]) return { id: id, name: links.names[id], obName: person.obName || person.name,
+        isSubstitute: person.isSubstitute === true };
+      return person;
+    });
+    return course;
+  });
+}
+
+function getMainIdentityDirectory_(courseRows, linkRows) {
+  var byId = {};
+  (courseRows || []).forEach(function(row) {
+    var id = cleanText_(row[6]);
+    if (!id) return;
+    if (!byId[id]) byId[id] = { instructorId: id, obNames: [], teacherName: '', status: '未綁定', version: 0, verifiedAt: '' };
+    var name = cleanText_(row[3]);
+    if (name && byId[id].obNames.indexOf(name) === -1) byId[id].obNames.push(name);
+  });
+  var seen = {};
+  (linkRows || []).forEach(function(row) {
+    var id = cleanText_(row[0]);
+    if (!byId[id]) byId[id] = { instructorId: id, obNames: [] };
+    var entry = byId[id];
+    entry.teacherName = cleanText_(row[1]); entry.status = cleanText_(row[3]);
+    entry.verifiedAt = cleanText_(row[4]); entry.version = Number(row[6]) || 0;
+    if (row[2] && entry.obNames.indexOf(cleanText_(row[2])) === -1) entry.obNames.push(cleanText_(row[2]));
+    if (seen[id]) entry.status = '對照重複，待核對';
+    seen[id] = true;
+  });
+  return Object.keys(byId).sort().map(function(id) { return byId[id]; });
+}
+
+function getMainExceptionTargets_(spreadsheet) {
+  var targets = [];
+  readMainOptionalRows_(spreadsheet, CONFIG.LEAVE_SHEET, SHEET_HEADERS.LEAVES).forEach(function(row) {
+    var id = cleanText_(row[9]);
+    if (!id) return;
+    var verification = cleanText_(row[15]), change = cleanText_(row[18]), status = cleanText_(row[5]);
+    var changing = ['申請取消中', '申請退出中', '取消後待回復 OB', '退出後待回復 OB'].indexOf(change) !== -1;
+    var unresolved = changing || (['已領取', '延後占用'].indexOf(status) !== -1 &&
+      ['', '待核對', '核對異常', '待人工核對', '待關閉 OB'].indexOf(verification) !== -1);
+    targets.push({ key: 'leave:' + id, targetId: id, kind: '代課', date: formatMyDate(row[2]), time: formatMyTime(status === '已取消' ? row[3] : row[25] || row[3]),
+      courseName: cleanText_(status === '已取消' ? row[4] : row[12] || row[4]), teacherName: cleanText_(status === '已取消' ? row[1] : row[6] || row[1]),
+      calendarId: cleanText_(row[20] || row[10]), requiresLiveValidation: true,
+      expectedCancelled: verification === '已關閉' || verification === '已取消核對',
+      verificationStatus: verification || status, reason: cleanText_(row[17]), resolved: !unresolved,
+      tab: changing ? 'changeRequests' : verification === '核對異常' ? 'exceptions' : 'obWork' });
+  });
+  readMainOptionalRows_(spreadsheet, SHEETS.SPECIAL_COURSE_REQUESTS, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS).forEach(function(row) {
+    var id = cleanText_(row[1]);
+    if (!id) return;
+    var status = cleanText_(row[14]), verification = cleanText_(row[15]);
+    var unresolved = status !== '已取消' && (['待處理', '核對異常', '申請取消中', '取消後待回復 OB', '退出後待回復 OB'].indexOf(status) !== -1 ||
+      ['', '待核對', '核對異常'].indexOf(verification) !== -1);
+    var target = { key: 'special:' + id, targetId: id, kind: '特別課', date: formatMyDate(row[3]), time: formatMyTime(row[7]),
+      courseName: cleanText_(row[8]), teacherName: cleanText_(row[2]), verificationStatus: verification || status,
+      calendarId: cleanText_(row[18]), requiresLiveValidation: true, expectedCancelled: status === '已取消',
+      reason: cleanText_(row[17]), resolved: !unresolved, tab: status === '申請取消中' ? 'changeRequests' : 'obWork' };
+    if (status === '已取消' && verification === '已回復核對') {
+      var sources = getSpecialRequestSourceSlots_(row).filter(function(slot) {
+        return ['own','leave','own-continuation'].indexOf(cleanText_(slot.sourceType)) !== -1;
+      });
+      target.validationItems = sources.map(function(slot) { return {calendarId:cleanText_(slot.calendarId),date:formatMyDate(slot.date),
+        time:formatMyTime(slot.originalTime || slot.time),courseName:cleanText_(slot.courseName),
+        teacherName:cleanText_(slot.originalTeacher),expectedCancelled:false}; });
+      if (target.calendarId && !target.validationItems.some(function(item) {return item.calendarId === target.calendarId;})) {
+        target.validationItems.push({calendarId:target.calendarId,date:target.date,time:target.time,
+          courseName:target.courseName,teacherName:target.teacherName,expectedCancelled:true});
+      }
+      if (!sources.length) target.validationItems.unshift({calendarId:'',expectedCancelled:false});
+    }
+    targets.push(target);
+  });
+  return targets;
+}
+
+function mainTrackingObject_(row) {
+  return { owner: cleanText_(row && row[1]), status: cleanText_(row && row[2]) || '未認領',
+    note: cleanText_(row && row[3]), followAt: cleanText_(row && row[4]), updatedAt: cleanText_(row && row[5]),
+    updatedBy: cleanText_(row && row[6]), version: Number(row && row[7]) || 0 };
+}
+
+function buildMainTaskQueue_(targets) {
+  var now = currentTimeMs_();
+  return (targets || []).filter(function(item) { return !item.resolved || (item.tracking && item.tracking.status !== '已結案' && item.tracking.owner); })
+    .map(function(item) {
+      var tracking = item.tracking || {};
+      var follow = tracking.followAt ? Date.parse(tracking.followAt.replace(' ', 'T') + '+08:00') : NaN;
+      var courseAt = /^\d{4}\/\d{2}\/\d{2}$/.test(item.date || '') && /^\d{2}:\d{2}$/.test(item.time || '')
+        ? Date.parse(item.date.replace(/\//g, '-') + 'T' + item.time + ':00+08:00') : NaN;
+      var dueAt = isFinite(follow) ? follow : isFinite(courseAt) ? courseAt : Infinity;
+      return { key: item.key, targetId: item.targetId, label: item.courseName, date: item.date, time: item.time,
+        tab: item.tab, owner: tracking.owner || '', followAt: tracking.followAt || '', dueAt: dueAt,
+        urgency: dueAt < now ? '已逾期' : dueAt - now <= 86400000 ? '即將上課' : '待處理' };
+    }).sort(function(a, b) { return a.dueAt - b.dueAt || a.key.localeCompare(b.key); });
+}
+
+function buildMainNotificationTracking_(messages, recipients, auditRows, lineState) {
+  var byMessage = {};
+  (recipients || []).forEach(function(row) {
+    var id = cleanText_(row[1]);
+    if (!byMessage[id]) byMessage[id] = { status: '已建立', recipients: 0, read: 0 };
+    byMessage[id].recipients += 1;
+    if (cleanText_(row[3]) === '已讀' || cleanText_(row[4])) byMessage[id].read += 1;
+  });
+  var deliveryByMessage = {};
+  (auditRows || []).forEach(function(row) {
+    if (cleanText_(row[2]) !== '通知傳送結果') return;
+    try { deliveryByMessage[cleanText_(row[3])] = JSON.parse(row[6]); } catch (error) { /* Historical delivery is unknown. */ }
+  });
+  return (messages || []).slice(-100).reverse().map(function(row) {
+    var event = cleanText_(row[1]), delivery = deliveryByMessage[cleanText_(row[0])];
+    var line = { status: 'not_applicable', detail: '此事件沒有關聯的 LINE 傳送紀錄' };
+    var match = /^closure_(\d{8})_2230_/.exec(event);
+    if (match) {
+      line = { status: 'unknown', detail: '沒有可核對的 LINE 狀態' };
+      if (lineState && cleanText_(lineState.targetDate).replace(/\D/g, '') === match[1]) {
+        line = { status: cleanText_(lineState.status) || 'unknown', detail: cleanText_(lineState.detail) || '佇列狀態不代表老師已讀' };
+      }
+    }
+    return { eventKey: event, title: cleanText_(row[3]), relatedId: cleanText_(row[6]), createdAt: cleanText_(row[7]),
+      inbox: byMessage[cleanText_(row[0])] || { status: '無收件紀錄', recipients: 0, read: 0 },
+      push: delivery && (!delivery.eventKey || delivery.eventKey === event) ? { status: delivery.status, detail: delivery.detail || '' }
+        : { status: 'unknown', detail: '舊紀錄沒有可精確連結的傳送結果' }, line: line };
+  });
+}
+
+function recordMainDeliveryEvidence_(message, result) {
+  if (!result || !result.inboxMessageId) return;
+  var status = result.accepted === true && !result.error ? 'accepted' : result.attempted ? 'unknown' : 'not_sent';
+  var detail = status === 'accepted' ? '推播提供者已接受；不代表裝置已收到或老師已讀' :
+    status === 'not_sent' ? '推播未送出；站內訊息狀態另行核對' : '未取得確定送出結果；不自動重送';
+  appendNotificationAuditSafely_({ actor: cleanText_(message && message.actor) || '系統',
+    action: '通知傳送結果', targetId: result.inboxMessageId, before: '', after: status,
+    reason: JSON.stringify({eventKey:cleanText_(message && message.eventKey),status:status,detail:detail}) });
+}
+
+function getMainNotificationTracking_(spreadsheet) {
+  var properties = getScriptProperties_(), line = null;
+  try {
+    var pending = JSON.parse(properties && properties.getProperty('CLOSURE_LINE_PENDING') || 'null');
+    if (pending) line = { targetDate: pending.targetDate || pending.payload && pending.payload.targetDate,
+      status: pending.status, detail: pending.status === 'queued' ? '已交付 LINE 佇列；不等同送達或已讀' : '關課 LINE 佇列：' + cleanText_(pending.status) };
+    var checked = JSON.parse(properties && properties.getProperty('MAIN_LINE_DELIVERY_STATUS') || 'null');
+    if (checked && (!line || line.targetDate === checked.targetDate)) line = checked;
+  } catch (error) { line = null; }
+  return buildMainNotificationTracking_(
+    readMainOptionalRows_(spreadsheet, SHEETS.NOTIFICATION_MESSAGES, SHEET_HEADERS.NOTIFICATION_MESSAGES),
+    readMainOptionalRows_(spreadsheet, SHEETS.NOTIFICATION_RECIPIENTS, SHEET_HEADERS.NOTIFICATION_RECIPIENTS),
+    readMainOptionalRows_(spreadsheet, SHEETS.AUDIT, SHEET_HEADERS.AUDIT), line);
+}
+
+function mainHealthTimestamp_(milliseconds) {
+  return isFinite(Number(milliseconds)) && Number(milliseconds) > 0
+    ? Utilities.formatDate(new Date(Number(milliseconds)), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss') : '';
+}
+
+function mainDiagnosticError_(error) {
+  return getErrorMessage_(error).replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/([?&](?:token|key|secret|access_token)=)[^&\s]+/gi, '$1[redacted]').slice(0, 300);
+}
+
+function mainOperationHasFailures_(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (result.failed === true || Number(result.failed) > 0 || Number(result.failedCount) > 0 ||
+      Number(result.manualReviewCount) > 0 || result.error || result.stoppedByRateLimit === true ||
+      result.courseSource && result.courseSource !== 'live' ||
+      ['paused','failed','error','partial','degraded','uncertain','blocked'].indexOf(cleanText_(result.status).toLowerCase()) !== -1) return true;
+  return ['notifications', 'monthlyDiscount', 'practice', 'rentals'].some(function(key) {
+    return result[key] && mainOperationHasFailures_(result[key]);
+  });
+}
+
+// Best-effort telemetry never changes the business result or releases a caller's existing lock.
+function recordMainOperationHealth_(key, runId, startedMs, phase, error) {
+  var lock = null, acquired = false;
+  try {
+    var properties = getScriptProperties_();
+    if (!properties || !properties.setProperty) return;
+    if (typeof LockService !== 'undefined') {
+      lock = LockService.getScriptLock();
+      if (lock.hasLock && lock.hasLock()) return;
+      if (!lock.tryLock || !lock.tryLock(100)) return;
+      acquired = true;
+    }
+    var propertyKey = 'MAIN_HEALTH_' + key;
+    var raw = properties.getProperty(propertyKey), before = raw ? JSON.parse(raw) : {};
+    if (phase === 'running') {
+      if (Number(before.lastAttemptMs) > startedMs) return;
+    } else if (before.runId !== runId) return;
+    var state = { runId: runId, lastAttemptMs: startedMs, status: phase,
+      lastSuccessMs: Number(before.lastSuccessMs) || 0, error: error ? mainDiagnosticError_(error) : '' };
+    if (phase !== 'running') state.completedMs = currentTimeMs_();
+    if (phase === 'healthy') state.lastSuccessMs = Math.max(state.lastSuccessMs, state.completedMs);
+    properties.setProperty(propertyKey, JSON.stringify(state));
+  } catch (ignored) { /* Diagnostic storage is not a business dependency. */ }
+  finally { if (acquired) lock.releaseLock(); }
+}
+
+function runMainObservedOperation_(key, operation) {
+  var start = currentTimeMs_(), runId = String(start) + '-' + String(Math.random());
+  recordMainOperationHealth_(key, runId, start, 'running', '');
+  try {
+    var result = operation();
+    var failed = mainOperationHasFailures_(result);
+    recordMainOperationHealth_(key, runId, start, failed ? 'warning' : 'healthy',
+      failed ? '本次執行包含失敗或待核對項目，請查看原作業紀錄。' : '');
+    return result;
+  } catch (error) {
+    recordMainOperationHealth_(key, runId, start, 'failed', error);
+    throw error;
+  }
+}
+
+function mainBackupAllowed_(session) {
+  var capabilities = getSessionManagementCapabilities_(session);
+  return isAdminRole_(session.role) && !session.impersonatedBy && !session.readOnly &&
+    capabilities.indexOf('course_admin') !== -1 && capabilities.indexOf('payroll_admin') !== -1;
+}
+
+function mainBackupPublicState_(stateValue, includeFileIds) {
+  var state = stateValue || {}, result = {};
+  ['status', 'lastSuccessAt', 'operationId', 'createdAt', 'sheetCount', 'cellCount', 'error'].forEach(function(key) {
+    if (state[key] != null) result[key] = state[key];
+  });
+  if (includeFileIds) ['backupId', 'rehearsalId'].forEach(function(key) {
+    if (state[key] && state[key] !== state.sourceId) result[key] = state[key];
+  });
+  result.retryable = state.status === 'failed' && state.copyStarted === false;
+  return result;
+}
+
+function getMainSystemHealth_(session, spreadsheet, courseRows, trackingValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  var properties = getScriptProperties_(), now = currentTimeMs_();
+  function read(key) {
+    try { return JSON.parse(properties && properties.getProperty(key) || 'null'); }
+    catch (error) { return null; }
+  }
+  var checks = [
+    ['scheduler', '主系統排程', 15 * 60000],
+    ['course_sync', 'OB 課表同步', 26 * 3600000],
+    ['practice_reconciliation', '自主練習核對', 2 * 3600000],
+    ['invoice_sync', '發票排程同步', 36 * 3600000]
+  ].map(function(definition) {
+    var saved = read('MAIN_HEALTH_' + definition[0]);
+    var valid = saved && Number(saved.lastAttemptMs) > 0 && Number(saved.lastAttemptMs) <= now + 60000 &&
+      (!saved.lastSuccessMs || Number(saved.lastSuccessMs) > 0 && Number(saved.lastSuccessMs) <= now + 60000);
+    var status = valid && ['healthy', 'warning', 'failed', 'running'].indexOf(saved.status) !== -1 ? saved.status : 'unknown';
+    if (status === 'healthy' && (!saved.lastSuccessMs || now - Number(saved.lastSuccessMs) > definition[2])) status = 'stale';
+    if (status === 'running' && now - Number(saved.lastAttemptMs) > 10 * 60000) status = 'stale';
+    return { key: definition[0], label: definition[1], status: status,
+      lastAttemptAt: valid ? mainHealthTimestamp_(saved.lastAttemptMs) : '',
+      lastSuccessAt: valid ? mainHealthTimestamp_(saved.lastSuccessMs) : '',
+      error: valid ? cleanText_(saved.error) : '',
+      detail: status === 'unknown' ? '尚未取得可核對的執行證據。' : status === 'stale' ? '成功紀錄過舊或上次執行未完成，不能視為目前正常。' :
+        status === 'healthy' ? '實際執行完成；不代表所有外部裝置已收到通知。' : '' };
+  });
+  var source = buildMainDataStatus_(courseRows || [], 8, 'course_snapshot');
+  checks.push({ key: 'course_snapshot', label: '課表資料快照', status: source.status === 'snapshot' ? 'healthy' : source.status,
+    lastAttemptAt: '', lastSuccessAt: source.lastSuccessAt, detail: source.warning, error: '' });
+  var notifications = { status: 'unknown', queued: 0, failed: 0, unknown: 0, detail: '通知證據尚未取得。' };
+  try {
+    var tracking = trackingValue || getMainNotificationTracking_(spreadsheet);
+    tracking.forEach(function(item) {
+      var status = item.push && item.push.status;
+      if (status === 'failed' || status === 'not_sent') notifications.failed += 1;
+      else if (status !== 'accepted') notifications.unknown += 1;
+    });
+    var pending = JSON.parse(properties && properties.getProperty('CLOSURE_LINE_PENDING') || 'null');
+    var delivery = JSON.parse(properties && properties.getProperty('MAIN_LINE_DELIVERY_STATUS') || 'null');
+    var target = pending && (pending.targetDate || pending.payload && pending.payload.targetDate);
+    var accepted = delivery && target && delivery.targetDate === target && delivery.status === 'accepted';
+    if (pending && !accepted) {
+      if (pending.status === 'failed' || pending.status === 'expired') notifications.failed += 1;
+      else if (Number(pending.expires) > 0 && Number(pending.expires) <= now) notifications.unknown += 1;
+      else if (['pending', 'queued', 'sending', 'retrying'].indexOf(pending.status) !== -1) notifications.queued += 1;
+      else notifications.unknown += 1;
+    }
+    notifications.status = !spreadsheet.getSheetByName(SHEETS.NOTIFICATION_MESSAGES) ? 'unknown' :
+      notifications.failed || notifications.unknown || notifications.queued ? 'warning' : 'healthy';
+    notifications.detail = '最近 100 則站內通知的推播證據及目前關課 LINE 佇列；未讀不等於推播失敗。歷史失敗不表示仍待重送。';
+  } catch (error) { notifications.detail = '通知追蹤讀取失敗，不能視為沒有積壓。'; }
+  var backupAllowed = mainBackupAllowed_(session), backupState = read('MAIN_BACKUP_STATE_V1');
+  if (backupState && spreadsheet.getId && backupState.sourceId !== spreadsheet.getId()) backupState = {status:'unknown',error:'備份來源無法核對。'};
+  var backup = mainBackupPublicState_(backupState || {status:'not_configured',lastSuccessAt:'',error:'尚未建立本系統可驗證的備份。'}, backupAllowed);
+  if (backup.status === 'verified') {
+    var verifiedMs = Date.parse(cleanText_(backup.lastSuccessAt).replace(' ', 'T') + '+08:00');
+    if (!isFinite(verifiedMs) || verifiedMs > now + 60000) { backup.status = 'unknown'; backup.error = '備份核對時間無效。'; }
+    else if (now - verifiedMs > 7 * 86400000) { backup.status = 'stale'; backup.error = '備份已超過七天，尚無較新的驗證紀錄。'; }
+  }
+  return {checkedAt:mainHealthTimestamp_(now),checks:checks,notifications:notifications,backup:backup,backupAllowed:backupAllowed};
+}
+
+function getMainSystemHealthSafely_(session, spreadsheet, courseRows, trackingValue) {
+  try { return getMainSystemHealth_(session, spreadsheet, courseRows, trackingValue); }
+  catch (error) { return { checkedAt: mainHealthTimestamp_(currentTimeMs_()), checks: [],
+    notifications: {status:'unknown'}, backup:{status:'unknown'}, backupAllowed:false, error:'系統健康證據未完整取得。' }; }
+}
+
+function buildMainWorkbookManifest_(spreadsheet) {
+  var sheets = spreadsheet.getSheets(), total = 0;
+  if (!sheets.length || sheets.length > 100) throw new Error('備份工作表數量超出可驗證範圍。');
+  var manifest = sheets.map(function(sheet) {
+    var range = sheet.getDataRange(), rows = range.getNumRows(), columns = range.getNumColumns();
+    total += rows * columns;
+    if (total > 1000000) throw new Error('備份資料超過一百萬格，請先安排較大範圍的獨立備份。');
+    var values = range.getValues(), formulas = range.getFormulas();
+    var cells = values.map(function(row, rowIndex) {
+      return row.map(function(value, columnIndex) {
+        var formula = formulas[rowIndex] && formulas[rowIndex][columnIndex];
+        return formula ? ['formula', formula] : value instanceof Date ? ['date',value.toISOString()] : [typeof value,value];
+      });
+    });
+    var digest = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(cells), Utilities.Charset.UTF_8));
+    return {name:sheet.getName(),rows:rows,columns:columns,hidden:sheet.isSheetHidden(),digest:digest};
+  });
+  return {sheets:manifest,sheetCount:sheets.length,cellCount:total};
+}
+
+function verifyMainWorkbookCopy_(manifest, candidate, productionId, otherForbiddenId) {
+  var id = cleanText_(candidate && candidate.getId());
+  if (!id || id === productionId || id === otherForbiddenId) throw new Error('備份／演練必須使用不同於正式表及原備份的獨立副本。');
+  var actual = buildMainWorkbookManifest_(candidate);
+  if (JSON.stringify(actual) !== JSON.stringify(manifest)) throw new Error('副本的工作表、資料或公式與備份基準不一致，驗證未通過。');
+  return actual;
+}
+
+function createMainBackup_(session, operationIdValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  if (!mainBackupAllowed_(session)) throw new Error('需要具課程及薪資權限的管理員本人操作；代查看為唯讀。');
+  var operationId = cleanText_(operationIdValue);
+  var operationMatch = /^main_backup_([a-z0-9]{8,12})_[A-Za-z0-9_-]{8,50}$/.exec(operationId);
+  if (!operationMatch) throw new Error('備份操作編號格式錯誤。');
+  var claimed = withScriptLock_(function() {
+    var properties = getScriptProperties_();
+    if (!properties || !properties.setProperty) throw new Error('備份狀態儲存不可用，未建立副本。');
+    var raw = properties.getProperty('MAIN_BACKUP_STATE_V1'), before;
+    try { before = raw ? JSON.parse(raw) : null; }
+    catch (error) { throw new Error('上次備份狀態無法核對，未重做副本。'); }
+    var source = SpreadsheetApp.getActiveSpreadsheet(), sourceId = cleanText_(source.getId());
+    if (!sourceId) throw new Error('正式試算表來源無法核對。');
+    if (before && before.sourceId !== sourceId) throw new Error('上次備份來源不符，未建立副本。');
+    if (before && before.operationId === operationId) return {cached:mainBackupPublicState_(before, true)};
+    if (before && ['preparing','copying_backup','copying_rehearsal','verifying_backup','verifying_rehearsal','unknown'].indexOf(before.status) !== -1) throw new Error('上次副本結果待確認，不會自動重做結果不明的備份。');
+    var today = Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'yyyy-MM-dd');
+    var operationMs = parseInt(operationMatch[1], 36);
+    if (!isFinite(operationMs) || operationMs > currentTimeMs_() + 300000 ||
+        Utilities.formatDate(new Date(operationMs), getTimeZone_(), 'yyyy-MM-dd') !== today) throw new Error('備份操作編號已過期或跨日，不能重新建立舊操作的副本。');
+    if (before && before.copyStarted !== false && cleanText_(before.createdAt).slice(0,10) === today) throw new Error('今天已執行過備份；當日不重複建立副本。');
+    var state = {operationId:operationId,sourceId:sourceId,status:'preparing',
+      createdAt:mainHealthTimestamp_(currentTimeMs_()),lastSuccessAt:before && before.lastSuccessAt || '',
+      actor:getSessionTeacherName_(session),copyStarted:false,sheetCount:0,cellCount:0,error:''};
+    properties.setProperty('MAIN_BACKUP_STATE_V1', JSON.stringify(state));
+    return {state:state,source:source,properties:properties,today:today};
+  });
+  if (claimed.cached) return claimed.cached;
+  var state = claimed.state, source = claimed.source, sourceId = state.sourceId;
+  function save() {
+    withScriptLock_(function() {
+      var current = JSON.parse(claimed.properties.getProperty('MAIN_BACKUP_STATE_V1') || 'null');
+      if (!current || current.operationId !== operationId || current.sourceId !== sourceId) throw new Error('備份操作狀態已變更，未覆蓋。');
+      claimed.properties.setProperty('MAIN_BACKUP_STATE_V1', JSON.stringify(state));
+    });
+  }
+  var copyAttempted = false;
+  try {
+    var manifest = withScriptLock_(function() { return buildMainWorkbookManifest_(source); });
+    state.sheetCount = manifest.sheetCount; state.cellCount = manifest.cellCount;
+    state.status = 'copying_backup'; state.copyStarted = true; save();
+    copyAttempted = true;
+    var backup = source.copy('Sherry 主系統備份 ' + claimed.today + ' ' + operationId);
+    state.backupId = cleanText_(backup.getId()); state.status = 'verifying_backup'; save();
+    verifyMainWorkbookCopy_(manifest, backup, sourceId, '');
+    state.status = 'copying_rehearsal'; save();
+    var rehearsal = backup.copy('Sherry 還原演練副本 ' + claimed.today + ' ' + operationId);
+    state.rehearsalId = cleanText_(rehearsal.getId()); state.status = 'verifying_rehearsal'; save();
+    verifyMainWorkbookCopy_(manifest, rehearsal, sourceId, state.backupId);
+    state.status = 'verified'; state.lastSuccessAt = mainHealthTimestamp_(currentTimeMs_()); save();
+  } catch (error) {
+    state.copyStarted = copyAttempted;
+    state.status = copyAttempted && /^copying_/.test(state.status) ? 'unknown' : 'failed';
+    state.error = mainDiagnosticError_(error); save();
+  }
+  return mainBackupPublicState_(state, true);
+}
+
+function getMainOperationsDashboard_(session, spreadsheet, courseRows) {
+  assertCapabilitySession_(session, 'course_admin');
+  var rows = readMainOptionalRows_(spreadsheet, MAIN_EXCEPTION_SHEET, MAIN_EXCEPTION_HEADERS), tracking = {};
+  rows.forEach(function(row) {
+    var key = cleanText_(row[0]);
+    if (tracking[key]) throw new Error('異常追蹤鍵重複，請核對追蹤資料。');
+    tracking[key] = mainTrackingObject_(row);
+  });
+  var targets = getMainExceptionTargets_(spreadsheet).map(function(item) {
+    item.tracking = tracking[item.key] || mainTrackingObject_(null); return item;
+  });
+  var notificationTracking = getMainNotificationTracking_(spreadsheet);
+  return {
+    tasks: buildMainTaskQueue_(targets),
+    exceptions: targets.filter(function(item) { return !item.resolved || tracking[item.key]; }),
+    identities: getMainIdentityDirectory_(courseRows, readMainOptionalRows_(spreadsheet, MAIN_IDENTITY_SHEET, MAIN_IDENTITY_HEADERS)),
+    notificationTracking: notificationTracking,
+    systemHealth: getMainSystemHealthSafely_(session, spreadsheet, courseRows, notificationTracking)
+  };
+}
+
+function getMainOperationsDashboardSafely_(session, spreadsheet, courseRows) {
+  try { return getMainOperationsDashboard_(session, spreadsheet, courseRows); }
+  catch (error) {
+    return { tasks: [], exceptions: [], identities: [], notificationTracking: [],
+      systemHealth: getMainSystemHealthSafely_(session, spreadsheet, courseRows),
+      error: '營運追蹤資料未完整取得，不能視為沒有待辦；其他管理功能仍可使用。' };
+  }
+}
+
+function assertMainOperationsWrite_(session) {
+  var actor = assertCapabilitySession_(session, 'course_admin');
+  if (session.impersonatedBy || session.readOnly) throw new Error('代查看為唯讀，不能修改營運追蹤或老師對照。');
+  return actor;
+}
+
+function updateMainException_(session, inputValue) {
+  var actor = assertMainOperationsWrite_(session), input = inputValue || {};
+  var key = cleanText_(input.key), action = cleanText_(input.action), note = cleanText_(input.note);
+  if (/^=/.test(note) || /^=/.test(actor)) throw new Error('備註或姓名不可使用試算表公式。');
+  if (!/^(leave|special):[A-Za-z0-9_-]{1,100}$/.test(key) || ['claim', 'release', 'save', 'close', 'reopen'].indexOf(action) < 0) throw new Error('異常追蹤操作格式錯誤。');
+  if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0 || note.length > 1000) throw new Error('追蹤版本或備註格式錯誤。');
+  var followAt = cleanText_(input.followAt).replace('T', ' ');
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(followAt)) followAt += ':00';
+  if (followAt && (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(followAt) ||
+      !isFinite(Date.parse(followAt.replace(' ', 'T') + '+08:00')) ||
+      Utilities.formatDate(new Date(followAt.replace(' ', 'T') + '+08:00'), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss') !== followAt)) throw new Error('下次追蹤時間格式錯誤。');
+  return withScriptLock_(function() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var target = getMainExceptionTargets_(ss).filter(function(item) { return item.key === key; });
+    if (target.length !== 1) throw new Error('找不到唯一的原始異常紀錄，未修改追蹤。');
+    var sheet = ensureSupportingSheet_(ss, MAIN_EXCEPTION_SHEET, MAIN_EXCEPTION_HEADERS);
+    var values = sheet.getDataRange().getValues(), matches = [];
+    values.slice(1).forEach(function(row, index) { if (cleanText_(row[0]) === key) matches.push({row:row,number:index+2}); });
+    if (matches.length > 1) throw new Error('異常追蹤鍵重複，未修改。');
+    var found = matches[0], old = mainTrackingObject_(found && found.row);
+    if (old.version !== input.expectedVersion) throw new Error('追蹤已被更新，請重新查詢，不要重送。');
+    if (old.owner && old.owner !== actor) throw new Error('此筆已由「' + old.owner + '」認領，不能覆蓋他人的處理。');
+    if (action !== 'claim' && old.owner !== actor) throw new Error('請先由本人認領這筆異常。');
+    if (old.status === '已結案' && action !== 'reopen') throw new Error('此筆已結案；如需續辦，請重新開啟。');
+    if (action === 'close' && (!target[0].resolved || !note)) throw new Error('原始課程尚未完成核對或缺少結案備註，不能結案。');
+    if (action === 'close') {
+      var properties = getScriptProperties_(), token = properties && properties.getProperty(CONFIG.API_TOKEN_PROPERTY);
+      var checks = target[0].validationItems || [target[0]], links = getMainTeacherIdentityMap_(ss);
+      checks.forEach(function(expected) {
+        if (!token || !expected.calendarId) throw new Error('缺少 OB 核對資料，不能結案。');
+        var live = readMainObSafely_(function() { return fetchCalendarDetail_(token, expected.calendarId); });
+        applyMainClosureIdentity_(live, links);
+        if (live.identityError || (live.cancelled === true) !== (expected.expectedCancelled === true) ||
+            cleanText_(live.calendarId) !== expected.calendarId || live.date !== expected.date ||
+            (!expected.expectedCancelled && (live.time !== expected.time ||
+              normalizeOrdinaryCourseReconciliationName_(live.courseName) !== normalizeOrdinaryCourseReconciliationName_(expected.courseName) ||
+              cleanText_(live.canonicalTeacherName || live.teacherName) !== expected.teacherName))) {
+          throw new Error('OB 最新資料與原始課程預期終態不一致，請先重新核對，未結案。');
+        }
+      });
+    }
+    var next = [key, action === 'release' ? '' : actor,
+      action === 'close' ? '已結案' : action === 'release' ? '未認領' : '處理中',
+      note || old.note, action === 'release' || action === 'close' ? '' : Object.prototype.hasOwnProperty.call(input,'followAt') ? followAt : old.followAt,
+      getTimestamp_(), actor, old.version + 1];
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(found ? found.number : sheet.getLastRow()+1, 1, 1, next.length).setValues([next]);
+      appendAudits([{actor:actor,action:'營運異常追蹤：'+action,targetId:key,before:JSON.stringify(old),after:JSON.stringify(mainTrackingObject_(next)),reason:note}]);
+      return mainTrackingObject_(next);
+    });
+  });
+}
+
+function saveMainTeacherIdentity_(session, inputValue) {
+  var actor = assertMainOperationsWrite_(session), input = inputValue || {};
+  var id = cleanText_(input.instructorId), teacher = cleanText_(input.teacherName);
+  if (/^=/.test(teacher) || /^=/.test(actor)) throw new Error('老師姓名不可使用試算表公式。');
+  if (!/^[1-9]\d{0,17}$/.test(id) || typeof input.active !== 'boolean' || !Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0) throw new Error('老師 ID 或版本格式錯誤。');
+  var obName = '';
+  if (input.active) {
+    var properties = getScriptProperties_(), token = properties && properties.getProperty(CONFIG.API_TOKEN_PROPERTY);
+    if (!token) throw new Error('尚未設定 OB 權杖，無法核對老師身分。');
+    var live = readMainObSafely_(function() { return getObApiJson_(CONFIG.INSTRUCTORS_API_URL + '/' + encodeURIComponent(id),
+      {method:'get',headers:{Authorization:'Bearer '+token},muteHttpExceptions:true}, '核對 OB 老師'); });
+    if (!live || cleanText_(live.id) !== id || live.removed === true || live.archived === true) throw new Error('OB 未確認此老師 ID 有效，未建立對照。');
+    obName = getRentalInstructorName_(live);
+    if (!obName || /^=/.test(obName)) throw new Error('OB 老師名稱不完整或為公式，未建立對照。');
+  }
+  return withScriptLock_(function() {
+    if (input.active && getActiveAccountTeacherNames_().indexOf(teacher) === -1) throw new Error('只能連結目前在職的系統帳號。');
+    var ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ensureSupportingSheet_(ss, MAIN_IDENTITY_SHEET, MAIN_IDENTITY_HEADERS);
+    var matches = [];
+    sheet.getDataRange().getValues().slice(1).forEach(function(row,index) { if (cleanText_(row[0]) === id) matches.push({row:row,number:index+2}); });
+    if (matches.length > 1) throw new Error('此 OB ID 有重複對照，未更新。');
+    var found = matches[0], revision = Number(found && found.row[6]) || 0;
+    if (revision !== input.expectedVersion) throw new Error('老師對照已更新，請重新查詢，不要重送。');
+    if (!input.active && !found) throw new Error('找不到可停用的老師對照。');
+    var row = [id,input.active ? teacher : cleanText_(found.row[1]),input.active ? obName : cleanText_(found.row[2]),
+      input.active ? '啟用' : '停用',getTimestamp_(),actor,revision+1];
+    return runStateTransitionUnlocked_([sheet], function(appendAudits) {
+      sheet.getRange(found ? found.number : sheet.getLastRow()+1,1,1,row.length).setValues([row]);
+      appendAudits([{actor:actor,action:'老師身分對照',targetId:id,before:found ? JSON.stringify(found.row) : '',after:JSON.stringify(row),reason:input.active ? '已由 OB 即時核對 ID；不更名歷史資料' : '停用對照'}]);
+      return {instructorId:id,teacherName:row[1],status:row[3],verifiedAt:row[4],version:row[6]};
+    });
+  });
+}
+
+function getMainCourseHistory_(session, calendarIdValue) {
+  assertCapabilitySession_(session, 'course_admin');
+  var id = cleanText_(calendarIdValue);
+  if (!/^[1-9]\d{0,17}$/.test(id)) throw new Error('請輸入單一有效的 OB 課程編號。');
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), ids = {}, targets = {}, events = [];
+  var payrollVisible = getSessionManagementCapabilities_(session).indexOf('payroll_admin') !== -1;
+  ids[id] = true;
+  var leaves = readMainOptionalRows_(ss, CONFIG.LEAVE_SHEET, SHEET_HEADERS.LEAVES);
+  var special = readMainOptionalRows_(ss, SHEETS.SPECIAL_COURSE_REQUESTS, SHEET_HEADERS.SPECIAL_COURSE_REQUESTS);
+  var changed = true;
+  while (changed) {
+    changed = false;
+    leaves.forEach(function(row) {
+      var related = [cleanText_(row[10]),cleanText_(row[20])].filter(Boolean);
+      if (!related.some(function(value) { return ids[value]; })) return;
+      related.forEach(function(value) { if (!ids[value]) { ids[value]=true;changed=true; } });
+      if (row[9]) targets[cleanText_(row[9])] = true;
+      if (row[21]) targets[cleanText_(row[21])] = true;
+    });
+    special.forEach(function(row) {
+      var calendar = cleanText_(row[18]);
+      if (ids[calendar] || targets[cleanText_(row[1])]) {
+        targets[cleanText_(row[1])] = true;
+        if (calendar && !ids[calendar]) {ids[calendar]=true;changed=true;}
+      }
+    });
+  }
+  Object.keys(ids).forEach(function(value) {targets[value]=true;});
+  function add(time,type,title,detail,actor) { events.push({time:cleanText_(time),type:type,title:cleanText_(title),detail:cleanText_(detail),actor:cleanText_(actor)}); }
+  readMainOptionalRows_(ss, CONFIG.COURSE_SHEET, SHEET_HEADERS.COURSE_LIST).forEach(function(row) {
+    if (ids[cleanText_(row[4])]) add(row[8],'課表',row[2],formatMyDate(row[0])+' '+formatMyTime(row[1])+'｜'+row[3]+'｜OB '+row[4],'OB 同步快照');
+  });
+  leaves.forEach(function(row) {
+    if (targets[cleanText_(row[9])]) add(row[0],'代課',row[4],row[1]+' → '+(row[6]||'尚無代課')+'｜'+row[5]+'｜'+(row[15]||'待核對'),'');
+  });
+  special.forEach(function(row) {if(targets[cleanText_(row[1])])add(row[0],'特別課',row[8],row[14]+'｜'+row[15],row[2]);});
+  readMainOptionalRows_(ss, SHEETS.COURSE_CLOSURE_LOG, SHEET_HEADERS.COURSE_CLOSURE_LOG).forEach(function(row) {
+    if (ids[cleanText_(row[3])]) add(row[0],'關課',row[4],row[2]+'｜'+row[6]+' 人｜'+row[7]+'｜'+row[9]+(row[10]?'｜'+row[10]:''),row[11]);
+  });
+  readMainOptionalRows_(ss, SHEETS.AUDIT, SHEET_HEADERS.AUDIT).forEach(function(row) {
+    var action = cleanText_(row[2]);
+    if (/身分|登入|密碼|權限|帳號/.test(action) || (!payrollVisible && /薪資|扣款|No Show/.test(action))) return;
+    if (targets[cleanText_(row[3])] || /^\w+:/.test(cleanText_(row[3])) && targets[cleanText_(row[3]).split(':').slice(1).join(':')]) {
+      add(row[0],'操作',row[2],row[4]+' → '+row[5]+(row[6]?'｜'+row[6]:''),row[1]);
+    }
+  });
+  readMainOptionalRows_(ss, SHEETS.NOTIFICATION_MESSAGES, SHEET_HEADERS.NOTIFICATION_MESSAGES).forEach(function(row) {
+    var tokens = cleanText_(row[1]).split('_');
+    if (targets[cleanText_(row[6])] || tokens.some(function(token) {return targets[token];})) add(row[7],'通知',row[3],row[4],row[8]);
+  });
+  if (payrollVisible) readMainOptionalRows_(ss, SHEETS.PAYROLL_LINES, SHEET_HEADERS.PAYROLL_LINES).forEach(function(row) {
+    if (ids[cleanText_(row[3])]) add(row[17],'薪資',row[4]+'｜'+row[7],row[0]+'｜版本 '+row[2]+'｜'+row[12]+'｜金額 '+row[13]+'｜'+row[16],'薪資試算');
+  });
+  events.sort(function(a,b) {return b.time.localeCompare(a.time);});
+  return {calendarIds:Object.keys(ids),payrollVisible:payrollVisible,events:events.slice(0,500),truncated:events.length>500};
+}
+
+function getMainRuleCatalogue_() {
+  var examples = [
+    ['場地租借／場租', 'A－場地租借', '一般老師', 1],
+    ['私人包班', 'A－私人包班', '一般老師', 1],
+    ['2026/11/09 起，小美／Josty Lin 的所有公開課（優先於雙人、優惠與點數規則）', 'A－雙人特別課〈優惠〉', 'Josty Lin', 2],
+    ['課名含「雙人」', 'A－雙人特別課', '一般老師', 2],
+    ['妙妙的綢吊〈優惠〉', 'B－綢吊〈優惠〉', '妙妙 簡', 4],
+    ['Jina、卡拉／卡拉 卡拉；2026/11/08 前的小美／Josty Lin（姓名精確比對）', 'A－空環', 'Jina', 4],
+    ['空瑜〈優惠〉', 'A－空瑜〈優惠〉', '一般老師', 2],
+    ['扣 2 點的地板〈優惠〉', 'D－柔軟度開發〈優惠〉', '一般老師', 2],
+    ['其他〈優惠〉（前述條件優先）', 'A－空環〈優惠〉', '一般老師', 2],
+    ['非〈優惠〉，扣 2 點', 'A－空環', '一般老師', 2],
+    ['其餘一般課', 'A－空環', '一般老師', 4]
+  ];
+  return {
+    version: 'main-assurance-20261109-xiaomei-two',
+    updatedAt: '2026-11-09',
+    stages: ['22:30：只取消 0 人課程', '23:40：未達最低人數才取消；取消前重新向 OB 核對'],
+    rules: examples.map(function(example, index) {
+      var rule = getCourseClosureRule_({ calendarId: 'catalogue', date: '2026/11/09', time: '12:00',
+        courseName: example[1], teacherName: example[2], points: example[3], enrollmentCount: 0 }, '23:40');
+      return { priority: index + 1, key: rule.ruleKey, condition: example[0],
+        minimumEnrollment: rule.minimumEnrollment, label: rule.ruleLabel };
+    }),
+    notes: [
+      '由上往下套用，前面的規則優先；這是目前程式規則，不代表已由營運逐條確認。',
+      '地板課按課名辨識：瑜伽、皮拉提斯、現代小品、柔軟度／柔軟開發、後彎、開髖。',
+      '期班、新老師課及其他特別課沒有一律排除，仍依上述規則判定。',
+      '徵人公告列缺一；缺二限最低 3 人或〈優惠〉課。公告是產生當時的快照，不會自動改寫已送出的 LINE。'
+    ],
+    history: [
+      { date: '2026-11-08', change: '2 點地板〈優惠〉改為至少 3 人；其他優惠課門檻不變。' },
+      { date: '2026-11-09', change: '新增唯讀規則與背景檢查；沒有新增確認關卡。' },
+      { date: '2026-11-09', change: '小美／Josty Lin 的所有公開課，自本日起至少 2 人；優先於雙人、優惠及點數門檻，舊日期不回改。' }
+    ]
+  };
+}
+
+function readMainObSafely_(reader) {
+  try { return reader(); }
+  catch (error) {
+    var message = getErrorMessage_(error);
+    if (/HTTP\s*4\d\d|權杖|權限|資料不完整|格式|無效|not found/i.test(message)) throw error;
+    return reader();
+  }
+}
+
+function buildMainDataStatus_(rows, timestampIndex, source) {
+  var values = (rows || []).map(function(row) { return row[timestampIndex]; });
+  var timestamps = values.map(function(value) {
+    if (value instanceof Date) return value.getTime();
+    var text = cleanText_(value);
+    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) return NaN;
+    return new Date(text.replace(' ', 'T') + '+08:00').getTime();
+  });
+  var now = currentTimeMs_();
+  var valid = timestamps.length > 0 && timestamps.every(function(time) { return isFinite(time) && time <= now + 60000; });
+  var oldest = valid ? Math.min.apply(null, timestamps) : null;
+  var newest = valid ? Math.max.apply(null, timestamps) : null;
+  var stale = valid && source === 'course_snapshot' && now - oldest > 3600000;
+  return { source: source, status: !valid ? 'unknown' : stale ? 'stale' : 'snapshot',
+    oldestAt: valid ? Utilities.formatDate(new Date(oldest), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss') : '',
+    lastSuccessAt: valid ? Utilities.formatDate(new Date(newest), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss') : '',
+    mixed: valid && oldest !== newest,
+    warning: !valid ? '來源時間不完整，不能視為即時資料。' : stale ? '同步快照已超過一小時；關課仍須向 OB 即時核對。' : '' };
+}
+
+function buildCourseClosureAssessment_(targetDate, details, before) {
+  var previous = {};
+  var baselineAvailable = !!(before && Array.isArray(before.items));
+  if (baselineAvailable) before.items.forEach(function(item) { previous[item.calendarId] = item; });
+  var impacts = [];
+  var items = (details || []).filter(function(detail) { return detail && detail.date === targetDate; }).map(function(detail) {
+    var rule = getCourseClosureRule_(detail, '23:40');
+    var decision = rule.manualReview ? '待確認資料' : detail.cancelled ? '已取消' :
+      rule.minimumEnrollment == null ? '不納入關課' : rule.eligible ? '未達門檻' : '人數已足';
+    var item = { calendarId: cleanText_(detail.calendarId), date: detail.date, time: detail.time,
+      courseName: detail.courseName, teacherName: detail.teacherName, points: detail.points == null ? null : detail.points,
+      enrollmentCount: detail.enrollmentCount == null ? null : detail.enrollmentCount,
+      minimumEnrollment: rule.minimumEnrollment,
+      shortage: rule.minimumEnrollment == null || rule.manualReview ? null : Math.max(0, rule.minimumEnrollment - Number(detail.enrollmentCount)),
+      ruleKey: rule.ruleKey, ruleLabel: rule.ruleLabel, decision: decision, reason: rule.reason };
+    var old = previous[item.calendarId];
+    if (old && (old.minimumEnrollment !== item.minimumEnrollment || old.ruleKey !== item.ruleKey)) {
+      impacts.push({ calendarId: item.calendarId, courseName: item.courseName, time: item.time,
+        beforeMinimum: old.minimumEnrollment, afterMinimum: item.minimumEnrollment,
+        beforeRule: old.ruleLabel || old.ruleKey, afterRule: item.ruleLabel });
+    }
+    return item;
+  });
+  items.sort(function(a, b) { return [a.time, a.calendarId].join('|').localeCompare([b.time, b.calendarId].join('|')); });
+  return { targetDate: targetDate, ruleVersion: getMainRuleCatalogue_().version, items: items,
+    baselineAvailable: baselineAvailable, baselineAt: before && before.observedAt || '', impacts: impacts };
+}
+
+// Diagnostic cache is never a cancellation input; every mutation still fetches its own OB detail.
+function getCourseClosureAssessment_() {
+  var targetDate = getTomorrowDate_();
+  var key = 'main_closure_assessment_' + targetDate.replace(/\D/g, '');
+  var cache;
+  var previous = null;
+  try {
+    cache = typeof CacheService !== 'undefined' ? CacheService.getScriptCache() : null;
+    var stored = cache && cache.get(key);
+    previous = stored ? JSON.parse(stored) : null;
+  } catch (error) { previous = null; }
+  var now = currentTimeMs_();
+  if (previous && previous.ruleVersion === getMainRuleCatalogue_().version && previous.targetDate === targetDate && previous.checkedAtMs <= now &&
+      now - previous.checkedAtMs < (previous.verified ? 300000 : 30000)) {
+    if (previous.verified) previous.dataStatus.status = 'cached';
+    return previous;
+  }
+  var result;
+  try {
+    var properties = getScriptProperties_();
+    var token = properties && properties.getProperty(CONFIG.API_TOKEN_PROPERTY);
+    if (!token) throw new Error('尚未設定 OB 權杖');
+    var range = getClosureApiDateRange_(targetDate);
+    var raw = readMainObSafely_(function() { return fetchCalendarPages_(token, range.dateFrom, range.dateTo); });
+    var identities = typeof SpreadsheetApp !== 'undefined' ? getMainTeacherIdentityMap_(SpreadsheetApp.getActiveSpreadsheet()) : { names: {}, conflicts: {} };
+    var details = raw.map(function(item) {
+      var normalized = normalizeClosureCalendarDetail_(item);
+      if (!normalized) throw new Error('OB 課程格式不完整');
+      return applyMainClosureIdentity_(normalized, identities);
+    });
+    result = buildCourseClosureAssessment_(targetDate, details, previous && previous.targetDate === targetDate ? previous : null);
+    result.observedAt = Utilities.formatDate(new Date(currentTimeMs_()), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
+    result.verified = true;
+    result.dataStatus = { source: 'ob_live', status: 'live', lastSuccessAt: result.observedAt, warning: '' };
+  } catch (error) {
+    result = { targetDate: targetDate, items: previous && previous.items || [], impacts: [],
+      baselineAvailable: false, verified: false, observedAt: previous && previous.observedAt || '',
+      dataStatus: { source: 'ob_live', status: previous && previous.observedAt ? 'stale' : 'unavailable',
+        lastSuccessAt: previous && previous.observedAt || '',
+        warning: 'OB 背景檢查未成功，未取得即時結論；舊資料僅供參考，不會據此關課。' } };
+  }
+  result.ruleVersion = getMainRuleCatalogue_().version;
+  result.checkedAtMs = currentTimeMs_();
+  try {
+    var serialized = JSON.stringify(result);
+    if (cache && serialized.length < 28000) cache.put(key, serialized, 21600);
+  } catch (error) { /* A diagnostic cache failure must not stop the existing schedule. */ }
+  return result;
+}
+
+function buildPayrollVersionDiff_(month, version, lineRows, summaryRows) {
+  var summaries = (summaryRows || []).filter(function(row) { return normalizePayrollMonthValue_(row[0]) === month; });
+  var versions = [];
+  summaries.forEach(function(row) { var v = cleanText_(row[8]); if (v && versions.indexOf(v) === -1) versions.push(v); });
+  var position = versions.indexOf(version);
+  var baseline = position > 0 ? versions[position - 1] : '';
+  var result = { version: version, baselineVersion: baseline, baselineAvailable: !!baseline, items: [], teachers: [], totalDelta: 0 };
+  if (!baseline) return result;
+  function groupedLines(target) {
+    var map = {};
+    (lineRows || []).filter(function(row) { return normalizePayrollMonthValue_(row[0]) === month && cleanText_(row[2]) === target; })
+      .forEach(function(row) {
+        var line = getPayrollLineObject_(row);
+        var key = JSON.stringify([line.calendarId, line.teacherName]);
+        if (!map[key]) map[key] = { line: line, amount: 0, count: 0 };
+        map[key].amount += line.amount + line.manualAdjustment;
+        map[key].count += 1;
+      });
+    return map;
+  }
+  var oldLines = groupedLines(baseline), newLines = groupedLines(version);
+  var keys = Object.keys(oldLines).concat(Object.keys(newLines).filter(function(key) { return !oldLines[key]; }));
+  keys.forEach(function(key) {
+    var old = oldLines[key], next = newLines[key], line = (next || old).line;
+    var reasons = [];
+    if (!old || !next) reasons.push(!old ? '本版新增此課程／老師明細' : '本版已無此課程／老師明細');
+    else {
+      [['attendanceCount', '出席人數'], ['courseIncome', '課程收入'], ['ruleDetail', '計薪規則'],
+        ['billingType', '計費類型'], ['courseName', '課程名稱'], ['date', '日期'], ['time', '時間'],
+        ['manualAdjustment', '人工加扣'], ['adjustmentReason', '調整原因']].forEach(function(field) {
+        if (String(old.line[field[0]]) !== String(next.line[field[0]])) reasons.push(field[1] + '變更');
+      });
+      if (old.amount !== next.amount && !reasons.length) reasons.push('計算金額變更；來源細節需核對');
+    }
+    if ((old && old.count > 1) || (next && next.count > 1)) reasons.push('同課程／老師有多筆明細，金額為合計');
+    if (reasons.length) result.items.push({ calendarId: line.calendarId, teacherName: line.teacherName,
+      date: line.date, time: line.time, courseName: line.courseName,
+      beforeAmount: old ? old.amount : 0, afterAmount: next ? next.amount : 0,
+      delta: (next ? next.amount : 0) - (old ? old.amount : 0),
+      change: !old ? '新增' : !next ? '移除' : '變更', reason: reasons.join('；') });
+  });
+  var byTeacher = {};
+  summaries.filter(function(row) { return cleanText_(row[8]) === baseline || cleanText_(row[8]) === version; }).forEach(function(row) {
+    var name = cleanText_(row[1]);
+    if (!byTeacher[name]) byTeacher[name] = {};
+    byTeacher[name][cleanText_(row[8]) === version ? 'next' : 'old'] = getPayrollSummaryObject_(row);
+  });
+  Object.keys(byTeacher).sort().forEach(function(name) {
+    var pair = byTeacher[name], old = pair.old || {}, next = pair.next || {};
+    var reasons = [];
+    [['subtotal', '鐘點費'], ['bonusRate', '獎金比例'], ['bonusAmount', '獎金'], ['fixedAdjustment', '固定加扣'],
+      ['adminAdjustment', '管理員加扣'], ['oneTimeDeduction', '單月扣款'], ['oneTimeDeductionReason', '扣款事件說明']].forEach(function(field) {
+      if (String(old[field[0]] == null ? '' : old[field[0]]) !== String(next[field[0]] == null ? '' : next[field[0]])) reasons.push(field[1] + '變更');
+    });
+    var delta = (next.totalSalary || 0) - (old.totalSalary || 0);
+    result.totalDelta += delta;
+    if (reasons.length || delta) result.teachers.push({ teacherName: name, beforeAmount: old.totalSalary || 0,
+      afterAmount: next.totalSalary || 0, delta: delta, reason: reasons.join('；') || '總額變更' });
+  });
+  return result;
+}
+
 function getCourseClosureRule_(detail, stageValue) {
   var stage = cleanText_(stageValue);
   var base = {
@@ -10208,6 +11046,11 @@ function getCourseClosureRule_(detail, stageValue) {
   };
   if (['22:30', '23:40'].indexOf(stage) === -1) {
     throw new Error('不支援的關課檢核時段：' + stage);
+  }
+  if (detail && detail.identityError) {
+    base.manualReview = true;
+    base.reason = detail.identityError;
+    return base;
   }
   if (detail && isVenueRentalCourseName_(detail.courseName)) {
     base.ruleKey = 'venue-rental-excluded';
@@ -10241,8 +11084,27 @@ function getCourseClosureRule_(detail, stageValue) {
     base.cancelAtOrBelow = 0;
   } else {
     var courseName = cleanText_(detail.courseName);
-    var teacherName = cleanText_(detail.teacherName);
-    if (courseName.indexOf('雙人') !== -1) {
+    var teacherName = cleanText_(detail.canonicalTeacherName || detail.teacherName);
+    var xiaomei = ['小美', 'Josty Lin'].indexOf(teacherName) !== -1;
+    var courseDate = cleanText_(detail.date).replace(/-/g, '/');
+    if (xiaomei && (!/^\d{4}\/\d{2}\/\d{2}$/.test(courseDate) ||
+        !isFinite(Date.parse(courseDate.replace(/\//g, '-') + 'T00:00:00+08:00')) ||
+        Utilities.formatDate(new Date(courseDate.replace(/\//g, '-') + 'T00:00:00+08:00'), getTimeZone_(), 'yyyy/MM/dd') !== courseDate)) {
+      base.manualReview = true;
+      base.reason = '小美開課規則的生效日期無法核對，請人工確認。';
+      return base;
+    }
+    if (xiaomei && courseDate >= '2026/11/09') {
+      if (detail.points == null || !isFinite(Number(detail.points))) {
+        base.manualReview = true;
+        base.reason = 'OB 課程資料不完整，請人工確認。';
+        return base;
+      }
+      base.ruleKey = 'xiaomei-two-students-20261109';
+      base.ruleLabel = '小美公開課至少 2 人（2026/11/09 起）';
+      base.minimumEnrollment = 2;
+      base.cancelAtOrBelow = 1;
+    } else if (courseName.indexOf('雙人') !== -1) {
       base.ruleKey = 'pair';
       base.ruleLabel = '雙人特別課至少 4 人';
       base.minimumEnrollment = 4;
@@ -10746,8 +11608,9 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
     var logSheet = requireSheet_(ss, SHEETS.COURSE_CLOSURE_LOG);
     assertHeaders_(logSheet, SHEET_HEADERS.COURSE_CLOSURE_LOG);
     var processed = getProcessedClosureKeysUnlocked_(logSheet, targetDate, stage);
+    var identities = getMainTeacherIdentityMap_(ss);
     var apiRange = getClosureApiDateRange_(targetDate);
-    var rawItems = fetchCalendarPages_(token, apiRange.dateFrom, apiRange.dateTo);
+    var rawItems = readMainObSafely_(function() { return fetchCalendarPages_(token, apiRange.dateFrom, apiRange.dateTo); });
     var result = {
       targetDate: targetDate,
       stage: stage,
@@ -10770,6 +11633,7 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
       var preview = normalizeClosureCalendarDetail_(raw);
       if (!preview || preview.date !== targetDate) return;
       targetDetails.push(preview);
+      applyMainClosureIdentity_(preview, identities);
       var previewRule = getCourseClosureRule_(preview, stage);
       if (!previewRule.eligible && !previewRule.manualReview) return;
       if (processed[preview.calendarId]) {
@@ -10785,13 +11649,18 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
           calendarId: preview.calendarId,
           time: preview.time,
           courseName: preview.courseName,
-          result: '待人工確認'
+          result: '待人工確認',
+          error: previewRule.reason
         });
         return;
       }
 
       try {
-        var latest = fetchCalendarDetail_(token, preview.calendarId, notifyStudents);
+        var latest = readMainObSafely_(function() { return fetchCalendarDetail_(token, preview.calendarId, notifyStudents); });
+        if (cleanText_(latest.calendarId) !== cleanText_(preview.calendarId) || latest.date !== targetDate) {
+          throw new Error('OB 最新課程編號或日期不一致，僅暫停此堂課，未取消。');
+        }
+        applyMainClosureIdentity_(latest, identities);
         var latestRule = getCourseClosureRule_(latest, stage);
         if (latestRule.manualReview) {
           appendCourseClosureLogUnlocked_(
@@ -10803,7 +11672,8 @@ function executeNextDayClosuresCore_(actorValue, stageValue, targetDateValue) {
             calendarId: latest.calendarId,
             time: latest.time,
             courseName: latest.courseName,
-            result: '待人工確認'
+            result: '待人工確認',
+            error: latestRule.reason
           });
           return;
         }
@@ -11074,6 +11944,7 @@ function notifyCourseClosureResult_(resultValue) {
     return cleanText_(item.result) === '執行失敗';
   });
   var hasFailures = failedItems.length > 0 || Number(result.failedCount) > 0;
+  var reviewItems = (result.items || []).filter(function(item) { return item.result === '待人工確認'; });
   var heading;
   var content;
   if (hasFailures) {
@@ -11093,6 +11964,13 @@ function notifyCourseClosureResult_(resultValue) {
       '保留 ' + (Number(result.keptOpenCount) || 0) + ' 堂；' +
       '待人工確認 ' + (Number(result.manualReviewCount) || 0) + ' 堂。';
   }
+  if (reviewItems.length || Number(result.manualReviewCount) > 0) {
+    heading += '｜資料待核對';
+    content += ' ' + reviewItems.map(function(item) {
+      return [cleanText_(item.time), cleanText_(item.courseName), '（' + cleanText_(item.calendarId) + '）：',
+        cleanText_(item.error) || 'OB 必要資料不足'].join('');
+    }).join('；') + '；僅暫停上述課程，其他課程照常處理。';
+  }
   if (result.stage === '22:30' && result.socialCopy && cleanText_(result.socialCopy.content)) {
     content += ' 社群提醒文字已整理完成。';
   }
@@ -11111,7 +11989,8 @@ function notifyCourseClosureResult_(resultValue) {
   }
   return sendPushOnceSafely_(
     ['closure', String(result.targetDate).replace(/\D/g, ''), String(result.stage).replace(/\D/g, ''), hasFailures ? 'failed' : 'success'].join('_') +
-      (result.studentNoticeWarnings && result.studentNoticeWarnings.length ? '_student_notice_review' : ''),
+      (result.studentNoticeWarnings && result.studentNoticeWarnings.length ? '_student_notice_review' : '') +
+      (reviewItems.length || Number(result.manualReviewCount) > 0 ? '_data_review' : ''),
     getActiveCourseAdminNames_(),
     {
       heading: heading,
@@ -11229,6 +12108,12 @@ function monitorCourseClosureLineDeliverySafely_() {
         var report = JSON.parse(response.getContentText());
         if (report.targetDate !== date || !Array.isArray(report.deliveries)) throw new Error('invalid-status');
         var rows = report.deliveries;
+        try {
+          properties.setProperty('MAIN_LINE_DELIVERY_STATUS', JSON.stringify({targetDate:date,
+            status: ['ivy','tako'].every(function(role) {return rows.some(function(row) {return row.role === role && row.status === 'accepted';});}) ? 'accepted' : 'unknown',
+            detail: rows.map(function(row) {return cleanText_(row.role)+'：'+cleanText_(row.status);}).join('；') + '；LINE 接受不等同老師已讀',
+            checkedAt: Utilities.formatDate(new Date(now),getTimeZone_(),'yyyy-MM-dd HH:mm:ss')}));
+        } catch (cacheError) { /* Delivery diagnostics must not affect notification recovery. */ }
         complete = ['ivy', 'tako'].every(function(role) { return rows.some(function(r) { return r.role === role && r.status === 'accepted'; }); });
         immediate = immediate || rows.some(function(r) { return ['failed', 'expired', 'revoked'].indexOf(r.status) !== -1; });
         reason = report.enabled === false ? 'LINE 通知服務未啟用' : rows.map(function(r) { return r.role + '：' + r.status + (r.last_error ? '（' + r.last_error + '）' : ''); }).join('；');
@@ -11342,6 +12227,7 @@ function executeNextDayClosures_(session, stageValue) {
 }
 
 function runCourseClosureScheduler() {
+  return runMainObservedOperation_('scheduler', function() {
   drainCourseClosureLineCopySafely_();
   monitorCourseClosureLineDeliverySafely_();
   var now = new Date(currentTimeMs_());
@@ -11361,6 +12247,7 @@ function runCourseClosureScheduler() {
     requireSheet_(ss, SHEETS.COURSE_CLOSURE_SETTINGS)
   );
   if (!settings.automatic) return { skipped: true, reason: 'manual', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult, practice: practiceReconciliationResult };
+  if (time >= '21:00' && time <= '23:59' && Number(time.slice(3)) % 15 < 5) getCourseClosureAssessment_();
   var stage = getCourseClosureDueStage_(time);
   if (!stage) return { skipped: true, reason: 'outside-window', notifications: notificationResult, monthlyDiscount: monthlyDiscountResult, practice: practiceReconciliationResult };
   var result = executeNextDayClosuresCore_('系統自動關課', stage, getTomorrowDate_());
@@ -11372,6 +12259,7 @@ function runCourseClosureScheduler() {
   result.monthlyDiscount = monthlyDiscountResult;
   result.practice = practiceReconciliationResult;
   return result;
+  });
 }
 
 function fetchCalendarPages_(token, dateFrom, dateTo) {
@@ -11425,7 +12313,7 @@ function syncCourseListForMonthlyLeaveOpening_(session) {
 
 function syncCourseListFromApiForSession_(admin) {
   assertCapabilitySession_(admin, 'course_admin');
-
+  return runMainObservedOperation_('course_sync', function() {
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) {
     throw new Error('請先在指令碼屬性設定 OMCEAN_API_TOKEN。');
@@ -11537,6 +12425,7 @@ function syncCourseListFromApiForSession_(admin) {
     dateTo: range.dateTo,
     courseAdjustmentCandidates: adjustmentCandidates.length
   };
+  });
 }
 
 function persistCourseAdjustmentCandidatesUnlocked_(sheet, candidates) {
@@ -13421,7 +14310,8 @@ function fetchPayrollAttendanceReport_(token, range) {
   throw new Error('OB 薪資報表超過單次同步分頁上限，未寫入薪資草稿。');
 }
 
-function mergePayrollAttendanceReport_(rawItems, reportRows, range, deductions) {
+function mergePayrollAttendanceReport_(rawItems, reportRows, range, deductions, identities) {
+  var identityMap = identities || { names: {}, conflicts: {} };
   var reportById = Object.create(null);
   var seen = Object.create(null);
   var noReplacementById = Object.create(null);
@@ -13445,6 +14335,7 @@ function mergePayrollAttendanceReport_(rawItems, reportRows, range, deductions) 
           !cleanText_(noShowPeople[0].id || noShowPeople[0].instructorId)) throw new Error('No Show 原課程老師資料缺漏或有多位老師，已停止同步。');
       var cancelledCourse = normalizePayrollCalendarItem_(Object.assign({}, raw, { cancelled: false }));
       if (!cancelledCourse || seen[cancelledCourse.calendarId]) throw new Error('No Show 原課程資料不完整或重複，已停止同步。');
+      applyMainPayrollIdentities_([cancelledCourse], identityMap);
       applyPayrollNoShows_([cancelledCourse], [noReplacement]);
       seen[cancelledCourse.calendarId] = true;
       return;
@@ -13452,6 +14343,7 @@ function mergePayrollAttendanceReport_(rawItems, reportRows, range, deductions) 
     if (raw && raw.cancelled === true) return;
     var course = normalizePayrollCalendarItem_(raw);
     if (!course) throw new Error('OB 第 ' + (index + 1) + ' 筆薪資課程資料不完整，已停止同步。');
+    applyMainPayrollIdentities_([course], identityMap);
     if (!isDateWithinApiWindow_(course.date, range.dateFrom, range.calendarDateTo)) return;
     if (seen[course.calendarId]) throw new Error('OB 課表課程編號重複：' + course.calendarId + '，已停止同步。');
     seen[course.calendarId] = true;
@@ -13500,17 +14392,18 @@ function mergePayrollAttendanceReport_(rawItems, reportRows, range, deductions) 
 function syncPayrollMonth_(session, monthValue) {
   assertCapabilitySession_(session, 'payroll_admin');
   var range = getPayrollMonthRange_(monthValue);
-  var initialDeductions;
+  var initialDeductions, initialIdentities;
   var initialState = withScriptLock_(function() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     initialDeductions = getPayrollDeductions_(ss, range.month);
+    initialIdentities = getMainTeacherIdentityMap_(ss);
     return getPayrollSyncState_(ss, range.month);
   });
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) throw new Error('請先在指令碼屬性設定 OMCEAN_API_TOKEN。');
   var rawItems = fetchCalendarPages_(token, range.dateFrom, range.dateTo);
   var useReport = range.month >= '2026-11';
-  var reportCourses = useReport ? mergePayrollAttendanceReport_(rawItems, fetchPayrollAttendanceReport_(token, range), range, initialDeductions) : null;
+  var reportCourses = useReport ? mergePayrollAttendanceReport_(rawItems, fetchPayrollAttendanceReport_(token, range), range, initialDeductions, initialIdentities) : null;
   if (useReport && !reportCourses.length && !initialDeductions.some(function(item) {
     return item.status === '有效' && item.event && item.event.input.mode === 'noReplacement';
   })) throw new Error('該月份沒有取得有效課程，未寫入薪資草稿。');
@@ -13518,6 +14411,9 @@ function syncPayrollMonth_(session, monthValue) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (getPayrollSyncState_(ss, range.month) !== initialState) {
       throw new Error('同步期間薪資資料已有變動，未建立新草稿；請重新查詢結算後再決定。');
+    }
+    if (JSON.stringify(getMainTeacherIdentityMap_(ss)) !== JSON.stringify(initialIdentities)) {
+      throw new Error('同步期間老師身分對照已變動，未建立新草稿；請重新查詢。');
     }
     ensurePayrollStructureUnlocked_(ss);
     var sourceMap = useReport ? null : getPayrollSourceMapUnlocked_(ss, range.month);
@@ -13531,6 +14427,7 @@ function syncPayrollMonth_(session, monthValue) {
       seen[item.calendarId] = true;
       normalized.push(mergePayrollSource_(item, sourceMap));
     });
+    normalized = applyMainPayrollIdentities_(normalized, initialIdentities);
     normalized = applyPayrollNoShows_(normalized, initialDeductions);
     if (!normalized.length) throw new Error('該月份沒有取得有效課程，未寫入薪資草稿。');
     var rules = getPayrollRulesUnlocked_(ss);
@@ -13613,6 +14510,7 @@ function fetchPayrollNoShowCourse_(calendarId) {
   var copy = Object.assign({}, raw, { cancelled: false });
   var course = normalizePayrollCalendarItem_(copy);
   if (!course) throw new Error('No Show 課程資料不完整。');
+  if (typeof SpreadsheetApp !== 'undefined') applyMainPayrollIdentities_([course], getMainTeacherIdentityMap_(SpreadsheetApp.getActiveSpreadsheet()));
   course.sourceCancelled = raw.cancelled === true;
   return course;
 }
@@ -13631,6 +14529,7 @@ function getPayrollNoShowCourses_(session, monthValue, dateValue) {
     if (course) course.sourceCancelled = raw.cancelled === true;
     return course;
   }).filter(function(course) { return course && course.date === date; }).map(function(course) {
+    if (typeof SpreadsheetApp !== 'undefined') applyMainPayrollIdentities_([course], getMainTeacherIdentityMap_(SpreadsheetApp.getActiveSpreadsheet()));
     return { calendarId: course.calendarId, courseName: course.courseName, date: course.date, time: course.time,
       instructors: course.instructors, sourceCancelled: course.sourceCancelled };
   }).sort(function(a, b) { return a.time.localeCompare(b.time) || a.courseName.localeCompare(b.courseName); });
@@ -14039,6 +14938,16 @@ function writePayrollDraftUnlocked_(spreadsheet, version, now, courses, draft) {
   }
 }
 
+function getMainPayrollDraftSourceError_(spreadsheet, month, version) {
+  var rows = readMainOptionalRows_(spreadsheet, SHEETS.PAYROLL_SNAPSHOT, SHEET_HEADERS.PAYROLL_SNAPSHOT)
+    .filter(function(row) { return normalizePayrollMonthValue_(row[1]) === month; });
+  var latest = rows.length ? cleanText_(rows[rows.length - 1][0]) : '';
+  if (latest && latest !== version && rows.some(function(row) {
+    return cleanText_(row[0]) === latest && cleanText_(row[14]).indexOf('錯誤：') === 0;
+  })) return '最新一次試算尚未完成，不能發布先前的舊草稿；請補齊來源資料後重新同步並試算。';
+  return '';
+}
+
 function publishPayroll_(session, monthValue, versionValue) {
   var actor = assertCapabilitySession_(session, 'payroll_admin');
   var month = getPayrollMonthRange_(monthValue).month;
@@ -14069,7 +14978,7 @@ function publishPayroll_(session, monthValue, versionValue) {
       }
     });
     if (!summaryRows.length || !lineRows.length) throw new Error('找不到可發布的薪資草稿，或此版本已發布。');
-    var deductionError = getPayrollDeductionDraftError_(ss, month, version);
+    var deductionError = getMainPayrollDraftSourceError_(ss, month, version) || getPayrollDeductionDraftError_(ss, month, version);
     if (deductionError) throw new Error(deductionError);
     var now = Utilities.formatDate(new Date(), getTimeZone_(), 'yyyy-MM-dd HH:mm:ss');
     summaryRows.forEach(function(item) {
@@ -14542,8 +15451,25 @@ function getPayrollAdminDashboard_(session, monthValue) {
     month: month,
     version: version,
     noShowEditable: noShowEditable,
+    dataStatus: buildMainDataStatus_(snapshotRows, 13, 'payroll_snapshot'),
+    ruleCatalogue: {
+      month: month,
+      rules: getPayrollRulesUnlocked_(ss).map(normalizePayrollRule_).map(function(rule) {
+        rule.appliesThisMonth = (!rule.effectiveMonth || rule.effectiveMonth <= month) && (!rule.throughMonth || rule.throughMonth >= month);
+        return rule;
+      }),
+      policies: ['學員自主練習、場地租借不計鐘點費。',
+        '特別課單一老師按收入 60%；雪莉與一位合作老師為 60%／40%；無雪莉的兩位老師各分收入 30%。',
+        '一般課先依老師專屬薪項（課程關鍵字較長者優先），再依預設人數階梯。',
+        '鐘點費小計滿 15,000／20,000／30,000 的獎金比例為 ' +
+          [15000,20000,30000].map(function(amount) {return calculateBonusRate_(amount)*100+'%';}).join('／') + '；未達 15,000 為 0%。',
+        'No Show 原老師該堂不計薪，另依已登記事件扣款；不代替學生退點或補點。',
+        '薪項生效／截止月份均包含該月；發布、人工調整及確認權限維持原規則。']
+    },
+    comparison: buildPayrollVersionDiff_(month, version,
+      lineSheet.getDataRange().getValues().slice(1), summaryRows),
     deductionDraftError: version && summaries.every(function(item) { return item.status === CONFIG.PAYROLL_DRAFT_STATUS; })
-      ? getPayrollDeductionDraftError_(ss, month, version) : '',
+      ? getMainPayrollDraftSourceError_(ss, month, version) || getPayrollDeductionDraftError_(ss, month, version) : '',
     summaries: summaries,
     deductions: getPayrollDeductions_(ss, month),
     deductionTeachers: ss.getSheetByName(SHEETS.ACCOUNTS) ? getActiveAccountTeacherNames_() : [],
@@ -21897,7 +22823,9 @@ function getCourseClosureDashboard_(session) {
     currentTime: manualAvailability.currentTime,
     manualStageAvailability: manualAvailability.stages,
     unclaimedCandidates: getUnclaimedSubstituteClosureCandidates_(session),
-    recentLogs: logs
+    recentLogs: logs,
+    ruleCatalogue: getMainRuleCatalogue_(),
+    assessment: getCourseClosureAssessment_()
   };
 }
 
@@ -22008,6 +22936,7 @@ function getAdminDashboard_(session) {
 
     return {
       paused: areClaimsPaused_(),
+      dataStatus: buildMainDataStatus_(courseRows, 8, 'course_snapshot'),
       leavePaused: areLeavesPaused_(),
       teachers: teachers,
       pendingInvitations: leaves.filter(function(item, index) {
@@ -22061,6 +22990,7 @@ function getAdminDashboard_(session) {
           item.verificationStatus === '已核對';
       })),
       courseClosure: getCourseClosureDashboard_(session),
+      operations: getMainOperationsDashboardSafely_(session, ss, courseRows),
       monthlyDiscount: getMonthlyDiscountDashboardUnlocked_(ss),
       courseAdjustments: getPendingCourseAdjustments_(session),
       replacementOptions: replacementOptions

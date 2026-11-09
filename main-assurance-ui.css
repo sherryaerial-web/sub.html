@@ -1,0 +1,56 @@
+.main-data-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; min-width: 0; padding: 10px 0; margin-bottom: 10px; border-block: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.main-data-status strong { color: var(--ink); font-size: 12px; }
+.main-data-status.is-warning { border-left: 3px solid var(--amber-700); padding-left: 10px; }
+.main-source-warning { flex-basis: 100%; color: var(--amber-700); }
+.main-disclosure { min-width: 0; margin: 0 0 12px; border-block: 1px solid var(--line); }
+.main-disclosure > summary { padding: 12px 4px; color: var(--ink); font-size: 13px; font-weight: 700; cursor: pointer; overflow-wrap: anywhere; }
+.main-disclosure-body { min-width: 0; padding: 0 4px 14px; }
+.main-disclosure h4 { margin: 16px 0 8px; font-size: 12px; }
+.main-meta { min-width: 0; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.main-state { margin: 8px 0; padding: 10px 0; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.main-state.is-error { color: var(--danger); }
+.main-table-scroll { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; margin: 12px 0; overscroll-behavior-x: contain; }
+.main-table { width: 100%; min-width: 650px; border-collapse: collapse; color: var(--ink); font-size: 12px; }
+.main-table th, .main-table td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; white-space: pre-line; overflow-wrap: anywhere; min-width: 88px; max-width: 300px; }
+.main-table th { background: var(--soft); color: var(--muted); font-weight: 700; }
+.main-table .main-field { min-width: 190px; }
+.main-table .admin-item-actions { min-width: 190px; }
+.main-operations, .main-section { min-width: 0; max-width: 100%; }
+.main-section { padding: 18px 0; border-bottom: 1px solid var(--line); }
+.main-section:first-child { padding-top: 0; }
+.main-section h3 { margin: 0 0 12px; font-size: 15px; line-height: 1.5; }
+.main-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.main-section-head h3 { margin-bottom: 0; }
+.main-search { display: flex; align-items: flex-end; gap: 10px; margin-top: 10px; }
+.main-search .main-field { flex: 1; max-width: 500px; }
+.main-field { display: grid; gap: 6px; min-width: 0; margin-top: 10px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.main-field input, .main-field select, .main-field textarea { width: 100%; max-width: 100%; min-width: 0; }
+.main-field textarea { resize: vertical; }
+.main-case { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.main-case:last-child { border-bottom: 0; }
+.main-case header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.main-case h4 { min-width: 0; margin: 0; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.main-case .main-field { max-width: 620px; }
+.main-tasks { list-style: none; margin: 0; padding: 0; }
+.main-tasks li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.main-tasks strong { font-size: 13px; overflow-wrap: anywhere; }
+.main-history { margin: 14px 0 0; padding: 0 0 0 20px; }
+.main-history li { padding: 0 0 14px 6px; }
+.main-history strong { display: block; margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.main-history-detail { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; font-size: 12px; line-height: 1.7; }
+.main-operations .compact-button { min-height: 38px; white-space: normal; }
+.main-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; padding: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.main-pagination span { min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.main-page-button { flex: 0 0 36px; width: 36px; min-height: 36px; justify-content: center; padding: 6px; }
+.main-health h4 { margin: 18px 0 8px; font-size: 13px; }
+.main-backup { padding: 0 0 10px; }
+.main-backup > strong { font-size: 13px; overflow-wrap: anywhere; }
+.practice-admin-list > [data-main-list] { display: grid; gap: 10px; min-width: 0; }
+@media (max-width: 600px) {
+  .main-search { flex-wrap: wrap; align-items: stretch; }
+  .main-search .main-field { flex-basis: 100%; }
+  .main-search > button { width: 100%; }
+  .main-tasks li { gap: 8px; }
+  .main-tasks .compact-button { padding: 8px; }
+  .main-case .admin-item-actions { display: flex; flex-wrap: wrap; }
+}

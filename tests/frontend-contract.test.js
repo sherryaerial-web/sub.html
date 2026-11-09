@@ -4382,7 +4382,7 @@ test('payroll review keeps the adjustment button while finalized payroll stays l
   assert.match(cards[0], /data-status="有異議"/);
   assert.doesNotMatch(cards[1], /data-admin-action="adjust-payroll"/);
   const button = { dataset: { adminAction: 'adjust-payroll', teacherName: '老師0', version: 'oct', adjustment: '100', status: '有異議' } };
-  await getElement('admin-tab-content').__listeners.get('click')[0]({ target: {
+  for (const listener of getElement('admin-tab-content').__listeners.get('click')) await listener({ target: {
     closest(selector) { return selector === '[data-admin-action]' ? button : null; },
   } });
   assert.equal(getElement('request-dialog').open, true);
@@ -4443,7 +4443,7 @@ test('payroll review guidance keeps zero-dollar salaries exempt from confirmatio
   context.fetchPayrollAdminDashboard = async () => {};
   getElement('payroll-admin-month').value = '2026-10';
   const button = { dataset: { adminAction: 'adjust-payroll', teacherName: 'Sue', version: 'oct', status: '有異議' } };
-  await getElement('admin-tab-content').__listeners.get('click')[0]({ target: {
+  for (const listener of getElement('admin-tab-content').__listeners.get('click')) await listener({ target: {
     closest(selector) { return selector === '[data-admin-action]' ? button : null; },
   } });
   assert.match(getElement('request-dialog-copy').textContent, /零元.*免確認/);
@@ -4795,7 +4795,8 @@ test('uses lucide icons and accessible icon controls throughout navigation', () 
 
 test('keeps the capability-scoped admin tabs accessible and exposes their queue counts', () => {
   const adminTabs = html.match(/<div class=["']admin-tabs["'][^>]*>[\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
-  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 17);
+  assert.equal((adminTabs.match(/role=["']tab["']/g) || []).length, 18);
+  assert.match(adminTabs, /data-admin-tab="mainOperations"[^>]*data-capability="course_admin"/);
   assert.match(adminTabs, /data-admin-tab=["']monthlyDiscount["']/);
   assert.match(html, /aria-selected=["']true["']/);
   assert.match(html, /class=["']admin-tab-count["']/);
@@ -4976,7 +4977,7 @@ test('admin workspace groups legacy tools behind a task-first home without chang
 
   const legacyTabMarkup = html.match(/<div[^>]*id=["']admin-subtabs["'][\s\S]*?<div id=["']admin-tab-content["']/)?.[0] || '';
   const legacyTabs = legacyTabMarkup.match(/data-admin-tab=["'][^"']+["']/g) || [];
-  assert.equal(new Set(legacyTabs).size, 17);
+  assert.equal(new Set(legacyTabs).size, 18);
   ['admin-sync', 'admin-reconcile', 'admin-leave-pause', 'admin-export-all', 'admin-act-as'].forEach((id) => {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   });

@@ -144,6 +144,104 @@ for (const source of ['scheduled reminder', 'operation notification']) {
   });
 }
 
+test('main exception tracking requires ownership, current version and resolved source before closure', () => {
+  const headers = Array.from(loadBackend().SHEET_HEADERS.LEAVES);
+  const leave = Array(headers.length).fill('');
+  Object.assign(leave, { 1:'甲',2:'2026/11/10',3:'12:00',4:'空環',5:'已領取',6:'乙',9:'case-uuid',10:'123',15:'核對異常',17:'老師不符' });
+  const sheet=createSheetFixture('請假代課紀錄',[headers,leave]);
+  const audit=createSheetFixture('操作紀錄',[['操作時間','操作者','操作類型','目標編號','舊狀態','新狀態','原因']]);
+  const ss=createSpreadsheetFixture([sheet,audit]);const b=loadBackendWithSpreadsheet(ss);
+  const actor={teacherName:'冠蓉',role:'管理員',managementCapabilities:['course_admin']};
+  const key='leave:case-uuid';
+  const first=b.updateMainException_(actor,{key,action:'claim',note:'開始核對',followAt:'2026-11-10T10:00',expectedVersion:0});
+  assert.equal(first.version,1);assert.equal(first.owner,'冠蓉');
+  assert.throws(()=>b.updateMainException_({...actor,teacherName:'Tako'},{key,action:'claim',expectedVersion:1}),/認領/);
+  assert.throws(()=>b.updateMainException_(actor,{key,action:'save',expectedVersion:0}),/更新/);
+  assert.throws(()=>b.updateMainException_(actor,{key,action:'save',note:'=IMPORTXML("https://example.test","x")',expectedVersion:1}),/公式/);
+  assert.throws(()=>b.updateMainException_(actor,{key,action:'save',followAt:'2026-02-31T10:00',expectedVersion:1}),/時間/);
+  assert.throws(()=>b.updateMainException_(actor,{key,action:'close',note:'完成',expectedVersion:1}),/尚未完成核對/);
+  assert.throws(()=>b.updateMainException_({...actor,readOnly:true},{key,action:'save',expectedVersion:1}),/唯讀/);
+  sheet.values[1][15]='已核對';
+  b.getScriptProperties_=()=>({getProperty:()=> 'fixture-token'});
+  b.fetchCalendarDetail_=()=>({calendarId:'123',date:'2026/11/10',time:'12:00',courseName:'不同課程',teacherName:'乙'});
+  assert.throws(()=>b.updateMainException_(actor,{key,action:'close',note:'完成',expectedVersion:1}),/OB/);
+  b.fetchCalendarDetail_=()=>({calendarId:'123',date:'2026/11/10',time:'12:00',courseName:'空環',teacherName:'乙'});
+  const closed=b.updateMainException_(actor,{key,action:'close',note:'OB 已核對一致',expectedVersion:1});
+  assert.equal(closed.status,'已結案');assert.equal(closed.version,2);assert.equal(audit.values.length,3);
+  assert.equal(sheet.values[1][5],'已領取');
+  const tracker=ss.getSheetByName('營運異常追蹤'), saved=JSON.stringify(tracker.values);
+  b.appendAuditEventsUnlocked_=()=>{throw Error('audit down');};
+  assert.throws(()=>b.updateMainException_(actor,{key,action:'reopen',note:'續查',expectedVersion:2}),/audit down/);
+  assert.equal(JSON.stringify(tracker.values),saved);
+  assert.throws(()=>b.updateMainException_({teacherName:'甲',role:'老師',managementCapabilities:[]},{key,action:'claim',expectedVersion:2}),/權限/);
+});
+
+test('main teacher ID links are live verified, versioned, auditable and never rename old course rows', () => {
+  const courseSheet=createSheetFixture('CourseList',[EXPECTED_COURSE_HEADERS,['2026/11/10','12:00','空環','小美','123','45','88','否','2026-11-09 12:00:00']]);
+  const audit=createSheetFixture('操作紀錄',[['操作時間','操作者','操作類型','目標編號','舊狀態','新狀態','原因']]);
+  const ss=createSpreadsheetFixture([courseSheet,audit]);const services=createAuthServices();
+  services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN','fixture-token');
+  const b=loadBackend({...services,SpreadsheetApp:{getActiveSpreadsheet:()=>ss}});
+  b.getObApiJson_=()=>({id:88,firstName:'小美'});b.getActiveAccountTeacherNames_=()=>['Josty Lin'];
+  const actor={teacherName:'冠蓉',role:'管理員',managementCapabilities:['course_admin']};
+  const result=b.saveMainTeacherIdentity_(actor,{instructorId:'88',teacherName:'Josty Lin',active:true,expectedVersion:0});
+  assert.equal(result.version,1);assert.equal(b.getMainTeacherIdentityMap_(ss).names['88'],'Josty Lin');
+  assert.equal(courseSheet.values[1][3],'小美');
+  assert.throws(()=>b.saveMainTeacherIdentity_(actor,{instructorId:'88',teacherName:'Josty Lin',active:true,expectedVersion:0}),/已更新/);
+  b.getObApiJson_=()=>({id:99,name:'不同 ID'});
+  assert.throws(()=>b.saveMainTeacherIdentity_(actor,{instructorId:'88',teacherName:'Josty Lin',active:true,expectedVersion:1}),/未確認/);
+  b.getObApiJson_=()=>({id:88,name:'小美'});
+  assert.throws(()=>b.saveMainTeacherIdentity_(actor,{instructorId:'88',teacherName:'不存在',active:true,expectedVersion:1}),/在職/);
+  const disabled=b.saveMainTeacherIdentity_(actor,{instructorId:'88',teacherName:'',active:false,expectedVersion:1});
+  assert.equal(disabled.status,'停用');assert.equal(b.getMainTeacherIdentityMap_(ss).names['88'],undefined);
+  assert.equal(audit.values.length,3);
+});
+
+test('failed latest payroll attempt cannot make an older complete draft look publishable',()=>{
+  const b=loadBackend();
+  const ss=createSpreadsheetFixture([createSheetFixture('薪資同步快照',[Array.from(b.SHEET_HEADERS.PAYROLL_SNAPSHOT),
+    ['v1','2026-11','123','','','','','','','','','','','2026-11-09 10:00:00','完成'],
+    ['v2','2026-11','123','','','','','','','','','','','2026-11-09 11:00:00','錯誤：出席人數缺漏']])]);
+  assert.match(b.getMainPayrollDraftSourceError_(ss,'2026-11','v1'),/最新.*試算.*未完成/);
+  assert.equal(b.getMainPayrollDraftSourceError_(ss,'2026-10','old'),'');
+});
+
+test('terminal exception closure rechecks restored cancellations and accepts verified cancelled delay occupancy',()=>{
+  for (const delay of [false,true]) {
+    const headers=Array.from(loadBackend().SHEET_HEADERS.LEAVES),row=Array(headers.length).fill('');
+    Object.assign(row,{1:'甲',2:'2026/11/10',3:'12:00',4:'空環',5:delay?'延後占用':'已取消',6:'乙',9:'terminal',10:'123',
+      15:delay?'已關閉':'已回復核對',18:delay?'延後占用／OB 已關閉':'取消後已回復 OB',25:delay?'':'12:30'});
+    const ss=createSpreadsheetFixture([createSheetFixture('請假代課紀錄',[headers,row]),
+      createSheetFixture('操作紀錄',[['操作時間','操作者','操作類型','目標編號','舊狀態','新狀態','原因']])]);
+    const b=loadBackendWithSpreadsheet(ss),actor={teacherName:'冠蓉',role:'管理員',managementCapabilities:['course_admin']};
+    b.getScriptProperties_=()=>({getProperty:()=> 'fixture-token'});
+    b.updateMainException_(actor,{key:'leave:terminal',action:'claim',expectedVersion:0});
+    let reads=0;
+    b.fetchCalendarDetail_=()=>{reads++;throw Error('OB HTTP 503');};
+    assert.throws(()=>b.updateMainException_(actor,{key:'leave:terminal',action:'close',note:'完成',expectedVersion:1}),/OB/);
+    assert.equal(reads,2);
+    b.fetchCalendarDetail_=()=>({calendarId:'123',date:'2026/11/10',time:'12:00',courseName:'空環',teacherName:'甲',cancelled:delay});
+    assert.equal(b.updateMainException_(actor,{key:'leave:terminal',action:'close',note:'終態核對完成',expectedVersion:1}).status,'已結案');
+  }
+});
+
+test('cancelled special-case closure verifies restored source slots as well as the cancelled replacement',()=>{
+  const b0=loadBackend(),row=Array(b0.SHEET_HEADERS.SPECIAL_COURSE_REQUESTS.length).fill('');
+  Object.assign(row,{1:'special-case',2:'乙',3:'2026/11/10',7:'12:00',8:'特別課',14:'已取消',15:'已回復核對',18:'999',
+    5:JSON.stringify([{sourceType:'own',calendarId:'123',date:'2026/11/10',originalTime:'11:00',courseName:'空環',originalTeacher:'甲'}])});
+  const ss=createSpreadsheetFixture([createSheetFixture('特別課安排',[Array.from(b0.SHEET_HEADERS.SPECIAL_COURSE_REQUESTS),row]),
+    createSheetFixture('操作紀錄',[['操作時間','操作者','操作類型','目標編號','舊狀態','新狀態','原因']])]);
+  const b=loadBackendWithSpreadsheet(ss),actor={teacherName:'冠蓉',role:'管理員',managementCapabilities:['course_admin']};
+  b.getScriptProperties_=()=>({getProperty:()=> 'fixture-token'});
+  b.updateMainException_(actor,{key:'special:special-case',action:'claim',expectedVersion:0});
+  let restored=false;
+  b.fetchCalendarDetail_=(_token,id)=>id==='999'?{calendarId:id,date:'2026/11/10',cancelled:true}:
+    {calendarId:id,date:'2026/11/10',time:'11:00',courseName:'空環',teacherName:restored?'甲':'錯誤老師',cancelled:false};
+  assert.throws(()=>b.updateMainException_(actor,{key:'special:special-case',action:'close',note:'完成',expectedVersion:1}),/OB/);
+  restored=true;
+  assert.equal(b.updateMainException_(actor,{key:'special:special-case',action:'close',note:'原課已回復，特別課已取消',expectedVersion:1}).status,'已結案');
+});
+
 function loadBackend(overrides = {}) {
   const file = path.join(__dirname, '..', 'Code.gs');
   const source = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
@@ -1942,10 +2040,11 @@ test('course administrators can manually notify selected active teachers and the
   assert.equal(result.accepted, true);
   assert.deepEqual(deliveries[0].names, ['Jina']);
   assert.equal(deliveries[0].message.url, 'https://sherryaerial-web.github.io/sub.html/');
-  assert.equal(auditSheet.values.length, 2);
-  assert.equal(auditSheet.values[1][1], '冠蓉');
-  assert.equal(auditSheet.values[1][2], '推播通知：手動');
-  assert.equal(auditSheet.values[1][5], '推播已建立');
+  assert.equal(auditSheet.values.length, 3);
+  const manualAudit = auditSheet.values.find(row => row[2] === '推播通知：手動');
+  assert.equal(manualAudit[1], '冠蓉');
+  assert.equal(manualAudit[5], '推播已建立');
+  assert.ok(auditSheet.values.some(row => row[2] === '通知傳送結果'));
 });
 
 test('managed notifications can open the relevant admin tool', () => {
@@ -8424,8 +8523,9 @@ test('admin-approved withdrawal immediately reopens the course without OB reconc
   assert.equal(row[15], '');
   assert.equal(row[18], '');
   assert.equal(row[19], '');
-  assert.match(auditSheet.values.at(-1)[6], /原代課老師：老師乙/);
-  assert.equal(auditSheet.values.at(-1)[5], '已重新開放');
+  const withdrawalAudit = auditSheet.values.findLast(row => row[5] === '已重新開放');
+  assert.match(withdrawalAudit[6], /原代課老師：老師乙/);
+  assert.equal(withdrawalAudit[5], '已重新開放');
   assert.deepEqual(JSON.parse(JSON.stringify(pushes[0].names)), ['老師乙']);
   assert.match(pushes[0].message.content, /已重新開放/);
   assert.doesNotMatch(pushes[0].message.content, /OB 回復後/);
@@ -11414,6 +11514,21 @@ test('No Show registration then cancellation still requires a fresh trial before
   f.backend.publishPayroll_(f.adminSession, '2026-11', 'after-cancel');
 });
 
+test('verified teacher IDs apply before no-replacement No Show report preflight and full monthly sync', () => {
+  const f=createPayrollNoShowFixture();
+  f.input={...f.input,mode:'noReplacement',replacementTeacher:'',refundPoints:8,extraPoints:8};
+  const saved=f.record(), range=f.backend.getPayrollMonthRange_('2026-11');
+  f.raw.instructors=[{id:1,firstName:'OB 新別名'}];
+  const identities={names:{'1':'Jina'},conflicts:{}};
+  assert.doesNotThrow(()=>f.backend.mergePayrollAttendanceReport_([f.raw],[],range,[saved],identities));
+  f.backend.getMainTeacherIdentityMap_=()=>identities;
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN','fixture-token');
+  f.backend.fetchCalendarPages_=()=>[f.raw];f.backend.fetchPayrollAttendanceReport_=()=>[];
+  const result=f.backend.syncPayrollMonth_(f.adminSession,'2026-11');
+  assert.equal(result.publishable,true);
+  assert.ok(f.spreadsheet.getSheetByName('薪資明細').values.some(row=>row[4]==='Jina'&&row[13]===0));
+});
+
 test('No Show no-replacement report exceptions apply only to confirmed exact ids, not other incomplete attendance', () => {
   const f = createPayrollNoShowFixture();
   f.input = { ...f.input, mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 8 };
@@ -12806,7 +12921,7 @@ test('closure calendar detail normalization keeps live attendance, points and di
 
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
     calendarId: '987', classId: '42', date: '2026/08/24', time: '12:30',
-    courseName: 'A－空環 Lv.1', teacherName: 'Jina', enrollmentCount: 2,
+    courseName: 'A－空環 Lv.1', teacherName: 'Jina', teacherId: '7', enrollmentCount: 2,
     points: 1, cancelled: false,
   });
 });

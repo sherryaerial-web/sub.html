@@ -1,0 +1,160 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import vm from 'node:vm';
+import { bootWorkspaceFixture } from './fixtures/workspace-navigation-fixture.mjs';
+
+const require = createRequire(import.meta.url);
+const { chromium } = require(path.join(process.env.CODEX_NODE_MODULES || '/Users/ivy/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules', 'playwright'));
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const output = process.env.WORKSPACE_PREVIEW_DIR || '/Users/ivy/Documents/2026 B 周年慶/output/workspace-navigation-integrated-local-20261110';
+await fs.mkdir(output, { recursive: true });
+let html = (await fs.readFile(path.join(repo, 'index.html'), 'utf8')).replace(/\n    initialize\(\);/, '');
+const inlineScript = source => `<script>${source.replaceAll('</script', '<\\/script')}</script>`;
+const scriptTags = [...html.matchAll(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/g)];
+for (const [tag, src] of scriptTags) {
+  const name = src.split('?')[0];
+  const source = name.includes('OneSignalSDK') ? '' : await fs.readFile(name.startsWith('https://unpkg.com/lucide') ? '/private/tmp/sherry-lucide-0.468.0.min.js' : path.join(repo, name), 'utf8');
+  html = html.replace(tag, () => inlineScript(source));
+}
+for (const [tag, href] of [...html.matchAll(/<link\b[^>]*href="([^"]+)"[^>]*>/g)]) {
+  const filename = href.split('?')[0];
+  const css = filename.endsWith('.css') && !filename.startsWith('https:') ? await fs.readFile(path.join(repo, filename), 'utf8') : '';
+  html = html.replace(tag, () => css ? `<style>${css}</style>` : '');
+}
+const logo = `data:image/png;base64,${(await fs.readFile(path.join(repo, 'assets/app-icon-180.png'))).toString('base64')}`;
+html = html.replaceAll('./assets/app-icon-180.png', logo)
+  .replace('<head>', '<head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data:; connect-src \'none\'; form-action \'none\'; base-uri \'none\'">')
+  .replace(/<\/body>\s*<\/html>\s*$/, () => `${inlineScript(`(${bootWorkspaceFixture.toString()})();`)}</body></html>`);
+const file = path.join(output, 'preview.html');
+await fs.writeFile(file, html);
+const browser = await chromium.launch({ headless: true, executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
+const errors = [], requests = [];
+let scenes = 0;
+try {
+  const page = await browser.newPage({ locale: 'zh-TW', timezoneId: 'Asia/Taipei' });
+  page.setDefaultTimeout(5000);
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (/^https?:/.test(request.url())) requests.push(request.url()); });
+  await page.route(/^https?:/, route => route.abort());
+  await page.goto(pathToFileURL(file).href);
+  if (errors.length) {
+    const scripts = await page.locator('script').allTextContents();
+    scripts.forEach((source, index) => { try { new vm.Script(source, { filename: `preview-script-${index}` }); } catch (error) { console.error(error.stack); } });
+    throw Error(`Preview startup: ${errors.join('; ')}`);
+  }
+  await page.waitForSelector('#app-shell:not([hidden])');
+  const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  async function checkLayout(label) {
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await settle();
+    const overflow = await page.evaluate(() => {
+      if (document.documentElement.scrollWidth > innerWidth + 1) return [{ page: document.documentElement.scrollWidth, viewport: innerWidth }];
+      return Array.from(document.querySelectorAll('.view.active input, .view.active select, .view.active textarea, dialog[open] input, dialog[open] select')).filter(element => element.getClientRects().length && element.type !== 'hidden').flatMap(element => {
+        const rect = element.getBoundingClientRect();
+        const scrollTable = element.closest('.main-table-scroll');
+        return !scrollTable && (rect.left < -1 || rect.right > innerWidth + 1) ? [{ id: element.id, left: rect.left, right: rect.right }] : [];
+      });
+    });
+    assert.deepEqual(overflow, [], label); scenes++;
+  }
+  const tabs = await page.evaluate(() => Object.keys(ADMIN_TAB_SECTIONS));
+  assert.equal(tabs.length, 18);
+  for (const [name, width, height] of [['desktop', 1366, 900], ['mobile', 390, 844], ['narrow', 320, 740]]) {
+    await page.setViewportSize({ width, height });
+    await page.evaluate(() => { switchView('view-admin'); openAdminSection('dashboard'); });
+    await checkLayout(`${name} dashboard`);
+    await page.screenshot({ path: path.join(output, `${name}-admin.png`) });
+    for (const tab of tabs) {
+      await page.evaluate(tab => openAdminTab(tab), tab);
+      await checkLayout(`${name} ${tab}`);
+      assert.equal(await page.evaluate(() => activeAdminSection), await page.evaluate(tab => ADMIN_TAB_SECTIONS[tab], tab));
+    }
+    await page.evaluate(() => openAdminSection('courses'));
+    await page.locator('[data-admin-course-group="changes"]').click();
+    await page.locator('#admin-status-select').selectOption('closureManagement');
+    assert.equal(await page.evaluate(() => activeAdminTab), 'closureManagement');
+    assert.match(await page.locator('#admin-status-select option[value="delayClosures"]').innerText(), /代關課程（0）/);
+    await checkLayout(`${name} closure via status select`);
+    await page.screenshot({ path: path.join(output, `${name}-courses.png`) });
+    await page.evaluate(() => openAdminTab('practice'));
+    await page.screenshot({ path: path.join(output, `${name}-practice.png`) });
+    await page.locator('.practice-booking-details > summary').first().click();
+    await checkLayout(`${name} practice editor`);
+    await page.screenshot({ path: path.join(output, `${name}-practice-editor.png`) });
+    await page.evaluate(() => switchView('view-leave'));
+    await page.locator('[data-date="2026/11/11"]').check();
+    await page.locator('[data-date="2026/11/13"]').check();
+    assert.equal(await page.locator('.leave-course-checkbox').count(), 3);
+    await page.locator('.leave-course-checkbox').nth(0).check();
+    await page.locator('.leave-course-checkbox').nth(2).check();
+    assert.match(await page.locator('#leave-confirmation-count').innerText(), /2 堂/);
+    assert.equal(await page.locator('#view-leave select, #view-leave textarea').count(), 0);
+    await checkLayout(`${name} original multi-date leave`);
+    await page.screenshot({ path: path.join(output, `${name}-leave.png`), fullPage: true });
+    await page.locator('#leave-submit').scrollIntoViewIfNeeded();
+    await settle();
+    await page.screenshot({ path: path.join(output, `${name}-leave-confirmation.png`) });
+    const leaveButton = await page.locator('#leave-submit').boundingBox();
+    assert.ok(leaveButton && leaveButton.y >= 0 && leaveButton.y + leaveButton.height <= height - (width <= 760 ? 65 : 0), `${name}: leave confirmation remains reachable above navigation`);
+    let confirmation = '';
+    page.once('dialog', async dialog => { confirmation = dialog.message(); await dialog.dismiss(); });
+    await page.locator('#leave-submit').click();
+    assert.match(confirmation, /2 堂/);
+    assert.equal(await page.locator('.leave-course-checkbox:checked').count(), 2);
+    await page.locator('#clear-leave-dates').click();
+    assert.equal(await page.locator('.leave-course-checkbox').count(), 0);
+    await page.locator('#select-all-visible-dates').click();
+    assert.equal(await page.locator('.leave-date-checkbox:checked').count(), 2);
+    await page.evaluate(() => switchView('view-home'));
+    await checkLayout(`${name} teacher home`);
+    await page.screenshot({ path: path.join(output, `${name}-teacher.png`) });
+    await page.evaluate(() => switchView('view-practice'));
+    await page.locator('#rental-new').click();
+    await page.waitForSelector('#rental-dialog[open]');
+    assert.equal(await page.locator('#rental-duration option').count(), 2);
+    await page.locator('#rental-recurring').check();
+    assert.equal(await page.locator('#rental-end-date-field').isVisible(), true);
+    await checkLayout(`${name} original rental form`);
+    await page.screenshot({ path: path.join(output, `${name}-rental.png`) });
+    await page.locator('#rental-dialog-cancel').click();
+  }
+  await page.evaluate(() => switchView('view-admin'));
+  await page.locator('#admin-mobile-more').click();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#admin-more-dialog').evaluate(element => element.open), false);
+  await page.waitForFunction(() => document.getElementById('admin-mobile-more').getAttribute('aria-expanded') === 'false');
+  assert.equal(await page.locator('#admin-mobile-more').getAttribute('aria-expanded'), 'false');
+  await page.locator('#admin-mobile-more').click();
+  await page.locator('#admin-more-dialog [data-admin-section="students"]').click();
+  assert.equal(await page.locator('#admin-more-dialog').evaluate(element => element.open), false);
+  assert.equal(await page.evaluate(() => activeAdminSection), 'students');
+  await page.locator('#inbox-button').click();
+  assert.equal(await page.locator('#app-shell').getAttribute('data-shell-mode'), 'admin');
+  assert.equal(await page.locator('#admin-mobile-tabbar').isVisible(), true);
+  for (const [capability, section, expected] of [['invoice_admin', 'finance', 'invoices'], ['payroll_admin', 'finance', 'payroll'], ['vvip_admin', 'students', 'vvip'], ['raffle_admin', 'students', 'raffle']]) {
+    await page.evaluate(({ capability, section }) => { authState.managementCapabilities = [capability]; switchView('view-admin'); openAdminSection(section); }, { capability, section });
+    assert.equal(await page.evaluate(() => activeAdminTab), expected);
+    assert.deepEqual(await page.locator('.admin-tab:not([hidden])').evaluateAll(elements => elements.map(element => element.dataset.adminTab)), [expected]);
+    assert.equal(await page.locator('#admin-subtabs').isVisible(), false);
+    await checkLayout(capability);
+  }
+  await page.evaluate(() => { authState.managementCapabilities = ['course_admin']; startActingAsTeacher('Tako'); });
+  assert.equal(await page.locator('#workspace-switcher').isVisible(), false);
+  assert.equal(await page.locator('#acting-banner').isVisible(), true);
+  await page.locator('#acting-stop').click();
+  assert.equal(await page.locator('#app-shell').getAttribute('data-shell-mode'), 'admin');
+  await page.evaluate(() => { authState.managementCapabilities = []; switchView('view-home'); });
+  assert.equal(await page.locator('#workspace-switcher').isVisible(), false);
+  assert.equal(await page.locator('#admin-mobile-tabbar').isVisible(), false);
+  assert.equal(await page.locator('#mobile-tabbar').isVisible(), true);
+  await settle();
+  assert.deepEqual(errors, [], 'No browser errors');
+  assert.deepEqual(requests, [], 'No external requests');
+  assert.deepEqual(await page.evaluate(() => offlineWrites), [], 'No mutation handlers were called');
+  const result = { scenes, widths: [1366, 390, 320], originalAdminTabs: tabs.length, browserErrors: errors, externalRequests: requests, formalWrites: 0 };
+  await fs.writeFile(path.join(output, 'verification.json'), JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result, null, 2));
+} finally { await browser.close(); }

@@ -9310,6 +9310,12 @@ function doPost(e) {
     }
 
     var handlers = {
+      getPersonalAppearance: function() {
+        return getPersonalAppearance_(session, parameters);
+      },
+      savePersonalAppearance: function() {
+        return savePersonalAppearance_(session, parameters);
+      },
       productionTaskApp: function() { return productionTaskAppRequest_(session, parameters); },
       getActivityPilotObPage: function() {
         return getActivityPilotObPage_(session, parameters);
@@ -9931,6 +9937,92 @@ function doPost(e) {
       message: error && error.message ? error.message : String(error)
     });
   }
+}
+
+// Personal preferences never use teacher-acting identity or business Sheets.
+function personalAppearanceDefault_() {
+  return { schemaVersion: 1, mode: 'preset', presetId: 'original', primary: '#786c64', secondary: '#eee0dc', revision: 0, updatedAt: '' };
+}
+
+function personalAppearanceValidate_(value) {
+  var keys = ['schemaVersion', 'mode', 'presetId', 'primary', 'secondary', 'revision', 'updatedAt'];
+  var palettes = { original: ['#786c64', '#eee0dc'], rose: ['#857377', '#e9dcdf'], sage: ['#717a70', '#dfe5dd'],
+    blue: ['#707c83', '#dfe5e8'], lilac: ['#7b7482', '#e5dfe9'], stone: ['#737675', '#e2e5e3'] };
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== keys.length ||
+      Object.keys(value).some(function(key) { return keys.indexOf(key) === -1; }) ||
+      value.schemaVersion !== 1 || ['preset', 'custom'].indexOf(value.mode) === -1 ||
+      typeof value.presetId !== 'string' || !Object.prototype.hasOwnProperty.call(palettes, value.presetId) ||
+      typeof value.primary !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.primary) ||
+      typeof value.secondary !== 'string' || !/^#[0-9a-f]{6}$/i.test(value.secondary) ||
+      !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.updatedAt !== 'string') return null;
+  if (value.revision === 0 ? value.updatedAt !== '' :
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.updatedAt) || !isFinite(Date.parse(value.updatedAt))) return null;
+  var primary = value.primary.toLowerCase(), secondary = value.secondary.toLowerCase();
+  if (value.mode === 'preset' && (primary !== palettes[value.presetId][0] || secondary !== palettes[value.presetId][1])) return null;
+  return { schemaVersion: 1, mode: value.mode, presetId: value.presetId, primary: primary, secondary: secondary,
+    revision: value.revision, updatedAt: value.updatedAt };
+}
+
+function personalAppearanceKey_(session) {
+  return 'PERSONAL_APPEARANCE_V1_' + bytesToHex_(Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256, session.teacherName, Utilities.Charset.UTF_8));
+}
+
+function personalAppearanceParametersValid_(parameters, save) {
+  var allowed = ['action', 'sessionToken', 'transport', 'clientOperationId'];
+  if (save) allowed = allowed.concat(['preference', 'expectedRevision']);
+  return !Object.keys(parameters).some(function(key) { return allowed.indexOf(key) === -1; });
+}
+
+function readPersonalAppearance_(properties, key) {
+  if (!properties) return { available: false, reason: 'storage_unavailable' };
+  var raw = properties.getProperty(key);
+  if (raw === null || raw === undefined) return { available: true, preference: personalAppearanceDefault_() };
+  if (typeof raw !== 'string' || raw.length > 1024) return { available: false, reason: 'corrupt' };
+  var preference;
+  try { preference = personalAppearanceValidate_(JSON.parse(raw)); } catch (error) { preference = null; }
+  return preference ? { available: true, preference: preference } : { available: false, reason: 'corrupt' };
+}
+
+function getPersonalAppearance_(session, parameters) {
+  if (!personalAppearanceParametersValid_(parameters, false)) return { available: false, reason: 'invalid_target' };
+  try { return readPersonalAppearance_(getScriptProperties_(), personalAppearanceKey_(session)); }
+  catch (error) { return { available: false, reason: 'storage_unavailable' }; }
+}
+
+function savePersonalAppearance_(session, parameters) {
+  if (!personalAppearanceParametersValid_(parameters, true) || session.impersonatedBy || session.readOnly) {
+    return { saved: false, reason: 'invalid_target' };
+  }
+  if (!parameters.clientOperationId) return { saved: false, reason: 'tracking_required' };
+  var preference;
+  try {
+    if (typeof parameters.preference !== 'string' || parameters.preference.length > 1024) return { saved: false, reason: 'invalid_preference' };
+    preference = personalAppearanceValidate_(JSON.parse(parameters.preference));
+  } catch (error) { return { saved: false, reason: 'invalid_preference' }; }
+  if (!preference) return { saved: false, reason: 'invalid_preference' };
+  var expected = parameters.expectedRevision;
+  if (typeof expected === 'string' && /^(0|[1-9][0-9]*)$/.test(expected)) expected = Number(expected);
+  if (!Number.isSafeInteger(expected) || expected < 0 || expected !== preference.revision) return { saved: false, reason: 'invalid_revision' };
+  return withScriptLock_(function() {
+    var properties = getScriptProperties_(), key = personalAppearanceKey_(session), current;
+    try { current = readPersonalAppearance_(properties, key); }
+    catch (error) { return { saved: false, reason: 'storage_unavailable' }; }
+    if (!current.available) return { saved: false, reason: current.reason };
+    var prior = current.preference;
+    var identical = ['mode', 'presetId', 'primary', 'secondary'].every(function(field) { return preference[field] === prior[field]; });
+    if (identical) return { saved: true, preference: prior };
+    if (expected !== prior.revision) return { saved: false, reason: 'conflict', current: prior };
+    if (prior.revision >= Number.MAX_SAFE_INTEGER) return { saved: false, reason: 'revision_exhausted' };
+    preference.revision = prior.revision + 1;
+    preference.updatedAt = new Date().toISOString();
+    var json = JSON.stringify(preference);
+    if (json.length > 1024) return { saved: false, reason: 'invalid_preference' };
+    // Once a write is attempted, any exception/readback mismatch must remain tracked as uncertain.
+    properties.setProperty(key, json);
+    if (properties.getProperty(key) !== json) throw new Error('配色儲存結果待確認，請勿重送。');
+    return { saved: true, preference: preference };
+  });
 }
 
 // Authenticated POST receipts: bounded metadata only, no tokens or form content.

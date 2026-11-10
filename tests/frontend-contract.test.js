@@ -597,7 +597,7 @@ test('schedule-first teacher home renders dates, teaching roles, and upcoming ro
 test('five-destination teacher navigation groups records and exposes account actions', () => {
   const tabbar = html.match(/<nav id="mobile-tabbar"[\s\S]*?<\/nav>/)[0];
   assert.equal((tabbar.match(/class="mobile-tab-item/g) || []).length, 5);
-  ['課表', '請假', '代課', '練習', '我的'].forEach((label) => assert.match(tabbar, new RegExp(`>${label}<`)));
+  ['課表', '請假', '代課', '教室', '我的'].forEach((label) => assert.match(tabbar, new RegExp(`>${label}<`)));
   assert.match(html, /class="teacher-flow-switcher"[^>]*data-teacher-flow="leave"/);
   assert.match(html, /data-view="view-leave"[^>]*>登記請假</);
   assert.match(html, /data-view="view-myleaves"[^>]*>請假紀錄</);
@@ -609,6 +609,84 @@ test('five-destination teacher navigation groups records and exposes account act
   assert.match(html, /data-view="view-inbox"/);
   assert.match(html, /id="account-admin-entry"/);
   assert.match(html, /id="account-logout"/);
+});
+
+test('approved navigation maps all original management workflows without removing their tabs', () => {
+  const { context } = createFrontendRuntime();
+  const mapping = JSON.parse(vm.runInContext('JSON.stringify(ADMIN_TAB_SECTIONS)', context));
+  assert.equal(Object.keys(mapping).length, 18);
+  assert.deepEqual(Object.entries(mapping).filter(([, section]) => section === 'finance').map(([tab]) => tab).sort(), ['invoices', 'payroll']);
+  assert.deepEqual(Object.entries(mapping).filter(([, section]) => section === 'students').map(([tab]) => tab).sort(), ['monthlyDiscount', 'raffle', 'vvip']);
+  assert.equal(mapping.closureManagement, 'courses');
+  ['courseAdjustments', 'mainOperations', 'payroll', 'vvip', 'invoices', 'raffle'].forEach(tab => {
+    assert.equal(context.getInitialAppRoute(`?view=admin&tab=${tab}`).adminTab, tab);
+  });
+});
+
+test('grouped destinations retain independent finance student and raffle permissions', () => {
+  const { context } = createFrontendRuntime();
+  const check = (capabilities, section, expected) => {
+    context.__capabilities = capabilities;
+    vm.runInContext('authState.managementCapabilities = __capabilities;', context);
+    assert.deepEqual(Array.from(context.getAdminSectionTabs(section)), expected);
+  };
+  check(['invoice_admin'], 'finance', ['invoices']);
+  check(['payroll_admin'], 'finance', ['payroll']);
+  check(['invoice_admin'], 'students', []);
+  check(['vvip_admin'], 'students', ['vvip']);
+  check(['raffle_admin'], 'students', ['raffle']);
+  check(['course_admin'], 'students', ['monthlyDiscount']);
+  assert.equal(context.getAdminTabCapability('payroll'), 'payroll_admin');
+  assert.equal(context.getAdminTabCapability('invoices'), 'invoice_admin');
+  assert.equal(context.getAdminTabCapability('vvip'), 'vvip_admin');
+  assert.equal(context.getAdminTabCapability('raffle'), 'raffle_admin');
+  assert.equal(context.getAdminTabCapability('practice'), 'course_admin');
+});
+
+test('workspace switch preserves admin inbox context and hides management switching while acting', () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext("authState.managementCapabilities = ['course_admin']; syncWorkspaceNavigation('view-admin');", context);
+  assert.equal(getElement('app-shell').dataset.shellMode, 'admin');
+  assert.equal(getElement('workspace-switcher').hidden, false);
+  context.syncWorkspaceNavigation('view-inbox');
+  assert.equal(getElement('app-shell').dataset.shellMode, 'admin');
+  context.syncWorkspaceNavigation('view-leave');
+  assert.equal(getElement('app-shell').dataset.shellMode, 'teacher');
+  vm.runInContext("authState.actingTeacherName = 'Tako'; syncWorkspaceNavigation('view-home');", context);
+  assert.equal(getElement('workspace-switcher').hidden, true);
+});
+
+test('leave keeps the original multi-date multi-course workflow without adding reasons', () => {
+  const leave = html.match(/<section id="view-leave"[\s\S]*?<section id="view-myleaves"/)[0];
+  ['select-all-visible-dates', 'clear-leave-dates', 'leave-date-list', 'leave-course-list', 'leave-confirmation', 'leave-submit'].forEach(id => assert.ok(leave.includes(`id="${id}"`)));
+  assert.doesNotMatch(leave, /原因|事假|病假|<select|<textarea/);
+  assert.match(html, /function selectAllVisibleDates\(\)/);
+  assert.match(html, /function clearLeaveDates\(\)/);
+  assert.match(html, /selectedLeaveCourses = new Set\(totals\.errors/);
+  assert.match(html, /start < items\.length; start \+= LEAVE_BATCH_SIZE/);
+});
+
+test('course status navigation retains every actionable count and unavailable state', () => {
+  const { context } = createFrontendRuntime();
+  assert.equal(context.getAdminStatusLabel('delayClosures'), '代關課程（—）');
+  vm.runInContext("adminDashboard = { delayClosures: [{}, {}], exceptions: [{}], courseClosure: { unclaimedCandidates: [{}, {}, {}] } };", context);
+  assert.equal(context.getAdminStatusLabel('delayClosures'), '代關課程（2）');
+  assert.equal(context.getAdminStatusLabel('exceptions'), '核對異常（1）');
+  assert.equal(context.getAdminStatusLabel('closureManagement'), '關課管理（3）');
+});
+
+test('workbench refresh updates all permitted sources and raffle keeps its own refresh controls', async () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.__reads = [];
+  vm.runInContext(`authState.managementCapabilities = ['course_admin', 'vvip_admin'];
+    activeAdminSection = 'dashboard'; activeAdminTab = 'pendingInvitations';
+    fetchAdminDashboard = async () => __reads.push('courses');
+    fetchNotificationAdminDashboard = async () => __reads.push('monthly');
+    fetchVvipReminderData = async () => __reads.push('vvip');`, context);
+  await context.refreshWorkspaceData();
+  assert.deepEqual(Array.from(context.__reads).sort(), ['courses', 'monthly', 'vvip']);
+  vm.runInContext("authState.managementCapabilities = ['raffle_admin']; activeAdminSection = 'students'; activeAdminTab = 'raffle'; syncWorkspaceNavigation('view-admin');", context);
+  assert.equal(getElement('workspace-admin-refresh').hidden, true);
 });
 
 test('teacher destinations opt into the app visual shell while admin keeps its existing workspace', () => {
@@ -749,7 +827,7 @@ test('notification permission is requested only after the signed-in teacher taps
   await context.requestPushPermission();
   assert.equal(calls.some(([name]) => name === 'requestPermission'), true);
   assert.equal(calls.some(([name]) => name === 'optIn'), true);
-  assert.equal(getElement('push-permission-card').hidden, false);
+  assert.equal(getElement('push-permission-card').hidden, true);
   assert.match(getElement('push-status-copy').textContent, /已確認.*綁定/);
 });
 
@@ -798,6 +876,56 @@ test('push diagnostics remain accessible when the SDK says opted in and verify t
   assert.equal(check.fields.subscriptionId, f.oneSignal.User.PushSubscription.id);
   assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
   assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已送達|保證/);
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+});
+
+test('verified push settings remain accessible in My Account and collapse again outside it', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  await f.context.checkPushNotifications();
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  f.context.switchView('view-account');
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  assert.equal(f.getElement('push-check').hidden, false);
+  f.context.loadPracticeDay = () => {};
+  f.context.switchView('view-practice');
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  assert.equal(f.calls.includes('optIn'), false);
+});
+
+test('a prior push verification cannot hide a different account or denied browser permission', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  await f.context.checkPushNotifications();
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  vm.runInContext('authState.teacherName = "另一位老師";', f.context);
+  f.context.renderPushPermissionCard();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  vm.runInContext('authState.teacherName = "Tako";', f.context);
+  f.context.window.Notification.permission = 'denied';
+  f.context.renderPushPermissionCard();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+});
+
+test('a fresh push check failure invalidates the previous hidden success state', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  await f.context.checkPushNotifications();
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  f.context.initializePushForSession = async () => { throw Error('offline'); };
+  await f.context.checkPushNotifications();
+  assert.match(f.getElement('push-status-copy').textContent, /檢查未完成/);
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+});
+
+test('reset browser permission cannot remain hidden behind an earlier push confirmation', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  await f.context.checkPushNotifications();
+  f.context.window.Notification.permission = 'default';
+  f.context.renderPushPermissionCard();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
 });
 
 test('push repair rebinds only the real owner and opts in without deleting or opting out a subscription', async () => {
@@ -818,6 +946,7 @@ test('push repair never reports success if the server cannot confirm this subscr
   await f.context.repairPushNotifications();
   assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
   assert.match(f.getElement('push-status-copy').textContent, /尚未.*綁定/);
+  assert.equal(f.getElement('push-permission-card').hidden, false);
 });
 
 test('push diagnostics do not accept a local opt-in without a subscription id and token', async () => {
@@ -861,6 +990,7 @@ test('subscription events invalidate previous remote confirmation without sendin
   f.oneSignal.User.PushSubscription.id = '22222222-2222-4222-8222-222222222222';
   f.listeners.subscription();
   assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+  assert.equal(f.getElement('push-permission-card').hidden, false);
   assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 1);
 });
 
@@ -4820,6 +4950,59 @@ test('practice admin workspace shows filters participants failures and protected
   assert.match(html, /callPostApi\("cancelPracticeBooking",\s*\{\s*practice:\s*\{/);
 });
 
+test('practice review puts unresolved students first without lifetime statistics or empty failure panels', () => {
+  const f = createFrontendRuntime({}, { now: '2026-11-09T22:00:00+08:00' });
+  const student = (participantId, status, date = '2026/11/10', extra = {}) => ({
+    participantId, status, date, room: 'C', startTime: '14:00', endTime: '15:00',
+    appName: '<學生>', email: 'student@example.test', qualificationVenue: '劍潭', ...extra,
+  });
+  f.context.practiceFixture = { filters: {}, bookings: [], notificationFailures: [],
+    summary: { total: 672, active: 318, waitlisted: 176, cancelled: 178 } };
+  f.context.studentFixture = { summary: { active: 20, pendingQualification: 2, changePending: 1 }, requests: [
+    student('active', '已成立'),
+    student('old-pending', '待確認資格', '2026/11/01'),
+    student('change', '已成立', '2026/11/02', { changeStatus: '時段異動待處理' }),
+    student('pending', '待確認資格', '2026/11/10', { canMarkAsCompanion: true }),
+    student('past', '已成立', '2026/11/01'),
+    student('cancelled', '已取消', '2026/11/01', { changeStatus: '時段異動待處理' }),
+  ] };
+  const before = JSON.stringify(f.context.studentFixture);
+  vm.runInContext('practiceAdminDashboard = practiceFixture; studentPracticeAdminDashboard = studentFixture; renderPracticeAdminDashboard();', f.context);
+  const result = f.getElement('admin-tab-content').innerHTML;
+  const review = result.match(/<section[^>]*data-practice-student-review[^>]*>([\s\S]*?)<\/section>/)?.[1];
+  assert.ok(review, 'student review queue must be present');
+  for (const id of ['pending', 'old-pending', 'change']) assert.match(review, new RegExp(`data-student-practice-participant="${id}"`));
+  for (const id of ['active', 'past', 'cancelled']) assert.doesNotMatch(review, new RegExp(`data-student-practice-participant="${id}"`));
+  assert.match(review, /confirm-student-practice-qualification/);
+  assert.match(review, /mark-student-practice-companion/);
+  assert.match(review, /時段異動待處理/);
+  assert.match(review, /&lt;學生&gt;/);
+  assert.doesNotMatch(result, /class="admin-summary"|查詢筆數|目前沒有推播失敗紀錄|practice-admin-failures/);
+  assert.ok(result.indexOf('data-practice-student-review') < result.indexOf('practice-admin-filter-form'));
+  assert.equal(JSON.stringify(f.context.studentFixture), before);
+});
+
+test('teacher practice overview keeps names and slots visible while editing and OB diagnostics are collapsed', () => {
+  const f = createFrontendRuntime({}, { now: '2026-11-09T22:00:00+08:00' });
+  f.context.practiceFixture = { filters: {}, bookings: [{
+    bookingId: 'compact-booking', date: '2026/11/10', room: 'C', startTime: '12:00', endTime: '14:00',
+    status: '候補', creatorName: 'Tako', waitlistCalendarId: '53821', reason: '等待相關課程取消',
+    participants: [{ teacherName: 'Tako', role: '建立者', startTime: '12:00', endTime: '14:00', status: '有效' }],
+    audits: [{ time: '2026/11/01', action: '建立', actor: '冠蓉' }],
+  }] };
+  vm.runInContext('practiceAdminDashboard = practiceFixture; studentPracticeAdminDashboard = {requests:[]}; renderPracticeAdminDashboard();', f.context);
+  const result = f.getElement('admin-tab-content').innerHTML;
+  const detail = result.match(/<details class="practice-booking-details"([^>]*)>\s*<summary[^>]*>([\s\S]*?)<\/summary>/);
+  assert.ok(detail, 'booking editor must be an on-demand disclosure');
+  assert.doesNotMatch(detail[1], /\bopen\b/);
+  for (const value of ['Tako', '2026/11/10', '12:00', '14:00', 'C', '候補']) assert.ok(detail[2].includes(value));
+  assert.doesNotMatch(detail[2], /<input|<select|53821|等待相關課程取消/);
+  assert.match(result, /53821/);
+  assert.match(result, /data-practice-admin-date="compact-booking"/);
+  assert.match(result, /data-admin-action="cancel-practice"/);
+  assert.match(result, /查看操作紀錄/);
+});
+
 test('practice admin dashboard renders participant intervals and failure audit safely', () => {
   const { context, getElement } = createFrontendRuntime();
   context.__practiceAdminDashboard = {
@@ -4964,7 +5147,7 @@ test('admin queue rendering does not leak Array.map indexes into cards', () => {
 });
 
 test('admin workspace groups legacy tools behind a task-first home without changing teacher navigation', () => {
-  const sectionNames = ['dashboard', 'courses', 'practice', 'payroll', 'operations', 'notifications', 'invoices', 'tools'];
+  const sectionNames = ['dashboard', 'courses', 'practice', 'finance', 'students', 'notifications', 'tools'];
   sectionNames.forEach((section) => {
     assert.match(html, new RegExp(`data-admin-section=["']${section}["']`));
   });
@@ -5965,7 +6148,7 @@ test('practice admin includes student qualification and independent cancellation
 
   assert.match(html, /studentPracticeAdminDashboard/);
   assert.match(html, /getStudentPracticeAdminDashboard/);
-  assert.match(html, /待確認學生資格/);
+  assert.match(html, /學生待審核／待處理/);
   assert.match(html, /qualificationVenue/);
   assert.match(html, /資格並成立/);
   assert.match(html, /已完成.*開關門與設備安裝教學/);
@@ -5979,7 +6162,7 @@ test('practice admin includes student qualification and independent cancellation
 });
 
 test('invoice admin workbench is capability-gated and exposes the required workflow', () => {
-  assert.match(html, /data-admin-section="invoices"[^>]*data-capability="invoice_admin"/);
+  assert.match(html, /data-admin-section="finance"/);
   assert.match(html, /data-admin-tab="invoices"[^>]*data-capability="invoice_admin"/);
   assert.match(html, /待開立/);
   assert.match(html, /資料異常/);

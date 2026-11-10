@@ -1021,9 +1021,18 @@
       grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 10px;
       align-items: end;
+      padding: 12px 0;
     }
-    .practice-admin-filter-actions { display: flex; gap: 8px; align-items: end; }
-    .practice-admin-list { display: grid; gap: 10px; }
+    .practice-admin-filter-panel { margin: 12px 0; border-block: 1px solid var(--line); }
+    .practice-admin-filter-panel > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; font-size: 13px; list-style: none; }
+    .practice-admin-filter-panel > summary::-webkit-details-marker { display: none; }
+    .practice-admin-filter-panel > summary .lucide { width: 16px; height: 16px; }
+    .practice-admin-filter-panel > summary span { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .practice-admin-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; grid-column: 1 / -1; }
+    .practice-admin-list { display: grid; gap: 8px; }
+    .practice-admin-section { margin-bottom: 22px; }
+    .practice-admin-empty { padding: 8px 2px; color: var(--muted); font-size: 13px; }
+    .practice-admin-list .state { padding: 14px; min-height: 0; }
     .practice-admin-history { margin-top: 20px; }
     .practice-admin-history-month { margin-top: 10px; border-top: 1px solid var(--line); }
     .practice-admin-history-month > summary { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 10px 2px; cursor: pointer; font-size: 14px; font-weight: 750; list-style: none; }
@@ -1032,23 +1041,43 @@
     .practice-admin-history-month[open] > summary::before { content: "-"; }
     .practice-admin-history-month > summary > span { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
     .practice-admin-card {
-      padding: 15px;
+      min-width: 0;
       border: 1px solid var(--line);
-      border-radius: var(--radius);
+      border-radius: 6px;
       background: var(--surface);
-      box-shadow: var(--shadow-sm);
+      overflow-wrap: anywhere;
     }
-    .practice-admin-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .practice-admin-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .practice-admin-card-head > div { min-width: 0; flex: 1; }
     .practice-admin-card-head strong { font-size: 15px; }
+    .practice-admin-card-head .status-pill { flex: 0 0 auto; max-width: 120px; white-space: normal; text-align: center; }
+    .practice-booking-details > summary, .practice-student-details > summary { padding: 12px 14px; cursor: pointer; list-style: none; }
+    .practice-booking-details > summary::-webkit-details-marker, .practice-student-details > summary::-webkit-details-marker { display: none; }
+    .practice-booking-details > summary::after, .practice-student-details > summary::after { content: "+"; flex: 0 0 14px; color: var(--muted); font-size: 18px; text-align: center; }
+    .practice-booking-details[open] > summary::after, .practice-student-details[open] > summary::after { content: "-"; }
+    .practice-admin-detail-body { margin: 0 14px; padding: 12px 0 14px; border-top: 1px solid var(--line); }
+    .practice-admin-slot { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .practice-admin-slot span { white-space: nowrap; }
+    .practice-admin-card .admin-item-actions { flex-wrap: wrap; }
+    .practice-admin-card .admin-item-actions button { min-width: 0; max-width: 100%; white-space: normal; }
+    .practice-admin-card .admin-item-actions .lucide { flex-shrink: 0; }
     .practice-admin-fields {
       display: grid;
-      grid-template-columns: minmax(110px, 1.2fr) repeat(3, minmax(90px, .8fr));
+      grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(0, .8fr));
       gap: 8px;
       margin-top: 12px;
     }
+    .practice-admin-fields .notification-field, .practice-admin-filters .notification-field { min-width: 0; }
+    .practice-admin-fields input, .practice-admin-fields select,
+    .practice-admin-filters input, .practice-admin-filters select { display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 42px; }
+    /* WebKit native date/time controls include inline padding in their intrinsic width. */
+    .practice-admin-fields input[type="date"], .practice-admin-fields input[type="time"],
+    .practice-admin-filters input[type="date"] { inline-size: 100%; min-inline-size: 0; max-inline-size: 100%; padding-inline: 0; text-align: center; }
     .practice-admin-participants { display: grid; gap: 6px; margin-top: 12px; }
-    .practice-admin-participant { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 7px; background: var(--soft); font-size: 12px; }
+    .practice-admin-participants > strong { font-size: 13px; }
+    .practice-admin-participant { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
     .practice-admin-audits { margin-top: 10px; }
+    .practice-admin-audits > summary { min-height: 36px; padding-block: 8px; font-size: 12px; cursor: pointer; }
     .practice-admin-failures { margin-top: 18px; }
     .ob-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
     .course-adjustment-card { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -2083,6 +2112,7 @@
     .raffle-prize { border-top: 1px solid var(--line, #ddd4ca); padding: 14px 0 4px; margin-top: 10px; overflow-wrap: anywhere; }
     .raffle-prize .status-pill { margin-left: 10px; }
   </style>
+  <link rel="stylesheet" href="./workspace-navigation.css?v=20261110">
 </head>
 <body>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -2146,6 +2176,10 @@
         <strong id="mobile-page-title" class="mobile-page-title">首頁</strong>
       </div>
       <div class="topbar-actions">
+        <div id="workspace-switcher" class="workspace-switcher" role="group" aria-label="切換工作區" hidden>
+          <button id="workspace-teacher" type="button" aria-pressed="false">老師端</button>
+          <button id="workspace-admin" type="button" aria-pressed="false">管理端</button>
+        </div>
         <span id="current-user" class="current-user"></span>
         <button id="inbox-button" class="icon-button inbox-button" type="button" data-view="view-inbox" aria-label="訊息收件匣" title="訊息收件匣"><i data-lucide="bell"></i><span id="inbox-unread-badge" class="inbox-unread-badge" hidden>0</span></button>
         <button id="back-button" class="icon-button" type="button" aria-label="返回首頁" title="返回首頁"><i data-lucide="arrow-left"></i></button>
@@ -2160,14 +2194,23 @@
 
     <div class="app-layout">
       <aside class="sidebar">
-        <nav class="primary-nav" aria-label="主要功能">
+        <nav class="primary-nav teacher-primary-nav" aria-label="老師主要功能">
           <button class="nav-item active" type="button" data-view="view-home"><i data-lucide="calendar-days"></i><span>課表</span></button>
           <button class="nav-item" type="button" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
           <button class="nav-item" type="button" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
-          <button class="nav-item" type="button" data-view="view-practice"><i data-lucide="sparkles"></i><span>練習</span></button>
-          <button class="nav-item" type="button" data-view="view-raffle"><i data-lucide="gift"></i><span>學生領獎</span></button>
+          <button class="nav-item" type="button" data-view="view-practice"><i data-lucide="door-open"></i><span>教室</span></button>
           <button class="nav-item" type="button" data-view="view-account"><i data-lucide="circle-user-round"></i><span>我的</span><span id="sidebar-inbox-badge" class="nav-unread-badge" hidden>0</span></button>
           <button id="admin-entry" class="nav-item admin-direct-entry" type="button" data-view="view-admin" hidden><i data-lucide="settings-2"></i><span>管理</span></button>
+        </nav>
+        <nav id="admin-section-nav" class="admin-sections" aria-label="管理主要功能" hidden>
+          <button class="admin-section active" type="button" data-admin-section="dashboard"><i data-lucide="layout-dashboard"></i><span>工作台</span></button>
+          <button class="admin-section" type="button" data-admin-section="courses" data-capability="course_admin"><i data-lucide="calendar-range"></i><span>課務</span></button>
+          <button class="admin-section" type="button" data-admin-section="practice" data-capability="course_admin"><i data-lucide="door-open"></i><span>教室</span></button>
+          <button class="admin-section" type="button" data-admin-section="students"><i data-lucide="users-round"></i><span>學生與活動</span></button>
+          <button class="admin-section" type="button" data-admin-section="finance"><i data-lucide="wallet"></i><span>財務</span></button>
+          <div class="admin-nav-divider" aria-hidden="true"></div>
+          <button class="admin-section" type="button" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="send"></i><span>通知發送</span></button>
+          <button class="admin-section" type="button" data-admin-section="tools" data-capability="course_admin"><i data-lucide="settings-2"></i><span>系統工具</span></button>
         </nav>
       </aside>
 
@@ -2192,7 +2235,6 @@
             <div><span class="eyebrow">Schedule</span><h2 class="section-heading">近期課程</h2><p id="teacher-home-summary" class="section-copy">載入本週課表中…</p></div>
             <span id="teacher-home-month" class="teacher-month-chip"></span>
           </div>
-          <div class="teacher-panel-heading" style="margin-bottom:16px"><button class="primary-button inline-button" type="button" data-view="view-raffle"><i data-lucide="gift"></i>學生領獎</button><span class="section-copy">找學生、核對獎品與領取</span></div>
           <p id="home-greeting" class="sr-only"></p>
           <div id="teacher-home-dates" class="teacher-date-strip" aria-label="選擇日期"></div>
           <div class="teacher-home-grid">
@@ -2344,6 +2386,7 @@
           <div class="view-header account-view-header"><div><span class="eyebrow">Account</span><h2 class="section-heading">我的</h2><p id="account-teacher-name" class="section-copy"></p></div></div>
           <div class="account-menu">
             <button type="button" data-view="view-payroll"><span class="account-menu-icon"><i data-lucide="receipt-text"></i></span><span><strong>我的薪資</strong><small>核對明細與確認薪資</small></span><i data-lucide="chevron-right"></i></button>
+            <button id="account-appearance-entry" type="button" disabled><span class="account-menu-icon"><i data-lucide="palette"></i></span><span><strong>個人化</strong></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 30 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
             <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>學生領獎</strong><small>查詢學生獎品、確認領取</small></span><i data-lucide="chevron-right"></i></button>
@@ -2359,20 +2402,10 @@
 
         <section id="view-admin" class="view">
           <div class="view-header">
-            <div><span class="eyebrow">Operations</span><h2 class="section-heading">教室管理工作台</h2><p class="section-copy">課程、代課、薪資與選課作業</p></div>
+            <div><h2 id="admin-workspace-title" class="section-heading">管理工作台</h2></div>
+            <button id="workspace-admin-refresh" class="icon-button" type="button" title="更新資料" aria-label="更新資料"><i data-lucide="refresh-cw"></i></button>
           </div>
           <div class="admin-layout">
-            <nav class="admin-sections" role="tablist" aria-label="管理功能分區">
-              <button class="admin-section active" type="button" role="tab" aria-selected="true" data-admin-section="dashboard"><i data-lucide="layout-dashboard"></i>管理首頁</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="courses" data-capability="course_admin"><i data-lucide="calendar-range"></i>課程・代課</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="practice" data-capability="course_admin"><i data-lucide="sparkles"></i>自主練習</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="operations" data-capability="course_admin"><i data-lucide="list-todo"></i>每月營運</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="bell-ring"></i>通知</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="invoices" data-capability="invoice_admin"><i data-lucide="receipt-text"></i>發票</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="raffle" data-capability="raffle_admin"><i data-lucide="gift"></i>抽獎與獎品管理</button>
-              <button class="admin-section" type="button" role="tab" aria-selected="false" data-admin-section="tools" data-capability="course_admin"><i data-lucide="wrench"></i>更多工具</button>
-            </nav>
             <div class="admin-main">
               <section id="admin-priority" class="admin-priority">
                 <div class="admin-priority-head"><h3>今天要處理</h3><span>有數字的項目優先</span></div>
@@ -2396,6 +2429,15 @@
               </div>
               <div id="main-course-source" hidden></div>
               <div class="admin-workspace">
+                <div id="admin-course-navigation" class="admin-course-navigation" hidden>
+                  <div id="admin-course-groups" class="admin-course-groups" role="tablist" aria-label="課務分類">
+                    <button type="button" role="tab" data-admin-course-group="arrangement">代課安排</button>
+                    <button type="button" role="tab" data-admin-course-group="changes">異動與關課</button>
+                    <button type="button" role="tab" data-admin-course-group="reconcile">OB 核對</button>
+                    <button type="button" role="tab" data-admin-course-group="history">歷史紀錄</button>
+                  </div>
+                  <label class="admin-status-filter" for="admin-status-select"><span>處理項目</span><select id="admin-status-select" class="admin-select"></select></label>
+                </div>
                 <div class="admin-tabs" id="admin-subtabs" role="tablist" aria-label="管理工作區">
               <button class="admin-tab active" type="button" role="tab" aria-selected="true" data-admin-tab="pendingInvitations" data-capability="course_admin"><i data-lucide="send"></i>待邀請<span class="admin-tab-count" data-admin-count="pendingInvitations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="missingObCancellations" data-capability="course_admin"><i data-lucide="calendar-x-2"></i>OB 已取消<span class="admin-tab-count" data-admin-count="missingObCancellations">—</span></button>
@@ -2427,10 +2469,46 @@
       <button id="mobile-primary-entry" class="mobile-tab-item active" type="button" data-mobile-tab="schedule" data-view="view-home"><i data-lucide="calendar-days"></i><span id="mobile-primary-label">課表</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="leave" data-view="view-leave"><i data-lucide="calendar-plus"></i><span>請假</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="substitute" data-view="view-claim"><i data-lucide="hand"></i><span>代課</span></button>
-      <button class="mobile-tab-item" type="button" data-mobile-tab="practice" data-view="view-practice"><i data-lucide="sparkles"></i><span>練習</span></button>
+      <button class="mobile-tab-item" type="button" data-mobile-tab="practice" data-view="view-practice"><i data-lucide="door-open"></i><span>教室</span></button>
       <button class="mobile-tab-item" type="button" data-mobile-tab="account" data-view="view-account"><i data-lucide="circle-user-round"></i><span>我的</span></button>
     </nav>
+    <nav id="admin-mobile-tabbar" class="admin-mobile-tabbar" aria-label="手機管理功能" hidden>
+      <button class="admin-section" type="button" data-admin-section="dashboard"><i data-lucide="layout-dashboard"></i><span>待辦</span></button>
+      <button class="admin-section" type="button" data-admin-section="courses" data-capability="course_admin"><i data-lucide="calendar-range"></i><span>課務</span></button>
+      <button class="admin-section" type="button" data-admin-section="practice" data-capability="course_admin"><i data-lucide="door-open"></i><span>教室</span></button>
+      <button class="admin-section" type="button" data-admin-section="finance"><i data-lucide="wallet"></i><span>財務</span></button>
+      <button id="admin-mobile-more" type="button" aria-haspopup="dialog" aria-controls="admin-more-dialog"><i data-lucide="menu"></i><span>更多</span></button>
+    </nav>
   </div>
+
+  <dialog id="admin-more-dialog" class="admin-more-dialog" aria-labelledby="admin-more-title">
+    <div class="dialog-body">
+      <div class="admin-panel-heading"><h3 id="admin-more-title">更多</h3><button id="admin-more-close" class="icon-button" type="button" aria-label="關閉"><i data-lucide="x"></i></button></div>
+      <nav class="admin-more-links" aria-label="其他管理功能">
+        <button class="admin-section" type="button" data-admin-section="students"><i data-lucide="users-round"></i><span>學生與活動</span></button>
+        <button class="admin-section" type="button" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="send"></i><span>通知發送</span></button>
+        <button class="admin-section" type="button" data-admin-section="tools" data-capability="course_admin"><i data-lucide="settings-2"></i><span>系統工具</span></button>
+      </nav>
+    </div>
+  </dialog>
+
+  <dialog id="appearance-dialog" class="appearance-dialog" aria-labelledby="appearance-title">
+    <form id="appearance-form" class="dialog-body">
+      <div class="appearance-heading"><h3 id="appearance-title">個人化</h3><button id="appearance-close" class="icon-button" type="button" aria-label="關閉" title="關閉"><i data-lucide="x" aria-hidden="true"></i></button></div>
+      <div id="appearance-presets" class="appearance-presets" role="group" aria-label="預設配色"></div>
+      <div class="appearance-custom-heading"><h4>自訂配色</h4><button id="appearance-reset" class="icon-button" type="button" aria-label="恢復原本配色" title="恢復原本配色"><i data-lucide="rotate-ccw" aria-hidden="true"></i></button></div>
+      <div class="appearance-colors">
+        <label for="appearance-primary">主色<span><input id="appearance-primary" type="color" value="#786c64"><output id="appearance-primary-value" for="appearance-primary">#786c64</output></span></label>
+        <label for="appearance-secondary">輔色<span><input id="appearance-secondary" type="color" value="#eee0dc"><output id="appearance-secondary-value" for="appearance-secondary">#eee0dc</output></span></label>
+      </div>
+      <p id="appearance-status" class="appearance-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="appearance-reload" class="compact-button" type="button" hidden><i data-lucide="refresh-cw" aria-hidden="true"></i>重新讀取</button>
+        <button id="appearance-cancel" class="compact-button" type="button">取消</button>
+        <button id="appearance-save" class="primary-button" type="submit"><i data-lucide="save" aria-hidden="true"></i><span>儲存</span></button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="request-dialog">
     <form id="request-form" class="dialog-body" method="dialog">
@@ -2602,8 +2680,9 @@
   <link rel="stylesheet" href="raffle-tools.css?v=ops-tools-20261031">
   <script src="raffle-tools.js?v=raffle-experience-20261105"></script>
   <script src="raffle.js?v=ops-refresh-20261105"></script>
-  <script src="admin-transport.js?v=ops-tools-20261031"></script>
+  <script src="admin-transport.js?v=personal-appearance-20261110"></script>
   <script src="main-assurance-ui.js?v=20261109"></script>
+  <script src="personal-appearance.js?v=20261110"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
@@ -2612,6 +2691,13 @@
     const AUTH_SESSION_KEY = "sherry-substitute-auth-session";
 
     const authState = { sessionToken: "", teacherName: "", actingTeacherName: "", role: "", managementCapabilities: [] };
+    let personalAppearanceVerified = false;
+    const personalAppearance = window.SherryPersonalAppearance
+      ? window.SherryPersonalAppearance.createController({
+        request: (action, params) => callPostApi(action, params),
+        storage: { getItem: key => window.localStorage.getItem(key), setItem: (key, value) => window.localStorage.setItem(key, value) },
+        onChange: renderPersonalAppearance
+      }) : null;
     let globalCourseList = [];
     let teacherHomeDashboard = null;
     let teacherHomeSelectedDate = "";
@@ -2669,25 +2755,44 @@
       completed: "courses",
       mainOperations: "courses",
       practice: "practice",
-      payroll: "payroll",
-      closureManagement: "operations",
-      monthlyDiscount: "operations",
-      vvip: "operations",
+      payroll: "finance",
+      closureManagement: "courses",
+      monthlyDiscount: "students",
+      vvip: "students",
       notifications: "notifications",
-      invoices: "invoices",
-      raffle: "raffle"
+      invoices: "finance",
+      raffle: "students"
     };
     const ADMIN_SECTION_DEFAULT_TABS = {
       courses: "pendingInvitations",
       practice: "practice",
+      finance: "payroll",
+      students: "monthlyDiscount",
       payroll: "payroll",
       operations: "closureManagement",
       notifications: "notifications",
       invoices: "invoices",
       raffle: "raffle"
     };
+    const ADMIN_SECTION_LABELS = {
+      dashboard: "管理工作台", courses: "課務", practice: "教室", finance: "財務",
+      students: "學生與活動", operations: "每月作業", notifications: "通知發送", tools: "系統工具"
+    };
+    const ADMIN_COURSE_GROUPS = {
+      arrangement: ["pendingInvitations", "activeInvitees"],
+      changes: ["courseAdjustments", "changeRequests", "delayClosures", "closureManagement"],
+      reconcile: ["obWork", "missingObCancellations", "exceptions"],
+      history: ["completed", "mainOperations"]
+    };
+    const ADMIN_TAB_LABELS = {
+      pendingInvitations: "待邀請", activeInvitees: "邀請中", courseAdjustments: "調課確認",
+      changeRequests: "取消／退出", delayClosures: "代關課程", closureManagement: "關課管理",
+      obWork: "待處理 OB", missingObCancellations: "OB 已取消", exceptions: "核對異常",
+      completed: "已完成", mainOperations: "履歷・追蹤"
+    };
     let activeAdminSection = "dashboard";
     let activeAdminTab = "pendingInvitations";
+    let activeWorkspaceMode = "teacher";
     let notificationCenterSection = "schedules";
     let notificationScheduleEditorOpen = false;
     let activeInvoiceTab = "pending";
@@ -2718,13 +2823,89 @@
       "view-myleaves": "請假",
       "view-claim": "代課",
       "view-mysubs": "代課",
-      "view-practice": "自主練習",
+      "view-practice": "教室",
       "view-payroll": "我的薪資",
       "view-inbox": "訊息",
       "view-account": "我的",
       "view-raffle": "學生領獎",
       "view-admin": "管理工作台"
     };
+
+    function getAdminTabCapability(tab) {
+      return ({ payroll: "payroll_admin", invoices: "invoice_admin", vvip: "vvip_admin", raffle: "raffle_admin" })[tab] || "course_admin";
+    }
+
+    function getAdminSectionTabs(section) {
+      const target = ({ payroll: "finance", invoices: "finance", raffle: "students" })[section] || section;
+      return Object.keys(ADMIN_TAB_SECTIONS).filter(tab => ADMIN_TAB_SECTIONS[tab] === target &&
+        authState.managementCapabilities.includes(getAdminTabCapability(tab)));
+    }
+
+    function canOpenAdminSection(section) {
+      if (authState.actingTeacherName) return false;
+      if (section === "dashboard") return authState.managementCapabilities.length > 0;
+      if (["tools", "operations"].includes(section)) return authState.managementCapabilities.includes("course_admin");
+      return getAdminSectionTabs(section).length > 0;
+    }
+
+    function getAdminCourseGroup(tab) {
+      return Object.keys(ADMIN_COURSE_GROUPS).find(group => ADMIN_COURSE_GROUPS[group].includes(tab)) || "arrangement";
+    }
+
+    function getAdminStatusLabel(tab) {
+      let count = "—";
+      if (adminDashboard && tab !== "mainOperations") {
+        const items = tab === "closureManagement"
+          ? adminDashboard.courseClosure && adminDashboard.courseClosure.unclaimedCandidates
+          : adminDashboard[tab];
+        count = Array.isArray(items) ? String(items.length) : "0";
+      }
+      const label = ADMIN_TAB_LABELS[tab] || tab;
+      return tab === "mainOperations" ? label : `${label}（${count}）`;
+    }
+
+    function syncWorkspaceNavigation(viewId) {
+      const canManage = authState.managementCapabilities.length > 0 && !authState.actingTeacherName;
+      if (viewId === "view-admin" && canManage) activeWorkspaceMode = "admin";
+      else if (viewId !== "view-inbox" || !canManage) activeWorkspaceMode = "teacher";
+      byId("app-shell").dataset.shellMode = activeWorkspaceMode;
+      byId("workspace-switcher").hidden = !canManage;
+      byId("workspace-teacher").setAttribute("aria-pressed", String(activeWorkspaceMode === "teacher"));
+      byId("workspace-admin").setAttribute("aria-pressed", String(activeWorkspaceMode === "admin"));
+      byId("admin-section-nav").hidden = activeWorkspaceMode !== "admin";
+      byId("admin-mobile-tabbar").hidden = activeWorkspaceMode !== "admin";
+      byId("mobile-tabbar").hidden = activeWorkspaceMode === "admin";
+      document.querySelectorAll(".admin-section").forEach(button => {
+        const section = button.dataset.adminSection;
+        const active = viewId === "view-admin" && (section === activeAdminSection || section === "dashboard" && activeAdminSection === "operations");
+        button.hidden = !canOpenAdminSection(section);
+        button.classList.toggle("active", active);
+        if (active) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
+      });
+      const more = byId("admin-mobile-more");
+      more.hidden = !["students", "notifications", "tools"].some(canOpenAdminSection);
+      const moreActive = ["students", "notifications", "tools"].includes(activeAdminSection) || viewId === "view-inbox";
+      more.classList.toggle("active", activeWorkspaceMode === "admin" && moreActive);
+      more.setAttribute("aria-expanded", String(Boolean(byId("admin-more-dialog").open)));
+      byId("workspace-admin-refresh").hidden = activeAdminTab === "raffle" || activeAdminSection === "dashboard" &&
+        !authState.managementCapabilities.some(capability => ["course_admin", "vvip_admin"].includes(capability));
+    }
+
+    function renderAdminCourseNavigation() {
+      const visible = activeAdminSection === "courses";
+      byId("admin-course-navigation").hidden = !visible;
+      if (!visible) return;
+      const group = getAdminCourseGroup(activeAdminTab);
+      document.querySelectorAll("[data-admin-course-group]").forEach(button => {
+        const active = button.dataset.adminCourseGroup === group;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      byId("admin-status-select").innerHTML = getAdminSectionTabs("courses")
+        .filter(tab => ADMIN_COURSE_GROUPS[group].includes(tab))
+        .map(tab => `<option value="${tab}">${escapeHtml(getAdminStatusLabel(tab))}</option>`).join("");
+      byId("admin-status-select").value = activeAdminTab;
+    }
 
     function beginReadRefresh(element, hasSnapshot, loadingHtml) {
       const owner = {};
@@ -4311,7 +4492,7 @@
         throw new Error("目前帳號沒有 VVIP 管理權限。");
       }
       activeAdminTab = "vvip";
-      activeAdminSection = "operations";
+      activeAdminSection = ADMIN_TAB_SECTIONS.vvip;
       await fetchVvipAdminDashboard();
     }
 
@@ -4354,7 +4535,7 @@
       return /請先登入|登入狀態(?:無效|已逾期)|登入帳號不存在|帳號目前未啟用/.test(message);
     }
 
-    function applySession(session, sessionToken = "") {
+    function applySession(session, sessionToken = "", verified = true) {
       const previousAccount = authState.teacherName;
       authState.sessionToken = sessionToken || session.sessionToken || authState.sessionToken;
       authState.teacherName = session.teacherName || "";
@@ -4368,6 +4549,45 @@
         mainAssuranceState.practiceRequest++;
         mainAssuranceState.payrollRequest++;
       }
+      syncPersonalAppearanceSession(verified);
+      if (verified && personalAppearance) personalAppearance.load();
+    }
+
+    function syncPersonalAppearanceSession(verified = personalAppearanceVerified) {
+      personalAppearanceVerified = Boolean(verified && authState.sessionToken && authState.teacherName);
+      byId("account-appearance-entry").disabled = !personalAppearance || !personalAppearanceVerified || Boolean(authState.actingTeacherName);
+      if (!personalAppearance) return;
+      personalAppearance.setSession({ owner: authState.teacherName, token: authState.sessionToken, acting: Boolean(authState.actingTeacherName), verified: personalAppearanceVerified });
+    }
+
+    function renderPersonalAppearance(snapshot) {
+      const preference = snapshot.isOpen && snapshot.draft ? snapshot.draft : snapshot.preference;
+      const tokens = window.SherryPersonalAppearance.themeTokens(preference);
+      document.querySelectorAll(".app-shell, body > dialog").forEach(element => {
+        Object.entries(tokens).forEach(([name, value]) => element.style.setProperty(name, value));
+      });
+      const dialog = byId("appearance-dialog");
+      if (snapshot.isOpen && !dialog.open) dialog.showModal();
+      if (!snapshot.isOpen && dialog.open) dialog.close();
+      const draft = snapshot.draft || snapshot.preference;
+      if (draft) {
+        ["primary", "secondary"].forEach(name => {
+          byId(`appearance-${name}`).value = draft[name];
+          byId(`appearance-${name}-value`).textContent = draft[name];
+        });
+        document.querySelectorAll("[data-appearance-preset]").forEach(button => {
+          button.setAttribute("aria-pressed", String(draft.mode === "preset" && draft.presetId === button.dataset.appearancePreset));
+        });
+      }
+      byId("appearance-status").textContent = snapshot.message || "";
+      byId("appearance-status").dataset.status = snapshot.status;
+      byId("appearance-save").disabled = !snapshot.canSave || snapshot.busy;
+      byId("appearance-save").querySelector("span").textContent = snapshot.needsReconciliation
+        ? (snapshot.busy ? "核對中…" : "核對原操作") : (snapshot.status === "saving" ? "儲存中…" : "儲存");
+      byId("appearance-reload").hidden = snapshot.needsReconciliation || !["error", "conflict"].includes(snapshot.status);
+      byId("appearance-reload").disabled = snapshot.busy;
+      ["appearance-primary", "appearance-secondary", "appearance-reset"].forEach(id => { byId(id).disabled = snapshot.busy || snapshot.needsReconciliation; });
+      document.querySelectorAll("[data-appearance-preset]").forEach(button => { button.disabled = snapshot.busy || snapshot.needsReconciliation; });
     }
 
     function resetTeacherViewSnapshots() {
@@ -4397,6 +4617,7 @@
 
     function updateActingMode() {
       const target = authState.actingTeacherName;
+      syncPersonalAppearanceSession();
       byId("acting-banner").hidden = !target;
       byId("acting-banner-copy").textContent = target
         ? `${authState.teacherName} 正在代 ${target} 操作；送出的異動會保留管理者紀錄。`
@@ -4434,11 +4655,7 @@
         raffle: "view-raffle",
         admin: "view-admin"
       };
-      const allowedAdminTabs = new Set([
-        "pendingInvitations", "missingObCancellations", "activeInvitees", "obWork",
-        "delayClosures", "closureManagement", "monthlyDiscount", "changeRequests", "exceptions", "completed",
-        "payroll", "vvip", "notifications", "practice", "invoices", "raffle"
-      ]);
+      const allowedAdminTabs = new Set(Object.keys(ADMIN_TAB_SECTIONS));
       const viewId = viewMap[params.get("view")] || "";
       const requestedTab = params.get("tab") || "";
       const route = {
@@ -4608,6 +4825,16 @@
       repairButton.hidden = false;
       enableButton.hidden = Boolean(isOptedIn || !OneSignal);
       disableButton.hidden = true;
+      const verifiedForCurrentSession = Boolean(pushVerifiedFingerprint && isOptedIn &&
+        (!window.Notification || browserPermission === "granted") &&
+        OneSignal.Notifications.permission === true &&
+        OneSignal.User.externalId === pushIdentityExternalId &&
+        isCurrentPushSession({ token: pushSessionToken, teacher: pushSessionTeacherName }) &&
+        pushVerifiedFingerprint === getPushFingerprint(OneSignal));
+      if (pushVerifiedFingerprint && !verifiedForCurrentSession) {
+        pushVerifiedFingerprint = "";
+        pushStatusMessage = "";
+      }
 
       if (isIosDevice() && !isStandalonePwa()) {
         byId("push-status-copy").textContent = "iPhone／iPad 請先使用 Safari 將網站加入主畫面（需 iOS 16.4 以上），再從主畫面開啟並設定通知。";
@@ -4625,6 +4852,7 @@
       byId("push-status-copy").textContent = pushStatusMessage || (isOptedIn
         ? "裝置通知已開啟，帳號綁定尚未檢查。"
         : "開啟後可收到代課邀請、領課結果與管理待辦提醒。");
+      card.hidden = verifiedForCurrentSession && activeViewId !== "view-account";
     }
 
     async function initializePushForSession(options = {}) {
@@ -4726,6 +4954,7 @@
       const generation = ++pushActionGeneration;
       pushActionToken = snapshot.token;
       buttons.forEach(button => { button.disabled = true; });
+      pushVerifiedFingerprint = "";
       pushStatusMessage = repair ? "正在重新綁定通知..." : "正在檢查通知...";
       renderPushPermissionCard();
       pushActionPromise = (async () => {
@@ -4816,17 +5045,14 @@
       let targetView = preserveView ? activeViewId : (route.viewId || defaultView);
       if (targetView === "view-admin" && !authState.managementCapabilities.length) targetView = "view-home";
       if (targetView === "view-admin" && route.adminTab) {
-        const tabCapability = route.adminTab === "payroll" ? "payroll_admin"
-          : route.adminTab === "vvip" ? "vvip_admin"
-          : route.adminTab === "invoices" ? "invoice_admin"
-          : route.adminTab === "raffle" ? "raffle_admin" : "course_admin";
+        const tabCapability = getAdminTabCapability(route.adminTab);
         if (authState.managementCapabilities.includes(tabCapability)) {
           activeAdminTab = route.adminTab;
           activeAdminSection = ADMIN_TAB_SECTIONS[route.adminTab] || "courses";
         }
       }
       if (preserveView && targetView === activeViewId) {
-        byId("app-shell").dataset.shellMode = targetView === "view-admin" ? "admin" : "teacher";
+        syncWorkspaceNavigation(targetView);
         syncMobileTabState(targetView);
         byId("back-button").classList.toggle("visible", !["view-home", "view-account", "view-admin"].includes(targetView));
       } else {
@@ -4847,6 +5073,7 @@
       authState.actingTeacherName = "";
       authState.role = "";
       authState.managementCapabilities = [];
+      syncPersonalAppearanceSession(false);
       globalCourseList = [];
       teacherHomeDashboard = null;
       teacherHomeSelectedDate = "";
@@ -4897,6 +5124,9 @@
       invoiceIssueDialogState = null;
       invoiceExternalDialogState = null;
       activeViewId = "";
+      activeWorkspaceMode = "teacher";
+      byId("workspace-switcher").hidden = true;
+      if (byId("admin-more-dialog").open) byId("admin-more-dialog").close();
       pushIdentityExternalId = "";
       pushSessionTeacherName = "";
       pushInitializationPromise = null;
@@ -4921,7 +5151,7 @@
       refreshIcons();
       const savedSession = readSavedSession();
       if (savedSession) {
-        applySession(savedSession, savedSession.sessionToken);
+        applySession(savedSession, savedSession.sessionToken, false);
         showLoggedInApp();
       }
 
@@ -4996,7 +5226,8 @@
       if (viewId === "view-admin") requestMainWorkspaceRestore(activeAdminTab);
       clearRaffleWorkspace();
       activeViewId = viewId;
-      byId("app-shell").dataset.shellMode = viewId === "view-admin" ? "admin" : "teacher";
+      syncWorkspaceNavigation(viewId);
+      renderPushPermissionCard();
       clearNotice();
       document.querySelectorAll(".view").forEach((view) => {
         view.classList.toggle("active", view.id === viewId);
@@ -5024,7 +5255,7 @@
       if (viewId === "view-raffle") renderRaffleWorkspace("teacher");
       if (viewId === "view-admin") {
         fetchAdminDashboard();
-        if (["dashboard", "operations"].includes(activeAdminSection)) fetchNotificationAdminDashboard();
+        if (["dashboard", "operations"].includes(activeAdminSection) && authState.managementCapabilities.includes("course_admin")) fetchNotificationAdminDashboard();
         if (authState.managementCapabilities.includes("vvip_admin")) fetchVvipReminderData();
       }
       refreshIcons();
@@ -8362,6 +8593,9 @@
       if (activeAdminSection === "dashboard" && activeAdminTab !== "pendingInvitations") {
         activeAdminSection = ADMIN_TAB_SECTIONS[activeAdminTab] || "courses";
       }
+      if (!["dashboard", "tools"].includes(activeAdminSection) && ADMIN_TAB_SECTIONS[activeAdminTab]) {
+        activeAdminSection = ADMIN_TAB_SECTIONS[activeAdminTab];
+      }
       const data = adminDashboard || {};
       const actingSelect = byId("admin-act-as");
       const teacherNames = (data.teachers || []).filter((name) => name && name !== authState.teacherName);
@@ -8375,13 +8609,8 @@
       byId("admin-reminders").innerHTML = reminders.length
         ? reminders.map((item) => `<button class="summary-item admin-reminder" type="button" data-admin-reminder-tab="${escapeHtml(item.tab)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join("")
         : '<div class="admin-all-clear"><i data-lucide="circle-check-big"></i><span>目前沒有待辦提醒</span></div>';
-      document.querySelectorAll(".admin-section").forEach((button) => {
-        const permitted = !button.dataset.capability || authState.managementCapabilities.includes(button.dataset.capability);
-        const active = button.dataset.adminSection === activeAdminSection;
-        button.hidden = !permitted;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-selected", active ? "true" : "false");
-      });
+      syncWorkspaceNavigation(activeViewId || "view-admin");
+      byId("admin-workspace-title").textContent = ADMIN_SECTION_LABELS[activeAdminSection] || "管理工作台";
       document.querySelectorAll(".admin-tab").forEach((button) => {
         const permitted = !button.dataset.capability || authState.managementCapabilities.includes(button.dataset.capability);
         const belongsToSection = ADMIN_TAB_SECTIONS[button.dataset.adminTab] === activeAdminSection;
@@ -8393,7 +8622,8 @@
       const showsPriority = activeAdminSection === "dashboard";
       byId("admin-priority").hidden = !showsPriority;
       byId("admin-tools-shell").hidden = activeAdminSection !== "tools";
-      byId("admin-subtabs").hidden = ["dashboard", "tools"].includes(activeAdminSection);
+      byId("admin-subtabs").hidden = !["finance", "students"].includes(activeAdminSection) || getAdminSectionTabs(activeAdminSection).length < 2;
+      renderAdminCourseNavigation();
       renderMainCourseSource();
       updateAdminTabCounts(data);
       renderAdminTab(true);
@@ -9204,9 +9434,7 @@
         return;
       }
       const filters = data.filters || {};
-      const summary = data.summary || {};
       const bookings = Array.isArray(data.bookings) ? data.bookings : [];
-      const studentSummary = studentData.summary || {};
       const studentRequests = (Array.isArray(studentData.requests) ? studentData.requests : [])
         .filter((item) => item.status !== "已取消");
       const now = Date.now();
@@ -9215,18 +9443,25 @@
         const end = Date.parse(`${date}T${item.endTime || ""}:00+08:00`);
         return Number.isFinite(end) && end <= now;
       };
-      const currentStudentRequests = studentRequests.filter((item) => !isEndedStudentRequest(item));
-      const endedStudentRequests = studentRequests.filter(isEndedStudentRequest);
+      const needsStudentReview = (item) => item.status === "待確認資格" ||
+        item.status === "時段異動待處理" || item.changeStatus === "時段異動待處理";
+      const reviewStudentRequests = studentRequests.filter(needsStudentReview);
+      const currentStudentRequests = studentRequests.filter((item) => !needsStudentReview(item) && !isEndedStudentRequest(item));
+      const endedStudentRequests = studentRequests.filter((item) => !needsStudentReview(item) && isEndedStudentRequest(item));
       const renderStudentCard = (item) => {
         const pending = item.status === "待確認資格";
         const companion = item.qualificationRole === "陪同者";
+        const changePending = item.status === "時段異動待處理" || item.changeStatus === "時段異動待處理";
         const qualificationVenue = item.qualificationVenue || (["A", "B"].includes(item.room) ? "晴光" : "劍潭");
-        const statusText = companion ? "陪同者" : pending ? "待確認資格" : item.status;
+        const statusText = [pending ? "待確認資格" : "", changePending ? "時段異動待處理" : ""].filter(Boolean).join("／") || (companion ? "陪同者" : item.status);
         return `<article class="practice-admin-card" data-student-practice-participant="${escapeHtml(item.participantId)}">
-          <div class="practice-admin-card-head">
-            <div><strong>${escapeHtml(item.date)}｜${escapeHtml(item.room)} 教室｜${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</strong><div class="item-meta">${escapeHtml(item.appName)}｜${escapeHtml(item.email)}｜${escapeHtml(qualificationVenue)}資格</div></div>
-            <span class="status-pill ${pending ? "pending" : ""}">${escapeHtml(statusText)}</span>
-          </div>
+          <details class="practice-student-details"${needsStudentReview(item) ? " open" : ""}>
+          <summary class="practice-admin-card-head">
+            <div><strong>${escapeHtml(item.appName || "學生")}</strong><div class="practice-admin-slot"><span>${escapeHtml(item.date)}</span><span>${escapeHtml(item.room)} 教室</span><span>${escapeHtml(item.startTime)}–${escapeHtml(item.endTime)}</span></div></div>
+            <span class="status-pill ${needsStudentReview(item) ? "pending" : ""}">${escapeHtml(statusText)}</span>
+          </summary>
+          <div class="practice-admin-detail-body">
+          <div class="item-meta">${escapeHtml(item.email)}｜${escapeHtml(qualificationVenue)}資格</div>
           ${item.note ? `<div class="item-meta">備註：${escapeHtml(item.note)}</div>` : ""}
           <div class="admin-item-actions">
             ${pending ? `<button class="primary-button inline-button" type="button" data-admin-action="confirm-student-practice-qualification" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="badge-check"></i>確認${escapeHtml(qualificationVenue)}資格並成立</button>` : ""}
@@ -9234,11 +9469,14 @@
             <button class="compact-button" type="button" data-admin-action="move-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-clock"></i>協助換時間</button>
             <button class="danger-button" type="button" data-admin-action="cancel-student-practice-participant" data-participant-id="${escapeHtml(item.participantId)}"><i data-lucide="calendar-x"></i>取消這位學生</button>
           </div>
+          </div>
+          </details>
         </article>`;
       };
+      const reviewStudentCards = renderMainPagedList("practice-students-review", reviewStudentRequests, renderStudentCard);
       const studentCards = renderMainPagedList("practice-students-current", currentStudentRequests, renderStudentCard, "目前沒有進行中或即將開始的學生自主練習");
-      const endedStudentCards = endedStudentRequests.length ? renderMainLazyDisclosure("practice-student-history", `已結束紀錄（${endedStudentRequests.length} 筆）`,
-        () => `<div class="practice-admin-list">${renderMainPagedList("practice-students-ended", endedStudentRequests, renderStudentCard)}</div>`, "admin-control student-practice-history", "", endedStudentRequests.length <= 20) : "";
+      const endedStudentCards = endedStudentRequests.length ? renderMainLazyDisclosure("practice-student-history", `學生已結束紀錄<span>${endedStudentRequests.length} 筆</span>`,
+        () => `<div class="practice-admin-list">${renderMainPagedList("practice-students-ended", endedStudentRequests, renderStudentCard)}</div>`, "practice-admin-history-month student-practice-history", "", endedStudentRequests.length <= 20) : "";
       const renderBookingCard = (booking) => {
         const participants = (booking.participants || []).map((participant) => `
           <div class="practice-admin-participant">
@@ -9247,12 +9485,18 @@
           </div>`).join("") || '<div class="item-meta">目前沒有有效參與者</div>';
         const audits = (booking.audits || []).slice(0, 8).map((audit) => `
           <div class="item-meta">${escapeHtml(audit.time)}｜${escapeHtml(audit.actor)}｜${escapeHtml(audit.action)}${audit.reason ? `｜${escapeHtml(audit.reason)}` : ""}</div>`).join("");
+        const names = [...new Set([booking.creatorName, ...(booking.participants || [])
+          .filter((participant) => !participant.status || participant.status === "有效")
+          .map((participant) => participant.teacherName)].filter(Boolean))].join("、") || "老師未設定";
         const editable = ["已成立", "候補"].includes(booking.status);
         return `<article class="practice-admin-card" data-practice-admin-booking="${escapeHtml(booking.bookingId)}">
-          <div class="practice-admin-card-head">
-            <div><strong>${escapeHtml(booking.date)}｜${escapeHtml(booking.room)} 教室｜${escapeHtml(booking.startTime)}–${escapeHtml(booking.endTime)}</strong><div class="item-meta">建立者：${escapeHtml(booking.creatorName || "未設定")}${booking.seriesId ? "｜每週循環" : "｜單次"}${booking.waitlistCalendarId ? `｜候補 OB：${escapeHtml(booking.waitlistCalendarId)}` : ""}</div></div>
+          <details class="practice-booking-details">
+          <summary class="practice-admin-card-head">
+            <div><strong>${escapeHtml(names)}</strong><div class="practice-admin-slot"><span>${escapeHtml(booking.date)}</span><span>${escapeHtml(booking.room)} 教室</span><span>${escapeHtml(booking.startTime)}–${escapeHtml(booking.endTime)}</span></div></div>
             <span class="status-pill">${escapeHtml(booking.status)}</span>
-          </div>
+          </summary>
+          <div class="practice-admin-detail-body">
+          <div class="item-meta">建立者：${escapeHtml(booking.creatorName || "未設定")}${booking.seriesId ? "｜每週循環" : "｜單次"}${booking.waitlistCalendarId ? `｜候補 OB：${escapeHtml(booking.waitlistCalendarId)}` : ""}</div>
           <div class="practice-admin-fields">
             <label class="notification-field">日期<input class="text-input" type="date" value="${escapeHtml(String(booking.date || "").replace(/\//g, "-"))}" data-practice-admin-date="${escapeHtml(booking.bookingId)}" ${editable ? "" : "disabled"}></label>
             <label class="notification-field">教室<select class="admin-select" data-practice-admin-room="${escapeHtml(booking.bookingId)}" ${editable ? "" : "disabled"}>${["A", "B", "C", "D"].map((room) => `<option value="${room}"${room === booking.room ? " selected" : ""}>${room}</option>`).join("")}</select></label>
@@ -9263,6 +9507,8 @@
           ${booking.reason ? `<div class="item-meta">原因：${escapeHtml(booking.reason)}</div>` : ""}
           ${audits ? `<details class="practice-admin-audits"><summary>查看操作紀錄（${(booking.audits || []).length}）</summary>${audits}</details>` : ""}
           ${editable ? `<div class="admin-item-actions"><button class="compact-button" type="button" data-admin-action="update-practice" data-booking-id="${escapeHtml(booking.bookingId)}"><i data-lucide="calendar-clock"></i>調整時段</button><button class="danger-button" type="button" data-admin-action="cancel-practice" data-booking-id="${escapeHtml(booking.bookingId)}" data-series-id="${escapeHtml(booking.seriesId || "")}"><i data-lucide="calendar-x"></i>取消登記</button></div>` : ""}
+          </div>
+          </details>
         </article>`;
       };
       const currentBookings = [];
@@ -9290,18 +9536,20 @@
           () => `<div class="practice-admin-list">${renderMainPagedList(`practice-history-${month}`, items, renderBookingCard)}</div>`,
           "practice-admin-history-month", `data-practice-admin-month="${escapeHtml(month)}"`, historyCount <= 20);
       });
-      const failures = renderMainPagedList("practice-notification-failures", data.notificationFailures || [], (item) => `
+      const notificationFailures = data.notificationFailures || [];
+      const failures = renderMainPagedList("practice-notification-failures", notificationFailures, (item) => `
         <article class="notification-history-row"><div class="notification-schedule-head"><strong>${escapeHtml(item.time || "時間未記錄")}</strong><span class="status-pill">推播失敗</span></div><div class="item-meta">${escapeHtml(item.reason || "原因未記錄")}｜場次 ${escapeHtml(item.targetId || "未記錄")}</div></article>`, "目前沒有推播失敗紀錄");
+      const hasFilters = [filters.dateFrom, filters.dateTo, filters.room, filters.status, filters.teacherName].some(Boolean);
       content.innerHTML = `
-        <section class="admin-control">
-          <strong>學生自主練習</strong>
-          <div class="item-meta">學生送出後會直接出現在這裡；待確認者按一次即可保留原時段並成立，不需重新輸入。</div>
-          <div class="admin-summary"><div class="summary-item"><span>待確認學生資格</span><strong>${Number(studentSummary.pendingQualification) || 0}</strong></div><div class="summary-item"><span>已成立</span><strong>${Number(studentSummary.active) || 0}</strong></div><div class="summary-item"><span>時段異動待處理</span><strong>${Number(studentSummary.changePending) || 0}</strong></div></div>
+        <section class="practice-admin-section" data-practice-student-review>
+          <div class="queue-section-heading"><strong>學生待審核／待處理</strong><span>${reviewStudentRequests.length} 筆</span></div>
+          ${reviewStudentRequests.length ? `<div class="practice-admin-list">${reviewStudentCards}</div>` : '<div class="practice-admin-empty">目前沒有待審核或待處理的學生</div>'}
         </section>
-        <div class="practice-admin-list">${studentCards}</div>
-        ${endedStudentCards}
-        <section class="admin-control"><strong>老師自主練習</strong><div class="item-meta">以下為原有老師自主練習與候補紀錄。</div></section>
-        <form id="practice-admin-filter-form" class="admin-control practice-admin-filters">
+        ${currentStudentRequests.length || endedStudentRequests.length ? `<section class="practice-admin-section">${currentStudentRequests.length ? `<div class="queue-section-heading"><strong>學生自主練習</strong><span>${currentStudentRequests.length} 筆</span></div><div class="practice-admin-list">${studentCards}</div>` : ""}${endedStudentCards}</section>` : ""}
+        <div class="queue-section-heading"><strong>老師自主練習</strong></div>
+        <details class="practice-admin-filter-panel"${hasFilters ? " open" : ""}>
+        <summary><i data-lucide="list-filter"></i>篩選<span>${hasFilters ? "已套用" : "全部日期・教室・老師"}</span></summary>
+        <form id="practice-admin-filter-form" class="practice-admin-filters">
           <label class="notification-field">開始日期<input id="practice-admin-date-from" class="text-input" type="date" value="${escapeHtml(filters.dateFrom || "")}"></label>
           <label class="notification-field">結束日期<input id="practice-admin-date-to" class="text-input" type="date" value="${escapeHtml(filters.dateTo || "")}"></label>
           <label class="notification-field">教室<select id="practice-admin-room" class="admin-select"><option value="">全部教室</option>${["A", "B", "C", "D"].map((room) => `<option value="${room}"${filters.room === room ? " selected" : ""}>${room} 教室</option>`).join("")}</select></label>
@@ -9309,11 +9557,11 @@
           <label class="notification-field">老師<input id="practice-admin-teacher" class="text-input" type="search" value="${escapeHtml(filters.teacherName || "")}" placeholder="輸入老師姓名"></label>
           <div class="practice-admin-filter-actions"><button class="compact-button" type="submit"><i data-lucide="search"></i>套用篩選</button><button class="compact-button" type="button" data-admin-action="clear-practice-filters"><i data-lucide="rotate-ccw"></i>清除</button></div>
         </form>
-        <div class="admin-summary"><div class="summary-item"><span>查詢筆數</span><strong>${Number(summary.total) || 0}</strong></div><div class="summary-item"><span>已成立</span><strong>${Number(summary.active) || 0}</strong></div><div class="summary-item"><span>候補</span><strong>${Number(summary.waitlisted) || 0}</strong></div><div class="summary-item"><span>已取消／衝突取消</span><strong>${Number(summary.cancelled) || 0}</strong></div></div>
+        </details>
         <div class="queue-section-heading"><strong>進行中／即將開始</strong><span>${currentBookings.length} 筆</span></div>
         <div class="practice-admin-list" data-practice-admin-current>${bookingCards}</div>
         ${historyCount ? `<section class="practice-admin-history" data-practice-admin-history><div class="queue-section-heading"><strong>已結束／已取消紀錄</strong><span>${historyCount} 筆</span></div>${historyCards}</section>` : ""}
-        <section class="practice-admin-failures"><div class="admin-control"><strong>推播失敗待處理</strong><div class="item-meta">自主練習異動通知若未成功送出，會保留在這裡供管理員追查。</div></div>${failures}</section>`;
+        ${notificationFailures.length ? `<section class="practice-admin-failures"><div class="queue-section-heading"><strong>推播失敗待處理</strong><span>${notificationFailures.length} 筆</span></div>${failures}</section>` : ""}`;
       refreshIcons();
     }
 
@@ -9708,7 +9956,7 @@
         const result = await callPostApi("endInvitationRound");
         setNotice(`已結束本輪邀請，共關閉 ${result.closedTeachers} 位老師的邀請。`);
         activeAdminTab = "closureManagement";
-        activeAdminSection = "operations";
+        activeAdminSection = ADMIN_TAB_SECTIONS.closureManagement;
         await fetchAdminDashboard();
       } finally {
         if (button && button.isConnected) setButtonBusy(button, false, "");
@@ -10087,10 +10335,17 @@ https://sherryaerial-web.github.io/sub.html/
     }
 
     function openAdminTab(tab) {
+      if (!Object.prototype.hasOwnProperty.call(ADMIN_TAB_SECTIONS, tab) ||
+          !authState.managementCapabilities.includes(getAdminTabCapability(tab)) || authState.actingTeacherName) {
+        return setNotice("目前帳號沒有這個管理功能的權限。", "error");
+      }
       captureMainWorkspacePosition();
       endReadRefresh(byId("admin-tab-content"));
       activeAdminTab = tab;
       activeAdminSection = ADMIN_TAB_SECTIONS[tab] || "courses";
+      syncWorkspaceNavigation(activeViewId || "view-admin");
+      byId("admin-workspace-title").textContent = ADMIN_SECTION_LABELS[activeAdminSection];
+      renderAdminCourseNavigation();
       requestMainWorkspaceRestore(tab);
       if (tab === "vvip") fetchVvipAdminDashboard();
       else if (tab === "payroll") fetchPayrollAdminDashboard(false, false);
@@ -10102,6 +10357,8 @@ https://sherryaerial-web.github.io/sub.html/
     }
 
     function openAdminSection(section) {
+      if (["payroll", "invoices", "raffle"].includes(section)) return openAdminTab(section);
+      if (!canOpenAdminSection(section)) return setNotice("目前帳號沒有這個管理功能的權限。", "error");
       captureMainWorkspacePosition();
       endReadRefresh(byId("admin-tab-content"));
       mainAssuranceState.restoreTab = "";
@@ -10109,7 +10366,7 @@ https://sherryaerial-web.github.io/sub.html/
       if (section === "dashboard") {
         activeAdminTab = "pendingInvitations";
         renderAdminDashboard();
-        if (!notificationDashboard) fetchNotificationAdminDashboard();
+        if (!notificationDashboard && authState.managementCapabilities.includes("course_admin")) fetchNotificationAdminDashboard();
         return;
       }
       if (section === "tools") {
@@ -10123,13 +10380,70 @@ https://sherryaerial-web.github.io/sub.html/
         if (!notificationDashboard) fetchNotificationAdminDashboard();
         return;
       }
-      openAdminTab(ADMIN_SECTION_DEFAULT_TABS[section] || "pendingInvitations");
+      const permittedTabs = getAdminSectionTabs(section);
+      const preferred = ADMIN_SECTION_DEFAULT_TABS[section];
+      openAdminTab(permittedTabs.includes(preferred) ? preferred : permittedTabs[0]);
+    }
+
+    async function refreshWorkspaceData() {
+      const button = byId("workspace-admin-refresh");
+      setButtonBusy(button, true, "");
+      try {
+        if (activeAdminSection === "dashboard") {
+          if (authState.managementCapabilities.includes("course_admin")) {
+            await fetchAdminDashboard();
+            await fetchNotificationAdminDashboard();
+          }
+          if (authState.managementCapabilities.includes("vvip_admin")) await fetchVvipReminderData();
+        }
+        else if (activeAdminTab === "practice") await fetchPracticeAdminDashboard();
+        else if (activeAdminTab === "payroll") await fetchPayrollAdminDashboard();
+        else if (activeAdminTab === "invoices") await fetchInvoiceAdminDashboard();
+        else if (activeAdminTab === "vvip") await fetchVvipAdminDashboard();
+        else if (activeAdminTab === "notifications" || activeAdminSection === "operations") await fetchNotificationAdminDashboard();
+        else if (authState.managementCapabilities.includes("course_admin")) await fetchAdminDashboard();
+      } finally { setButtonBusy(button, false, ""); }
     }
 
     byId("login-form").addEventListener("submit", login);
+    if (personalAppearance) {
+      byId("appearance-presets").innerHTML = window.SherryPersonalAppearance.palettes.map(palette =>
+        `<button class="appearance-preset" type="button" data-appearance-preset="${escapeHtml(palette.id)}" aria-pressed="${palette.id === "original"}"><span class="appearance-swatch" aria-hidden="true"><span style="background:${palette.primary}"></span><span style="background:${palette.secondary}"></span></span><span>${escapeHtml(palette.label)}</span><i data-lucide="check" aria-hidden="true"></i></button>`
+      ).join("");
+      byId("account-appearance-entry").addEventListener("click", () => personalAppearance.open());
+      byId("appearance-presets").addEventListener("click", event => {
+        const button = event.target.closest("[data-appearance-preset]");
+        if (button && !button.disabled) personalAppearance.setPreset(button.dataset.appearancePreset);
+      });
+      ["primary", "secondary"].forEach(name => byId(`appearance-${name}`).addEventListener("input", event => personalAppearance.setColor(name, event.target.value)));
+      byId("appearance-reset").addEventListener("click", () => personalAppearance.reset());
+      ["appearance-close", "appearance-cancel"].forEach(id => byId(id).addEventListener("click", () => personalAppearance.cancel()));
+      byId("appearance-dialog").addEventListener("cancel", event => { event.preventDefault(); personalAppearance.cancel(); });
+      byId("appearance-dialog").addEventListener("close", event => { if (!event.target.open && personalAppearance.snapshot().isOpen) personalAppearance.cancel(); });
+      byId("appearance-form").addEventListener("submit", event => { event.preventDefault(); personalAppearance.save(); });
+      byId("appearance-reload").addEventListener("click", () => { personalAppearance.cancel(); personalAppearance.open(); });
+    }
     byId("logout-button").addEventListener("click", logout);
     byId("account-logout").addEventListener("click", logout);
     byId("acting-stop").addEventListener("click", stopActingAsTeacher);
+    byId("workspace-teacher").addEventListener("click", () => switchView("view-home"));
+    byId("workspace-admin").addEventListener("click", () => {
+      if (!authState.actingTeacherName) switchView("view-admin");
+    });
+    byId("workspace-admin-refresh").addEventListener("click", refreshWorkspaceData);
+    byId("admin-mobile-more").addEventListener("click", () => {
+      byId("admin-more-dialog").showModal();
+      byId("admin-mobile-more").setAttribute("aria-expanded", "true");
+    });
+    byId("admin-more-close").addEventListener("click", () => byId("admin-more-dialog").close());
+    byId("admin-more-dialog").addEventListener("close", () => byId("admin-mobile-more").setAttribute("aria-expanded", "false"));
+    document.querySelectorAll("[data-admin-course-group]").forEach(button => {
+      button.addEventListener("click", () => {
+        const tab = (ADMIN_COURSE_GROUPS[button.dataset.adminCourseGroup] || []).find(tab => getAdminSectionTabs("courses").includes(tab));
+        if (tab) openAdminTab(tab);
+      });
+    });
+    byId("admin-status-select").addEventListener("change", event => openAdminTab(event.target.value));
     byId("admin-act-as").addEventListener("change", (event) => {
       if (event.target.value) startActingAsTeacher(event.target.value);
     });
@@ -10139,9 +10453,14 @@ https://sherryaerial-web.github.io/sub.html/
       openAdminTab(button.dataset.adminReminderTab);
     });
     document.querySelectorAll(".admin-section").forEach((button) => {
-      button.addEventListener("click", () => openAdminSection(button.dataset.adminSection));
+      button.addEventListener("click", () => {
+        if (byId("admin-more-dialog").open) byId("admin-more-dialog").close();
+        if (!canOpenAdminSection(button.dataset.adminSection)) return;
+        if (activeViewId !== "view-admin") switchView("view-admin");
+        openAdminSection(button.dataset.adminSection);
+      });
     });
-    byId("back-button").addEventListener("click", () => switchView("view-home"));
+    byId("back-button").addEventListener("click", () => switchView(activeWorkspaceMode === "admin" ? "view-admin" : "view-home"));
     byId("teacher-home-dates").addEventListener("click", (event) => {
       const button = event.target.closest ? event.target.closest("[data-teacher-home-date]") : null;
       if (button) selectTeacherHomeDate(button.dataset.teacherHomeDate);

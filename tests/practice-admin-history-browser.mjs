@@ -16,8 +16,16 @@ try {
   const page = await browser.newPage({ timezoneId: 'America/Los_Angeles' });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/*', route => route.abort());
-  await page.setContent(html);
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== 'https://history.test') return route.abort();
+    if (url.pathname.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: await fs.readFile(path.join(repo, path.basename(url.pathname))) });
+    if (/^\/assets\/app-icon-[a-z0-9-]+\.png$/.test(url.pathname)) return route.fulfill({ contentType: 'image/png', body: await fs.readFile(path.join(repo, url.pathname)) });
+    return route.abort();
+  });
+  await page.setContent(html.replace('<head>', '<head><base href="https://history.test/">'));
+  await page.addScriptTag({ path: path.join(repo, 'main-assurance-ui.js') });
+  if (process.env.PRACTICE_ICON_SCRIPT) await page.addScriptTag({ path: process.env.PRACTICE_ICON_SCRIPT });
   await page.evaluate(() => {
     Date.now = () => Date.parse('2026-10-23T15:00:00+08:00');
     const booking = (bookingId, date, status = '已成立', endTime = '15:00') => ({
@@ -38,6 +46,7 @@ try {
     document.getElementById('app-shell').hidden = false;
     document.querySelectorAll('.view').forEach(view => view.classList.remove('active'));
     document.getElementById('view-admin').classList.add('active');
+    activeViewId = 'view-admin'; syncWorkspaceNavigation('view-admin');
     activeAdminTab = 'practice'; activeAdminSection = 'practice';
     renderPracticeAdminDashboard();
   });
@@ -56,10 +65,12 @@ try {
     await page.locator('[data-practice-admin-history]').scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${output}/${name}-collapsed.png` });
     await september.locator(':scope > summary').click();
+    await september.locator('[data-practice-admin-booking]').first().waitFor({ state: 'visible' });
     assert.equal(await september.locator('[data-practice-admin-booking]').count(), 20);
     const card = september.locator('[data-practice-admin-booking]').first();
     await card.scrollIntoViewIfNeeded();
     assert.equal(await card.isVisible(), true);
+    await card.locator('.practice-booking-details > summary').click();
     assert.equal(await card.locator('[data-admin-action="update-practice"]').isVisible(), true);
     await card.locator('.practice-admin-audits > summary').click();
     assert.equal(await card.getByText(/保留操作紀錄/).isVisible(), true);
@@ -72,7 +83,9 @@ try {
     assert.equal(overflow, false, `${name} card controls`);
     await page.screenshot({ path: `${output}/${name}-expanded.png` });
     await card.locator('.practice-admin-audits > summary').click();
+    await card.locator('.practice-booking-details > summary').click();
     await september.locator(':scope > summary').click();
+    await card.waitFor({ state: 'detached' });
   }
   await page.evaluate(() => {
     practiceAdminDashboard.filters = { dateFrom: '2026-09-01', dateTo: '2026-09-30', teacherName: 'Tako' };

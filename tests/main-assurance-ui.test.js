@@ -714,7 +714,7 @@ test('backup is an explicit full-admin one-shot command, never a render side eff
   }
 });
 
-test('large active practice lists stay bounded while metrics remain full totals', () => {
+test('large active practice lists stay bounded while section counts remain full totals', () => {
   const r = runtime();
   r.context.bookings = Array.from({ length: 101 }, (_, index) => ({ bookingId: `future-${index}`, date: '2099/01/01',
     room: 'A', startTime: '12:00', endTime: '13:00', status: '已成立', participants: [] }));
@@ -724,7 +724,9 @@ test('large active practice lists stay bounded while metrics remain full totals'
   const result = r.element('admin-tab-content').innerHTML;
   assert.equal((result.match(/data-practice-admin-booking=/g) || []).length, 20);
   assert.equal((result.match(/data-student-practice-participant=/g) || []).length, 20);
-  assert.match(result, /<span>查詢筆數<\/span><strong>101<\/strong>/);
+  assert.match(result, /<strong>進行中／即將開始<\/strong><span>101 筆<\/span>/);
+  assert.match(result, /<strong>學生自主練習<\/strong><span>101 筆<\/span>/);
+  assert.doesNotMatch(result, /class="admin-summary"|查詢筆數/);
   assert.match(result, /data-main-page-key="practice-bookings-current"/);
   assert.doesNotMatch(html, /Jina／小美／卡拉／2 點課 2 人以下/);
 });

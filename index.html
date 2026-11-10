@@ -2112,7 +2112,7 @@
     .raffle-prize { border-top: 1px solid var(--line, #ddd4ca); padding: 14px 0 4px; margin-top: 10px; overflow-wrap: anywhere; }
     .raffle-prize .status-pill { margin-left: 10px; }
   </style>
-  <link rel="stylesheet" href="./workspace-navigation.css?v=20261110">
+  <link rel="stylesheet" href="./workspace-navigation.css?v=mobile-workbench-20261110">
 </head>
 <body>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -2681,7 +2681,7 @@
   <script src="raffle-tools.js?v=raffle-experience-20261105"></script>
   <script src="raffle.js?v=ops-refresh-20261105"></script>
   <script src="admin-transport.js?v=personal-appearance-20261110"></script>
-  <script src="main-assurance-ui.js?v=20261109"></script>
+  <script src="main-assurance-ui.js?v=mobile-workbench-20261110"></script>
   <script src="personal-appearance.js?v=20261110"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
@@ -2813,6 +2813,9 @@
     let pushActionGeneration = 0;
     let pushVerifiedFingerprint = "";
     let pushStatusMessage = "";
+    let pushRecheckTimer = null;
+    let pushVerificationGeneration = 0;
+    let pushInitializationGeneration = 0;
 
     window.OneSignalDeferred = window.OneSignalDeferred || [];
 
@@ -4764,11 +4767,19 @@
           pushSdk = OneSignal;
           pushSdkAppId = appId;
           const changed = () => {
+            const snapshot = { token: pushSessionToken, teacher: pushSessionTeacherName };
+            if (!isCurrentPushSession(snapshot)) return;
             if (pushVerifiedFingerprint !== getPushFingerprint(OneSignal)) {
               pushVerifiedFingerprint = "";
               pushStatusMessage = "";
             }
-            if (authState.sessionToken === pushSessionToken) renderPushPermissionCard(OneSignal);
+            renderPushPermissionCard(OneSignal);
+            window.clearTimeout(pushRecheckTimer);
+            pushRecheckTimer = window.setTimeout(async () => {
+              pushRecheckTimer = null;
+              if (pushActionPromise) await pushActionPromise;
+              if (isCurrentPushSession(snapshot) && !pushVerifiedFingerprint) checkPushNotifications();
+            }, 400);
           };
           if (OneSignal.User && OneSignal.User.addEventListener) OneSignal.User.addEventListener("change", changed);
           if (OneSignal.User && OneSignal.User.PushSubscription && OneSignal.User.PushSubscription.addEventListener) {
@@ -4866,10 +4877,12 @@
       pushSessionTeacherName = teacherName;
       pushSessionToken = token;
       const snapshot = { token, teacher: teacherName };
+      const generation = ++pushInitializationGeneration;
+      const isCurrentInitialization = () => isCurrentPushSession(snapshot) && generation === pushInitializationGeneration;
       pushInitializationPromise = (async () => {
         try {
           const configuration = await callPostApi("getPushConfiguration");
-          if (!isCurrentPushSession(snapshot)) return null;
+          if (!isCurrentInitialization()) return null;
           if (!configuration || !configuration.configured || !configuration.appId || !configuration.externalId) {
             pushInitializationPromise = null;
             pushStatusMessage = "通知服務尚未設定完成，請聯繫管理員。";
@@ -4877,18 +4890,29 @@
             return null;
           }
           const OneSignal = await ensureOneSignalInitialized(configuration.appId);
-          if (!isCurrentPushSession(snapshot)) return null;
+          if (!isCurrentInitialization()) return null;
           await queuePushIdentity(async () => {
-            if (isCurrentPushSession(snapshot)) await OneSignal.login(configuration.externalId);
+            if (isCurrentInitialization()) await OneSignal.login(configuration.externalId);
           });
-          if (!isCurrentPushSession(snapshot)) return null;
+          if (!isCurrentInitialization()) return null;
           pushIdentityExternalId = configuration.externalId;
           pushStatusMessage = "";
           pushVerifiedFingerprint = "";
+          if (!options.skipVerification && !(isIosDevice() && !isStandalonePwa()) &&
+              (!window.Notification || window.Notification.permission === "granted")) {
+            pushStatusMessage = "正在確認通知狀態...";
+            renderPushPermissionCard(OneSignal);
+            try {
+              await verifyPushSubscription(OneSignal, snapshot);
+            } catch (error) {
+              if (isCurrentInitialization()) pushStatusMessage = "暫時無法確認通知綁定，請稍後再檢查。";
+            }
+          }
+          if (!isCurrentInitialization()) return null;
           renderPushPermissionCard(OneSignal);
           return OneSignal;
         } catch (error) {
-          if (isCurrentPushSession(snapshot)) {
+          if (isCurrentInitialization()) {
             pushInitializationPromise = null;
             pushStatusMessage = "通知服務載入失敗，請重新檢查或綁定；其他功能不受影響。";
             renderPushPermissionCard();
@@ -4912,6 +4936,7 @@
     }
 
     async function verifyPushSubscription(OneSignal, snapshot) {
+      const generation = ++pushVerificationGeneration;
       const user = OneSignal.User || {};
       const subscription = user.PushSubscription || {};
       pushVerifiedFingerprint = "";
@@ -4924,8 +4949,14 @@
         return;
       }
       const fingerprint = getPushFingerprint(OneSignal);
-      const result = await callPostApi("getPushSubscriptionStatus", { subscriptionId: subscription.id });
-      if (!isCurrentPushSession(snapshot)) return;
+      let result;
+      try {
+        result = await callPostApi("getPushSubscriptionStatus", { subscriptionId: subscription.id });
+      } catch (error) {
+        if (!isCurrentPushSession(snapshot) || generation !== pushVerificationGeneration) return;
+        throw error;
+      }
+      if (!isCurrentPushSession(snapshot) || generation !== pushVerificationGeneration) return;
       if (fingerprint !== getPushFingerprint(OneSignal)) {
         pushStatusMessage = "通知狀態正在更新，請稍後再檢查。";
         return;
@@ -4953,6 +4984,7 @@
       const buttons = ["push-enable", "push-check", "push-repair"].map(byId);
       const generation = ++pushActionGeneration;
       pushActionToken = snapshot.token;
+      pushVerificationGeneration++;
       buttons.forEach(button => { button.disabled = true; });
       pushVerifiedFingerprint = "";
       pushStatusMessage = repair ? "正在重新綁定通知..." : "正在檢查通知...";
@@ -4964,7 +4996,7 @@
             await pushSdk.Notifications.requestPermission();
             if (!isCurrentPushSession(snapshot)) return;
           }
-          const OneSignal = await initializePushForSession({ force: repair });
+          const OneSignal = await initializePushForSession({ force: repair, skipVerification: true });
           if (!OneSignal || !isCurrentPushSession(snapshot)) return;
           if (repair) {
             if (!OneSignal.Notifications.permission) {
@@ -5137,6 +5169,10 @@
       ["push-enable", "push-check", "push-repair"].forEach(id => { byId(id).disabled = false; });
       pushVerifiedFingerprint = "";
       pushStatusMessage = "";
+      pushVerificationGeneration++;
+      pushInitializationGeneration++;
+      window.clearTimeout(pushRecheckTimer);
+      pushRecheckTimer = null;
       byId("push-permission-card").hidden = true;
       renderInboxBadge(0);
       byId("admin-entry").hidden = true;
@@ -8807,8 +8843,11 @@
         </div>
       </article>` : `<article class="monthly-next-card"><div><div class="monthly-next-label">本月進度</div><h3 class="monthly-next-title">目前沒有待處理流程</h3></div></article>`;
       const mainOperations = adminDashboard && adminDashboard.operations;
-      if (window.SherryMainAssurance) mainAssuranceState.listRenderers["operations-tasks"] = () => window.SherryMainAssurance.renderOperationsList("operations-tasks", adminDashboard && adminDashboard.operations, getMainOperationsOptions());
-      const mainTasks = authState.managementCapabilities.includes("course_admin") ? `<section class="main-section"><h3>待辦明細</h3>${window.SherryMainAssurance ? window.SherryMainAssurance.renderTasks(mainOperations && mainOperations.tasks, mainOperations && mainOperations.error, { pages: mainAssuranceState.pages }) : '<div class="state error">待辦元件未載入。</div>'}</section>` : "";
+      const taskOptions = () => ({ ...getMainOperationsOptions(), home: true, today: getTaipeiToday() });
+      if (window.SherryMainAssurance) ["operations-tasks", "operations-earlier-tasks"].forEach(key => {
+        mainAssuranceState.listRenderers[key] = () => window.SherryMainAssurance.renderOperationsList(key, adminDashboard && adminDashboard.operations, taskOptions());
+      });
+      const mainTasks = authState.managementCapabilities.includes("course_admin") ? `<section class="main-section"><h3>待辦事項</h3>${window.SherryMainAssurance ? window.SherryMainAssurance.renderTasks(mainOperations && mainOperations.tasks, mainOperations && mainOperations.error, taskOptions()) : '<div class="state error">待辦元件未載入。</div>'}</section>` : "";
       content.innerHTML = `${mainTasks}<div class="admin-home-grid">
         <section class="admin-home-card">
           <div class="admin-panel-heading"><h3>本月流程</h3><button class="compact-button" type="button" data-admin-go-section="operations">查看完整流程</button></div>

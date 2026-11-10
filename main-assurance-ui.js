@@ -229,11 +229,28 @@
     const sorted = tasks.slice().sort((a, b) => rank(a.urgency) - rank(b.urgency)
       || due(a).localeCompare(due(b)) || String(a.key).localeCompare(String(b.key)));
     if (!sorted.length) return state('目前沒有待辦事項。');
-    const page = paginate(sorted, options.pages && options.pages['operations-tasks']);
-    return `<div data-main-list="operations-tasks"><ul class="main-tasks">${page.items.map(item => `<li><div><strong>${escape(item.label || '待處理事項')}</strong> <span class="status-pill">${escape(item.urgency || '待處理')}</span>
-      ${meta(`${[item.date, item.time].filter(Boolean).join(' ') || '日期未取得'}｜對象 ID：${value(item.targetId)}｜負責：${item.owner || '未承接'}`)}
-      ${item.followAt ? meta(`追蹤：${item.followAt}`) : ''}</div>
-      <button type="button" class="compact-button" data-admin-go-tab="${escape(item.tab || 'mainOperations')}" data-main-target-id="${escape(item.targetId || '')}"><i data-lucide="arrow-right"></i>前往</button></li>`).join('')}</ul>${renderPager('operations-tasks', page)}</div>`;
+    const earlier = [], current = [];
+    const today = String(options.today || '').replaceAll('/', '-');
+    sorted.forEach(item => {
+      const date = String(item.date || '').replaceAll('/', '-');
+      // Old unassigned course work stays available without hiding active follow-ups or student reviews.
+      const isEarlier = options.home && validQueryDate(today) && validQueryDate(date) && date < today &&
+        ['obWork', 'changeRequests', 'pendingInvitations', 'activeInvitees'].includes(item.tab) &&
+        ['已逾期', '逾期', 'overdue'].includes(item.urgency) && !item.owner && !item.followAt;
+      (isEarlier ? earlier : current).push(item);
+    });
+    const renderPage = (key, items) => {
+      const page = paginate(items, options.pages && options.pages[key], options.home && key === 'operations-tasks' ? 6 : 20);
+      const rows = page.items.map(item => `<li><div><strong>${escape(item.label || '待處理事項')}</strong> <span class="status-pill">${escape(item.urgency || '待處理')}</span>
+        ${meta([[item.date, item.time].filter(Boolean).join(' ') || '日期未取得', item.owner ? `負責：${item.owner}` : ''].filter(Boolean).join('｜'))}
+        ${item.followAt ? meta(`追蹤：${item.followAt}`) : ''}</div>
+        <button type="button" class="compact-button" data-admin-go-tab="${escape(item.tab || 'mainOperations')}" data-main-target-id="${escape(item.targetId || '')}"><i data-lucide="arrow-right"></i>前往</button></li>`).join('');
+      return `<div data-main-list="${key}">${rows ? `<ul class="main-tasks">${rows}</ul>` : state('近期沒有待辦事項。')}${renderPager(key, page)}</div>`;
+    };
+    if (options.taskList === 'operations-earlier-tasks') return renderPage(options.taskList, earlier);
+    const currentPage = renderPage('operations-tasks', current);
+    if (options.taskList === 'operations-tasks') return currentPage;
+    return currentPage + (earlier.length ? disclosure(`較早待辦（${earlier.length}）`, renderPage('operations-earlier-tasks', earlier)) : '');
   }
 
   function renderException(item, options = {}) {
@@ -324,7 +341,7 @@
   function renderOperationsList(key, operations, options = {}) {
     const data = operations || {};
     if (key === 'operations-history') return renderHistory(options.history, options);
-    if (key === 'operations-tasks') return renderTasks(data.tasks, errorText(data), options);
+    if (key === 'operations-tasks' || key === 'operations-earlier-tasks') return renderTasks(data.tasks, errorText(data), { ...options, taskList: key });
     if (key === 'operations-notices') return renderNotices(errorText(data) ? null : data.notificationTracking, options);
     if (key === 'operations-cases') {
       return !errorText(data) && Array.isArray(data.exceptions)

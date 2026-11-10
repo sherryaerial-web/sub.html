@@ -56,7 +56,6 @@ try {
   });
   await page.evaluate(() => refreshIcons());
   await page.evaluate(() => initializePushForSession());
-  await page.locator('#push-check').click();
   await page.locator('#push-permission-card').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#push-status-copy').textContent(), '已確認這支裝置綁定 卡拉 卡拉，通知訂閱有效。');
   assert.equal(await page.evaluate(() => pushCalls.includes('optIn')), false);

@@ -861,11 +861,106 @@ function createPushFrontendFixture(overrides = {}, fixtures = {}) {
   return { ...runtime, oneSignal, calls, listeners };
 }
 
+test('a fresh app opening automatically verifies an existing push subscription without another tap', async () => {
+  for (let opening = 0; opening < 2; opening++) {
+    const f = createPushFrontendFixture();
+    await f.context.initializePushForSession();
+    assert.equal(f.getElement('push-permission-card').hidden, true, `opening ${opening + 1}`);
+    assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
+    assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 1);
+    assert.equal(f.calls.includes('permission') || f.calls.includes('optIn'), false);
+  }
+});
+
+test('automatic push verification leaves server failures visible instead of trusting local permission', async () => {
+  const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: { status: 'not_linked', matched: false, enabled: false } });
+  await f.context.initializePushForSession();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  assert.match(f.getElement('push-status-copy').textContent, /尚未確認/);
+});
+
+test('an SDK subscription restored after startup is automatically rechecked for the current session', async () => {
+  const f = createPushFrontendFixture();
+  f.oneSignal.User.PushSubscription.id = '';
+  f.oneSignal.User.PushSubscription.token = '';
+  await f.context.initializePushForSession();
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+  f.oneSignal.User.PushSubscription.id = '22222222-2222-4222-8222-222222222222';
+  f.oneSignal.User.PushSubscription.token = 'restored-device-token';
+  f.listeners.subscription();
+  await new Promise(resolve => setTimeout(resolve, 650));
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  assert.equal(f.calls.includes('optIn') || f.calls.includes('permission'), false);
+});
+
+test('a subscription change during a slow check is rechecked after that check settles', async () => {
+  const f = createPushFrontendFixture();
+  await f.context.initializePushForSession();
+  let finish;
+  const original = f.context.callPostApi;
+  f.context.callPostApi = action => action === 'getPushSubscriptionStatus'
+    ? new Promise(resolve => { finish = resolve; }) : original(action);
+  const checking = f.context.checkPushNotifications();
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  f.oneSignal.User.PushSubscription.id = '22222222-2222-4222-8222-222222222222';
+  f.listeners.subscription();
+  await new Promise(resolve => setTimeout(resolve, 450));
+  f.context.callPostApi = original;
+  finish({ status: 'ready', matched: true, enabled: true });
+  await checking;
+  await new Promise(resolve => setTimeout(resolve, 650));
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+});
+
+test('automatic startup confirmation cannot restore a banner or account state after logout', async () => {
+  let finish;
+  const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: new Promise(resolve => { finish = resolve; }) });
+  const opening = f.context.initializePushForSession();
+  while (!f.requestActions.includes('getPushSubscriptionStatus')) await new Promise(resolve => setImmediate(resolve));
+  f.context.clearSession();
+  finish({ status: 'ready', matched: true, enabled: true });
+  await opening;
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  assert.equal(vm.runInContext('pushVerifiedFingerprint', f.context), '');
+});
+
+test('a late startup success cannot overwrite a newer push repair failure for the same subscription', async () => {
+  let finishStartup;
+  const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: new Promise(resolve => { finishStartup = resolve; }) });
+  const opening = f.context.initializePushForSession();
+  while (!f.requestActions.includes('getPushSubscriptionStatus')) await new Promise(resolve => setImmediate(resolve));
+  const original = f.context.callPostApi;
+  f.context.callPostApi = (action, params) => action === 'getPushSubscriptionStatus'
+    ? Promise.resolve({ status: 'not_linked', matched: false, enabled: false }) : original(action, params);
+  await f.context.repairPushNotifications();
+  assert.match(f.getElement('push-status-copy').textContent, /尚未確認/);
+  finishStartup({ status: 'ready', matched: true, enabled: true });
+  await opening;
+  assert.match(f.getElement('push-status-copy').textContent, /尚未確認/);
+  assert.equal(f.getElement('push-permission-card').hidden, false);
+});
+
+test('a superseded startup configuration cannot reset the newer push repair state', async () => {
+  const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: { status: 'not_linked', matched: false, enabled: false } });
+  const original = f.context.callPostApi;
+  let finishConfiguration;
+  f.context.callPostApi = (action, params) => action === 'getPushConfiguration' && !finishConfiguration
+    ? new Promise(resolve => { finishConfiguration = resolve; }) : original(action, params);
+  const opening = f.context.initializePushForSession();
+  await f.context.repairPushNotifications();
+  finishConfiguration({ configured: true, appId: 'app', externalId: 'teacher_real_owner' });
+  await opening;
+  assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 1);
+  assert.match(f.getElement('push-status-copy').textContent, /尚未確認/);
+});
+
 test('push diagnostics remain accessible when the SDK says opted in and verify this device on the server', async () => {
   assert.match(html, /id="push-check"/);
   assert.match(html, /id="push-repair"/);
   const f = createPushFrontendFixture();
   await f.context.initializePushForSession();
+  assert.equal(f.getElement('push-permission-card').hidden, true);
+  f.context.switchView('view-account');
   assert.equal(f.getElement('push-permission-card').hidden, false);
   assert.equal(f.calls.includes('permission'), false);
   assert.equal(f.calls.includes('optIn'), false);
@@ -876,7 +971,7 @@ test('push diagnostics remain accessible when the SDK says opted in and verify t
   assert.equal(check.fields.subscriptionId, f.oneSignal.User.PushSubscription.id);
   assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
   assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已送達|保證/);
-  assert.equal(f.getElement('push-permission-card').hidden, true);
+  assert.equal(f.getElement('push-permission-card').hidden, false);
 });
 
 test('verified push settings remain accessible in My Account and collapse again outside it', async () => {
@@ -991,13 +1086,13 @@ test('subscription events invalidate previous remote confirmation without sendin
   f.listeners.subscription();
   assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
   assert.equal(f.getElement('push-permission-card').hidden, false);
-  assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 1);
+  assert.equal(f.requestActions.filter(action => action === 'getPushSubscriptionStatus').length, 2);
 });
 
 test('push diagnostics ignore a late reply after logout', async () => {
   let finish;
   const f = createPushFrontendFixture({}, { getPushSubscriptionStatus: new Promise(resolve => { finish = resolve; }) });
-  await f.context.initializePushForSession();
+  await f.context.initializePushForSession({ skipVerification: true });
   const pending = f.context.checkPushNotifications();
   while (!f.requestActions.includes('getPushSubscriptionStatus')) await new Promise(resolve => setImmediate(resolve));
   f.context.clearSession();

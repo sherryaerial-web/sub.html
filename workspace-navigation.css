@@ -148,10 +148,11 @@ body > dialog {
 .admin-more-links .admin-section { border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
 .admin-more-links .admin-section.active { color: var(--sea-700); }
 
-.app-shell[data-shell-mode] .teacher-home-panel { border: 0; border-radius: 0; box-shadow: none; background: var(--surface); }
-.app-shell[data-shell-mode] .teacher-panel-heading { padding: 13px 0; border-bottom: 1px solid var(--line); min-height: 48px; color: var(--ink); }
+.app-shell[data-shell-mode] .teacher-home-panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; box-shadow: none; background: var(--surface); }
+.app-shell[data-shell-mode] .teacher-panel-heading { padding: 13px 18px; border-bottom: 1px solid var(--line); min-height: 48px; color: var(--ink); }
 .app-shell[data-shell-mode] .teacher-schedule-list,
-.app-shell[data-shell-mode] .teacher-upcoming-list { padding: 0; }
+.app-shell[data-shell-mode] .teacher-upcoming-list { padding: 0 18px; }
+.app-shell[data-shell-mode] .teacher-home-empty { padding: 20px 8px; }
 .app-shell[data-shell-mode] .teacher-home-heading .section-heading { font-size: 25px; }
 .app-shell[data-shell-mode] .teacher-home-heading .section-copy { color: var(--muted); font-size: 12px; }
 .app-shell[data-shell-mode] .teacher-month-chip { border: 0; background: var(--soft); color: var(--muted); box-shadow: none; border-radius: 4px; font-size: 12px; }
@@ -211,9 +212,9 @@ body > dialog {
   .app-shell[data-shell-mode] .teacher-date-strip { width: 100%; grid-auto-columns: 76px; margin-right: 0; padding-right: 0; }
   .app-shell[data-shell-mode] .teacher-date-card { min-height: 74px; border-radius: 6px; }
   .app-shell[data-shell-mode] .teacher-home-grid { gap: 24px; }
-  .app-shell[data-shell-mode] .teacher-panel-heading { padding-inline: 0; }
+  .app-shell[data-shell-mode] .teacher-panel-heading { padding-inline: 16px; }
   .app-shell[data-shell-mode] .teacher-schedule-list,
-  .app-shell[data-shell-mode] .teacher-upcoming-list { padding-inline: 0; }
+  .app-shell[data-shell-mode] .teacher-upcoming-list { padding-inline: 16px; }
   .app-shell[data-shell-mode] .mobile-tabbar,
   .app-shell[data-shell-mode] .admin-mobile-tabbar {
     position: fixed;

@@ -162,6 +162,42 @@ test('tasks sort by urgency then followup/date without changing original order a
   assert.match(m.renderTasks([]), /目前沒有待辦/);
 });
 
+test('home tasks collapse old unowned course work but keep tracked and student reviews visible', () => {
+  const tasks = [
+    { key: 'old', label: '八月舊課程', date: '2026/08/01', urgency: '已逾期', tab: 'obWork', targetId: 'private-uuid' },
+    { key: 'today', label: '今日課程', date: '2026/11/10', urgency: '已逾期', tab: 'obWork' },
+    { key: 'student', label: '學生資格待確認', date: '2026/08/01', urgency: '已逾期', tab: 'practice' },
+    { key: 'owned', label: '已承接舊課程', date: '2026/08/01', urgency: '已逾期', tab: 'obWork', owner: 'Tako' },
+    { key: 'follow', label: '設有追蹤的課程', date: '2026/08/01', urgency: '已逾期', tab: 'obWork', followAt: '2026-11-10T12:00' },
+    { key: 'critical', label: '緊急課程', date: '2026/08/01', urgency: 'critical', tab: 'obWork' },
+    { key: 'unknown', label: '日期未知', date: '', urgency: '已逾期', tab: 'obWork' },
+  ];
+  const before = JSON.stringify(tasks);
+  const result = ui().renderTasks(tasks, null, { home: true, today: '2026/11/10' });
+  const earlier = result.match(/<details\b[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
+  assert.match(earlier, /較早待辦（1）/);
+  assert.match(earlier, /八月舊課程/);
+  assert.doesNotMatch(earlier, /\bopen\b/);
+  const visible = result.replace(earlier, '');
+  for (const label of ['今日課程', '學生資格待確認', '已承接舊課程', '設有追蹤的課程', '緊急課程', '日期未知']) assert.ok(visible.includes(label), label);
+  assert.doesNotMatch(visible, /八月舊課程/);
+  assert.doesNotMatch(result, /對象 ID|未承接/);
+  assert.match(result, /data-main-target-id="private-uuid"/);
+  assert.equal(JSON.stringify(tasks), before);
+});
+
+test('earlier home tasks retain independent pagination and all original navigation targets', () => {
+  const tasks = Array.from({ length: 25 }, (_, index) => ({ key: `old-${String(index).padStart(2, '0')}`, label: `八月課程 ${String(index).padStart(2, '0')}`,
+    date: '2026/08/01', urgency: '已逾期', tab: 'obWork', targetId: `target-${index}` }));
+  const options = { home: true, today: '2026/11/10', pages: { 'operations-earlier-tasks': 2 } };
+  const result = ui().renderOperationsList('operations-earlier-tasks', { tasks }, options);
+  assert.match(result, /data-main-list="operations-earlier-tasks"/);
+  assert.match(result, /八月課程 20/);
+  assert.doesNotMatch(result, /八月課程 00/);
+  assert.match(result, /data-main-target-id="target-20"/);
+  assert.match(ui().renderTasks(tasks), /八月課程 00/);
+});
+
 test('operations renders cases, canonical identity choices and strictly read-only notice states', () => {
   const m = ui();
   assert.equal(typeof m.renderOperations, 'function');

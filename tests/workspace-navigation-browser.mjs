@@ -62,6 +62,33 @@ try {
   }
   const tabs = await page.evaluate(() => Object.keys(ADMIN_TAB_SECTIONS));
   assert.equal(tabs.length, 18);
+  await page.evaluate(() => {
+    window.originalTaskFixture = structuredClone(adminDashboard.operations.tasks);
+    window.originalToday = getTaipeiToday;
+    getTaipeiToday = () => '2026/11/10';
+    adminDashboard.operations.tasks = [
+      { key: 'review', label: '學生資格待確認', date: '2026/08/01', time: '10:00', tab: 'practice', urgency: '已逾期', targetId: 'student-review' },
+      ...Array.from({ length: 25 }, (_, index) => ({ key: `old-${String(index).padStart(2, '0')}`, label: `八月課程 ${index}`,
+        date: '2026/08/01', time: '11:00', tab: 'obWork', urgency: '已逾期', targetId: `private-target-${index}` }))
+    ];
+    renderAdminHome();
+  });
+  assert.equal(await page.getByText('學生資格待確認', { exact: true }).isVisible(), true);
+  assert.equal(await page.getByText('八月課程 0', { exact: true }).isVisible(), false);
+  assert.doesNotMatch(await page.locator('#admin-tab-content').innerText(), /對象 ID|未承接/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: path.join(output, 'mobile-admin-earlier-collapsed.png') });
+  await page.getByText('較早待辦（25）', { exact: true }).click();
+  assert.equal(await page.getByText('八月課程 0', { exact: true }).isVisible(), true);
+  await page.locator('[data-main-list="operations-earlier-tasks"] [data-main-page="2"]').click();
+  assert.equal(await page.getByText('八月課程 20', { exact: true }).isVisible(), true);
+  assert.equal(await page.getByText('學生資格待確認', { exact: true }).isVisible(), true);
+  assert.equal(await page.locator('[data-main-target-id="private-target-20"]').getAttribute('data-admin-go-tab'), 'obWork');
+  await page.evaluate(() => {
+    adminDashboard.operations.tasks = originalTaskFixture;
+    getTaipeiToday = originalToday;
+    renderAdminHome();
+  });
   for (const [name, width, height] of [['desktop', 1366, 900], ['mobile', 390, 844], ['narrow', 320, 740]]) {
     await page.setViewportSize({ width, height });
     await page.evaluate(() => { switchView('view-admin'); openAdminSection('dashboard'); });
@@ -110,7 +137,39 @@ try {
     assert.equal(await page.locator('.leave-date-checkbox:checked').count(), 2);
     await page.evaluate(() => switchView('view-home'));
     await checkLayout(`${name} teacher home`);
+    const panelGeometry = await page.locator('.teacher-home-panel').evaluateAll(panels => panels.map(panel => {
+      const rect = panel.getBoundingClientRect();
+      const heading = panel.querySelector('.teacher-panel-heading');
+      const list = panel.querySelector('.teacher-schedule-list, .teacher-upcoming-list');
+      return { radius: parseFloat(getComputedStyle(panel).borderRadius), headingInset: parseFloat(getComputedStyle(heading).paddingLeft),
+        listInset: parseFloat(getComputedStyle(list).paddingLeft), panelLeft: rect.left, panelRight: rect.right };
+    }));
+    for (const geometry of panelGeometry) {
+      assert.ok(geometry.radius >= 8 && geometry.headingInset >= 14 && geometry.listInset >= 14, `${name}: panels need soft corners and inner spacing: ${JSON.stringify(geometry)}`);
+      const outerInset = width < 360 ? 14 : 16;
+      assert.ok(geometry.panelLeft >= outerInset && geometry.panelRight <= width - outerInset, `${name}: panels stay inset from screen edges`);
+    }
     await page.screenshot({ path: path.join(output, `${name}-teacher.png`) });
+    const originalHome = await page.evaluate(() => structuredClone(teacherHomeDashboard));
+    await page.evaluate(() => {
+      teacherHomeDashboard.scheduleByDate = {};
+      teacherHomeDashboard.upcoming = [{ date: '2026/11/12', title: '請假登記開放中', time: '21:00', meta: '請於 11/12 21:00 前完成下月請假', targetView: 'leave' }];
+      teacherHomeSelectedDate = '2026/11/10';
+      renderTeacherHome(teacherHomeDashboard);
+      const preset = SherryPersonalAppearance.palettes.find(item => item.id === 'lilac');
+      Object.entries(SherryPersonalAppearance.themeTokens({ ...SherryPersonalAppearance.defaultPreference(), mode: 'preset', presetId: 'lilac', primary: preset.primary, secondary: preset.secondary }))
+        .forEach(([token, value]) => document.getElementById('app-shell').style.setProperty(token, value));
+    });
+    await checkLayout(`${name} empty teacher home`);
+    assert.equal(await page.getByText('請假登記開放中', { exact: true }).isVisible(), true);
+    assert.equal(await page.getByText('這天沒有課程或練習', { exact: true }).isVisible(), true);
+    await page.screenshot({ path: path.join(output, `${name}-teacher-empty-lilac.png`) });
+    await page.evaluate(home => {
+      teacherHomeDashboard = home;
+      renderTeacherHome(teacherHomeDashboard);
+      Object.keys(SherryPersonalAppearance.themeTokens(SherryPersonalAppearance.defaultPreference()))
+        .forEach(token => document.getElementById('app-shell').style.removeProperty(token));
+    }, originalHome);
     await page.evaluate(() => switchView('view-practice'));
     await page.locator('#rental-new').click();
     await page.waitForSelector('#rental-dialog[open]');

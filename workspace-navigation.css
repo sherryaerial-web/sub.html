@@ -26,7 +26,9 @@ body > dialog {
   --appearance-nav: #ebe5dd;
   --appearance-edge: #ad8175;
   --shadow-sm: 0 1px 3px #40393610;
-  --radius: 6px;
+  --radius: 12px;
+  --panel-radius: 16px;
+  --panel-padding: 18px;
 }
 
 .app-shell[data-shell-mode] {
@@ -53,8 +55,8 @@ body > dialog {
 .app-shell[data-shell-mode] .topbar .icon-button { color: var(--appearance-on-primary); border-color: transparent; background: transparent; }
 .app-shell[data-shell-mode] .current-user { color: var(--appearance-on-primary); background: none; }
 
-.workspace-switcher { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); }
-.workspace-switcher button { min-height: 34px; padding: 6px 14px; border: 0; border-radius: 4px; background: none; color: var(--muted); font-size: 12px; font-weight: 650; cursor: pointer; white-space: nowrap; }
+.workspace-switcher { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.workspace-switcher button { min-height: 34px; padding: 6px 14px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-size: 12px; font-weight: 650; cursor: pointer; white-space: nowrap; }
 .workspace-switcher button[aria-pressed="true"] { color: var(--sea-700); background: var(--surface); box-shadow: 0 1px 3px #203b3120; }
 
 .app-shell[data-shell-mode] .app-layout { grid-template-columns: 216px minmax(0, 1fr); min-height: calc(100dvh - 72px); }
@@ -72,15 +74,15 @@ body > dialog {
 .app-shell[data-shell-mode] .teacher-home-heading .eyebrow { display: none; }
 .app-shell[data-shell-mode] .view-header .section-copy { font-size: 12px; }
 .app-shell #view-admin > .view-header { flex-direction: row; flex-wrap: nowrap; align-items: center; }
-.app-shell .admin-workspace,
 .app-shell .list-item,
-.app-shell .admin-control { background: var(--surface); border-color: var(--line); }
-.app-shell .toolbar { padding-inline: 0; border: 0; background: none; }
+.app-shell .admin-control { background: var(--surface); border-color: var(--line); border-radius: var(--panel-radius); }
+.app-shell .admin-workspace { background: transparent; }
+.app-shell .toolbar { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--panel-radius); background: var(--surface); }
 .app-shell .confirmation { background: var(--soft); border-color: var(--line); }
 .app-shell[data-shell-mode] .primary-button { color: var(--appearance-on-primary); background: var(--appearance-primary); border-color: var(--appearance-primary); box-shadow: none; }
 .app-shell[data-shell-mode] .compact-button { color: var(--sea-700); background: var(--surface); border-color: var(--line-strong); box-shadow: none; }
 .app-shell[data-shell-mode] .danger-button { color: var(--coral-600); background: var(--coral-100); box-shadow: none; }
-.app-shell[data-shell-mode] .status-pill { border-radius: 4px; }
+.app-shell[data-shell-mode] .status-pill { border-radius: 999px; }
 
 .app-shell .admin-sections {
   position: static;
@@ -115,48 +117,53 @@ body > dialog {
 .app-shell .admin-section.active { background: var(--appearance-secondary); color: var(--appearance-on-secondary); border-color: transparent; }
 .admin-nav-divider { height: 1px; margin: 19px 12px; background: var(--line); }
 .app-shell .admin-layout { display: block; }
-.app-shell .admin-priority { padding: 0; border: 0; border-radius: 0; box-shadow: none; margin-bottom: 24px; }
+.app-shell .admin-priority { padding: var(--panel-padding); border: 1px solid var(--line); border-radius: var(--panel-radius); box-shadow: none; margin-bottom: 20px; }
 .app-shell .admin-priority-head > span { display: none; }
 .app-shell .admin-reminders { display: flex; flex-wrap: wrap; gap: 8px; }
-.app-shell .admin-reminder { min-height: 38px; gap: 10px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 5px; box-shadow: none; background: var(--surface); }
+.app-shell .admin-reminder { min-height: 42px; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; box-shadow: none; background: var(--surface); }
 .app-shell .admin-reminder span { font-size: 12px; }
 .app-shell .admin-reminder strong { font-size: 12px; color: var(--coral-600); }
-.app-shell .admin-home-grid { gap: 28px; }
-.app-shell .admin-home-card { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
-.app-shell .admin-home-card .admin-panel-heading { padding-top: 18px; border-top: 1px solid var(--line); }
-.app-shell .admin-home-action { min-height: 56px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px 0; background: none; box-shadow: none; }
+.app-shell .admin-home-grid { gap: 20px; }
+.app-shell .admin-home-card { min-width: 0; padding: var(--panel-padding); border: 1px solid var(--line); border-radius: var(--panel-radius); box-shadow: none; }
+.app-shell .admin-home-card .admin-panel-heading { padding: 0; border: 0; margin-bottom: 16px; flex-wrap: wrap; }
+.app-shell .admin-home-action { min-width: 0; min-height: 84px; border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--soft); box-shadow: none; }
 .app-shell .admin-home-action > span { display: none; }
 .app-shell .admin-home-action > strong { font-size: 13px; }
-.app-shell .admin-home-card .monthly-next-card { border: 0; border-radius: 0; background: var(--soft); box-shadow: none; }
+.app-shell .admin-home-card .monthly-next-card { padding: 16px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; box-shadow: none; }
+.app-shell #admin-tab-content > .main-section { padding: var(--panel-padding); margin-bottom: 20px; border: 1px solid var(--line); border-radius: var(--panel-radius); background: var(--surface); }
+.app-shell .main-tasks li { padding-block: 16px; }
+.app-shell .main-tasks li:last-child { border-bottom: 0; }
+.app-shell .main-data-status { padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.app-shell .main-data-status.is-warning { border-left: 3px solid var(--amber-700); padding-left: 14px; }
 .app-shell .admin-tools-shell { border: 0; padding: 0; box-shadow: none; }
-.app-shell .admin-tabs { position: static; flex-wrap: wrap; gap: 5px 20px; margin-bottom: 20px; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; box-shadow: none; }
-.app-shell .admin-tab { flex: 0 1 auto; min-width: 0; min-height: 44px; padding: 8px 0 11px; border: 0; border-radius: 0; background: none; white-space: normal; font-size: 13px; }
-.app-shell .admin-tab.active { border-bottom: 2px solid var(--sea-700); color: var(--sea-700); background: none; }
+.app-shell .admin-tabs { position: static; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: none; }
+.app-shell .admin-tab { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 9px 12px; border: 0; border-radius: 10px; background: none; white-space: normal; font-size: 13px; }
+.app-shell .admin-tab.active { color: var(--appearance-on-secondary); background: var(--appearance-secondary); }
 .app-shell .admin-tab-count { border-radius: 4px; font-size: 10px; padding: 2px 5px; }
 
-.admin-course-navigation { margin-bottom: 20px; }
-.admin-course-groups { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
-.admin-course-groups button { min-height: 44px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
-.admin-course-groups button.active { color: var(--sea-700); border-bottom-color: var(--sea-700); }
+.admin-course-navigation { margin-bottom: 20px; padding: var(--panel-padding); border: 1px solid var(--line); border-radius: var(--panel-radius); background: var(--surface); }
+.admin-course-groups { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; border-bottom: 0; margin-bottom: 16px; padding: 4px; border-radius: 12px; background: var(--soft); }
+.admin-course-groups button { min-width: 0; min-height: 44px; padding: 8px 4px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+.admin-course-groups button.active { color: var(--appearance-on-secondary); background: var(--appearance-secondary); }
 .admin-status-filter { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
-.admin-status-filter .admin-select { min-width: 0; width: min(100%, 260px); font-size: 13px; }
+.admin-status-filter .admin-select { min-width: 0; width: min(100%, 260px); margin-top: 0; font-size: 13px; }
 .admin-mobile-tabbar { display: none; }
-.admin-more-dialog { width: min(94vw, 440px); border: 1px solid var(--line); border-radius: 8px; padding: 0; color: var(--ink); background: var(--surface); }
+.admin-more-dialog { width: min(94vw, 440px); border: 1px solid var(--line); border-radius: var(--panel-radius); padding: 0; color: var(--ink); background: var(--surface); }
 .admin-more-dialog::backdrop { background: #24342a3d; }
 .admin-more-dialog .dialog-body { padding: 20px; }
 .admin-more-links { display: grid; gap: 6px; }
-.admin-more-links .admin-section { border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
+.admin-more-links .admin-section { border-radius: 10px; background: var(--soft); }
 .admin-more-links .admin-section.active { color: var(--sea-700); }
 
-.app-shell[data-shell-mode] .teacher-home-panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; box-shadow: none; background: var(--surface); }
+.app-shell[data-shell-mode] .teacher-home-panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--panel-radius); box-shadow: none; background: var(--surface); }
 .app-shell[data-shell-mode] .teacher-panel-heading { padding: 13px 18px; border-bottom: 1px solid var(--line); min-height: 48px; color: var(--ink); }
 .app-shell[data-shell-mode] .teacher-schedule-list,
 .app-shell[data-shell-mode] .teacher-upcoming-list { padding: 0 18px; }
 .app-shell[data-shell-mode] .teacher-home-empty { padding: 20px 8px; }
 .app-shell[data-shell-mode] .teacher-home-heading .section-heading { font-size: 25px; }
 .app-shell[data-shell-mode] .teacher-home-heading .section-copy { color: var(--muted); font-size: 12px; }
-.app-shell[data-shell-mode] .teacher-month-chip { border: 0; background: var(--soft); color: var(--muted); box-shadow: none; border-radius: 4px; font-size: 12px; }
-.app-shell[data-shell-mode] .teacher-date-card { border: 1px solid transparent; border-radius: 6px; background: var(--surface); box-shadow: none; }
+.app-shell[data-shell-mode] .teacher-month-chip { border: 0; background: var(--soft); color: var(--muted); box-shadow: none; border-radius: 10px; font-size: 12px; }
+.app-shell[data-shell-mode] .teacher-date-card { border: 1px solid transparent; border-radius: 12px; background: var(--surface); box-shadow: none; }
 .app-shell[data-shell-mode] .teacher-date-card.active { border-color: var(--line-strong); color: var(--sea-700); background: var(--aqua-50); box-shadow: none; }
 .app-shell[data-shell-mode] .teacher-schedule-row,
 .app-shell[data-shell-mode] .teacher-upcoming-row { border-bottom-color: var(--line); }
@@ -167,19 +174,19 @@ body > dialog {
 .app-shell[data-shell-mode] .teacher-schedule-row time,
 .app-shell[data-shell-mode] .teacher-upcoming-date,
 .app-shell[data-shell-mode] .teacher-text-button { color: var(--sea-700); }
-.app-shell[data-shell-mode] .teacher-status-pill { border-radius: 4px; background: var(--green-100); color: var(--green-700); }
+.app-shell[data-shell-mode] .teacher-status-pill { border-radius: 999px; background: var(--green-100); color: var(--green-700); }
 .app-shell[data-shell-mode] .teacher-status-pill.regular { background: var(--soft); color: var(--muted); }
 .app-shell[data-shell-mode] .teacher-status-pill.waitlist { background: var(--amber-100); color: var(--amber-700); }
-.app-shell[data-shell-mode] .teacher-flow-switcher { position: static; display: flex; gap: 22px; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
-.app-shell[data-shell-mode] .teacher-flow-switcher button { min-height: 44px; padding: 9px 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); background: none; box-shadow: none; }
-.app-shell[data-shell-mode] .teacher-flow-switcher button.active { color: var(--sea-700); border-bottom-color: var(--sea-700); background: none; box-shadow: none; }
-.app-shell[data-shell-mode] .account-menu { gap: 0; }
-.app-shell[data-shell-mode] .account-menu > button { min-height: 70px; padding: 14px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--surface); color: var(--ink); }
-.app-shell[data-shell-mode] .account-menu-icon { width: 36px; height: 36px; background: none; color: var(--sea-700); border-radius: 5px; }
+.app-shell[data-shell-mode] .teacher-flow-switcher { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); }
+.app-shell[data-shell-mode] .teacher-flow-switcher button { min-width: 0; min-height: 44px; padding: 9px 12px; border: 0; border-radius: 10px; color: var(--muted); background: none; box-shadow: none; }
+.app-shell[data-shell-mode] .teacher-flow-switcher button.active { color: var(--appearance-on-secondary); background: var(--appearance-secondary); box-shadow: none; }
+.app-shell[data-shell-mode] .account-menu { gap: 10px; }
+.app-shell[data-shell-mode] .account-menu > button { min-width: 0; min-height: 74px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--panel-radius); background: var(--surface); color: var(--ink); }
+.app-shell[data-shell-mode] .account-menu-icon { width: 36px; height: 36px; background: var(--soft); color: var(--sea-700); border-radius: 10px; }
 .app-shell[data-shell-mode] .account-menu small { color: var(--muted); }
-.app-shell[data-shell-mode] .account-logout { border-radius: 6px; color: var(--coral-600); border-color: var(--line); }
-.app-shell[data-shell-mode] .push-permission-card { border-radius: 6px; box-shadow: none; }
-.app-shell[data-shell-mode] .date-option { border-radius: 6px; box-shadow: none; }
+.app-shell[data-shell-mode] .account-logout { border-radius: 12px; color: var(--coral-600); border-color: var(--line); }
+.app-shell[data-shell-mode] .push-permission-card { border-radius: var(--panel-radius); box-shadow: none; }
+.app-shell[data-shell-mode] .date-option { border-radius: 12px; box-shadow: none; }
 .app-shell[data-shell-mode] .date-option:has(input:checked) { border-color: var(--line-strong); color: var(--sea-700); background: var(--aqua-50); }
 
 @media (max-width: 1100px) and (min-width: 761px) {
@@ -210,7 +217,7 @@ body > dialog {
   .app-shell[data-shell-mode] .view-header { flex-wrap: wrap; gap: 12px; }
   .app-shell[data-shell-mode] .view-header .section-copy { font-size: 12px; }
   .app-shell[data-shell-mode] .teacher-date-strip { width: 100%; grid-auto-columns: 76px; margin-right: 0; padding-right: 0; }
-  .app-shell[data-shell-mode] .teacher-date-card { min-height: 74px; border-radius: 6px; }
+  .app-shell[data-shell-mode] .teacher-date-card { min-height: 74px; border-radius: 12px; }
   .app-shell[data-shell-mode] .teacher-home-grid { gap: 24px; }
   .app-shell[data-shell-mode] .teacher-panel-heading { padding-inline: 16px; }
   .app-shell[data-shell-mode] .teacher-schedule-list,
@@ -260,14 +267,16 @@ body > dialog {
   .app-shell[data-shell-mode] .admin-mobile-tabbar > button.active::before { content: ""; position: absolute; top: -6px; width: 27px; height: 2px; background: var(--sea-700); }
   .app-shell[data-shell-mode] .mobile-tabbar svg,
   .app-shell[data-shell-mode] .admin-mobile-tabbar svg { width: 21px; height: 21px; }
-  .admin-more-dialog { width: 100%; max-width: 100%; max-height: calc(100dvh - 24px); margin: auto 0 0; border: 0; border-radius: 8px 8px 0 0; }
+  .admin-more-dialog { width: 100%; max-width: 100%; max-height: calc(100dvh - 24px); margin: auto 0 0; border: 0; border-radius: 18px 18px 0 0; }
   .admin-more-dialog .dialog-body { padding: 20px 20px calc(24px + env(safe-area-inset-bottom)); }
   .admin-course-groups { gap: 3px; }
-  .admin-course-groups button { min-width: 0; padding: 8px 0; font-size: 12px; }
+  .admin-course-groups button { min-width: 0; padding: 8px 2px; font-size: 12px; }
   .admin-status-filter { align-items: center; gap: 10px; }
   .admin-status-filter .admin-select { width: auto; flex: 1; }
-  .app-shell .admin-tabs { position: static; width: 100%; margin-inline: 0; overflow: visible; gap: 4px 18px; }
+  .app-shell .admin-tabs { position: static; width: 100%; margin-inline: 0; overflow: visible; gap: 6px; }
   .app-shell .admin-tab { font-size: 12px; }
+  .app-shell .notification-section-nav,
+  .app-shell .invoice-section-nav { position: static; width: 100%; margin: 0 0 14px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
   .app-shell .admin-home-actions-wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell .admin-home-action { justify-items: start; text-align: left; }
   .app-shell .admin-reminders { gap: 7px; }
@@ -282,7 +291,6 @@ body > dialog {
   .app-shell input[type="time"],
   .app-shell input[type="month"] { min-width: 0; max-width: 100%; padding-inline: 0; -webkit-appearance: none; appearance: none; }
   .app-shell .teacher-flow-switcher { position: static; backdrop-filter: none; }
-  .app-shell[data-shell-mode] .account-menu > button { border-radius: 0; }
 }
 
 @media (max-width: 359px) {
@@ -293,11 +301,11 @@ body > dialog {
   .app-shell[data-shell-mode] .topbar-actions { gap: 3px; }
   .workspace-switcher button { padding-inline: 7px; }
   .admin-course-groups button { font-size: 11px; }
-  .app-shell .admin-tabs { gap: 4px 12px; }
+  .app-shell .admin-tabs { gap: 6px; }
 }
 
 
-.appearance-dialog { width: min(540px, calc(100% - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.appearance-dialog { width: min(540px, calc(100% - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; padding: 0; border: 1px solid var(--line); border-radius: var(--panel-radius); background: var(--surface); color: var(--ink); }
 .appearance-dialog .dialog-body { min-width: 0; padding: 22px; }
 .appearance-heading, .appearance-custom-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
 .appearance-heading h3 { margin: 0; font-size: 20px; }
@@ -305,7 +313,7 @@ body > dialog {
 .appearance-custom-heading h4 { margin: 0; font-size: 14px; }
 .appearance-dialog .icon-button { width: 40px; height: 40px; flex: 0 0 40px; padding: 8px; background: var(--surface); color: var(--ink); border-color: var(--line); }
 .appearance-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.appearance-preset { position: relative; display: grid; align-content: start; gap: 8px; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--surface); font-size: 12px; text-align: left; cursor: pointer; }
+.appearance-preset { position: relative; display: grid; align-content: start; gap: 8px; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--surface); font-size: 12px; text-align: left; cursor: pointer; }
 .appearance-preset[aria-pressed="true"] { border-color: var(--sea-700); box-shadow: inset 0 0 0 1px var(--sea-700); }
 .appearance-preset > svg { position: absolute; top: 13px; right: 13px; width: 20px; height: 20px; padding: 2px; background: var(--surface); color: var(--ink); border-radius: 50%; visibility: hidden; }
 .appearance-preset[aria-pressed="true"] > svg { visibility: visible; }
@@ -322,7 +330,7 @@ body > dialog {
 .appearance-dialog .primary-button:hover:not(:disabled) { background: var(--appearance-primary); border-color: var(--appearance-primary); color: var(--appearance-on-primary); }
 .appearance-dialog .compact-button { background: var(--surface); border-color: var(--line-strong); color: var(--sea-700); }
 .app-shell[data-shell-mode] .account-menu > button:disabled { opacity: .55; cursor: not-allowed; }
-.app-shell[data-shell-mode] .account-menu button:nth-child(2) .account-menu-icon { background: none; color: var(--sea-700); }
+.app-shell[data-shell-mode] .account-menu button:nth-child(2) .account-menu-icon { color: var(--sea-700); }
 @media (max-width: 520px) {
   .appearance-dialog .dialog-body { padding: 18px 14px; }
   .appearance-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

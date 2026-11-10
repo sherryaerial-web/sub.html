@@ -59,6 +59,16 @@ try {
       });
     });
     assert.deepEqual(overflow, [], label); scenes++;
+    const surfaces = await page.evaluate(() => {
+      const selectors = ['.admin-priority', '.admin-home-card', '.admin-course-navigation', '#view-account .account-menu > button'];
+      if (activeViewId === 'view-admin' && activeAdminSection === 'dashboard') selectors.push('#admin-tab-content > .main-section');
+      return [...document.querySelectorAll(selectors.join(','))].filter(element => element.getClientRects().length).map(element => {
+        const style = getComputedStyle(element);
+        return { name: element.className, radius: parseFloat(style.borderTopLeftRadius), left: parseFloat(style.paddingLeft), right: parseFloat(style.paddingRight) };
+      });
+    });
+    for (const surface of surfaces) assert.ok(surface.radius >= 14 && surface.left >= 14 && surface.right >= 14,
+      `${label}: colored surfaces must have soft corners and real inner spacing: ${JSON.stringify(surface)}`);
   }
   const tabs = await page.evaluate(() => Object.keys(ADMIN_TAB_SECTIONS));
   assert.equal(tabs.length, 18);
@@ -91,12 +101,20 @@ try {
   });
   for (const [name, width, height] of [['desktop', 1366, 900], ['mobile', 390, 844], ['narrow', 320, 740]]) {
     await page.setViewportSize({ width, height });
-    await page.evaluate(() => { switchView('view-admin'); openAdminSection('dashboard'); });
+    await page.evaluate(() => {
+      switchView('view-admin'); openAdminSection('dashboard');
+      notificationDashboard.monthlyOperations.operations = [{ id: 'leave_reminder', label: '發送請假截止提醒',
+        recommendedAt: '2026-11-11 21:00', canExecute: true, status: 'pending', early: true }];
+      renderAdminHome();
+    });
     await checkLayout(`${name} dashboard`);
     await page.screenshot({ path: path.join(output, `${name}-admin.png`) });
+    await page.locator('.admin-home-card').last().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(output, `${name}-admin-lower.png`) });
     for (const tab of tabs) {
       await page.evaluate(tab => openAdminTab(tab), tab);
       await checkLayout(`${name} ${tab}`);
+      await page.screenshot({ path: path.join(output, `${name}-admin-${tab}.png`) });
       assert.equal(await page.evaluate(() => activeAdminSection), await page.evaluate(tab => ADMIN_TAB_SECTIONS[tab], tab));
     }
     await page.evaluate(() => openAdminSection('courses'));
@@ -121,11 +139,11 @@ try {
     assert.equal(await page.locator('#view-leave select, #view-leave textarea').count(), 0);
     await checkLayout(`${name} original multi-date leave`);
     await page.screenshot({ path: path.join(output, `${name}-leave.png`), fullPage: true });
-    await page.locator('#leave-submit').scrollIntoViewIfNeeded();
+    await page.locator('#leave-submit').evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
     await settle();
     await page.screenshot({ path: path.join(output, `${name}-leave-confirmation.png`) });
     const leaveButton = await page.locator('#leave-submit').boundingBox();
-    assert.ok(leaveButton && leaveButton.y >= 0 && leaveButton.y + leaveButton.height <= height - (width <= 760 ? 65 : 0), `${name}: leave confirmation remains reachable above navigation`);
+    assert.ok(leaveButton && leaveButton.y >= 0 && leaveButton.y + leaveButton.height <= height - (width <= 760 ? 65 : 0), `${name}: leave confirmation remains reachable above navigation: ${JSON.stringify(leaveButton)}`);
     let confirmation = '';
     page.once('dialog', async dialog => { confirmation = dialog.message(); await dialog.dismiss(); });
     await page.locator('#leave-submit').click();
@@ -145,7 +163,7 @@ try {
         listInset: parseFloat(getComputedStyle(list).paddingLeft), panelLeft: rect.left, panelRight: rect.right };
     }));
     for (const geometry of panelGeometry) {
-      assert.ok(geometry.radius >= 8 && geometry.headingInset >= 14 && geometry.listInset >= 14, `${name}: panels need soft corners and inner spacing: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.radius >= 16 && geometry.headingInset >= 14 && geometry.listInset >= 14, `${name}: panels need soft corners and inner spacing: ${JSON.stringify(geometry)}`);
       const outerInset = width < 360 ? 14 : 16;
       assert.ok(geometry.panelLeft >= outerInset && geometry.panelRight <= width - outerInset, `${name}: panels stay inset from screen edges`);
     }
@@ -170,6 +188,9 @@ try {
       Object.keys(SherryPersonalAppearance.themeTokens(SherryPersonalAppearance.defaultPreference()))
         .forEach(token => document.getElementById('app-shell').style.removeProperty(token));
     }, originalHome);
+    await page.evaluate(() => switchView('view-account'));
+    await checkLayout(`${name} account menu`);
+    await page.screenshot({ path: path.join(output, `${name}-account.png`) });
     await page.evaluate(() => switchView('view-practice'));
     await page.locator('#rental-new').click();
     await page.waitForSelector('#rental-dialog[open]');

@@ -9,6 +9,7 @@
     const confirmReconciled = options.confirmReconciled || (() => false);
     const storageKey = 'sherry-admin-pending-v1';
     const active = new Map(), pendingCalls = new Map();
+    const expiryNoticeFallback = new Map();
     let needsHealth = false, healthPromise = null, resumePromise = null;
     const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))))
       .map(b => b.toString(16).padStart(2, '0')).join('');
@@ -65,6 +66,26 @@
       if (state === 'running') return '操作仍在處理中，請稍後再確認；不要重複送出。';
       if (state === 'not_received') return '尚未確認系統收到這次操作，內容已保留；再次按送出會沿用原編號確認，避免重複操作。';
       return '操作結果待確認，可能已完成部分內容，請勿重送；請先查閱清單或聯繫管理員。';
+    }
+    function shouldShowResumeNotice(record, state) {
+      const key = 'sherry-admin-expiry-notice-v1:' + JSON.stringify([record.owner, record.id]);
+      let wasExpired = expiryNoticeFallback.get(key);
+      if (wasExpired === undefined) {
+        try { wasExpired = storage.getItem(key) === 'expired'; }
+        catch (_) { wasExpired = false; }
+      }
+      const expired = state === 'expired';
+      expiryNoticeFallback.set(key, expired);
+      try {
+        // Reminder metadata must never rewrite shared pending operation receipts.
+        if ((storage.getItem(key) === 'expired') !== expired) {
+          const value = expired ? 'expired' : '';
+          storage.setItem(key, value);
+          if (storage.getItem(key) !== value) throw Error('Reminder metadata was not saved.');
+        }
+        expiryNoticeFallback.delete(key);
+      } catch (_) { /* Keep same-page dedup and state transitions if storage is unavailable. */ }
+      return !expired || !wasExpired;
     }
     function consume(record, result) {
       if (result && result.state === 'completed' && result.payload && result.payload.status === 'success') {
@@ -162,9 +183,10 @@
           for (const record of records) {
             let result;
             try { result = await status(record, token); } catch (_) { result = {state:'uncertain'}; }
+            const showNotice = shouldShowResumeNotice(record, result.state);
             const slot = active.get(record.signature);
             if (slot && result.state === 'completed' && result.payload) slot.resolveRecovered(result.payload);
-            else notice(recordLabel(record) + (result.state === 'completed' && !result.payload ? '系統已執行完成，完整回覆已過期；請核對原清單，勿重複送出。' : statusMessage(result.state)), result.state);
+            else if (showNotice) notice(recordLabel(record) + (result.state === 'completed' && !result.payload ? '系統已執行完成，完整回覆已過期；請核對原清單，勿重複送出。' : statusMessage(result.state)), result.state);
           }
         } catch (error) { notice(error.message, 'uncertain'); }
       })().finally(() => { resumePromise = null; });

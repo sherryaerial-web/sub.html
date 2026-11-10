@@ -4975,6 +4975,7 @@ test('fetches calendar pages in blocks of 100 with bearer auth', () => {
   assert.match(calls[1].url, /start=100/);
   assert.match(calls[0].url, /date_from=2026-08-03/);
   assert.match(calls[0].url, /date_to=2026-09-30/);
+  assert.ok(calls.every(call => new URL(call.url).searchParams.get('include_cancelled') === 'false'));
   assert.equal(calls[0].options.headers.Authorization, 'Bearer secret-for-test');
 });
 
@@ -11344,6 +11345,201 @@ function createPayrollNoShowFixture() {
   return f;
 }
 
+function createPayrollNoShowCalendarFixture() {
+  const f = createPayrollNoShowFixture();
+  f.services.PropertiesService.getScriptProperties().setProperty('OMCEAN_API_TOKEN', 'fixture-token');
+  f.backend.fetchPayrollNoShowCourse_ = f.readCourse;
+  f.calendarItems = [f.raw];
+  f.calendarReads = [];
+  f.backend.UrlFetchApp = { fetch(url, options) {
+    f.calendarReads.push({ url, options });
+    assert.equal(options.method, 'get');
+    assert.equal(options.headers.Authorization, 'Bearer fixture-token');
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, 'https://api.omceanbooking.com');
+    let body;
+    if (parsed.pathname === '/v1/calendar') {
+      const items = f.calendarItems.filter(item => parsed.searchParams.get('include_cancelled') === 'true' || item.cancelled !== true);
+      const start = Number(parsed.searchParams.get('start'));
+      body = items.slice(start, start + 100);
+    } else {
+      assert.equal(parsed.pathname, '/v1/calendar/60001');
+      body = f.raw;
+    }
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify(body) };
+  } };
+  return f;
+}
+
+test('No Show day lookup includes cancelled courses, preserves flags and identities, and excludes adjacent days', () => {
+  const f = createPayrollNoShowCalendarFixture();
+  f.raw.cancelled = true;
+  f.calendarItems = [f.raw, { ...f.raw, id: 60002, cancelled: false, classTime: '2026-11-04T09:00:00Z' },
+    { ...f.raw, id: 60003, classTime: '2026-11-05T00:00:00Z' }, { id: 60004, cancelled: true }];
+  f.backend.getMainTeacherIdentityMap_ = () => ({ names: { '1': 'Tako' }, conflicts: {} });
+  const before = JSON.stringify(f.calendarItems);
+  const courses = f.backend.getPayrollNoShowCourses_(f.adminSession, '2026-11', '2026-11-04');
+  assert.deepEqual(Array.from(courses, course => [course.calendarId, course.time, course.sourceCancelled, course.instructors[0].name]),
+    [['60002', '17:00', false, 'Tako'], ['60001', '18:00', true, 'Tako']]);
+  const query = new URL(f.calendarReads[0].url).searchParams;
+  assert.equal(query.get('include_cancelled'), 'true');
+  assert.equal(query.get('date_from'), '2026-11-04');
+  assert.equal(query.get('date_to'), '2026-11-05');
+  assert.equal(JSON.stringify(f.calendarItems), before);
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+});
+
+test('No Show cancelled lookup paginates across month-end without changing ordinary calendar defaults', () => {
+  const f = createPayrollNoShowCalendarFixture();
+  f.calendarItems = Array.from({ length: 101 }, (_, index) => ({ ...f.raw, id: 60001 + index,
+    cancelled: true, classTime: '2026-11-30T10:00:00Z' }));
+  const courses = f.backend.getPayrollNoShowCourses_(f.adminSession, '2026-11', '2026/11/30');
+  assert.equal(courses.length, 101);
+  assert.equal(courses[100].calendarId, '60101');
+  assert.ok(courses.every(course => course.sourceCancelled === true));
+  assert.deepEqual(f.calendarReads.map(call => {
+    const query = new URL(call.url).searchParams;
+    return [query.get('start'), query.get('include_cancelled'), query.get('date_to')];
+  }), [['0', 'true', '2026-12-01'], ['100', 'true', '2026-12-01']]);
+  const ordinary = f.backend.fetchCalendarPages_('fixture-token', '2026-11-30', '2026-12-01');
+  assert.equal(ordinary.length, 0);
+  assert.equal(new URL(f.calendarReads.at(-1).url).searchParams.get('include_cancelled'), 'false');
+});
+
+test('No Show day lookup rejects unauthorized, readonly, invalid dates and missing tokens before any API read', () => {
+  const f = createPayrollNoShowCalendarFixture();
+  for (const session of [{ ...f.adminSession, managementCapabilities: [] },
+    { ...f.adminSession, readOnly: true }, { ...f.adminSession, impersonatedBy: '管理員' }]) {
+    assert.throws(() => f.backend.getPayrollNoShowCourses_(session, '2026-11', '2026-11-04'));
+  }
+  for (const [month, date] of [['2026-10', '2026-10-04'], ['2026-11', '2026-12-01'], ['2026-11', '2026-11-31']]) {
+    assert.throws(() => f.backend.getPayrollNoShowCourses_(f.adminSession, month, date));
+  }
+  f.services.PropertiesService.getScriptProperties().deleteProperty('OMCEAN_API_TOKEN');
+  assert.throws(() => f.backend.getPayrollNoShowCourses_(f.adminSession, '2026-11', '2026-11-04'), /TOKEN/);
+  assert.equal(f.calendarReads.length, 0);
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+});
+
+test('No Show day lookup fails closed on HTTP, malformed JSON, invalid shape or a later-page failure', () => {
+  for (const [status, body, laterPage, error] of [[401, '[]', false, /401/], [200, '{', false, /JSON/],
+    [200, '{}', false, /格式/], [503, '[]', true, /503/]]) {
+    const f = createPayrollNoShowCalendarFixture();
+    let reads = 0;
+    f.backend.UrlFetchApp.fetch = () => {
+      const firstPage = laterPage && reads++ === 0;
+      return { getResponseCode: () => firstPage ? 200 : status,
+        getContentText: () => firstPage ? JSON.stringify(Array(100).fill(f.raw)) : body };
+    };
+    assert.throws(() => f.backend.getPayrollNoShowCourses_(f.adminSession, '2026-11', '2026-11-04'), error);
+    assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+  }
+});
+
+for (const reason of [undefined, '', '   \n\t']) {
+  test(`No Show accepts ${reason === undefined ? 'omitted' : reason === '' ? 'empty' : 'whitespace'} event reason through preview and idempotent registration`, () => {
+    const f = createPayrollNoShowCalendarFixture();
+    delete f.input.reason;
+    if (reason !== undefined) f.input.reason = reason;
+    const quote = f.quote();
+    assert.equal(quote.amount, 700);
+    assert.equal(quote.event.input.reason, '');
+    const input = { ...f.input, quoteKey: quote.quoteKey };
+    const saved = f.backend.recordPayrollNoShow_(f.adminSession, input);
+    assert.equal(saved.event.input.reason, '');
+    f.backend.UrlFetchApp.fetch = () => { throw Error('unexpected retry read'); };
+    assert.equal(f.backend.recordPayrollNoShow_(f.adminSession, { ...input, reason: '  ' }).id, saved.id);
+    assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...input, reason: 'changed' }), /編號|內容/);
+    assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 2);
+    assert.equal(f.auditSheet.values.filter(row => row[2] === '登記 No Show Fee').length, 1);
+    assert.throws(() => f.backend.cancelPayrollNoShow_(f.adminSession, saved.id, ''), /取消原因/);
+  });
+}
+
+test('No Show optional event reason still accepts 500 characters and rejects 501 without writes', () => {
+  const f = createPayrollNoShowFixture();
+  const input = { ...f.input, reason: '原'.repeat(500) };
+  const quote = f.backend.previewPayrollNoShow_(f.adminSession, input);
+  assert.equal(quote.event.input.reason, '原'.repeat(500));
+  assert.throws(() => f.backend.previewPayrollNoShow_(f.adminSession, { ...f.input, reason: '原'.repeat(501) }), /500/);
+  assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...input, reason: '原'.repeat(501), quoteKey: quote.quoteKey }), /500/);
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+  assert.equal(f.backend.recordPayrollNoShow_(f.adminSession, { ...input, quoteKey: quote.quoteKey }).event.input.reason, '原'.repeat(500));
+});
+
+test('No Show blank event reasons never bypass required input or readonly preview and registration guards', () => {
+  const f = createPayrollNoShowCalendarFixture();
+  f.input.reason = '';
+  const quote = f.quote();
+  for (const patch of [{ month: '' }, { month: '2026-10' }, { calendarId: '' }, { calendarId: '../60001' },
+    { teacherName: '' }, { teacherName: '不存在' }, { confirmed: false }, { confirmed: undefined }, { confirmed: 'true' }]) {
+    const input = { ...f.input, ...patch, quoteKey: quote.quoteKey };
+    assert.throws(() => f.backend.previewPayrollNoShow_(f.adminSession, input));
+    assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, input));
+  }
+  for (const session of [{ ...f.adminSession, readOnly: true }, { ...f.adminSession, impersonatedBy: '管理員' }]) {
+    assert.throws(() => f.backend.previewPayrollNoShow_(session, f.input), /唯讀/);
+    assert.throws(() => f.backend.recordPayrollNoShow_(session, { ...f.input, quoteKey: quote.quoteKey }), /唯讀/);
+  }
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+});
+
+test('No Show blank event reasons never bypass exact calendar ID, month, start time or source teacher checks', () => {
+  for (const [patch, error] of [[{ id: 60002 }, /編號/], [{ classTime: '2026-10-04T10:00:00Z' }, /月份/],
+    [{ classTime: '2026-11-30T10:00:00Z' }, /尚未開始/], [{ instructors: [{ id: 2, firstName: 'Other' }] }, /老師.*不符/]]) {
+    const f = createPayrollNoShowCalendarFixture();
+    f.backend.Date = class extends Date { static now() { return Date.parse('2026-11-10T00:00:00Z'); } };
+    f.input.reason = '';
+    Object.assign(f.raw, patch);
+    assert.throws(() => f.quote(), error);
+    assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+  }
+});
+
+test('No Show cancelled calendar ID loads a marked snapshot and allows no-replacement registration with no reason', () => {
+  const f = createPayrollNoShowCalendarFixture();
+  f.raw.cancelled = true;
+  f.input = { ...f.input, mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 8, reason: '' };
+  const course = f.backend.fetchPayrollNoShowCourse_('60001');
+  assert.equal(course.calendarId, '60001');
+  assert.equal(course.sourceCancelled, true);
+  assert.equal(f.raw.cancelled, true);
+  assert.equal(f.calendarReads[0].url, 'https://api.omceanbooking.com/v1/calendar/60001');
+  const quote = f.quote();
+  assert.equal(quote.amount, 1440);
+  const saved = f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, quoteKey: quote.quoteKey });
+  assert.equal(saved.event.course.sourceCancelled, true);
+  assert.equal(saved.event.course.calendarId, '60001');
+  assert.equal(saved.event.input.reason, '');
+  const draft = f.backend.buildPayrollDraft_('2026-11', f.backend.applyPayrollNoShows_([], [saved]), f.rules);
+  assert.equal(draft.errors.length, 0);
+  assert.equal(draft.lines.length, 1);
+  assert.equal(draft.lines[0].teacherName, 'Jina');
+  assert.equal(draft.lines[0].amount, 0);
+});
+
+test('No Show cancelled courses still reject replacement mode even when the event reason is omitted', () => {
+  const f = createPayrollNoShowCalendarFixture();
+  f.raw.cancelled = true;
+  delete f.input.reason;
+  assert.throws(() => f.quote(), /有代課.*已取消/);
+  assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+});
+
+test('No Show optional reasons do not bypass stale cancellation snapshots or changed input', () => {
+  for (const cancelled of [false, true]) {
+    const f = createPayrollNoShowCalendarFixture();
+    f.raw.cancelled = cancelled;
+    f.input = { ...f.input, mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 8, reason: '' };
+    const quote = f.quote();
+    f.raw.cancelled = !cancelled;
+    assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, quoteKey: quote.quoteKey }), /變動|重新/);
+    f.raw.cancelled = cancelled;
+    assert.throws(() => f.backend.recordPayrollNoShow_(f.adminSession, { ...f.input, reason: 'new reason', quoteKey: quote.quoteKey }), /變動|重新/);
+    assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
+  }
+});
+
 test('No Show quotes calculate original expected wage or extra points only, with immutable price snapshot', () => {
   const f = createPayrollNoShowFixture();
   const quote = f.quote();
@@ -11387,7 +11583,7 @@ test('No Show rejects readonly, invalid confirmation, historical month, mismatch
     { replacementTeacher: 'Jina' }, { calendarId: '../60001' }, { attendanceCount: -1 },
     { mode: 'noReplacement', replacementTeacher: '', refundPoints: 8, extraPoints: 16 },
     { mode: 'noReplacement', replacementTeacher: '', refundPoints: 0, extraPoints: 0 },
-    { reason: '' }, { mode: 'unknown' }]) {
+    { reason: '原'.repeat(501) }, { mode: 'unknown' }]) {
     assert.throws(() => f.backend.previewPayrollNoShow_(f.adminSession, { ...f.input, ...patch }));
   }
   assert.equal(f.spreadsheet.getSheetByName('薪資單月扣款').values.length, 1);
@@ -11399,7 +11595,7 @@ test('No Show POST routes reject acting-teacher context before preview or write 
   f.backend.previewPayrollNoShow_ = () => { throw Error('unexpected preview reached'); };
   f.backend.recordPayrollNoShow_ = () => { throw Error('unexpected write reached'); };
   f.backend.cancelPayrollNoShow_ = () => { throw Error('unexpected cancel reached'); };
-  for (const action of ['previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow']) {
+  for (const action of ['getPayrollNoShowCourses', 'previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow']) {
     const response = JSON.parse(f.backend.doPost({ parameter: { action, sessionToken: 'fixture',
       actingTeacherName: 'Jina', event: JSON.stringify(f.input), deductionId: f.input.id, reason: 'test' } }).text);
     assert.equal(response.status, 'error');

@@ -30,7 +30,8 @@ try {
     callPostApi = async (action, params) => {
       if (action === 'getPayrollAdminDashboard') return fixturePayroll;
       if (action === 'getPayrollNoShowCourses') return [{ calendarId: '60001', date: '2026/11/04', time: '18:00',
-        courseName: 'A－空環 Lv.1', instructors: [{ name: 'Jina' }] }];
+        courseName: 'A－空環 Lv.1', instructors: [{ name: 'Jina' }] }, { calendarId: '60002', date: '2026/11/04', time: '20:00',
+        courseName: 'C－舞綢 Lv.1', sourceCancelled: true, instructors: [{ name: 'Jina' }] }];
       if (action === 'previewPayrollNoShow') {
         noShowPreviewCalls.push(params.event);
         return { amount: params.event.mode === 'replacement' ? 700 : 1440,
@@ -63,10 +64,12 @@ try {
   await page.getByText('登記 No Show Fee', { exact: true }).click();
   await page.locator('#payroll-noshow-date').fill('2026-11-04');
   await page.locator('#payroll-noshow-load').click();
+  assert.match(await page.locator('#payroll-noshow-course option[value="60002"]').innerText(), /已取消/);
   await page.locator('#payroll-noshow-course').selectOption('60001');
   await page.locator('#payroll-noshow-teacher').selectOption('Jina');
   await page.locator('#payroll-noshow-replacement').selectOption('Tako');
-  await page.locator('#payroll-noshow-reason').fill('確認未授課');
+  assert.equal(await page.locator('#payroll-noshow-reason').evaluate(input => input.required), false);
+  await page.locator('#payroll-noshow-reason').fill('');
   await page.locator('#payroll-noshow-confirmed').check();
   assert.equal(await page.getByText('清單找不到課程？手動輸入 OB 課程編號', { exact: true }).count(), 1);
   await page.locator('#payroll-noshow-preview-button').click();
@@ -80,6 +83,7 @@ try {
   await page.locator('#payroll-noshow-replacement').selectOption('Tako');
   await page.locator('#payroll-noshow-preview-button').click();
   await page.locator('#payroll-noshow-register').waitFor();
+  assert.equal(await page.evaluate(() => noShowPreviewCalls[0].reason), '');
   await page.locator('#payroll-noshow-reason').fill('更新原因');
   assert.equal(await page.locator('#payroll-noshow-register').count(), 0);
   await page.locator('#payroll-noshow-mode').selectOption('noReplacement');

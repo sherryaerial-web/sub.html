@@ -80,6 +80,41 @@ try {
   assert.deepEqual(await page.locator('#admin-section-nav [data-admin-section]').evaluateAll(buttons => buttons.map(button => button.dataset.adminSection)),
     ['dashboard', 'courses', 'practice', 'finance', 'students', 'notifications', 'tools']);
   await page.evaluate(() => {
+    openAdminSection('students');
+    window.originalWorkspaceApi = callApi;
+    callApi = (action, params) => action === 'getPayrollAdminDashboard'
+      ? new Promise(resolve => { window.finishWorkspacePayroll = () => originalWorkspaceApi(action, params).then(resolve); })
+      : originalWorkspaceApi(action, params);
+    payrollDashboard = null;
+  });
+  assert.deepEqual(await page.locator('.admin-tab:visible').evaluateAll(buttons => buttons.map(button => button.dataset.adminTab)),
+    ['raffle', 'monthlyDiscount', 'vvip']);
+  assert.equal(await page.locator('.admin-tab[aria-selected="true"]').getAttribute('data-admin-tab'), 'raffle');
+  await page.evaluate(() => openAdminSection('finance'));
+  assert.equal(await page.locator('#admin-workspace-title').innerText(), '財務');
+  assert.deepEqual(await page.locator('.admin-tab:visible').evaluateAll(buttons => buttons.map(button => button.dataset.adminTab)),
+    ['invoices', 'payroll']);
+  assert.match(await page.locator('#admin-tab-content').innerText(), /載入薪資後台/);
+  await page.evaluate(() => { openAdminSection('students'); finishWorkspacePayroll(); });
+  await settle();
+  assert.equal(await page.locator('#admin-workspace-title').innerText(), '學生與活動');
+  assert.equal(await page.locator('.admin-tab[aria-selected="true"]').getAttribute('data-admin-tab'), 'raffle');
+  assert.doesNotMatch(await page.locator('#admin-tab-content').innerText(), /薪資月份|載入薪資後台/);
+  await page.evaluate(() => { callApi = originalWorkspaceApi; openAdminTab('invoices'); });
+  await settle();
+  await page.evaluate(() => {
+    callApi = (action, params) => action === 'getVvipAdminDashboard'
+      ? new Promise(resolve => { window.finishWorkspaceReminder = () => originalWorkspaceApi(action, params).then(resolve); })
+      : originalWorkspaceApi(action, params);
+    window.pendingWorkspaceReminder = fetchVvipReminderData();
+    const field = document.createElement('input'); field.id = 'fixture-unsaved-invoice';
+    document.getElementById('admin-tab-content').appendChild(field);
+  });
+  await page.locator('#fixture-unsaved-invoice').fill('正在編輯的發票內容');
+  await page.evaluate(async () => { finishWorkspaceReminder(); await pendingWorkspaceReminder; });
+  assert.equal(await page.locator('#fixture-unsaved-invoice').inputValue(), '正在編輯的發票內容');
+  await page.evaluate(() => { callApi = originalWorkspaceApi; openAdminSection('dashboard'); });
+  await page.evaluate(() => {
     window.originalTaskFixture = structuredClone(adminDashboard.operations.tasks);
     window.originalToday = getTaipeiToday;
     getTaipeiToday = () => '2026/11/10';

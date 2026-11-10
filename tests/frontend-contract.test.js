@@ -194,6 +194,7 @@ function createFrontendRuntime(fixtures = {}, options = {}) {
     querySelectorAll(selector) {
       if (selector === '.claim-checkbox:checked') return [checkedClaim];
       if (selector === '[data-admin-count]') return options.adminCountBadges || [];
+      if (selector === '.admin-tab') return options.adminTabs || [];
       return [];
     },
     querySelector(selector) {
@@ -641,6 +642,164 @@ test('grouped destinations retain independent finance student and raffle permiss
   assert.equal(context.getAdminTabCapability('vvip'), 'vvip_admin');
   assert.equal(context.getAdminTabCapability('raffle'), 'raffle_admin');
   assert.equal(context.getAdminTabCapability('practice'), 'course_admin');
+});
+
+test('student activities open raffle first while restricted accounts retain their permitted destination', () => {
+  const { context } = createFrontendRuntime();
+  context.renderRaffleWorkspace = () => {};
+  vm.runInContext("authState.managementCapabilities = ['course_admin', 'vvip_admin', 'raffle_admin']; activeViewId='view-admin';", context);
+  context.openAdminSection('students');
+  assert.equal(vm.runInContext('activeAdminTab', context), 'raffle');
+  vm.runInContext("authState.managementCapabilities = ['course_admin'];", context);
+  context.openAdminSection('students');
+  assert.equal(vm.runInContext('activeAdminTab', context), 'monthlyDiscount');
+});
+
+test('finance tabs replace student tabs immediately before its first read finishes', async () => {
+  const tabs = ['monthlyDiscount', 'vvip', 'raffle', 'payroll', 'invoices'].map(adminTab => ({
+    dataset: { adminTab }, hidden: false, classList: { toggle() {} }, setAttribute() {}, addEventListener() {},
+  }));
+  const { context, getElement } = createFrontendRuntime({}, { adminTabs: tabs });
+  vm.runInContext("authState.managementCapabilities = ['course_admin', 'payroll_admin', 'invoice_admin', 'vvip_admin', 'raffle_admin']; activeViewId='view-admin'; activeAdminTab='monthlyDiscount'; activeAdminSection='students';", context);
+  context.renderAdminDashboard();
+  let resolveRead, pending;
+  context.callApi = () => new Promise(resolve => { resolveRead = resolve; });
+  const fetchPayroll = context.fetchPayrollAdminDashboard;
+  context.fetchPayrollAdminDashboard = (...args) => { pending = fetchPayroll(...args); return pending; };
+  context.openAdminSection('finance');
+  assert.equal(getElement('admin-workspace-title').textContent, '財務');
+  assert.deepEqual(tabs.filter(tab => !tab.hidden).map(tab => tab.dataset.adminTab), ['payroll', 'invoices']);
+  resolveRead({ month: '2026-11', metrics: {}, lines: [], summaries: [], disputes: [] });
+  await pending;
+});
+
+for (const [fetchName, tab, cache] of [
+  ['fetchInvoiceAdminDashboard', 'invoices', 'invoiceDashboard'],
+  ['fetchNotificationAdminDashboard', 'notifications', 'notificationDashboard'],
+  ['fetchVvipAdminDashboard', 'vvip', 'vvipDashboard'],
+]) {
+  test(`${fetchName} does not replace another destination after a late read`, async () => {
+    const { context, getElement } = createFrontendRuntime();
+    vm.runInContext(`authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='${tab}'; activeAdminSection=ADMIN_TAB_SECTIONS['${tab}'];`, context);
+    let resolveRead;
+    context.callApi = () => new Promise(resolve => { resolveRead = resolve; });
+    const pending = context[fetchName]();
+    vm.runInContext("activeAdminTab='monthlyDiscount'; activeAdminSection='students';", context);
+    getElement('admin-tab-content').innerHTML = 'new destination';
+    resolveRead({ month: '2026-11', metrics: {}, members: [], whitelist: [], schedules: [], history: [], queue: [], items: [] });
+    await pending;
+    assert.equal(getElement('admin-tab-content').innerHTML, 'new destination');
+  });
+  test(`${fetchName} ignores a response belonging to a previous signed-in account`, async () => {
+    const { context } = createFrontendRuntime();
+    vm.runInContext(`authState.sessionToken='old-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='${tab}'; activeAdminSection=ADMIN_TAB_SECTIONS['${tab}'];`, context);
+    let resolveRead;
+    context.callApi = () => new Promise(resolve => { resolveRead = resolve; });
+    const pending = context[fetchName]();
+    vm.runInContext("authState.sessionToken='new-session'; authState.teacherName='Tako';", context);
+    resolveRead({ privateRecord: 'previous-account' });
+    await pending;
+    assert.equal(vm.runInContext(cache, context), null);
+  });
+  test(`${fetchName} keeps the newest response when requests finish out of order`, async () => {
+    const { context } = createFrontendRuntime();
+    vm.runInContext(`authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='${tab}'; activeAdminSection=ADMIN_TAB_SECTIONS['${tab}'];`, context);
+    const replies = [];
+    context.callApi = () => new Promise(resolve => { replies.push(resolve); });
+    context.renderAdminDashboard = () => {};
+    const first = context[fetchName](), second = context[fetchName]();
+    replies[1]({ marker: 'newest' });
+    await second;
+    replies[0]({ marker: 'older' });
+    await first;
+    assert.equal(vm.runInContext(`${cache}.marker`, context), 'newest');
+  });
+  test(`${fetchName} does not show an old failure over a different destination`, async () => {
+    const { context, getElement } = createFrontendRuntime();
+    vm.runInContext(`authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='${tab}'; activeAdminSection=ADMIN_TAB_SECTIONS['${tab}'];`, context);
+    let rejectRead;
+    context.callApi = () => new Promise((resolve, reject) => { rejectRead = reject; });
+    const notices = [];
+    context.setNotice = (...args) => notices.push(args);
+    const pending = context[fetchName]();
+    vm.runInContext("activeAdminTab='monthlyDiscount'; activeAdminSection='students';", context);
+    getElement('admin-tab-content').innerHTML = 'new destination';
+    rejectRead(Error('old read failed'));
+    await pending;
+    assert.equal(getElement('admin-tab-content').innerHTML, 'new destination');
+    assert.deepEqual(notices, []);
+  });
+}
+
+test('VVIP reminder reads do not overwrite a later filtered student read', async () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext("authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='pendingInvitations'; activeAdminSection='dashboard';", context);
+  const replies = [];
+  context.callApi = () => new Promise(resolve => { replies.push(resolve); });
+  context.renderAdminDashboard = () => {};
+  const reminder = context.fetchVvipReminderData();
+  vm.runInContext("activeAdminTab='vvip'; activeAdminSection='students';", context);
+  const filtered = context.fetchVvipAdminDashboard('student@example.com');
+  replies[1]({ marker: 'filtered' });
+  await filtered;
+  replies[0]({ marker: 'unfiltered' });
+  await reminder;
+  assert.equal(vm.runInContext('vvipDashboard.marker', context), 'filtered');
+});
+
+test('VVIP reminder does not reset another destination or a teacher view', async () => {
+  for (const view of ['view-admin', 'view-account']) {
+    const { context, getElement } = createFrontendRuntime();
+    vm.runInContext("authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='pendingInvitations'; activeAdminSection='dashboard';", context);
+    let resolveRead;
+    context.callApi = () => new Promise(resolve => { resolveRead = resolve; });
+    const pending = context.fetchVvipReminderData();
+    context.__nextView = view;
+    vm.runInContext("activeViewId=__nextView; activeAdminTab='monthlyDiscount'; activeAdminSection='students';", context);
+    let renders = 0;
+    context.renderAdminDashboard = () => { renders++; };
+    getElement('admin-tab-content').innerHTML = 'current form';
+    resolveRead({ marker: 'reminder' });
+    await pending;
+    assert.equal(renders, 0, view);
+    assert.equal(getElement('admin-tab-content').innerHTML, 'current form');
+  }
+});
+
+test('VVIP reminder does not replace a filtered read already on screen', async () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext("authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='vvip'; activeAdminSection='students'; vvipDashboard={marker:'filtered'};", context);
+  let reads = 0;
+  context.callApi = async () => { reads++; return { marker: 'unfiltered' }; };
+  await context.fetchVvipReminderData();
+  assert.equal(reads, 0);
+  assert.equal(vm.runInContext('vvipDashboard.marker', context), 'filtered');
+});
+
+test('VVIP background reminder preserves a newly edited form on the same invoice destination', async () => {
+  const { context, getElement } = createFrontendRuntime();
+  vm.runInContext("authState.sessionToken='same-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='invoices'; activeAdminSection='finance';", context);
+  let resolveRead;
+  context.callApi = () => new Promise(resolve => { resolveRead = resolve; });
+  const pending = context.fetchVvipReminderData();
+  context.renderAdminDashboard = () => { getElement('admin-tab-content').innerHTML = 'form reset'; };
+  getElement('admin-tab-content').innerHTML = 'unsaved invoice form';
+  resolveRead({ metrics: { pendingSelections: 2 } });
+  await pending;
+  assert.equal(getElement('admin-tab-content').innerHTML, 'unsaved invoice form');
+  assert.equal(vm.runInContext('vvipDashboard.metrics.pendingSelections', context), 2);
+});
+
+test('VVIP reminder ignores a reply from a previous signed-in account', async () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext("authState.sessionToken='old-session'; authState.teacherName='冠蓉'; activeViewId='view-admin'; activeAdminTab='pendingInvitations'; activeAdminSection='dashboard';", context);
+  let resolveRead;
+  context.callApi = () => new Promise(resolve => { resolveRead = resolve; });
+  const pending = context.fetchVvipReminderData();
+  vm.runInContext("authState.sessionToken='new-session'; authState.teacherName='Tako';", context);
+  resolveRead({ marker: 'previous-account' });
+  await pending;
+  assert.equal(vm.runInContext('vvipDashboard', context), null);
 });
 
 test('mobile more follows finance permissions after student work moves into primary navigation', () => {

@@ -8,7 +8,7 @@ const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const html=(await fs.readFile(path.join(repo,'index.html'),'utf8')).replace(/<script\b[^>]*src=[^>]*><\/script>/g,'').replace(/\n    initialize\(\);/,'');
 const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 try {
- const page=await browser.newPage();await page.route('**/*',r=>r.abort());await page.setContent(html);await page.addScriptTag({path:path.join(repo,'raffle.js')});
+ const page=await browser.newPage();page.setDefaultTimeout(5000);await page.route('**/*',r=>r.abort());await page.setContent(html);await page.addScriptTag({path:path.join(repo,'raffle.js')});
  await page.evaluate(()=>{
   window.readyWrites=[];window.readyQueued=false;window.readySent=false;window.readyFail=false;window.readyMode='normal';
   callApi=async(action,params)=>{
@@ -29,6 +29,9 @@ try {
   };
   authState.sessionToken='fixture';authState.teacherName='測試店長';authState.managementCapabilities=['raffle_admin'];document.getElementById('app-shell').hidden=false;document.getElementById('auth-shell').hidden=true;activeAdminTab='raffle';activeAdminSection='raffle';switchView('view-admin');
  });
+ await page.getByRole('heading',{name:'獎品備貨與到館',exact:true}).waitFor();
+ assert.doesNotMatch(await page.locator('#admin-tab-content').innerText(),/店長：/);
+ await page.locator('.raffle-tools > summary').click();
  await page.locator('[data-raffle-ready-preview]').click();await page.getByText('領獎通知預覽 · 不會寄出',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>readyWrites.length),0);
  await fs.mkdir('/private/tmp/raffle-preview',{recursive:true});
  for(const [name,width,height] of [['ready-mobile',390,844],['ready-desktop',1280,1000]]){await page.setViewportSize({width,height});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await page.screenshot({path:`/private/tmp/raffle-preview/${name}.png`,fullPage:true});}
@@ -38,9 +41,15 @@ try {
  await page.locator('[data-raffle-confirm-send]').click();await page.evaluate(()=>{readyFail=true;});await page.locator('[data-raffle-save]').click();await page.getByText('測試結果不確定',{exact:false}).waitFor();await page.locator('[data-raffle-save]').click();await page.getByText('領獎通知｜已送出／已核對｜2 筆獎品',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>readyWrites[2].operation.requestId===readyWrites[3].operation.requestId),true);
  assert.deepEqual(await page.evaluate(()=>readyWrites.map(w=>w.action)),['confirmRaffleReadyNotifications','confirmRaffleReadyNotifications','sendRaffleReadyMailBatch','sendRaffleReadyMailBatch']);
  await page.evaluate(()=>{readyMode='wrong';});await page.locator('[data-raffle-ready-preview]').click();await page.getByText('寄信用途不符，請重新核對。',{exact:true}).waitFor();assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
- await page.evaluate(()=>{readyMode='pending';});await page.locator('[data-raffle-ready-preview]').click();await page.locator('[data-raffle-campaign]').dispatchEvent('change');await page.evaluate(()=>finishReady());assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
+ await page.evaluate(()=>{readyMode='pending';});await page.locator('[data-raffle-ready-preview]').click();await page.evaluate(()=>{clearRaffleWorkspace();renderAdminDashboard();finishReady();});assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
+ await page.locator('.raffle-tools > summary').click();
  await page.locator('[data-raffle-ready-preview]').click();await page.evaluate(()=>{clearSession();finishReady();});assert.equal(await page.locator('[data-raffle-confirm-mail]').count(),0);
  await page.evaluate(()=>{authState.sessionToken='teacher';authState.teacherName='老師';authState.managementCapabilities=[];document.getElementById('app-shell').hidden=false;document.getElementById('auth-shell').hidden=true;switchView('view-raffle');});await page.locator('[data-raffle-query]').waitFor();assert.equal(await page.locator('[data-raffle-ready-preview]').count(),0);assert.equal(await page.locator('[data-raffle-ready-send]').count(),0);
+ assert.doesNotMatch(await page.locator('#view-raffle').innerText(),/店長：|Tako 會在 App 收到備貨提醒/);
+ assert.equal(await page.getByRole('heading',{name:'獎品備貨與到館',exact:true}).count(),0);
+ assert.equal(await page.locator('[data-raffle-fulfillment]').isVisible(),true);
+ await page.setViewportSize({width:390,height:844});
+ await page.screenshot({path:'/private/tmp/raffle-preview/teacher-guide-mobile.png',fullPage:true});
  await page.evaluate(()=>{
   const host=document.createElement('main');document.body.replaceChildren(host);window.closeWrites=[];window.closeFail=true;window.closeDone=false;
   SherryRaffle.mount(host,{mode:'admin',api:async(action,params)=>{
@@ -50,6 +59,7 @@ try {
    throw Error('unexpected closure API '+action);
   }});
  });
+ await page.locator('.raffle-tools > summary').click();
  await page.locator('[data-raffle-mail-records]').click();await page.locator('[data-raffle-close-queued]').click();await page.locator('[data-raffle-cancel]').click();assert.equal(await page.evaluate(()=>closeWrites.length),0);
  await page.locator('[data-raffle-close-queued]').click();await page.locator('[data-raffle-save]').click();assert.equal(await page.evaluate(()=>closeWrites.length),0);
  await page.locator('[data-raffle-mail-reason]').fill('已領取，停止通知');

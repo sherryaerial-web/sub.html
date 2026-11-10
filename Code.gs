@@ -12354,7 +12354,7 @@ function runCourseClosureScheduler() {
   });
 }
 
-function fetchCalendarPages_(token, dateFrom, dateTo) {
+function fetchCalendarPages_(token, dateFrom, dateTo, includeCancelled) {
   if (!cleanText_(token)) throw new Error('尚未設定 Omcean API 權杖。');
 
   var allItems = [];
@@ -12364,7 +12364,7 @@ function fetchCalendarPages_(token, dateFrom, dateTo) {
       'start=' + start,
       'date_from=' + encodeURIComponent(dateFrom),
       'date_to=' + encodeURIComponent(dateTo),
-      'include_cancelled=false'
+      'include_cancelled=' + (includeCancelled === true ? 'true' : 'false')
     ].join('&');
     var response = UrlFetchApp.fetch(CONFIG.API_URL + '?' + query, {
       method: 'get',
@@ -14570,9 +14570,10 @@ function normalizePayrollNoShowInput_(input) {
     attendanceCount: Number(item.attendanceCount), refundPoints: Number(item.refundPoints),
     extraPoints: Number(item.extraPoints), pointPrice: Number(item.pointPrice), reason: cleanText_(item.reason),
     confirmed: item.confirmed === true };
-  if (!/^[1-9]\d{0,14}$/.test(result.calendarId) || !result.teacherName || !result.reason || result.reason.length > 500 || !result.confirmed) {
-    throw new Error('請選擇課程、原老師並填寫原因，確認老師該堂未授課。');
+  if (!/^[1-9]\d{0,14}$/.test(result.calendarId) || !result.teacherName || !result.confirmed) {
+    throw new Error('請選擇課程、原老師，確認老師該堂未授課。');
   }
+  if (result.reason.length > 500) throw new Error('事件原因不可超過 500 字。');
   if (['replacement', 'noReplacement'].indexOf(result.mode) === -1) throw new Error('請選擇有代課或無代課。');
   if (result.mode === 'replacement') {
     if (!result.replacementTeacher || result.replacementTeacher === result.teacherName ||
@@ -14616,7 +14617,7 @@ function getPayrollNoShowCourses_(session, monthValue, dateValue) {
   var token = PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
   if (!cleanText_(token)) throw new Error('請先設定 OMCEAN_API_TOKEN。');
   var nextDate = Utilities.formatDate(new Date(start.getTime() + 86400000), getTimeZone_(), 'yyyy-MM-dd');
-  return fetchCalendarPages_(token, date.replace(/\//g, '-'), nextDate).map(function(raw) {
+  return fetchCalendarPages_(token, date.replace(/\//g, '-'), nextDate, true).map(function(raw) {
     var course = normalizePayrollCalendarItem_(Object.assign({}, raw, { cancelled: false }));
     if (course) course.sourceCancelled = raw.cancelled === true;
     return course;

@@ -492,9 +492,9 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         ['ob-sync','preview','mail-preview','mail-send','mail-records','ready-preview','ready-send'].forEach(name=>{const button=node('[data-raffle-'+name+']');if(button)actions.appendChild(button);});
         form.appendChild(tools);
       }
-      if(data.canPrepare){
+      if(admin && data.canPrepare){
         const guide=document.createElement('section');guide.className='admin-control';
-        guide.innerHTML='<h3>店長：備貨、到館與通知</h3><p>學生選好需要送館的獎品後，Tako 會在 App 收到備貨提醒，附學生姓名、完整 Email、獎品與館別。</p><p>備貨送到後，開啟「獎品／館別備貨清單」→「查看學生／逐筆到館」→「確認到館並通知學生」。只處理這筆獎品；結果不明時先查寄信紀錄，不要重送。</p>';
+        guide.innerHTML='<h3>獎品備貨與到館</h3><p>學生選好需要送館的獎品後，備貨人員會在 App 收到提醒，附學生姓名、完整 Email、獎品與館別。</p><p>備貨送到後，開啟「獎品／館別備貨清單」→「查看學生／逐筆到館」→「確認到館並通知學生」。只處理這筆獎品；結果不明時先查寄信紀錄，不要重送。</p>';
         form.after(guide);
       }
       settingsButton();lineTestPanel(data);

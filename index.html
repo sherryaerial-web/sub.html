@@ -2443,6 +2443,7 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="missingObCancellations" data-capability="course_admin"><i data-lucide="calendar-x-2"></i>OB 已取消<span class="admin-tab-count" data-admin-count="missingObCancellations">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="activeInvitees" data-capability="course_admin"><i data-lucide="users"></i>邀請中<span class="admin-tab-count" data-admin-count="activeInvitees">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="closureManagement" data-capability="course_admin"><i data-lucide="calendar-cog"></i>關課管理<span class="admin-tab-count" data-admin-count="courseClosureCandidates">—</span></button>
+              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="raffle" data-capability="raffle_admin">抽獎結果核對</button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="monthlyDiscount" data-capability="course_admin"><i data-lucide="badge-percent"></i>優惠課推薦<span class="admin-tab-count" data-admin-count="monthlyDiscount">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="obWork" data-capability="course_admin"><i data-lucide="database"></i>待處理 OB<span class="admin-tab-count" data-admin-count="obWork">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="courseAdjustments" data-capability="course_admin"><i data-lucide="arrow-left-right"></i>調課確認<span class="admin-tab-count" data-admin-count="courseAdjustments">—</span></button>
@@ -2456,7 +2457,6 @@
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="mainOperations" data-capability="course_admin"><i data-lucide="history"></i>履歷・追蹤</button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="payroll" data-capability="payroll_admin"><i data-lucide="landmark"></i>薪資<span class="admin-tab-count" data-admin-count="payroll">—</span></button>
               <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="vvip" data-capability="vvip_admin"><i data-lucide="crown"></i>VVIP 選課<span class="admin-tab-count" data-admin-count="vvip">—</span></button>
-              <button class="admin-tab" type="button" role="tab" aria-selected="false" data-admin-tab="raffle" data-capability="raffle_admin">抽獎結果核對</button>
                 </div>
                 <div id="admin-tab-content" class="admin-tab-content"><div class="state">載入中...</div></div>
               </div>
@@ -2679,8 +2679,8 @@
   <script src="production-tasks.js?v=task-review-20261026"></script>
   <link rel="stylesheet" href="raffle-tools.css?v=ops-tools-20261031">
   <script src="raffle-tools.js?v=raffle-experience-20261105"></script>
-  <script src="raffle.js?v=ops-refresh-20261105"></script>
-  <script src="admin-transport.js?v=personal-appearance-20261110"></script>
+  <script src="raffle.js?v=workspace-fixes-20261110-3"></script>
+  <script src="admin-transport.js?v=workspace-fixes-20261110-3"></script>
   <script src="main-assurance-ui.js?v=workbench-bundle-20261110-2"></script>
   <script src="personal-appearance.js?v=20261110"></script>
   <script>
@@ -2713,7 +2713,8 @@
     const mainAssuranceState = { writes: Object.create(null), calendarId: "", history: null, historyLoading: false, historyRequest: 0, refreshError: "",
       queryAccount: null, preferences: null, pages: Object.create(null), positions: Object.create(null), restoreTab: "",
       openDetails: new Set(), listRenderers: Object.create(null), lazyRenderers: Object.create(null), backupRequest: null,
-      practiceRequest: 0, payrollRequest: 0, adminRequest: 0, adminUiRequest: 0 };
+      practiceRequest: 0, payrollRequest: 0, adminRequest: 0, adminUiRequest: 0,
+      invoiceRequest: 0, notificationRequest: 0, vvipRequest: 0 };
     let vvipDashboard = null;
     let vvipAdminFilter = "pending";
     let payrollDashboard = null;
@@ -2767,7 +2768,7 @@
       courses: "pendingInvitations",
       practice: "practice",
       finance: "payroll",
-      students: "monthlyDiscount",
+      students: "raffle",
       payroll: "payroll",
       operations: "closureManagement",
       notifications: "notifications",
@@ -5154,6 +5155,9 @@
       mainAssuranceState.backupRequest = null;
       mainAssuranceState.practiceRequest++;
       mainAssuranceState.payrollRequest++;
+      mainAssuranceState.invoiceRequest++;
+      mainAssuranceState.notificationRequest++;
+      mainAssuranceState.vvipRequest++;
       vvipDashboard = null;
       payrollDashboard = null;
       notificationDashboard = null;
@@ -7874,7 +7878,7 @@
           <label class="notification-field" data-noshow-replacement>計薪出席人數<input id="payroll-noshow-attendance" class="text-input" type="number" min="0" max="1000" step="1"></label>
           <label class="notification-field" data-noshow-points hidden>原退還點數總計<input id="payroll-noshow-points" class="text-input" type="number" min="0.01" max="100000" step="0.01"></label>
           <label class="notification-field" data-noshow-points hidden>事件當時單點價格<input id="payroll-noshow-price" class="text-input" type="number" min="0.01" max="100000" step="0.01" value="180"></label>
-          <label class="notification-field">事件原因<input id="payroll-noshow-reason" class="text-input" type="text" maxlength="500" required></label>
+          <label class="notification-field">事件原因（選填）<input id="payroll-noshow-reason" class="text-input" type="text" maxlength="500"></label>
           <label class="checkbox-line"><input id="payroll-noshow-confirmed" type="checkbox" required>已確認原老師該堂未授課</label>
           <button id="payroll-noshow-preview-button" class="compact-button" type="submit"><i data-lucide="calculator"></i>試算 No Show Fee</button>
           <div id="payroll-noshow-preview" class="notification-field" aria-live="polite"></div>
@@ -8519,15 +8523,25 @@
 
     async function fetchInvoiceAdminDashboard(rethrow = false) {
       const content = byId("admin-tab-content");
+      const account = authState.teacherName, token = authState.sessionToken;
+      const tab = activeAdminTab, view = activeViewId, section = activeAdminSection;
+      const request = ++mainAssuranceState.invoiceRequest;
+      const isCurrent = () => request === mainAssuranceState.invoiceRequest && account === authState.teacherName && token === authState.sessionToken;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId && section === activeAdminSection;
       const hadSnapshot = invoiceDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
       const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入發票管理資料中...</div>');
       try {
-        invoiceDashboard = await callApi("getInvoiceAdminDashboard");
-        renderAdminDashboard();
+        const dashboard = await callApi("getInvoiceAdminDashboard");
+        if (!isCurrent()) return;
+        invoiceDashboard = dashboard;
+        if (onCurrentView()) renderAdminDashboard();
       } catch (error) {
-        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        else setNotice(`發票管理資料更新失敗：${error.message}`, "error");
+        if (!isCurrent()) return;
+        if (onCurrentView()) {
+          if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+          else setNotice(`發票管理資料更新失敗：${error.message}`, "error");
+        }
         if (rethrow) throw error;
       } finally {
         endReadRefresh(content, refreshOwner);
@@ -8536,15 +8550,25 @@
 
     async function fetchNotificationAdminDashboard(rethrow = false) {
       const content = byId("admin-tab-content");
+      const account = authState.teacherName, token = authState.sessionToken;
+      const tab = activeAdminTab, view = activeViewId, section = activeAdminSection;
+      const request = ++mainAssuranceState.notificationRequest;
+      const isCurrent = () => request === mainAssuranceState.notificationRequest && account === authState.teacherName && token === authState.sessionToken;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId && section === activeAdminSection;
       const hadSnapshot = notificationDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
       const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入通知中心中...</div>');
       try {
-        notificationDashboard = await callApi("getNotificationAdminDashboard");
-        renderAdminDashboard();
+        const dashboard = await callApi("getNotificationAdminDashboard");
+        if (!isCurrent()) return;
+        notificationDashboard = dashboard;
+        if (onCurrentView()) renderAdminDashboard();
       } catch (error) {
-        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        else setNotice(`通知中心更新失敗：${error.message}`, "error");
+        if (!isCurrent()) return;
+        if (onCurrentView()) {
+          if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+          else setNotice(`通知中心更新失敗：${error.message}`, "error");
+        }
         if (rethrow) throw error;
       } finally {
         endReadRefresh(content, refreshOwner);
@@ -8609,15 +8633,25 @@
 
     async function fetchVvipAdminDashboard(email = "", rethrow = false) {
       const content = byId("admin-tab-content");
+      const account = authState.teacherName, token = authState.sessionToken;
+      const tab = activeAdminTab, view = activeViewId, section = activeAdminSection;
+      const request = ++mainAssuranceState.vvipRequest;
+      const isCurrent = () => request === mainAssuranceState.vvipRequest && account === authState.teacherName && token === authState.sessionToken;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId && section === activeAdminSection;
       const hadSnapshot = !email && vvipDashboard !== null;
       if (hadSnapshot) renderAdminDashboard();
       const refreshOwner = beginReadRefresh(content, hadSnapshot, '<div class="state">載入 VVIP 選課資料中...</div>');
       try {
-        vvipDashboard = await callApi("getVvipAdminDashboard", { email });
-        renderAdminDashboard();
+        const dashboard = await callApi("getVvipAdminDashboard", { email });
+        if (!isCurrent()) return;
+        vvipDashboard = dashboard;
+        if (onCurrentView()) renderAdminDashboard();
       } catch (error) {
-        if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
-        else setNotice(`VVIP 資料更新失敗：${error.message}`, "error");
+        if (!isCurrent()) return;
+        if (onCurrentView()) {
+          if (!hadSnapshot) content.innerHTML = `<div class="state error">${escapeHtml(error.message)}</div>`;
+          else setNotice(`VVIP 資料更新失敗：${error.message}`, "error");
+        }
         if (rethrow) throw error;
       } finally {
         endReadRefresh(content, refreshOwner);
@@ -8625,11 +8659,24 @@
     }
 
     async function fetchVvipReminderData() {
+      if (activeViewId === "view-admin" && activeAdminTab === "vvip") return;
+      const account = authState.teacherName, token = authState.sessionToken;
+      const tab = activeAdminTab, view = activeViewId, section = activeAdminSection;
+      const request = ++mainAssuranceState.vvipRequest;
+      const isCurrent = () => request === mainAssuranceState.vvipRequest && account === authState.teacherName && token === authState.sessionToken;
+      const onCurrentView = () => tab === activeAdminTab && view === activeViewId && section === activeAdminSection && view === "view-admin";
       try {
-        vvipDashboard = await callApi("getVvipAdminDashboard", { email: "" });
-        if (activeAdminTab !== "vvip") renderAdminDashboard();
+        const dashboard = await callApi("getVvipAdminDashboard", { email: "" });
+        if (!isCurrent()) return;
+        vvipDashboard = dashboard;
+        if (onCurrentView()) {
+          updateAdminTabCounts();
+          renderAdminReminders();
+          if (section === "dashboard") renderAdminHome();
+          refreshIcons();
+        }
       } catch (error) {
-        setNotice(`VVIP 提醒更新失敗：${error.message}`, "error");
+        if (isCurrent() && onCurrentView()) setNotice(`VVIP 提醒更新失敗：${error.message}`, "error");
       }
     }
 
@@ -8660,10 +8707,7 @@
         .join("");
       const leavePauseButton = byId("admin-leave-pause");
       leavePauseButton.innerHTML = `<i data-lucide="${data.leavePaused ? "play" : "pause"}"></i>${data.leavePaused ? "恢復請假登記" : "暫停請假登記"}`;
-      const reminders = buildAdminReminderItems();
-      byId("admin-reminders").innerHTML = reminders.length
-        ? reminders.map((item) => `<button class="summary-item admin-reminder" type="button" data-admin-reminder-tab="${escapeHtml(item.tab)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join("")
-        : '<div class="admin-all-clear"><i data-lucide="circle-check-big"></i><span>目前沒有待辦提醒</span></div>';
+      renderAdminReminders();
       syncWorkspaceNavigation(activeViewId || "view-admin");
       byId("admin-workspace-title").textContent = ADMIN_SECTION_LABELS[activeAdminSection] || "管理工作台";
       document.querySelectorAll(".admin-tab").forEach((button) => {
@@ -8684,6 +8728,13 @@
       renderAdminTab(true);
       refreshIcons();
       restoreMainWorkspacePosition();
+    }
+
+    function renderAdminReminders() {
+      const reminders = buildAdminReminderItems();
+      byId("admin-reminders").innerHTML = reminders.length
+        ? reminders.map((item) => `<button class="summary-item admin-reminder" type="button" data-admin-reminder-tab="${escapeHtml(item.tab)}"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join("")
+        : '<div class="admin-all-clear"><i data-lucide="circle-check-big"></i><span>目前沒有待辦提醒</span></div>';
     }
 
     function buildAdminReminderItems() {
@@ -10451,17 +10502,14 @@ https://sherryaerial-web.github.io/sub.html/
       endReadRefresh(byId("admin-tab-content"));
       activeAdminTab = tab;
       activeAdminSection = ADMIN_TAB_SECTIONS[tab] || "courses";
-      syncWorkspaceNavigation(activeViewId || "view-admin");
-      byId("admin-workspace-title").textContent = ADMIN_SECTION_LABELS[activeAdminSection];
-      renderAdminCourseNavigation();
       requestMainWorkspaceRestore(tab);
+      renderAdminDashboard();
       if (tab === "vvip") fetchVvipAdminDashboard();
       else if (tab === "payroll") fetchPayrollAdminDashboard(false, false);
       else if (tab === "notifications") fetchNotificationAdminDashboard();
       else if (tab === "practice") fetchPracticeAdminDashboard(false, false);
       else if (tab === "invoices") fetchInvoiceAdminDashboard();
       else if (tab === "mainOperations") fetchAdminDashboard();
-      else renderAdminDashboard();
     }
 
     function openAdminSection(section) {

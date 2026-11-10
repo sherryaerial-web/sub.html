@@ -21,6 +21,7 @@ try {
     let serial = 0;
     window.crypto.randomUUID = () => `noshow-ui-${++serial}`;
     window.noShowCalls = [];
+    window.noShowPreviewCalls = [];
     window.fixturePayroll = { month: '2026-11', version: 'draft-1', noShowEditable: true,
       deductionDraftError: '', summaries: [{ teacherName: 'Jina', status: '草稿', version: 'draft-1', totalSalary: 700, subtotal: 700 }],
       lines: [], disputes: [], deductionTeachers: ['Jina', 'Tako'], deductions: [],
@@ -30,9 +31,12 @@ try {
       if (action === 'getPayrollAdminDashboard') return fixturePayroll;
       if (action === 'getPayrollNoShowCourses') return [{ calendarId: '60001', date: '2026/11/04', time: '18:00',
         courseName: 'A－空環 Lv.1', instructors: [{ name: 'Jina' }] }];
-      if (action === 'previewPayrollNoShow') return { amount: params.event.mode === 'replacement' ? 700 : 1440,
-        quoteKey: 'fixture-quote', event: { input: params.event, originalWage: 700, pointPrice: 180, extraPoints: 8, refundPoints: 8,
-          course: { calendarId: '60001', date: '2026/11/04', time: '18:00', courseName: 'A－空環 Lv.1' } } };
+      if (action === 'previewPayrollNoShow') {
+        noShowPreviewCalls.push(params.event);
+        return { amount: params.event.mode === 'replacement' ? 700 : 1440,
+          quoteKey: 'fixture-quote', event: { input: params.event, originalWage: 700, pointPrice: 180, extraPoints: 8, refundPoints: 8,
+            course: { calendarId: '60001', date: '2026/11/04', time: '18:00', courseName: 'A－空環 Lv.1' } } };
+      }
       if (action === 'recordPayrollNoShow') {
         noShowCalls.push(params.event);
         if (noShowCalls.length === 1) throw Error('本機模擬登記結果待確認');
@@ -62,9 +66,18 @@ try {
   await page.locator('#payroll-noshow-course').selectOption('60001');
   await page.locator('#payroll-noshow-teacher').selectOption('Jina');
   await page.locator('#payroll-noshow-replacement').selectOption('Tako');
-  await page.locator('#payroll-noshow-attendance').fill('2');
   await page.locator('#payroll-noshow-reason').fill('確認未授課');
   await page.locator('#payroll-noshow-confirmed').check();
+  assert.equal(await page.getByText('清單找不到課程？手動輸入 OB 課程編號', { exact: true }).count(), 1);
+  await page.locator('#payroll-noshow-preview-button').click();
+  await page.getByText('請填寫計薪出席人數（0–1000 的整數）。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => noShowPreviewCalls.length), 0);
+  await page.locator('#payroll-noshow-attendance').fill('2');
+  await page.locator('#payroll-noshow-replacement').selectOption('Jina');
+  await page.locator('#payroll-noshow-preview-button').click();
+  await page.getByText('代課老師須與原老師不同。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => noShowPreviewCalls.length), 0);
+  await page.locator('#payroll-noshow-replacement').selectOption('Tako');
   await page.locator('#payroll-noshow-preview-button').click();
   await page.locator('#payroll-noshow-register').waitFor();
   await page.locator('#payroll-noshow-reason').fill('更新原因');

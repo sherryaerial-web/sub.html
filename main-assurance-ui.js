@@ -248,9 +248,72 @@
       return `<div data-main-list="${key}">${rows ? `<ul class="main-tasks">${rows}</ul>` : state('近期沒有待辦事項。')}${renderPager(key, page)}</div>`;
     };
     if (options.taskList === 'operations-earlier-tasks') return renderPage(options.taskList, earlier);
-    const currentPage = renderPage('operations-tasks', current);
+    const currentPage = renderPage(options.listKey || 'operations-tasks', current);
     if (options.taskList === 'operations-tasks') return currentPage;
     return currentPage + (earlier.length ? disclosure(`較早待辦（${earlier.length}）`, renderPage('operations-earlier-tasks', earlier)) : '');
+  }
+
+  const taskCategories = {
+    pendingInvitations: ['代課待安排', 'hand'], activeInvitees: ['代課邀請待回覆', 'users'],
+    obWork: ['課程待核對', 'calendar-check'], changeRequests: ['課程異動待處理', 'calendar-clock'],
+    courseAdjustments: ['調課待確認', 'calendar-range'], exceptions: ['異常待核對', 'circle-alert'],
+    practice: ['自主練習待審核', 'sparkles'], missingObCancellations: ['課程待關閉', 'calendar-x'],
+    notifications: ['通知待發送', 'send'], monthlyDiscount: ['優惠課待確認', 'badge-percent'],
+    vvip: ['選課待確認', 'crown'], payroll: ['薪資待確認', 'wallet'], invoices: ['發票待處理', 'receipt'],
+    raffle: ['獎品待處理', 'gift'], mainOperations: ['其他待核對', 'clipboard-list']
+  };
+
+  function buildTaskOverview(tasks, options = {}) {
+    const current = [], history = new Map(), seen = new Set();
+    const today = String(options.today || '').replaceAll('/', '-');
+    list(tasks).forEach((source, index) => {
+      if (!source || typeof source !== 'object') return;
+      const tab = Object.hasOwn(taskCategories, source.tab) ? source.tab : 'mainOperations';
+      const identity = `${tab}:${source.targetId || source.key || `row-${index}`}`;
+      if (seen.has(identity)) return;
+      seen.add(identity);
+      const item = { ...source, tab };
+      const date = String(item.date || '').replaceAll('/', '-');
+      const oldCourse = validQueryDate(today) && validQueryDate(date) && date < today &&
+        ['obWork', 'changeRequests', 'pendingInvitations', 'courseAdjustments', 'missingObCancellations'].includes(tab) &&
+        !item.owner && !item.followAt && !['critical', 'urgent', 'high', '緊急', '高'].includes(item.urgency);
+      if (oldCourse) {
+        const month = date.slice(0, 7);
+        if (!history.has(month)) history.set(month, []);
+        history.get(month).push(item);
+      } else current.push(item);
+    });
+    const group = (items, scope) => Object.entries(taskCategories).flatMap(([tab, [label, icon]]) => {
+      const members = items.filter(item => item.tab === tab);
+      if (!members.length) return [];
+      const records = members.filter(item => item.summaryOnly !== true);
+      const summaryCount = Math.max(0, ...members.map(item => Number.isSafeInteger(item.summaryCount) && item.summaryCount > 0 ? item.summaryCount : 0));
+      return [{ id: `task-overview-${scope}-${tab}`, tab, label, icon,
+        count: Math.max(records.length, summaryCount), items: records, summaryOnly: !records.length }];
+    });
+    return { groups: group(current, 'current'), history: [...history].sort(([a], [b]) => b.localeCompare(a)).map(([month, items]) => {
+      const groups = group(items, `history-${month}`);
+      return { month, count: groups.reduce((sum, item) => sum + item.count, 0), groups };
+    }) };
+  }
+
+  function renderTaskOverviewPage(key, tasks, options = {}) {
+    const overview = buildTaskOverview(tasks, options);
+    const group = [...overview.groups, ...overview.history.flatMap(month => month.groups)].find(item => item.id === key);
+    return group ? renderTasks(group.items, null, { pages: options.pages, listKey: key }) : state('這類待辦目前沒有明細。');
+  }
+
+  function renderTaskOverview(tasks, error, options = {}) {
+    const warning = error ? state(`部分待辦資料無法取得：${error}`, true) : '';
+    if (!Array.isArray(tasks)) return warning || state('待辦資料尚未取得。', true);
+    const overview = buildTaskOverview(tasks, options);
+    const summary = group => `<i data-lucide="${group.icon}"></i><strong>${group.label}</strong><span class="task-overview-count">${group.count} 項</span>`;
+    const groups = items => items.map(group => group.summaryOnly
+      ? `<button type="button" class="task-overview-link" data-task-category="${group.tab}" data-admin-go-tab="${group.tab}">${summary(group)}<i data-lucide="chevron-right"></i></button>`
+      : `<details class="task-overview-group" data-task-category="${group.tab}"><summary>${summary(group)}<i class="task-overview-chevron" data-lucide="chevron-down"></i></summary><div class="task-overview-body">${renderTaskOverviewPage(group.id, tasks, options)}</div></details>`).join('');
+    const historyCount = overview.history.reduce((sum, month) => sum + month.count, 0);
+    const history = historyCount ? `<details class="task-overview-history"><summary><i data-lucide="archive"></i><strong>歷史待核對</strong><span class="task-overview-count">${historyCount} 項</span><i class="task-overview-chevron" data-lucide="chevron-down"></i></summary><div class="task-overview-history-body">${overview.history.map(month => `<details class="task-overview-month"><summary>${escape(month.month.slice(0, 4))} 年 ${Number(month.month.slice(5))} 月<span>${month.count} 項</span></summary>${groups(month.groups)}</details>`).join('')}</div></details>` : '';
+    return warning + `<div class="task-overview">${overview.groups.length ? groups(overview.groups) : warning ? '' : state('目前沒有近期待辦事項。')}${history}</div>`;
   }
 
   function renderException(item, options = {}) {
@@ -372,7 +435,8 @@
   }
 
   const api = { renderDataStatus, renderRuleCatalogue, renderClosureAssessment, renderPayrollComparison,
-    renderTasks, renderException, renderOperations, renderOperationsList, renderHistory, versionValid, closed,
+    renderTasks, buildTaskOverview, renderTaskOverview, renderTaskOverviewPage,
+    renderException, renderOperations, renderOperationsList, renderHistory, versionValid, closed,
     normalizeQueryPreferences, createQueryPreferences, paginate, renderPager, renderPagedList,
     renderSystemHealth, isBackupVerified, isBackupPending, isBackupDailyLimit };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

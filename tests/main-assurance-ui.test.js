@@ -198,6 +198,77 @@ test('earlier home tasks retain independent pagination and all original navigati
   assert.match(ui().renderTasks(tasks), /八月課程 00/);
 });
 
+test('workbench overview groups courses notifications and prizes into one entry per queue', () => {
+  const tasks = [
+    ...Array.from({ length: 3 }, (_, index) => ({ key: `ob-${index}`, targetId: `ob-${index}`, tab: 'obWork', label: `課程 ${index}`, date: '2026/11/14' })),
+    { key: 'send-1', tab: 'notifications', label: '待發送一' }, { key: 'send-2', tab: 'notifications', label: '待發送二' },
+    { key: 'prize-1', tab: 'raffle', label: '獎品一' }, { key: 'prize-2', tab: 'raffle', label: '獎品二' },
+  ];
+  const before = JSON.stringify(tasks);
+  const overview = ui().buildTaskOverview(tasks, { today: '2026/11/10' });
+  assert.deepEqual(overview.groups.map(group => [group.tab, group.count]), [['obWork', 3], ['notifications', 2], ['raffle', 2]]);
+  const markup = ui().renderTaskOverview(tasks, null, { today: '2026/11/10' });
+  assert.equal((markup.match(/data-task-category="obWork"/g) || []).length, 1);
+  assert.equal((markup.match(/data-task-category="raffle"/g) || []).length, 1);
+  assert.match(markup, /課程待核對/);
+  assert.match(markup, /獎品待處理/);
+  assert.doesNotMatch(markup, /<details[^>]+open/);
+  assert.equal(JSON.stringify(tasks), before);
+});
+
+test('workbench deduplicates the same queue target but never loses separate actions', () => {
+  const tasks = [
+    { key: 'leave:id-a', targetId: 'id-a', tab: 'obWork', label: '原追蹤', owner: 'Tako' },
+    { key: 'obWork:id-a', targetId: 'id-a', tab: 'obWork', label: '同一課程' },
+    { key: 'change:id-a', targetId: 'id-a', tab: 'changeRequests', label: '另需確認的異動' },
+  ];
+  const overview = ui().buildTaskOverview(tasks, { today: '2026/11/10' });
+  assert.deepEqual(overview.groups.map(group => group.count), [1, 1]);
+  assert.equal(overview.groups[0].items[0].owner, 'Tako');
+});
+
+test('history is grouped by month without counting old unassigned courses as current work', () => {
+  const tasks = [
+    { key: 'a', tab: 'obWork', date: '2026/08/01', label: '八月一' },
+    { key: 'b', tab: 'obWork', date: '2026/08/02', label: '八月二' },
+    { key: 'c', tab: 'changeRequests', date: '2026/09/01', label: '九月異動' },
+    { key: 'd', tab: 'obWork', date: '2026/08/01', label: '仍有人追蹤', owner: 'Tako' },
+    { key: 'e', tab: 'practice', date: '2026/08/01', label: '學生待審核' },
+    { key: 'f', tab: 'obWork', date: '2026/08/01', label: '有追蹤日期', followAt: '2026-11-10T15:00' },
+    { key: 'g', tab: 'obWork', date: '2026/08/01', label: '緊急', urgency: 'critical' },
+    { key: 'h', tab: 'obWork', date: '', label: '日期未取得' },
+    { key: 'i', tab: 'exceptions', date: '2026/08/01', label: '仍待核對的異常' },
+  ];
+  const overview = ui().buildTaskOverview(tasks, { today: '2026/11/10' });
+  assert.deepEqual(overview.history.map(month => [month.month, month.count]), [['2026-09', 1], ['2026-08', 2]]);
+  assert.equal(overview.groups.reduce((sum, group) => sum + group.count, 0), 6);
+  const markup = ui().renderTaskOverview(tasks, null, { today: '2026/11/10' });
+  assert.match(markup, /歷史待核對/);
+  assert.match(markup, /2026 年 8 月/);
+  assert.doesNotMatch(markup, /已結案|已刪除/);
+});
+
+test('group details preserve pagination targets escaping and unavailable states', () => {
+  const tasks = Array.from({ length: 25 }, (_, index) => ({ key: `key-${String(index).padStart(2, '0')}`, targetId: `id-${index}`,
+    tab: 'raffle', label: index === 20 ? '<img src=x>' : `獎品 ${index}` }));
+  const result = ui().renderTaskOverviewPage('task-overview-current-raffle', tasks, { today: '2026/11/10', pages: { 'task-overview-current-raffle': 2 } });
+  assert.match(result, /data-main-target-id="id-20"/);
+  assert.doesNotMatch(result, /data-main-target-id="id-0"/);
+  assert.match(result, /&lt;img/);
+  assert.doesNotMatch(result, /<img/);
+  assert.match(ui().renderTaskOverview(undefined), /尚未取得/);
+  assert.match(ui().renderTaskOverview([], '連線失敗'), /無法取得/);
+  assert.doesNotMatch(ui().renderTaskOverview([], '連線失敗'), /目前沒有待辦/);
+});
+
+test('a failed tracking source does not hide known queues or claim the workbench is empty', () => {
+  const result = ui().renderTaskOverview([{ key: 'v', tab: 'vvip', summaryOnly: true, summaryCount: 3 }], '課務來源逾時');
+  assert.match(result, /課務來源逾時/);
+  assert.match(result, /data-task-category="vvip"/);
+  assert.match(result, /3 項/);
+  assert.doesNotMatch(ui().renderTaskOverview([], '課務來源逾時'), /目前沒有近期待辦/);
+});
+
 test('operations renders cases, canonical identity choices and strictly read-only notice states', () => {
   const m = ui();
   assert.equal(typeof m.renderOperations, 'function');
@@ -757,10 +828,14 @@ test('large active practice lists stay bounded while section counts remain full 
   r.context.students = r.context.bookings.map((_, index) => ({ participantId: `student-${index}`, date: '2099/01/01',
     room: 'A', startTime: '12:00', endTime: '13:00', status: '已成立' }));
   r.run('practiceAdminDashboard={filters:{},summary:{total:101},bookings}; studentPracticeAdminDashboard={summary:{active:101},requests:students}; renderPracticeAdminDashboard();');
-  const result = r.element('admin-tab-content').innerHTML;
+  let result = r.element('admin-tab-content').innerHTML;
+  assert.equal((result.match(/data-practice-admin-booking=/g) || []).length, 0);
+  assert.match(result, /進行中／即將開始<span>101 筆<\/span>/);
+  r.run('mainAssuranceState.openDetails.add("practice-current-bookings"); renderPracticeAdminDashboard();');
+  result = r.element('admin-tab-content').innerHTML;
   assert.equal((result.match(/data-practice-admin-booking=/g) || []).length, 20);
   assert.equal((result.match(/data-student-practice-participant=/g) || []).length, 20);
-  assert.match(result, /<strong>進行中／即將開始<\/strong><span>101 筆<\/span>/);
+  assert.match(result, /進行中／即將開始<span>101 筆<\/span>/);
   assert.match(result, /<strong>學生自主練習<\/strong><span>101 筆<\/span>/);
   assert.doesNotMatch(result, /class="admin-summary"|查詢筆數/);
   assert.match(result, /data-main-page-key="practice-bookings-current"/);

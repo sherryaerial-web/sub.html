@@ -643,6 +643,20 @@ test('grouped destinations retain independent finance student and raffle permiss
   assert.equal(context.getAdminTabCapability('practice'), 'course_admin');
 });
 
+test('mobile more follows finance permissions after student work moves into primary navigation', () => {
+  const { context, getElement } = createFrontendRuntime();
+  const activeStates = new Map();
+  getElement('admin-mobile-more').classList.toggle = (name, value) => activeStates.set(name, value);
+  vm.runInContext("authState.managementCapabilities = ['payroll_admin']; activeAdminSection = 'finance'; syncWorkspaceNavigation('view-admin');", context);
+  assert.equal(getElement('admin-mobile-more').hidden, false);
+  assert.equal(activeStates.get('active'), true);
+  vm.runInContext("authState.managementCapabilities = ['raffle_admin']; activeAdminSection = 'students'; syncWorkspaceNavigation('view-admin');", context);
+  assert.equal(getElement('admin-mobile-more').hidden, true);
+  assert.equal(activeStates.get('active'), false);
+  assert.equal(context.canOpenAdminSection('students'), true);
+  assert.equal(context.canOpenAdminSection('finance'), false);
+});
+
 test('workspace switch preserves admin inbox context and hides management switching while acting', () => {
   const { context, getElement } = createFrontendRuntime();
   vm.runInContext("authState.managementCapabilities = ['course_admin']; syncWorkspaceNavigation('view-admin');", context);
@@ -954,14 +968,14 @@ test('a superseded startup configuration cannot reset the newer push repair stat
   assert.match(f.getElement('push-status-copy').textContent, /尚未確認/);
 });
 
-test('push diagnostics remain accessible when the SDK says opted in and verify this device on the server', async () => {
+test('push checks verify this device on the server without reopening the confirmed account banner', async () => {
   assert.match(html, /id="push-check"/);
   assert.match(html, /id="push-repair"/);
   const f = createPushFrontendFixture();
   await f.context.initializePushForSession();
   assert.equal(f.getElement('push-permission-card').hidden, true);
   f.context.switchView('view-account');
-  assert.equal(f.getElement('push-permission-card').hidden, false);
+  assert.equal(f.getElement('push-permission-card').hidden, true);
   assert.equal(f.calls.includes('permission'), false);
   assert.equal(f.calls.includes('optIn'), false);
   await f.context.checkPushNotifications();
@@ -971,27 +985,32 @@ test('push diagnostics remain accessible when the SDK says opted in and verify t
   assert.equal(check.fields.subscriptionId, f.oneSignal.User.PushSubscription.id);
   assert.match(f.getElement('push-status-copy').textContent, /已確認.*綁定/);
   assert.doesNotMatch(f.getElement('push-status-copy').textContent, /已送達|保證/);
-  assert.equal(f.getElement('push-permission-card').hidden, false);
+  assert.equal(f.getElement('push-permission-card').hidden, true);
 });
 
-test('verified push settings remain accessible in My Account and collapse again outside it', async () => {
+test('verified push confirmation stays hidden across management teacher and account destinations', async () => {
   const f = createPushFrontendFixture();
   await f.context.initializePushForSession();
   await f.context.checkPushNotifications();
-  assert.equal(f.getElement('push-permission-card').hidden, true);
-  f.context.switchView('view-account');
-  assert.equal(f.getElement('push-permission-card').hidden, false);
-  assert.equal(f.getElement('push-check').hidden, false);
+  vm.runInContext("authState.managementCapabilities = ['course_admin']; authState.actingTeacherName = '';", f.context);
+  f.context.fetchAdminDashboard = async () => {};
+  f.context.fetchNotificationAdminDashboard = async () => {};
+  f.context.loadTeacherHome = () => {};
   f.context.loadPracticeDay = () => {};
-  f.context.switchView('view-practice');
-  assert.equal(f.getElement('push-permission-card').hidden, true);
+  for (const view of ['view-admin', 'view-home', 'view-account', 'view-practice', 'view-account', 'view-admin', 'view-account']) {
+    f.context.switchView(view);
+    assert.equal(f.getElement('push-permission-card').hidden, true, view);
+    assert.equal(f.getElement('app-shell').dataset.shellMode, view === 'view-admin' ? 'admin' : 'teacher');
+  }
   assert.equal(f.calls.includes('optIn'), false);
+  assert.equal(f.submittedForms.some(form => /send|submit|delete/i.test(form.fields.action)), false);
 });
 
 test('a prior push verification cannot hide a different account or denied browser permission', async () => {
   const f = createPushFrontendFixture();
   await f.context.initializePushForSession();
   await f.context.checkPushNotifications();
+  f.context.switchView('view-account');
   assert.equal(f.getElement('push-permission-card').hidden, true);
   vm.runInContext('authState.teacherName = "另一位老師";', f.context);
   f.context.renderPushPermissionCard();
@@ -4860,6 +4879,62 @@ test('management reminders expose only queues authorized for the logged-in admin
   assert.equal(crownItems[2].count, 3);
 });
 
+test('unified workbench collects permitted queues without duplicate course identities', () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext(`
+    authState.managementCapabilities = ['course_admin'];
+    adminDashboard = { operations: { tasks: [{ key: 'special:one', targetId: 'one', tab: 'obWork', label: '追蹤課程', owner: 'Tako' },
+      { key: 'prize-one', tab: 'raffle', label: '不可見獎品' }] },
+      obWork: [{ specialGroupId: 'one', actualCourse: '同一課程', date: '2026/11/14' }], pendingInvitations: [{ substituteId: 'two', date: '2026/11/15', originalCourse: '待安排代課' }] };
+    vvipDashboard = { metrics: { pendingSelections: 3 } };
+  `, context);
+  const tasks = JSON.parse(JSON.stringify(context.buildAdminHomeTasks()));
+  assert.equal(tasks.filter(item => item.tab === 'obWork' && item.targetId === 'one').length, 1);
+  assert.ok(tasks.some(item => item.tab === 'pendingInvitations'));
+  assert.ok(!tasks.some(item => item.tab === 'raffle' || item.tab === 'vvip'));
+});
+
+test('teacher prize reminders use one row while dated schedule reminders remain separate', () => {
+  const { context, getElement } = createFrontendRuntime();
+  context.renderTeacherHome({ upcoming: [
+    { id: 'prize-1', title: '獎品甲', targetView: 'raffle' }, { id: 'prize-2', title: '獎品乙', targetView: 'raffle' },
+    { id: 'practice-a', title: '自主練習', date: '2026/11/11', targetView: 'practice' },
+    { id: 'practice-b', title: '自主練習', date: '2026/11/12', targetView: 'practice' },
+  ] });
+  const markup = getElement('teacher-home-upcoming').innerHTML;
+  assert.equal((markup.match(/data-view="view-raffle"/g) || []).length, 1);
+  assert.match(markup, /獎品待處理/);
+  assert.match(markup, /2 件/);
+  assert.equal((markup.match(/data-view="view-practice"/g) || []).length, 2);
+});
+
+test('upcoming unsent notifications are not mistaken for completed-operation delivery retries', () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext(`
+    authState.managementCapabilities = ['course_admin'];
+    adminDashboard = { operations: { tasks: [] } };
+    notificationDashboard = { monthlyOperations: { now: '2026-11-01 09:00', operations: [
+      { id: 'future', label: '未到期', recommendedAt: '2026-11-05 21:00', status: 'pending', canExecute: true, notificationPending: true, notificationIds: ['future'] },
+      { id: 'due', label: '今日待發送', recommendedAt: '2026-11-01 21:00', status: 'pending', canExecute: true, notificationPending: true, notificationIds: ['due'] },
+      { id: 'retry', label: '已完成待核對通知', recommendedAt: '2026-10-25 21:00', status: 'completed', canExecute: true, notificationPending: true },
+      { id: 'sync', label: '其他非通知操作', recommendedAt: '2026-11-01', status: 'pending', canExecute: true, notificationPending: true }
+    ] } };
+  `, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.buildAdminHomeTasks())).filter(item => item.tab === 'notifications').map(item => item.targetId), ['due', 'retry']);
+});
+
+test('course adjustment group IDs are retained for task deduplication and original links', () => {
+  const { context } = createFrontendRuntime();
+  vm.runInContext(`
+    authState.managementCapabilities = ['course_admin'];
+    adminDashboard = { operations: { tasks: [{ key: 'adjustment:a', targetId: 'group-a', tab: 'courseAdjustments', label: '調課追蹤' }] },
+      courseAdjustments: [{ groupId: 'group-a', courseName: '同一調課' }] };
+  `, context);
+  const tasks = JSON.parse(JSON.stringify(context.buildAdminHomeTasks()));
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].targetId, 'group-a');
+});
+
 test('management header renders each pending queue once without a duplicate summary grid', () => {
   const { context, getElement } = createFrontendRuntime();
   vm.runInContext(`
@@ -5077,6 +5152,27 @@ test('practice review puts unresolved students first without lifetime statistics
   assert.equal(JSON.stringify(f.context.studentFixture), before);
 });
 
+test('teacher practice current list starts collapsed and materializes a paged list only when opened', () => {
+  const { context, getElement } = createFrontendRuntime({}, { now: '2026-11-10T21:00:00+08:00' });
+  context.practiceFixture = { filters: {}, bookings: Array.from({ length: 160 }, (_, index) => ({
+    bookingId: `upcoming-${index + 1}`, date: '2026/11/11', room: 'C', startTime: '12:00', endTime: '14:00',
+    status: '已成立', creatorName: 'Tako', participants: [], audits: [],
+  })) };
+  const before = JSON.stringify(context.practiceFixture);
+  vm.runInContext('practiceAdminDashboard = practiceFixture; studentPracticeAdminDashboard = {requests:[]}; renderPracticeAdminDashboard();', context);
+  const collapsed = getElement('admin-tab-content').innerHTML;
+  const disclosure = collapsed.match(/<details[^>]*data-main-lazy="practice-current-bookings"([^>]*)>/);
+  assert.ok(disclosure, 'the whole upcoming list needs an on-demand disclosure');
+  assert.doesNotMatch(disclosure[1], /\bopen\b/);
+  assert.match(collapsed, /進行中／即將開始<span>160 筆<\/span>/);
+  assert.doesNotMatch(collapsed, /data-practice-admin-booking=/);
+  vm.runInContext('mainAssuranceState.openDetails.add("practice-current-bookings"); renderPracticeAdminDashboard();', context);
+  const expanded = getElement('admin-tab-content').innerHTML;
+  assert.match(expanded, /data-practice-admin-booking="upcoming-1"/);
+  assert.equal((expanded.match(/data-practice-admin-booking=/g) || []).length, 20);
+  assert.equal(JSON.stringify(context.practiceFixture), before);
+});
+
 test('teacher practice overview keeps names and slots visible while editing and OB diagnostics are collapsed', () => {
   const f = createFrontendRuntime({}, { now: '2026-11-09T22:00:00+08:00' });
   f.context.practiceFixture = { filters: {}, bookings: [{
@@ -5085,7 +5181,7 @@ test('teacher practice overview keeps names and slots visible while editing and 
     participants: [{ teacherName: 'Tako', role: '建立者', startTime: '12:00', endTime: '14:00', status: '有效' }],
     audits: [{ time: '2026/11/01', action: '建立', actor: '冠蓉' }],
   }] };
-  vm.runInContext('practiceAdminDashboard = practiceFixture; studentPracticeAdminDashboard = {requests:[]}; renderPracticeAdminDashboard();', f.context);
+  vm.runInContext('practiceAdminDashboard = practiceFixture; studentPracticeAdminDashboard = {requests:[]}; getMainQueryPreferences(); mainAssuranceState.openDetails.add("practice-current-bookings"); renderPracticeAdminDashboard();', f.context);
   const result = f.getElement('admin-tab-content').innerHTML;
   const detail = result.match(/<details class="practice-booking-details"([^>]*)>\s*<summary[^>]*>([\s\S]*?)<\/summary>/);
   assert.ok(detail, 'booking editor must be an on-demand disclosure');
@@ -5118,7 +5214,7 @@ test('practice admin dashboard renders participant intervals and failure audit s
     summary: { total: 0, pendingQualification: 0, active: 0, changePending: 0 },
     requests: [],
   };
-  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; renderPracticeAdminDashboard();', context);
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; getMainQueryPreferences(); mainAssuranceState.openDetails.add("practice-current-bookings"); renderPracticeAdminDashboard();', context);
   const rendered = getElement('admin-tab-content').innerHTML;
   assert.match(rendered, /Ariel Lu/);
   assert.match(rendered, /Tako/);
@@ -5147,10 +5243,10 @@ test('practice admin groups ended and cancelled bookings into collapsed months w
   const before = JSON.stringify(bookings);
   context.__practiceAdminDashboard = { filters: { dateFrom: '2026-09-01', room: 'A' }, summary: { total: 7, active: 4, waitlisted: 1, cancelled: 2 }, bookings, notificationFailures: [] };
   context.__studentPracticeAdminDashboard = { summary: {}, requests: [] };
-  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; renderPracticeAdminDashboard();', context);
+  vm.runInContext('practiceAdminDashboard = __practiceAdminDashboard; studentPracticeAdminDashboard = __studentPracticeAdminDashboard; getMainQueryPreferences(); mainAssuranceState.openDetails.add("practice-current-bookings"); renderPracticeAdminDashboard();', context);
   const rendered = getElement('admin-tab-content').innerHTML;
   assert.match(rendered, /data-practice-admin-current/);
-  const current = rendered.match(/<div[^>]*data-practice-admin-current[^>]*>([\s\S]*?)<\/div>\s*<section[^>]*data-practice-admin-history/)[1];
+  const current = vm.runInContext('mainAssuranceState.lazyRenderers["practice-current-bookings"]()', context);
   for (const id of ['ongoing', 'future', 'unknown-end']) assert.match(current, new RegExp(`data-practice-admin-booking="${id}"`));
   for (const id of ['past-sep', 'at-end', 'future-cancel', 'future-conflict']) assert.doesNotMatch(current, new RegExp(`data-practice-admin-booking="${id}"`));
   assert.ok(current.indexOf('booking="ongoing"') < current.indexOf('booking="future"'));
@@ -5234,6 +5330,39 @@ test('provides self-only payroll review and protected sync publish dispute contr
   assert.match(html, /syncPayrollMonth/);
   assert.match(html, /publishPayroll/);
   assert.match(html, /resolvePayrollDispute/);
+});
+
+test('No Show preview identifies missing attendance separately from replacement teacher errors', async () => {
+  const { context, getElement, requestActions } = createFrontendRuntime({ previewPayrollNoShow: {
+    amount: 700, quoteKey: 'local-quote', event: { originalWage: 700,
+      course: { date: '2026/11/10', time: '12:00', courseName: 'B－椅子瑜伽' } },
+  } });
+  vm.runInContext("authState.sessionToken = 'session'; authState.teacherName = '冠蓉'; authState.managementCapabilities = ['payroll_admin']; payrollDashboard = {month:'2026-11', noShowEditable:true};", context);
+  const fields = { date: '2026-11-10', course: '60001', calendar: '', teacher: 'Jina', mode: 'replacement',
+    replacement: 'Liz', attendance: '', points: '', price: '180', reason: 'No show' };
+  Object.entries(fields).forEach(([key, value]) => { getElement(`payroll-noshow-${key}`).value = value; });
+  getElement('payroll-noshow-form').querySelectorAll = () => [];
+  getElement('payroll-noshow-confirmed').checked = true;
+  for (const attendance of ['', '1.5', '-1', '1001']) {
+    getElement('payroll-noshow-attendance').value = attendance;
+    await context.previewPayrollNoShow();
+    assert.match(getElement('notice').textContent, /計薪出席人數.*0.*1000.*整數/);
+    assert.equal(requestActions.includes('previewPayrollNoShow'), false);
+  }
+  getElement('payroll-noshow-attendance').value = '2';
+  getElement('payroll-noshow-replacement').value = '';
+  await context.previewPayrollNoShow();
+  assert.match(getElement('notice').textContent, /請選擇代課老師/);
+  getElement('payroll-noshow-replacement').value = 'Jina';
+  await context.previewPayrollNoShow();
+  assert.match(getElement('notice').textContent, /代課老師.*原老師.*不同/);
+  assert.equal(requestActions.includes('previewPayrollNoShow'), false);
+  getElement('payroll-noshow-replacement').value = 'Liz';
+  getElement('payroll-noshow-attendance').value = '0';
+  await context.previewPayrollNoShow();
+  assert.equal(requestActions.filter(action => action === 'previewPayrollNoShow').length, 1);
+  assert.match(getElement('payroll-noshow-preview').innerHTML, /確認登記/);
+  assert.equal(requestActions.includes('recordPayrollNoShow'), false);
 });
 
 test('admin queue rendering does not leak Array.map indexes into cards', () => {

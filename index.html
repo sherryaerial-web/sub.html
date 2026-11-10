@@ -2112,7 +2112,7 @@
     .raffle-prize { border-top: 1px solid var(--line, #ddd4ca); padding: 14px 0 4px; margin-top: 10px; overflow-wrap: anywhere; }
     .raffle-prize .status-pill { margin-left: 10px; }
   </style>
-  <link rel="stylesheet" href="./workspace-navigation.css?v=soft-workspace-20261110">
+  <link rel="stylesheet" href="./workspace-navigation.css?v=workbench-bundle-20261110-2">
 </head>
 <body>
   <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -2206,8 +2206,8 @@
           <button class="admin-section active" type="button" data-admin-section="dashboard"><i data-lucide="layout-dashboard"></i><span>工作台</span></button>
           <button class="admin-section" type="button" data-admin-section="courses" data-capability="course_admin"><i data-lucide="calendar-range"></i><span>課務</span></button>
           <button class="admin-section" type="button" data-admin-section="practice" data-capability="course_admin"><i data-lucide="door-open"></i><span>教室</span></button>
-          <button class="admin-section" type="button" data-admin-section="students"><i data-lucide="users-round"></i><span>學生與活動</span></button>
           <button class="admin-section" type="button" data-admin-section="finance"><i data-lucide="wallet"></i><span>財務</span></button>
+          <button class="admin-section" type="button" data-admin-section="students"><i data-lucide="users-round"></i><span>學生與活動</span></button>
           <div class="admin-nav-divider" aria-hidden="true"></div>
           <button class="admin-section" type="button" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="send"></i><span>通知發送</span></button>
           <button class="admin-section" type="button" data-admin-section="tools" data-capability="course_admin"><i data-lucide="settings-2"></i><span>系統工具</span></button>
@@ -2476,7 +2476,7 @@
       <button class="admin-section" type="button" data-admin-section="dashboard"><i data-lucide="layout-dashboard"></i><span>待辦</span></button>
       <button class="admin-section" type="button" data-admin-section="courses" data-capability="course_admin"><i data-lucide="calendar-range"></i><span>課務</span></button>
       <button class="admin-section" type="button" data-admin-section="practice" data-capability="course_admin"><i data-lucide="door-open"></i><span>教室</span></button>
-      <button class="admin-section" type="button" data-admin-section="finance"><i data-lucide="wallet"></i><span>財務</span></button>
+      <button class="admin-section" type="button" data-admin-section="students"><i data-lucide="users-round"></i><span>學生與活動</span></button>
       <button id="admin-mobile-more" type="button" aria-haspopup="dialog" aria-controls="admin-more-dialog"><i data-lucide="menu"></i><span>更多</span></button>
     </nav>
   </div>
@@ -2485,7 +2485,7 @@
     <div class="dialog-body">
       <div class="admin-panel-heading"><h3 id="admin-more-title">更多</h3><button id="admin-more-close" class="icon-button" type="button" aria-label="關閉"><i data-lucide="x"></i></button></div>
       <nav class="admin-more-links" aria-label="其他管理功能">
-        <button class="admin-section" type="button" data-admin-section="students"><i data-lucide="users-round"></i><span>學生與活動</span></button>
+        <button class="admin-section" type="button" data-admin-section="finance"><i data-lucide="wallet"></i><span>財務</span></button>
         <button class="admin-section" type="button" data-admin-section="notifications" data-capability="course_admin"><i data-lucide="send"></i><span>通知發送</span></button>
         <button class="admin-section" type="button" data-admin-section="tools" data-capability="course_admin"><i data-lucide="settings-2"></i><span>系統工具</span></button>
       </nav>
@@ -2681,7 +2681,7 @@
   <script src="raffle-tools.js?v=raffle-experience-20261105"></script>
   <script src="raffle.js?v=ops-refresh-20261105"></script>
   <script src="admin-transport.js?v=personal-appearance-20261110"></script>
-  <script src="main-assurance-ui.js?v=mobile-workbench-20261110"></script>
+  <script src="main-assurance-ui.js?v=workbench-bundle-20261110-2"></script>
   <script src="personal-appearance.js?v=20261110"></script>
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
@@ -2886,8 +2886,8 @@
         if (active) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
       });
       const more = byId("admin-mobile-more");
-      more.hidden = !["students", "notifications", "tools"].some(canOpenAdminSection);
-      const moreActive = ["students", "notifications", "tools"].includes(activeAdminSection) || viewId === "view-inbox";
+      more.hidden = !["finance", "notifications", "tools"].some(canOpenAdminSection);
+      const moreActive = ["finance", "notifications", "tools"].includes(activeAdminSection) || viewId === "view-inbox";
       more.classList.toggle("active", activeWorkspaceMode === "admin" && moreActive);
       more.setAttribute("aria-expanded", String(Boolean(byId("admin-more-dialog").open)));
       byId("workspace-admin-refresh").hidden = activeAdminTab === "raffle" || activeAdminSection === "dashboard" &&
@@ -3393,6 +3393,7 @@
         claim: "view-claim",
         mysubs: "view-mysubs",
         practice: "view-practice",
+        raffle: "view-raffle",
         payroll: "view-payroll",
         inbox: "view-inbox"
       })[targetView] || "view-home";
@@ -3445,11 +3446,20 @@
         : "";
       byId("teacher-home-summary").innerHTML = `本週 ${Number(summary.regular || 0)} 堂課 <span aria-hidden="true">·</span> ${Number(summary.substitute || 0)} 堂代課${practiceSummary}`;
       byId("teacher-home-month").textContent = teacherHomeDashboard.monthLabel || "";
-      const upcoming = Array.isArray(teacherHomeDashboard.upcoming) ? teacherHomeDashboard.upcoming : [];
+      const rawUpcoming = Array.isArray(teacherHomeDashboard.upcoming) ? teacherHomeDashboard.upcoming : [];
+      const prizes = rawUpcoming.filter(item => item.targetView === "raffle");
+      const prizeCount = new Set(prizes.map((item, index) => item.id || `prize-${index}`)).size;
+      let prizeShown = false;
+      const upcoming = rawUpcoming.flatMap(item => {
+        if (item.targetView !== "raffle") return [item];
+        if (prizeShown) return [];
+        prizeShown = true;
+        return [{ targetView: "raffle", title: "獎品待處理", count: prizeCount, groupedPrize: true }];
+      });
       byId("teacher-home-pending").textContent = teacherHomeDashboard.pendingCount ? `${teacherHomeDashboard.pendingCount} 件申請進度` : "";
       byId("teacher-home-upcoming").innerHTML = upcoming.length ? upcoming.map((item) => {
         const parts = getTeacherHomeDateParts(item.date);
-        return `<button class="teacher-upcoming-row" type="button" data-view="${escapeHtml(getTeacherHomeViewId(item.targetView))}"><span class="teacher-upcoming-date">${escapeHtml(parts.short)}</span><span class="teacher-upcoming-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.time, item.meta].filter(Boolean).join(" · "))}</small></span><i data-lucide="chevron-right"></i></button>`;
+        return `<button class="teacher-upcoming-row" type="button" data-view="${escapeHtml(getTeacherHomeViewId(item.targetView))}"><span class="teacher-upcoming-date">${item.groupedPrize ? `${item.count} 件` : escapeHtml(parts.short)}</span><span class="teacher-upcoming-copy"><strong>${escapeHtml(item.title)}</strong>${item.groupedPrize ? "" : `<small>${escapeHtml([item.time, item.meta].filter(Boolean).join(" · "))}</small>`}</span><i data-lucide="chevron-right"></i></button>`;
       }).join("") : '<div class="teacher-home-empty compact"><i data-lucide="circle-check-big"></i><strong>目前沒有近期事項</strong></div>';
       const populatedDate = (teacherHomeDashboard.dates || []).find((item) => item.hasSchedule);
       const selectedStillExists = teacherHomeSelectedDate &&
@@ -4863,7 +4873,7 @@
       byId("push-status-copy").textContent = pushStatusMessage || (isOptedIn
         ? "裝置通知已開啟，帳號綁定尚未檢查。"
         : "開啟後可收到代課邀請、領課結果與管理待辦提醒。");
-      card.hidden = verifiedForCurrentSession && activeViewId !== "view-account";
+      card.hidden = verifiedForCurrentSession;
     }
 
     async function initializePushForSession(options = {}) {
@@ -7857,7 +7867,7 @@
           <label class="notification-field">事件日期<input id="payroll-noshow-date" class="text-input" type="date" min="${escapeHtml(data.month)}-01" max="${escapeHtml(data.month)}-${new Date(Number(data.month.slice(0, 4)), Number(data.month.slice(5)), 0).getDate()}" required></label>
           <button id="payroll-noshow-load" class="compact-button" type="button" data-admin-action="load-payroll-noshow-courses"><i data-lucide="search"></i>查詢當日課程</button>
           <label class="notification-field">課程<select id="payroll-noshow-course" class="text-input"><option value="">請先查詢當日課程</option></select></label>
-          <details class="notification-field"><summary>找不到已取消的課程</summary><label>OB 課程編號<input id="payroll-noshow-calendar" class="text-input" type="text" inputmode="numeric" maxlength="15"></label></details>
+          <details class="notification-field"><summary>清單找不到課程？手動輸入 OB 課程編號</summary><label>OB 課程編號<input id="payroll-noshow-calendar" class="text-input" type="text" inputmode="numeric" maxlength="15"></label></details>
           <label class="notification-field">原老師<select id="payroll-noshow-teacher" class="text-input" required>${teachers}</select></label>
           <label class="notification-field">授課處理<select id="payroll-noshow-mode" class="text-input"><option value="replacement">有代課</option><option value="noReplacement">無代課</option></select></label>
           <label class="notification-field" data-noshow-replacement>代課老師<select id="payroll-noshow-replacement" class="text-input">${teachers}</select></label>
@@ -7921,6 +7931,15 @@
       if (payrollNoShowPending || !payrollDashboard?.noShowEditable || byId("payroll-noshow-preview-button").disabled) return;
       invalidatePayrollNoShow();
       const input = readPayrollNoShowInput();
+      if (input.mode === "replacement") {
+        if (!input.replacementTeacher) return setNotice("請選擇代課老師。", "error");
+        if (input.replacementTeacher === input.teacherName) return setNotice("代課老師須與原老師不同。", "error");
+        const attendance = Number(input.attendanceCount);
+        if (!String(input.attendanceCount).trim() || !Number.isSafeInteger(attendance) || attendance < 0 || attendance > 1000) {
+          byId("payroll-noshow-attendance").focus();
+          return setNotice("請填寫計薪出席人數（0–1000 的整數）。", "error");
+        }
+      }
       const form = byId("payroll-noshow-form");
       const date = byId("payroll-noshow-date").value.replace(/-/g, "/");
       const revision = payrollNoShowRevision;
@@ -8655,7 +8674,7 @@
         button.classList.toggle("active", active);
         button.setAttribute("aria-selected", active ? "true" : "false");
       });
-      const showsPriority = activeAdminSection === "dashboard";
+      const showsPriority = activeAdminSection === "dashboard" && !window.SherryMainAssurance;
       byId("admin-priority").hidden = !showsPriority;
       byId("admin-tools-shell").hidden = activeAdminSection !== "tools";
       byId("admin-subtabs").hidden = !["finance", "students"].includes(activeAdminSection) || getAdminSectionTabs(activeAdminSection).length < 2;
@@ -8686,6 +8705,48 @@
         if (count > 0) items.push({ label: "VVIP 待確認", count, tab: "vvip" });
       }
       return items;
+    }
+
+    function buildAdminHomeTasks() {
+      const tasks = new Map();
+      const course = adminDashboard || {};
+      const add = (item) => {
+        if (!item || !authState.managementCapabilities.includes(getAdminTabCapability(item.tab))) return;
+        const key = `${item.tab}:${item.targetId || item.key}`;
+        const existing = tasks.get(key);
+        tasks.set(key, existing ? { ...item, ...existing, date: existing.date || item.date, time: existing.time || item.time } : item);
+      };
+      ((course.operations && course.operations.tasks) || []).forEach(add);
+      if (authState.managementCapabilities.includes("course_admin")) {
+        ["pendingInvitations", "activeInvitees", "obWork", "changeRequests", "courseAdjustments", "missingObCancellations", "exceptions"].forEach(tab => {
+          (course[tab] || []).forEach((item, index) => {
+            const targetId = item.substituteId || item.specialGroupId || item.groupId || item.adjustmentId || item.requestId || item.invitationId || item.id || "";
+            add({ key: `${tab}:${targetId || index}`, targetId, tab,
+              label: item.actualCourse || item.courseName || item.originalCourse || item.teacherName || "待處理事項",
+              date: item.date || "", time: item.time || "", urgency: "待處理" });
+          });
+        });
+        ((studentPracticeAdminDashboard && studentPracticeAdminDashboard.requests) || []).filter(item => item.status === "待確認資格" ||
+          item.status === "時段異動待處理" || item.changeStatus === "時段異動待處理").forEach(item => {
+          add({ key: `practice:${item.participantId}`, targetId: item.participantId, tab: "practice", label: item.appName || "學生自主練習",
+            date: item.date || "", time: item.startTime || "", urgency: "待處理" });
+        });
+        const discountCount = Number(course.monthlyDiscount && course.monthlyDiscount.pendingCount);
+        if (Number.isSafeInteger(discountCount) && discountCount > 0) add({ key: "summary:monthlyDiscount", tab: "monthlyDiscount", summaryOnly: true, summaryCount: discountCount });
+        const monthly = notificationDashboard && notificationDashboard.monthlyOperations;
+        const today = monthlyOperationDate(monthly && monthly.now) || getTaipeiToday().replaceAll("/", "-");
+        ((monthly && monthly.operations) || []).filter(item => {
+          const date = monthlyOperationDate(item.recommendedAt);
+          return item.canExecute && (item.status === "completed" && item.notificationPending || Array.isArray(item.notificationIds) && item.notificationIds.length &&
+            item.status !== "completed" && date && date.slice(0, 7) === today.slice(0, 7) && date <= today);
+        }).forEach(item => add({ key: `notifications:${item.id}`, targetId: item.id, tab: "notifications", label: item.label,
+          date: monthlyOperationDate(item.recommendedAt), urgency: "待處理" }));
+      }
+      if (authState.managementCapabilities.includes("vvip_admin")) {
+        const count = Number(vvipDashboard && vvipDashboard.metrics && vvipDashboard.metrics.pendingSelections);
+        if (Number.isSafeInteger(count) && count > 0) add({ key: "summary:vvip", tab: "vvip", summaryOnly: true, summaryCount: count });
+      }
+      return [...tasks.values()];
     }
 
     function updateAdminTabCounts(data = adminDashboard || {}) {
@@ -8843,11 +8904,18 @@
         </div>
       </article>` : `<article class="monthly-next-card"><div><div class="monthly-next-label">本月進度</div><h3 class="monthly-next-title">目前沒有待處理流程</h3></div></article>`;
       const mainOperations = adminDashboard && adminDashboard.operations;
-      const taskOptions = () => ({ ...getMainOperationsOptions(), home: true, today: getTaipeiToday() });
-      if (window.SherryMainAssurance) ["operations-tasks", "operations-earlier-tasks"].forEach(key => {
-        mainAssuranceState.listRenderers[key] = () => window.SherryMainAssurance.renderOperationsList(key, adminDashboard && adminDashboard.operations, taskOptions());
-      });
-      const mainTasks = authState.managementCapabilities.includes("course_admin") ? `<section class="main-section"><h3>待辦事項</h3>${window.SherryMainAssurance ? window.SherryMainAssurance.renderTasks(mainOperations && mainOperations.tasks, mainOperations && mainOperations.error, taskOptions()) : '<div class="state error">待辦元件未載入。</div>'}</section>` : "";
+      const taskOptions = () => ({ pages: mainAssuranceState.pages, today: getTaipeiToday() });
+      const tasks = buildAdminHomeTasks();
+      const taskUi = window.SherryMainAssurance;
+      if (taskUi) {
+        const overview = taskUi.buildTaskOverview(tasks, taskOptions());
+        [...overview.groups, ...overview.history.flatMap(month => month.groups)].forEach(group => {
+          mainAssuranceState.listRenderers[group.id] = () => taskUi.renderTaskOverviewPage(group.id, buildAdminHomeTasks(), taskOptions());
+        });
+      }
+      const taskError = authState.managementCapabilities.includes("course_admin")
+        ? (!mainOperations || !Array.isArray(mainOperations.tasks) ? "課務追蹤資料尚未取得。" : mainOperations.error) : null;
+      const mainTasks = `<section class="main-section"><h3>待辦事項</h3>${taskUi ? taskUi.renderTaskOverview(tasks, taskError, taskOptions()) : '<div class="state error">待辦元件未載入。</div>'}</section>`;
       content.innerHTML = `${mainTasks}<div class="admin-home-grid">
         <section class="admin-home-card">
           <div class="admin-panel-heading"><h3>本月流程</h3><button class="compact-button" type="button" data-admin-go-section="operations">查看完整流程</button></div>
@@ -9567,7 +9635,9 @@
       const compareBookingTime = (a, b) =>
         `${String(a.date || "").replace(/\//g, "-")}T${a.startTime || ""}`
           .localeCompare(`${String(b.date || "").replace(/\//g, "-")}T${b.startTime || ""}`);
-      const bookingCards = renderMainPagedList("practice-bookings-current", currentBookings.sort(compareBookingTime), renderBookingCard, "目前沒有進行中或即將開始的老師自主練習");
+      const bookingCards = currentBookings.length ? renderMainLazyDisclosure("practice-current-bookings", `進行中／即將開始<span>${currentBookings.length} 筆</span>`,
+        () => `<div class="practice-admin-list" data-practice-admin-current>${renderMainPagedList("practice-bookings-current", currentBookings.sort(compareBookingTime), renderBookingCard)}</div>`,
+        "practice-admin-history-month practice-admin-current-group") : '<div class="practice-admin-empty">目前沒有進行中或即將開始的老師自主練習</div>';
       const historyCount = bookings.length - currentBookings.length;
       const historyCards = renderMainPagedList("practice-history-months", Array.from(historicalMonths.keys()).sort((a, b) => b.localeCompare(a)), (month) => {
         const items = historicalMonths.get(month).sort((a, b) => compareBookingTime(b, a));
@@ -9597,8 +9667,7 @@
           <div class="practice-admin-filter-actions"><button class="compact-button" type="submit"><i data-lucide="search"></i>套用篩選</button><button class="compact-button" type="button" data-admin-action="clear-practice-filters"><i data-lucide="rotate-ccw"></i>清除</button></div>
         </form>
         </details>
-        <div class="queue-section-heading"><strong>進行中／即將開始</strong><span>${currentBookings.length} 筆</span></div>
-        <div class="practice-admin-list" data-practice-admin-current>${bookingCards}</div>
+        ${bookingCards}
         ${historyCount ? `<section class="practice-admin-history" data-practice-admin-history><div class="queue-section-heading"><strong>已結束／已取消紀錄</strong><span>${historyCount} 筆</span></div>${historyCards}</section>` : ""}
         ${notificationFailures.length ? `<section class="practice-admin-failures"><div class="queue-section-heading"><strong>推播失敗待處理</strong><span>${notificationFailures.length} 筆</span></div>${failures}</section>` : ""}`;
       refreshIcons();

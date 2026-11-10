@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(path.join(process.env.CODEX_NODE_MODULES, 'playwright'));
@@ -49,6 +49,11 @@ try {
       throw Error(`Unexpected API: ${action}`);
     };
     authState.sessionToken = 'fixture'; authState.teacherName = '卡拉 卡拉';
+    authState.managementCapabilities = ['course_admin'];
+    fetchAdminDashboard = async () => {};
+    fetchNotificationAdminDashboard = async () => {};
+    loadTeacherHome = () => {};
+    loadPracticeDay = () => {};
     document.getElementById('auth-shell').hidden = true;
     document.getElementById('app-shell').hidden = false;
     document.getElementById('current-user').textContent = '卡拉 卡拉';
@@ -60,11 +65,26 @@ try {
   assert.equal(await page.locator('#push-status-copy').textContent(), '已確認這支裝置綁定 卡拉 卡拉，通知訂閱有效。');
   assert.equal(await page.evaluate(() => pushCalls.includes('optIn')), false);
   await page.evaluate(() => switchView('view-account'));
-  assert.equal(await page.locator('#push-permission-card').isVisible(), true);
+  assert.equal(await page.locator('#push-permission-card').isVisible(), false);
   await fs.mkdir(output, { recursive: true });
   for (const [name, width, height] of [['desktop', 1366, 900], ['mobile', 390, 844], ['narrow', 320, 700]]) {
     await page.setViewportSize({ width, height });
+    await page.locator('#workspace-admin').click();
+    assert.equal(await page.locator('#app-shell').getAttribute('data-shell-mode'), 'admin');
+    assert.equal(await page.locator('#push-permission-card').isVisible(), false);
+    await page.locator('#workspace-teacher').click();
+    assert.equal(await page.locator('#app-shell').getAttribute('data-shell-mode'), 'teacher');
+    assert.equal(await page.locator('#push-permission-card').isVisible(), false);
+    await page.locator(width <= 760 ? '#mobile-tabbar [data-view="view-account"]' : '.teacher-primary-nav [data-view="view-account"]').click();
+    assert.equal(await page.locator('#view-account').isVisible(), true);
+    assert.equal(await page.locator('#push-permission-card').isVisible(), false);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, name);
+    await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
+  }
+  await page.evaluate(async () => { pushRemoteStatus = 'not_linked'; await checkPushNotifications(); });
+  assert.equal(await page.locator('#push-permission-card').isVisible(), true);
+  for (const [name, width, height] of [['desktop', 1366, 900], ['mobile', 390, 844], ['narrow', 320, 700]]) {
+    await page.setViewportSize({ width, height });
     for (const selector of ['#push-check', '#push-repair']) {
       const box = await page.locator(selector).boundingBox();
       assert.ok(box && box.width > 70 && box.height >= 40 && box.x >= 0 && box.x + box.width <= width, `${name}: ${selector}`);
@@ -72,14 +92,14 @@ try {
     const copy = await page.locator('#push-status-copy').boundingBox();
     const actions = await page.locator('.push-permission-actions').boundingBox();
     assert.ok(copy && actions && (copy.y + copy.height <= actions.y || copy.x + copy.width <= actions.x), `${name}: copy/actions overlap`);
-    await page.screenshot({ path: `${output}/${name}.png`, fullPage: true });
+    await page.screenshot({ path: `${output}/${name}-warning.png`, fullPage: true });
   }
   await page.evaluate(() => {
     loadPracticeDay = () => {};
     switchView('view-practice');
   });
-  assert.equal(await page.locator('#push-permission-card').isVisible(), false);
-  await page.evaluate(() => { switchView('view-account'); pushRemoteStatus = 'not_linked'; });
+  assert.equal(await page.locator('#push-permission-card').isVisible(), true);
+  await page.evaluate(() => switchView('view-account'));
   await page.locator('#push-repair').click();
   await page.getByText('推播服務尚未確認這支裝置的帳號綁定，請稍後檢查或重新綁定。', { exact: true }).waitFor();
   await page.evaluate(() => switchView('view-practice'));
@@ -89,8 +109,34 @@ try {
   await page.evaluate(() => { fixturePushSdk.User.PushSubscription.id = ''; fixturePushSdk.User.PushSubscription.token = ''; });
   await page.locator('#push-check').click();
   await page.getByText('這支裝置尚未建立有效通知訂閱，請開啟通知或重新綁定。', { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => pushCalls.filter(call => call && call.action === 'getPushSubscriptionStatus').length), 2);
+  assert.equal(await page.evaluate(() => pushCalls.filter(call => call && call.action === 'getPushSubscriptionStatus').length), 3);
+  await page.evaluate(() => {
+    fixturePushSdk.User.PushSubscription.id = '11111111-1111-4111-8111-111111111111';
+    fixturePushSdk.User.PushSubscription.token = 'fixture-token';
+    pushRemoteStatus = 'ready';
+  });
+  await page.locator('#push-check').click();
+  await page.locator('#push-permission-card').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#view-account').isVisible(), false);
+  await page.evaluate(() => switchView('view-account'));
+  assert.equal(await page.locator('#push-permission-card').isVisible(), false);
   assert.equal(await page.evaluate(() => pushCalls.includes('optOut') || pushCalls.includes('logout')), false);
+  for (const [name, preview] of [
+    ['integrated', '/Users/ivy/Documents/2026 B 周年慶/output/workspace-navigation-integrated-local-20261110/preview.html'],
+    ['grouped', '/Users/ivy/Documents/2026 B 周年慶/output/grouped-workbench-local-20261110/preview.html']
+  ]) {
+    const local = await browser.newPage({ viewport: { width: 390, height: 844 }, locale: 'zh-TW', timezoneId: 'Asia/Taipei' });
+    local.on('pageerror', error => errors.push(error.message));
+    await local.route(/^https?:/, route => route.abort());
+    await local.goto(pathToFileURL(preview).href);
+    await local.locator('#workspace-teacher').click();
+    await local.locator('#mobile-tabbar [data-view="view-account"]').click();
+    assert.equal(await local.locator('#view-account').isVisible(), true, name);
+    assert.equal(await local.locator('#push-permission-card').isVisible(), false, name);
+    assert.equal(await local.evaluate(() => offlineWrites.length), 0, name);
+    await local.screenshot({ path: `${output}/${name}-confirmed-account.png`, fullPage: true });
+    await local.close();
+  }
   assert.deepEqual(errors, []);
   console.log(`PASS push UI: desktop/mobile/narrow screenshots at ${output}; check is read-only, repair rebinds own device, missing subscription and unconfirmed server do not report success; no real network/sends.`);
 } finally {

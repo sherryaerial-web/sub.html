@@ -7097,7 +7097,7 @@ test('special slot planning accepts fifteen-minute steps relative to a non-quart
   assert.equal(plan.endTime, '14:10');
 });
 
-test('special slot planning allows up to thirty minutes early and preserves the previous-course turnover', () => {
+test('special slot planning allows up to sixty minutes early and preserves the previous-course turnover', () => {
   const backend = loadBackend();
   backend.getNextMonthKey_ = () => '2026-09';
   const pendingRows = [
@@ -7119,9 +7119,24 @@ test('special slot planning allows up to thirty minutes early and preserves the 
     'leave-offset-1', 'leave-offset-2',
   ]);
 
+  const earlierRows = [
+    ['2026/09/24', '09:55', 'C－空環 Lv.1', '老師乙', 'cal-before'],
+    ...safeRows.slice(1),
+  ];
+  for (const [start, end] of [['11:25', '13:55'], ['11:10', '13:40']]) {
+    const plan = backend.buildTeacherSpecialCourseSlotPlan_(
+      'Tako', 'leave:leave-offset-1', 150, start, pendingRows, earlierRows, 'merge'
+    );
+    assert.equal(plan.actualStartTime, start);
+    assert.equal(plan.endTime, end);
+    assert.deepEqual(Array.from(plan.orderedSubstituteIds), ['leave-offset-1', 'leave-offset-2']);
+  }
   assert.throws(() => backend.buildTeacherSpecialCourseSlotPlan_(
-    'Tako', 'leave:leave-offset-1', 120, '11:25', pendingRows, safeRows, 'merge'
-  ), /最多只能提早 30 分鐘/);
+    'Tako', 'leave:leave-offset-1', 150, '10:55', pendingRows, earlierRows.slice(1), 'merge'
+  ), /最多只能提早 60 分鐘/);
+  assert.throws(() => backend.buildTeacherSpecialCourseSlotPlan_(
+    'Tako', 'leave:leave-offset-1', 150, '11:25', pendingRows, safeRows, 'merge'
+  ), /上一堂課.*15 分鐘換場/);
 
   const turnoverConflictRows = [
     ['2026/09/24', '10:50', 'C－空環 Lv.1', '老師乙', 'cal-before'],
@@ -7656,11 +7671,17 @@ test('advancing a special course restores its former delayed continuation to the
   assert.match(staleContinuation.differences.join('；'), /接續常態課：時間不一致.*12:00.*12:15/);
 });
 
-test('special claim rejects more than thirty minutes early, non-quarter-hour, or too-late actual start without writes', () => {
-  ['12:45', '13:40', '14:50'].forEach((actualStartTime) => {
+test('special claim rejects more than sixty minutes early, invalid time steps, or a turnover conflict without writes', () => {
+  for (const [actualStartTime, reason] of [
+    ['12:15', /最多只能提早 60 分鐘/],
+    ['12:30', /上一堂課.*15 分鐘換場/],
+    ['13:40', /15 分鐘為單位/],
+    ['15:00', /最晚只能選 14:45/],
+  ]) {
     const { backend, leaveSheet, adminSession, teacherASession } = createInvitationBackend({
       nextMonth: '2026-09',
       courseRows: [
+        ['2026/09/12', '11:30', 'B－空環 Lv.1', '老師丙', 'cal-prev', 'class-ring-1', 'teacher-c', '否', ''],
         ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-invalid-1', 'class-ring-2', 'teacher-b', '否', ''],
         ['2026/09/12', '15:00', 'B－空環 Lv.1', '老師丙', 'cal-invalid-2', 'class-ring-1', 'teacher-c', '否', ''],
       ],
@@ -7675,9 +7696,37 @@ test('special claim rejects more than thirty minutes early, non-quarter-hour, or
     assert.throws(() => backend.claimSpecialCourse_(teacherASession, {
       mode: 'vacancy', substituteIds: ['leave-invalid-1'], actualStartTime,
       courseName: '椅子瑜伽特別課', durationMinutes: 90, difficulty: '', note: '',
-    }), /實際開始時間/);
+    }), reason);
     assert.equal(JSON.stringify(leaveSheet.values), before);
+  }
+});
+
+test('a special claim sixty minutes early saves the actual time without taking the next class at the turnover boundary', () => {
+  const { backend, leaveSheet, specialRequestSheet, adminSession, teacherASession } = createInvitationBackend({
+    nextMonth: '2026-09',
+    courseRows: [
+      ['2026/09/12', '11:15', 'B－空環 Lv.1', '老師丙', 'cal-before', 'class-ring-1', 'teacher-c', '否', ''],
+      ['2026/09/12', '13:30', 'B－空環 Lv.2', '老師乙', 'cal-early', 'class-ring-2', 'teacher-b', '否', ''],
+      ['2026/09/12', '14:15', 'B－空環 Lv.1', '老師丙', 'cal-next', 'class-ring-1', 'teacher-c', '否', ''],
+    ],
+    leaveRows: [
+      ['stamp', '老師乙', '2026/09/12', '13:30', 'B－空環 Lv.2', '確認中', '', '', '', 'leave-early', 'cal-early'],
+      ['stamp', '老師丙', '2026/09/12', '14:15', 'B－空環 Lv.1', '確認中', '', '', '', 'leave-next', 'cal-next'],
+    ],
   });
+  backend.openInvitations_(adminSession, ['老師甲']);
+
+  const result = backend.claimSpecialCourse_(teacherASession, {
+    mode: 'vacancy', startSlotKey: 'leave:leave-early', actualStartTime: '12:30',
+    courseName: '空環特別課', durationMinutes: 90,
+  });
+
+  assert.equal(result.actualStartTime, '12:30');
+  assert.equal(result.endTime, '14:00');
+  assert.deepEqual(Array.from(result.substituteIds), ['leave-early']);
+  assert.deepEqual(specialRequestSheet.values[1].slice(7, 12), ['12:30', '空環特別課', '', 90, '14:00']);
+  assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-early')[5], '已領取');
+  assert.equal(leaveSheet.values.find((row) => row[9] === 'leave-next')[5], '確認中');
 });
 
 test('continuous special claim blocks a missing required slot without partial writes', () => {

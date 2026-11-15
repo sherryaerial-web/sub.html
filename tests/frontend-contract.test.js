@@ -2362,7 +2362,7 @@ test('separates ordinary substitute handling from the special-course flow', () =
   const specialStartSelect = html.match(/<select id="special-actual-start"[\s\S]*?<\/select>/)?.[0] || '';
   assert.doesNotMatch(specialStartSelect, /開始時段預設為第一門課程開始時間/);
   assert.equal((html.match(/請先勾選第一堂課程/g) || []).length, 2);
-  assert.match(html, /可提早 15 或 30 分鐘，也可延後；所有時間都須保留前後 15 分鐘換場/);
+  assert.match(html, /可提早 15、30、45 或 60 分鐘，也可延後；所有時間都須保留前後 15 分鐘換場/);
   assert.match(html, /難度／等級（如有）/);
   assert.match(html, /id="special-claim-summary"[\s\S]*id="special-course-name"/);
   assert.match(html, /自訂分鐘數（90–240）/);
@@ -2781,10 +2781,10 @@ test('special-course draft delays the actual start while reserving every occupie
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.getSpecialCourseStartTimeOptions('leave-a', 90, availability))),
-    ['13:00', '13:15', '13:30', '13:45', '14:00', '14:15', '14:30', '14:45'],
+    ['12:45', '13:00', '13:15', '13:30', '13:45', '14:00', '14:15', '14:30', '14:45'],
   );
 
-  ['12:45', '13:40', '14:50'].forEach((actualStartTime) => {
+  ['12:15', '13:40', '14:50'].forEach((actualStartTime) => {
     assert.throws(() => context.validateSpecialCourseDraft({
       mode: 'merge', substituteIds: ['leave-a'], actualStartTime,
       courseName: '主題課', durationMinutes: 90, note: '',
@@ -2835,23 +2835,63 @@ test('special-course draft delays the actual start while reserving every occupie
   }, turnoverBlockedAvailability), /上一堂課.*15 分鐘換場/);
 });
 
-test('special-course start options label delays relative to the original slot without changing their values', () => {
+test('special-course start choices show both new offsets and keep the original time as the default', () => {
   const { context, getElement } = createFrontendRuntime();
   context.document.querySelectorAll = (selector) => selector === '.claim-checkbox:checked'
     ? [{ dataset: { slotKey: 'leave-first' } }]
     : [];
   vm.runInContext(`claimOptions = { specialAvailability: {
-    'leave-first': { startTime: '17:30', earliestStartTime: '17:00', nextCourseTime: '18:45' }
+    'leave-first': { startTime: '17:30', earliestStartTime: '16:30', nextCourseTime: '18:45' }
   } };`, context);
 
   context.syncSpecialCourseStartTimeOptions();
 
   const select = getElement('special-actual-start');
+  assert.match(select.innerHTML, /<option value="16:30">16:30（提早 60 分鐘）<\/option>/);
+  assert.match(select.innerHTML, /<option value="16:45">16:45（提早 45 分鐘）<\/option>/);
+  assert.doesNotMatch(select.innerHTML, /value="16:15"/);
   assert.match(select.innerHTML, /<option value="17:00">17:00（提早 30 分鐘）<\/option>/);
   assert.match(select.innerHTML, /<option value="17:30">17:30<\/option>/);
   assert.match(select.innerHTML, /<option value="17:45">17:45（延後 15 分鐘）<\/option>/);
   assert.match(select.innerHTML, /<option value="18:30">18:30（延後 60 分鐘）<\/option>/);
   assert.equal(select.value, '17:30');
+
+  select.value = '16:30';
+  context.syncSpecialCourseStartTimeOptions();
+  assert.equal(select.value, '16:30');
+
+  vm.runInContext(`claimOptions.specialAvailability['leave-first'].earliestStartTime = '16:45';`, context);
+  context.syncSpecialCourseStartTimeOptions();
+  assert.doesNotMatch(select.innerHTML, /value="16:30"/);
+  assert.match(select.innerHTML, /value="16:45"/);
+  assert.equal(select.value, '17:30');
+});
+
+test('a single-slot special can use a gap that only fits with forty-five or sixty minutes early', () => {
+  const { context, getElement } = createFrontendRuntime();
+  const option = {
+    room: 'B', date: '2026/09/12', startTime: '13:30', earliestStartTime: '12:30',
+    nextCourseTime: '14:15', mergePartnerIds: [], maxDurationMinutes: 30,
+  };
+  const availability = { 'leave-first': option };
+  assert.equal(context.getSingleSlotSpecialCourseBlockReason(option), '');
+  const draft = { mode: 'vacancy', startSlotKey: 'leave-first', courseName: '特別課', note: '' };
+  assert.equal(context.validateSpecialCourseDraft({
+    ...draft, actualStartTime: '12:45', durationMinutes: 75,
+  }, availability).actualStartTime, '12:45');
+  assert.equal(context.validateSpecialCourseDraft({
+    ...draft, actualStartTime: '12:30', durationMinutes: 90,
+  }, availability).actualStartTime, '12:30');
+  assert.throws(() => context.validateSpecialCourseDraft({
+    ...draft, actualStartTime: '12:45', durationMinutes: 90,
+  }, availability), /15 分鐘換場/);
+
+  context.document.querySelectorAll = selector => selector === '.claim-checkbox:checked'
+    ? [{ dataset: { slotKey: 'leave-first' } }] : [];
+  vm.runInContext(`claimOptions = { specialAvailability: ${JSON.stringify(availability)} };`, context);
+  getElement('special-actual-start').value = '12:30';
+  context.updateSpecialClaimSummary();
+  assert.match(getElement('special-claim-summary').textContent, /最多可排 90 分鐘/);
 });
 
 test('single-slot special course blocks a gap shorter than 75 minutes after turnover', () => {

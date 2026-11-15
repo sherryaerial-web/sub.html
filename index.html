@@ -2302,7 +2302,7 @@
             </div>
             <p class="hint">只需勾選特別課開始的第一堂，系統會依課程長度，自動占用同日、同教室需要使用的後續時段。後續堂會標示「此堂已包含」。</p>
             <div class="claim-fields">
-              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><p id="special-start-guidance" class="hint">開始時段預設為第一門課程開始時間，如需調整請從此調整。</p><select id="special-actual-start" class="claim-control" aria-describedby="special-start-guidance special-start-limit" disabled><option value="">請先勾選第一堂課程</option></select><p id="special-start-limit" class="hint">可提早 15 或 30 分鐘，也可延後；所有時間都須保留前後 15 分鐘換場。</p></div>
+              <div class="claim-field full"><label for="special-actual-start">實際開始時間 <span class="claim-required">必填</span></label><p id="special-start-guidance" class="hint">開始時段預設為第一門課程開始時間，如需調整請從此調整。</p><select id="special-actual-start" class="claim-control" aria-describedby="special-start-guidance special-start-limit" disabled><option value="">請先勾選第一堂課程</option></select><p id="special-start-limit" class="hint">可提早 15、30、45 或 60 分鐘，也可延後；所有時間都須保留前後 15 分鐘換場。</p></div>
               <div class="claim-field full"><label for="special-course-name">特別課名稱 <span class="claim-required">必填</span></label><input id="special-course-name" class="claim-control" type="text" maxlength="80" placeholder="例如：舞綢中軸特別課、椅子瑜伽特別課"></div>
               <div class="claim-field"><label for="special-course-difficulty">難度／等級（如有）</label><input id="special-course-difficulty" class="claim-control" type="text" maxlength="40" placeholder="例如：基礎、Open level"></div>
               <div class="claim-field"><label>課程長度 <span class="claim-required">必填</span></label><div class="special-duration-options"><label class="handling-option"><input type="radio" name="special-duration" value="75">75 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="90" checked>90 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="120">120 分鐘</label><label class="handling-option"><input type="radio" name="special-duration" value="custom">自訂</label></div></div>
@@ -2686,6 +2686,7 @@
   <script>
     const APP_URL = "https://script.google.com/macros/s/AKfycbyJADHe_DZdNIbfv_KPewAcBekEond-5Fw63i-RWCd1mHl_O9uGAQ-LTnzENZshjnhe/exec";
     const LEAVE_BATCH_SIZE = 25;
+    const SPECIAL_COURSE_MAX_ADVANCE_MINUTES = 60;
     const PRACTICE_DAY_CACHE_MS = 30000;
     const LAST_TEACHER_KEY = "sherry-substitute-last-teacher";
     const AUTH_SESSION_KEY = "sherry-substitute-auth-session";
@@ -3771,13 +3772,14 @@
       const latestStartMinutes = occupancyStartMinutes +
         Math.floor((latestByNextCourse - occupancyStartMinutes) / 15) * 15;
       const previousTurnoverMinutes = parseClaimTimeMinutes(first.earliestStartTime);
+      const firstCandidateStartMinutes = occupancyStartMinutes - SPECIAL_COURSE_MAX_ADVANCE_MINUTES;
       const earliestStartMinutes = Math.max(
         0,
-        occupancyStartMinutes - 30,
+        firstCandidateStartMinutes,
         Number.isFinite(previousTurnoverMinutes) ? previousTurnoverMinutes : 0
       );
       const options = [];
-      for (let minutes = occupancyStartMinutes - 30; minutes <= latestStartMinutes; minutes += 15) {
+      for (let minutes = firstCandidateStartMinutes; minutes <= latestStartMinutes; minutes += 15) {
         if (minutes < earliestStartMinutes) continue;
         options.push(formatClaimTimeMinutes(minutes));
       }
@@ -3795,8 +3797,8 @@
       if (!Number.isFinite(actualStartMinutes) || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
         throw new Error("實際開始時間必須從所選時段起，以 15 分鐘為單位調整。");
       }
-      if (actualStartMinutes < occupancyStartMinutes - 30) {
-        throw new Error("實際開始時間最多只能提早 30 分鐘。");
+      if (actualStartMinutes < occupancyStartMinutes - SPECIAL_COURSE_MAX_ADVANCE_MINUTES) {
+        throw new Error(`實際開始時間最多只能提早 ${SPECIAL_COURSE_MAX_ADVANCE_MINUTES} 分鐘。`);
       }
       const earliestStartMinutes = parseClaimTimeMinutes(first.earliestStartTime);
       if (Number.isFinite(earliestStartMinutes) && actualStartMinutes < earliestStartMinutes) {
@@ -3938,7 +3940,7 @@
       const earliestAllowedMinutes = Number.isFinite(occupancyStartMinutes)
         ? Math.max(
             0,
-            occupancyStartMinutes - 30,
+            occupancyStartMinutes - SPECIAL_COURSE_MAX_ADVANCE_MINUTES,
             Number.isFinite(previousTurnoverMinutes) ? previousTurnoverMinutes : 0
           )
         : NaN;
@@ -7321,8 +7323,13 @@
       const details = items.map((item) => `${formatDateWithWeekday(item["日期"])} ${item["時段"]} ${item["課程"]}`).join("＋");
       if (mode === "vacancy" && slotKeys.length === 1) {
         const option = (claimOptions.specialAvailability || {})[slotKeys[0]] || {};
+        const startMinutes = parseClaimTimeMinutes(byId("special-actual-start").value || option.startTime);
+        const nextMinutes = parseClaimTimeMinutes(option.nextCourseTime);
+        const maxDuration = Number.isFinite(startMinutes) && Number.isFinite(nextMinutes)
+          ? Math.min(240, Math.max(0, nextMinutes - startMinutes - 15))
+          : option.maxDurationMinutes;
         summary.textContent = option.nextCourseTime
-          ? `${details}；下一堂 ${option.nextCourseTime}，含 15 分鐘換場，最多可排 ${option.maxDurationMinutes} 分鐘。`
+          ? `${details}；下一堂 ${option.nextCourseTime}，含 15 分鐘換場，最多可排 ${maxDuration} 分鐘。`
           : `${details}；後面沒有課，送出後會提醒管理員確認閉館時間。`;
       } else if (mode === "merge" && slotKeys.length === 1) {
         try {

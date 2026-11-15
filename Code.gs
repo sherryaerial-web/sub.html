@@ -303,6 +303,7 @@ var CONFIG = {
   PASSWORD_IMPORT_COMPLETED_PROPERTY: 'TEACHER_PASSWORD_IMPORT_COMPLETED_AT',
   PASSWORD_IMPORT_EXPECTED_ROWS: 37,
   LEAVE_BATCH_MAX: 50,
+  SPECIAL_COURSE_MAX_ADVANCE_MINUTES: 60,
   INVITATION_OPEN_STATUS: '開放中',
   INVITATION_CLOSED_STATUS: '已關閉',
   INVITATION_ROUND_ENDED_STATUS: '本輪已結束',
@@ -19400,8 +19401,8 @@ function buildTeacherSpecialCourseSlotPlan_(teacherName, startSlotKey, durationM
   if (actualStartMinutes < 0 || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
     throw new Error('實際開始時間必須從所選時段起，以 15 分鐘為單位調整。');
   }
-  if (actualStartMinutes < occupancyStartMinutes - 30) {
-    throw new Error('實際開始時間最多只能提早 30 分鐘。');
+  if (actualStartMinutes < occupancyStartMinutes - CONFIG.SPECIAL_COURSE_MAX_ADVANCE_MINUTES) {
+    throw new Error('實際開始時間最多只能提早 ' + CONFIG.SPECIAL_COURSE_MAX_ADVANCE_MINUTES + ' 分鐘。');
   }
   var previousCourse = fullSchedule.filter(function(course) {
     return course.minutes < occupancyStartMinutes;
@@ -19558,8 +19559,8 @@ function buildSpecialCourseSlotPlan_(startId, durationMinutes, actualStartTime, 
   if (actualStartMinutes < 0 || (actualStartMinutes - occupancyStartMinutes) % 15 !== 0) {
     throw new Error('實際開始時間必須從所選時段起，以 15 分鐘為單位調整。');
   }
-  if (actualStartMinutes < occupancyStartMinutes - 30) {
-    throw new Error('實際開始時間最多只能提早 30 分鐘。');
+  if (actualStartMinutes < occupancyStartMinutes - CONFIG.SPECIAL_COURSE_MAX_ADVANCE_MINUTES) {
+    throw new Error('實際開始時間最多只能提早 ' + CONFIG.SPECIAL_COURSE_MAX_ADVANCE_MINUTES + ' 分鐘。');
   }
   var previousCourse = fullSchedule.filter(function(course) {
     return course.minutes < occupancyStartMinutes;

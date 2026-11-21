@@ -24,7 +24,7 @@ async function runArrivalBatch(rows,send,batchId,alive=()=>true,onResult=()=>{})
  return{results,stopped};
 }
 function mount(root,{api,campaignId,readOnly}){
- let disposed=false,busy=false,page=0,packing=null,packingFilters={},preview=null,stock=null,draft=null,request=null,historyEmail='',historyOffset=0,historyNext=null,templates=[],incompleteOffset=0,incompleteNext=null;
+ let disposed=false,busy=false,page=0,packing=null,packingFilters={},preview=null,arrivalReceipt=null,stock=null,draft=null,request=null,historyEmail='',historyOffset=0,historyNext=null,templates=[],incompleteOffset=0,incompleteNext=null;
  root.className='admin-control activity-tools';root.innerHTML=`<h3>備貨與活動管理</h3><p class="item-meta">店長常用工具。姓名貼含學生 Email，請僅用於備貨。</p><nav class="admin-item-actions" aria-label="活動管理工具">${button('packing','備貨／姓名貼')}${button('history','學生活動紀錄')}${button('incomplete','未完成抽獎')}${button('inventory','庫存提醒')}${button('templates','下次活動草稿')}</nav><div data-tool-status role="status" aria-live="polite"></div><div data-tool-body><p class="item-meta">選擇上方工具開始操作。</p></div>`;
  const body=root.querySelector('[data-tool-body]'),notice=root.querySelector('[data-tool-status]'),value=k=>body.querySelector(`[data-field="${k}"]`)?.value||'',selected=()=>packing.rows.filter((r,i)=>body.querySelector(`[data-pick="${i}"]`)?.checked);
  const filters=()=>({venue:value('venue'),prizeName:value('prize'),state:value('state')});
@@ -47,8 +47,22 @@ function mount(root,{api,campaignId,readOnly}){
   }
  }
  function rowsHTML(rows,checks=false){return rows.map((r,i)=>`<article class="activity-tool-row">${checks?`<input type="checkbox" data-pick="${i}" aria-label="選擇 ${esc(r.studentName+' '+r.prizeName)}">`:''}<div><strong>${esc(r.studentName)}</strong><div class="item-meta">${esc(r.email)}</div><p>${esc(r.prizeName)} · ${esc(r.quantity)} 件<br>${esc(r.venue)} · ${esc(state(r.status))}</p></div></article>`).join('');}
+ function paintArrivalReceipt(){
+  const box=body.querySelector('[data-arrival-receipt]');
+  if(!box||!arrivalReceipt)return;
+  const {rows,results,finished}=arrivalReceipt;
+  const remaining=rows.length-results.length;
+  box.innerHTML='<h4>最近一批到館結果</h4><ul>'+rows.map((row,index)=>{
+   const result=results[index];
+   const status=result?.notified?'已到館，通知服務已接受':result?.ready?'已到館，通知需核對':
+    result?'結果待確認，請查閱紀錄，勿重送':finished?'本批未送出':'等待處理';
+   return `<li><strong>${esc(row.studentName)}</strong> · ${esc(row.prizeName)} · ${esc(row.venue)}<br>${status}</li>`;
+  }).join('')+'</ul>'+(finished?`<p>共 ${rows.length} 筆，${remaining} 筆未送出。</p>`+
+   button('packing-refresh','重新讀取備貨清單'):'');
+ }
  async function loadPacking(offset=0,f={}){const d=await api('getActivityPacking',{campaignId,offset,...f});if(disposed)return;packing=d;page=offset;packingFilters=f;preview=null;
-  body.innerHTML=`<h4>備貨／姓名貼</h4><div class="activity-tool-grid">${select('venue','領取館別',d.venues,f.venue)}${select('prize','獎品',d.prizes,f.prizeName)}${field('state','狀態',`<select class="admin-select" data-field="state"><option value="">待備貨與待領</option><option value="waiting" ${f.state==='waiting'?'selected':''}>待備貨</option><option value="ready" ${f.state==='ready'?'selected':''}>已到館</option><option value="partial" ${f.state==='partial'?'selected':''}>部分領取</option></select>`)}</div><div class="admin-item-actions">${button('filter','套用篩選')}${button('select-page','勾選本頁')}${readOnly?'':button('select-waiting','勾選本頁待備貨')}${button('clear','取消勾選')}${button('print','列印勾選姓名貼')}${readOnly?'':button('arrival-preview','核對勾選項目到館')}</div><p class="item-meta">共 ${d.total} 筆；第 ${Math.floor(offset/50)+1} 頁。姓名貼每筆一張；一次最多確認到館 10 筆。</p>${rowsHTML(d.rows,true)||'<p>目前沒有符合的待領獎品。</p>'}<div class="admin-item-actions">${offset?button('pack-prev','上一頁'):''}${d.nextOffset!==null?button('pack-next','下一頁'):''}</div><div data-arrival-preview></div>`;
+  body.innerHTML=`<h4>備貨／姓名貼</h4><div class="activity-tool-grid">${select('venue','領取館別',d.venues,f.venue)}${select('prize','獎品',d.prizes,f.prizeName)}${field('state','狀態',`<select class="admin-select" data-field="state"><option value="">待備貨與待領</option><option value="waiting" ${f.state==='waiting'?'selected':''}>待備貨</option><option value="ready" ${f.state==='ready'?'selected':''}>已到館</option><option value="partial" ${f.state==='partial'?'selected':''}>部分領取</option></select>`)}</div><div class="admin-item-actions">${button('filter','套用篩選')}${button('select-page','勾選本頁')}${readOnly?'':button('select-waiting','勾選本頁待備貨')}${button('clear','取消勾選')}${button('print','列印勾選姓名貼')}${readOnly?'':button('arrival-preview','核對勾選項目到館')}</div><p class="item-meta">共 ${d.total} 筆；第 ${Math.floor(offset/50)+1} 頁。姓名貼每筆一張；一次最多確認到館 10 筆。</p>${rowsHTML(d.rows,true)||'<p>目前沒有符合的待領獎品。</p>'}<div class="admin-item-actions">${offset?button('pack-prev','上一頁'):''}${d.nextOffset!==null?button('pack-next','下一頁'):''}</div><div data-arrival-preview></div><section data-arrival-receipt aria-live="polite"></section>`;
+  paintArrivalReceipt();
  }
  async function history(offset=0,email=historyEmail){
   const d=await api('getActivityStudentHistory',{campaignId,email,offset});
@@ -71,7 +85,7 @@ function mount(root,{api,campaignId,readOnly}){
    clearArrivalPreview();
    return;
   }
-  if(['print','arrival-preview','pack-next','pack-prev'].includes(action)&&packingFiltersChanged()){
+  if(['print','arrival-preview','pack-next','pack-prev','packing-refresh'].includes(action)&&packingFiltersChanged()){
    notice.textContent='篩選條件已變更，請先套用篩選。';
    return;
   }
@@ -79,12 +93,31 @@ function mount(root,{api,campaignId,readOnly}){
   if(action.startsWith('download-')){const t=templates[Number(action.split('-')[1])];if(!t)return;const url=URL.createObjectURL(new Blob([JSON.stringify(t.draft,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='activity-draft.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;}
   run(async()=>{
    if(action==='packing')await loadPacking();
+   else if(action==='packing-refresh')await loadPacking(0,packingFilters);
    else if(['filter','pack-next','pack-prev'].includes(action))await loadPacking(action==='filter'?0:action==='pack-next'?packing.nextOffset:Math.max(0,page-50),action==='filter'?filters():packingFilters);
    else if(action==='arrival-preview'){clearArrivalPreview();const rows=selected();if(rows.length<1||rows.length>10)throw Error('請選 1 至 10 筆已經送到教室的獎品。');if(rows.some(row=>row.status!=='waiting'))throw Error('到館登記只適用待備貨項目，請用「勾選本頁待備貨」重新選取。');const d=await api('previewActivityArrival',{operation:JSON.stringify({campaignId,items:rows.map(r=>({id:r.id,version:r.version,venue:r.venue}))})});if(disposed)return;
     if(packingFiltersChanged()||!selectionsMatch(rows,selected())||!selectionsMatch(rows,d?.rows))throw Error('勾選或備貨資料已變更，請重新核對。');
     preview={rows:d.rows,batchId:id()};body.querySelector('[data-arrival-preview]').innerHTML='<h4>確認以下獎品均已到館</h4>'+rowsHTML(d.rows)+'<p>確認後將逐筆登記到館並通知學生。結果不明時會停止剩餘項目。</p>'+button('arrival-send','確認到館並通知學生')+button('arrival-cancel','取消');}
    else if(action==='arrival-cancel'){preview=null;body.querySelector('[data-arrival-preview]').replaceChildren();}
-   else if(action==='arrival-send'){if(!preview||packingFiltersChanged()||!selectionsMatch(preview.rows,selected()))throw Error('請重新核對選取項目。');const p=preview;preview=null;const box=body.querySelector('[data-arrival-preview]');const render=results=>{if(disposed)return;box.innerHTML='<h4>本批處理結果</h4>'+results.map(r=>`<p>${esc(r.row.studentName+' · '+r.row.prizeName)}：${r.notified?'已到館，通知服務已接受':r.ready?'已到館，通知需核對':'結果待確認，請查閱紀錄，勿重送'}</p>`).join('');};const out=await runArrivalBatch(p.rows,op=>api('prepareActivityArrival',{operation:JSON.stringify({...op,campaignId})}),p.batchId,()=>!disposed,render);if(!disposed){notice.textContent=out.stopped?'本批已停止。另有 '+(p.rows.length-out.results.length)+' 筆未送出，請更新清單與通知紀錄核對。':'本批已處理。請更新清單查看。';body.querySelectorAll('[data-pick]').forEach(c=>c.checked=false);}}
+   else if(action==='arrival-send'){
+    if(!preview||packingFiltersChanged()||!selectionsMatch(preview.rows,selected()))throw Error('請重新核對選取項目。');
+    const batch=preview;
+    clearArrivalPreview();
+    arrivalReceipt={rows:batch.rows,results:[],finished:false};
+    paintArrivalReceipt();
+    const outcome=await runArrivalBatch(batch.rows,
+     op=>api('prepareActivityArrival',{operation:JSON.stringify({...op,campaignId})}),
+     batch.batchId,()=>!disposed,results=>{
+      if(disposed)return;
+      arrivalReceipt.results=results;
+      paintArrivalReceipt();
+     });
+    if(disposed)return;
+    arrivalReceipt.finished=true;
+    paintArrivalReceipt();
+    notice.textContent=outcome.stopped?'本批已停止。請依逐筆結果核對備貨及通知紀錄。':'本批已處理。';
+    body.querySelectorAll('[data-pick]').forEach(c=>c.checked=false);
+   }
    else if(action==='incomplete')await incomplete();
    else if(action==='incomplete-next')await incomplete(incompleteNext);
    else if(action==='incomplete-prev')await incomplete(Math.max(0,incompleteOffset-50));

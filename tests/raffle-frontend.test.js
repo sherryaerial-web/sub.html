@@ -130,3 +130,22 @@ test('import confirmation is absent when disabled or preview has unresolved conf
  assert.ok(!api.renderPreview({...data,readOnly:true}).includes('data-raffle-confirm-import'));
  assert.ok(!api.renderPreview({...data,conflictCount:1}).includes('data-raffle-confirm-import'));
 });
+
+test('pickup hold affects both labels and actions at the claim and campaign level', () => {
+  const api=load(), base={id:'one',campaignId:'c',studentKey:'s',prizeName:'毛巾',quantity:2,claimedQuantity:0};
+  const permissions={readOnly:false,canPrepare:true,canCorrect:true,readyPreviewCampaign:'c',readyDeliveryCampaign:'c'};
+  for (const status of ['waiting','ready','partial']) {
+    for (const globalHold of [true,false]) {
+      const html=api.renderClaims([{...base,status,pickupBlocked:!globalHold}],[],{...permissions,pickupBlocked:globalHold});
+      assert.match(html,/暫停領取/);
+      assert.doesNotMatch(html,/尚可領取|class="status-pill">可領取|data-ready-delivery=|data-raffle-ready-preview=|data-raffle-action="(?:collect|prepare)"/);
+      assert.match(html,/data-raffle-action="audit"/);
+    }
+  }
+  const active=api.renderClaims([{...base,status:'ready'}],[],permissions);
+  assert.match(active,/尚可領取 2 件/);
+  assert.match(active,/data-raffle-action="collect"/);
+  for (const status of ['claimed','digital','cancelled']) {
+    assert.doesNotMatch(api.renderClaims([{...base,status}],[],{...permissions,pickupBlocked:true}), /暫停領取|尚可領取/);
+  }
+});

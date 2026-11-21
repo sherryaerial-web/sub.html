@@ -22,15 +22,17 @@
     });
     return [...groups.entries()].map(([key, items]) => `<article class="raffle-student admin-control" data-raffle-student="${escape(key)}">
       <h3>${escape(items[0].studentName)}</h3><p class="item-meta">${escape(permissions.canCorrect && items[0].email ? items[0].email : items[0].maskedEmail)} · 請核對學生身分，同名不代表同一人</p>
-      ${items.map(item => `<div class="raffle-prize">
-        <div><strong>${escape(item.prizeName)}</strong><span class="status-pill">${escape(status(item.status))}</span></div>
+      ${items.map(item => {
+        const onHold=(item.pickupBlocked||permissions.pickupBlocked)&&['ready','waiting','partial'].includes(item.status);
+        return `<div class="raffle-prize">
+        <div><strong>${escape(item.prizeName)}</strong><span class="status-pill">${escape(onHold?'暫停領取':status(item.status))}</span></div>
         <p class="item-meta">${escape((campaigns.find(c => c.id === item.campaignId) || {}).name || '')}｜${escape(item.venue || '非實體領取／待確認館別')}｜${escape(item.claimedQuantity || 0)}／${escape(item.quantity || 1)} 件已領</p>
-        <p><strong>${['ready','partial'].includes(item.status) ? `尚可領取 ${escape(Number(item.quantity) - Number(item.claimedQuantity || 0))} 件` : item.status === 'waiting' ? '尚未備妥，請先等到館確認' : escape(status(item.status))}</strong> · 已領取 ${escape(item.claimedQuantity || 0)} 件</p>
+        <p><strong>${onHold?'領取期限需核對，請暫停交付':['ready','partial'].includes(item.status) ? `尚可領取 ${escape(Number(item.quantity) - Number(item.claimedQuantity || 0))} 件` : item.status === 'waiting' ? '尚未備妥，請先等到館確認' : escape(status(item.status))}</strong> · 已領取 ${escape(item.claimedQuantity || 0)} 件</p>
         ${item.claimedAt ? `<p class="item-meta">領取：${escape(item.claimedAt)}｜經手：${escape(item.claimedBy)}</p>` : ''}
-        ${item.pickupBlocked && ['waiting','ready','partial'].includes(item.status) ? `<p class="state error">已過領取期限／期限需核對：${escape(item.pickupDeadline)}；暫停備貨與交付，原紀錄保留。</p>` : ''}
+        ${onHold ? `<p class="state error">已過領取期限／期限需核對：${escape(item.pickupDeadline || permissions.pickupDeadline || '待核對')}；暫停備貨與交付，原紀錄保留。</p>` : ''}
         <div class="admin-item-actions">
-          ${permissions.readyDeliveryCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-ready-delivery="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">通知學生（限定測試）</button>` : ''}
-          ${permissions.readyPreviewCampaign && permissions.readyPreviewCampaign===item.campaignId && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-ready-preview="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">預覽到館通知（不寄送）</button>` : ''}
+          ${permissions.readyDeliveryCampaign===item.campaignId && !onHold && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-ready-delivery="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">通知學生（限定測試）</button>` : ''}
+          ${permissions.readyPreviewCampaign && permissions.readyPreviewCampaign===item.campaignId && !onHold && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-ready-preview="${escape(item.id)}" data-campaign-id="${escape(item.campaignId)}">預覽到館通知（不寄送）</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && ['ready','partial'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="collect" data-claim-id="${escape(item.id)}">確認已領取</button>` : ''}
           ${permissions.readOnly === false && !permissions.pickupBlocked && !item.pickupBlocked && permissions.canPrepare && item.status === 'waiting' ? `<button type="button" class="compact-button" data-raffle-action="prepare" data-claim-id="${escape(item.id)}">${permissions.canCorrect ? '確認到館並通知學生' : '確認到館'}</button>` : ''}
           ${permissions.readOnly === false && permissions.canCorrect && ['waiting','ready','partial'].includes(item.status) && Number(item.claimedQuantity) < Number(item.quantity) ? `<button type="button" class="compact-button" data-raffle-action="revoke" data-claim-id="${escape(item.id)}">撤銷未領部分</button>` : ''}
@@ -39,7 +41,7 @@
           ${permissions.readOnly === false && permissions.canCorrect && Number(item.claimedQuantity) > 0 && ['partial','claimed','ready'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="correct" data-claim-id="${escape(item.id)}">更正誤領</button>` : ''}
           ${permissions.canCorrect ? `<button type="button" class="compact-button" data-raffle-action="audit" data-claim-id="${escape(item.id)}">操作紀錄</button>` : ''}
         </div>
-      </div>`).join('')}</article>`).join('');
+      </div>`;}).join('')}</article>`).join('');
   }
   function renderPreview(data) {
     const issues = data.errors || [];
@@ -82,7 +84,7 @@
     const known=at=>Number.isFinite(at)&&at>0&&at<=8640000000000000;
     items.sort((a,b)=>(known(a.at)?a.at:Infinity)-(known(b.at)?b.at:Infinity));
     const destinations={tasks:'前往活動審核',mail:'查看寄送紀錄',schedule:'查看排程詳情'};
-    const queueRows=items.map(r=>`<li class="raffle-ops-item"><div><strong>${escape(r.text)}</strong><p class="item-meta">${known(r.at)?'最早待處理：'+date(r.at):'待處理起始時間未提供；請查看詳情'}</p></div><button type="button" class="compact-button" data-ops-go="${r.go}" data-ops-key="${escape(r.key)}">${destinations[r.go]}</button></li>`);
+    const queueRows=items.map(r=>`<li class="raffle-ops-item"><div><strong>${escape(r.text)}</strong><p class="item-meta">${known(r.at)?'最早待處理：'+date(r.at):'待處理起始時間未提供；請查看詳情'}</p>${r.key==='purchaseIntakes:review:'?'<p class="item-meta">核對個別購卡時，可在「學生活動紀錄」用完整 OB Email 查詢，再依購卡單號比對 OB 付款、退款及活動獎勵紀錄。</p>':''}</div><button type="button" class="compact-button" data-ops-go="${r.go}" data-ops-key="${escape(r.key)}">${destinations[r.go]}</button></li>`);
     const general=data.readyLineEnabled&&!data.readyTestOnly&&data.classroom?.lineFirst&&!data.classroom?.testOnly;
     return `<p class="item-meta">${data.phase==='upcoming'?'活動尚未開始，資格自 '+date(data.startsAt)+' 起算。':data.phase==='ended'?'活動同步期間已結束。':'活動同步進行中。'} 活動回覆：${data.activityRepliesPaused?'暫停，等管理者通知開放':'已開放'}。</p>
       <div class="raffle-ops-grid">${source('購卡',data.sources.purchases)}${source('上課',data.sources.classes)}</div>

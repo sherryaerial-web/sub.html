@@ -67,6 +67,28 @@
     }
     return record.channels?'本筆使用 OB＋Email，必須分別核對兩個管道都已送出／收到，才可標記完成。':'本筆是舊版 Email 通知，請核對 Email 寄送結果。';
   }
+  function renderPurchaseReviews(data,offset,purchaseId) {
+    if(data?.ok!==true||data.campaignId!=='christmas-2026'||!Array.isArray(data.rows)||data.rows.length>20)throw Error('購卡清單資料不完整，請重新查詢。');
+    if(purchaseId&&(!data.ob||data.rows.length!==1||data.rows[0].id!==purchaseId))throw Error('OB 購卡資料有變動，請更新清單。');
+    const time=v=>Number.isSafeInteger(v)&&v>0?new Date(v).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'時間待核對';
+    const payments={paid:'已付款',awaiting_verification:'付款待驗證',pending:'待付款確認',unpaid:'未付款',refunded:'已退款',partially_refunded:'部分退款'};
+    const payment=v=>Object.hasOwn(payments,v)?payments[v]:'付款狀態待核對';
+    const page=(n,label)=>`<button type="button" class="compact-button" data-review-page="${n}">${label}</button>`;
+    const rows=data.rows.map(r=>{
+      if(!/^[1-9][0-9]{0,14}$/.test(r.id)||!/^[1-9][0-9]{0,14}$/.test(r.memberId))throw Error('購卡識別資料需核對。');
+      const amount=typeof r.price==='number'&&Number.isFinite(r.price)&&r.price>=0?'NT$'+r.price.toLocaleString('zh-TW'):'金額待核對';
+      const course=Number.isSafeInteger(r.points)&&r.points>0?r.points+' 點課卡':'課卡待核對';
+      const credit=r.credit===null?'查無此單加星紀錄':Number.isSafeInteger(r.credit)?'活動入帳 '+r.credit+' 星':'加星狀態待核對';
+      const gift=r.awarded===true?'活動端已收到贈品入帳回執':r.awarded===false?'活動端尚無贈品入帳回執，請核對教室領獎紀錄':'贈品狀態待核對';
+      const ob=data.ob;
+      const current=purchaseId?`<p><strong>${escape(ob.name||'姓名待核對')}</strong>　${escape(ob.email||'Email 待核對')}<br>${escape(ob.passName||'OB 課卡名稱待核對')} · ${payment(ob.payment)} · ${ob.refund==='yes'?'有退款紀錄':ob.refund==='no'?'未退款':'退款狀態待核對'}<br><span class="item-meta">OB 查詢時間　${time(ob.checkedAt)}</span></p>`:
+        `<button type="button" class="compact-button" data-review-order="${r.id}">查 OB 會員與付款明細</button>`;
+      return `<article class="raffle-prize"><strong>購卡 #${r.id}</strong> · 會員編號 ${r.memberId}<p>${time(r.at)} · ${course} · ${amount}<br>活動留存的付款狀態：${payment(r.payment)}<br>${credit} · ${gift}</p>${current}</article>`;
+    });
+    const limit=data.truncated===true?'<p>已達本次查詢上限，較晚的紀錄尚未列出。</p>':'';
+    const controls=purchaseId?page(offset,'返回購卡清單'):[offset>0?page(offset-20,'上一頁'):'',data.nextOffset===offset+20?page(offset+20,'下一頁'):'',page(offset,'更新清單')].join('');
+    return '<h4 tabindex="-1">待核對購卡明細</h4>'+ (rows.join('')||'<p>本頁沒有待核對購卡。</p>') +limit+'<div class="admin-item-actions">'+controls+'<button type="button" class="compact-button" data-review-close>關閉明細</button></div>';
+  }
   function renderOperations(data) {
     if(data?.ok!==true||!data.sources?.purchases||!data.sources?.classes||!data.queues||!Object.values(data.queues).every(Array.isArray)||!Array.isArray(data.tasks))throw Error('狀態回應不完整，請更新查看。');
     const date=v=>Number.isFinite(v)&&v>0?new Date(v).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}):'尚無完成紀錄';
@@ -74,7 +96,7 @@
     const statuses={idle:'等待新資料',closed:'不在活動同步期間',paused:'依設定暫停',disabled:'未啟動',complete:'完成本次工作',completed:'完成本次工作',continuing:'分批處理中',processed:'已處理',reconciled:'已核對',waiting:'等待來源或額度',deferred:'稍後續處理',busy:'上一筆處理中',queued:'已排入',pending:'待處理',working:'處理中',accepted:'服務已接受',sent:'服務已接受',skipped:'略過',ready:'已備妥',reserved:'已保留',delivered:'已交付',awarded:'已入帳',retained:'已保存',ineligible:'不符合資格',manual:'待人工確認',review:'待核對',blocked:'需要檢查設定',stale:'資料需重新核對',unknown:'結果待核對',uncertain:'結果待核對',rejected:'已拒絕／需核對',failed:'失敗待處理',conflict:'資料衝突',exception:'執行異常',invalid_result:'回應異常',missing:'沒有排程回報',lookup:'查詢中',unavailable:'查詢未完成',unbound:'未綁定',sending:'結果待核對'};
     const source=(name,s)=>`<div><strong>${name}</strong><p>最近整批同步：${date(s.lastCompletedAt)}</p><p>處理中 ${escape(s.pending)} 批 · 待核對 ${escape(s.blocked)} 批${s.oldestPendingAt?' · 最早待處理 '+date(s.oldestPendingAt):''}</p></div>`;
     const queueNames={intakes:'活動申請',purchases:'購卡獎勵',purchaseIntakes:'購卡資格暫存',identity:'身分查詢',identityDelivery:'驗證通知',ready:'LINE 領獎通知',line:'活動回覆'};
-    const items=Object.entries(data.queues).flatMap(([key,rows])=>rows.filter(r=>r.count>0&&!['accepted','unbound','rejected'].includes(key==='ready'?r.state:'')).map(r=>({key:key+':'+r.state+':'+(r.kind||''),at:r.oldestAt,go:key==='intakes'?'tasks':key==='ready'?'mail':'schedule',text:`${r.kind==='photo'?'照片':r.kind==='referral'?'推薦':queueNames[key]||'待處理'} · ${statuses[r.state]||'待核對'} ${r.count} 筆`})));
+    const items=Object.entries(data.queues).flatMap(([key,rows])=>rows.filter(r=>r.count>0&&!['accepted','unbound','rejected'].includes(key==='ready'?r.state:'')).map(r=>({key:key+':'+r.state+':'+(r.kind||''),at:r.oldestAt,go:(key==='purchases'||key==='purchaseIntakes')&&r.state==='review'?'purchases':key==='intakes'?'tasks':key==='ready'?'mail':'schedule',text:`${r.kind==='photo'?'照片':r.kind==='referral'?'推薦':queueNames[key]||'待處理'} · ${statuses[r.state]||'待核對'} ${r.count} 筆`})));
     for(const [key,label] of [['purchases','購卡'],['classes','上課']]){const s=data.sources[key];if(s.pending||s.blocked)items.push({key:'source:'+key,at:s.oldestPendingAt,go:'schedule',text:`${label}同步 · 處理中 ${s.pending} 批 · 待核對 ${s.blocked} 批`});}
     // A last error is not necessarily the start of the current incident: do not invent its age.
     data.tasks.filter(t=>t.attention||t.stale).forEach(t=>items.push({key:'task:'+t.id,go:'schedule',text:`${labels[t.id]||'排程'} · ${t.stale?(t.lastTickAt?'超過 5 分鐘未回報，請檢查排程':'尚未收到排程回報'):statuses[t.state]||'需要核對'}`}));
@@ -83,8 +105,8 @@
     else if(mail&&(mail.queued||mail.uncertain))items.push({key:'mail',go:'mail',at:mail.oldestPendingAt,text:`教室通知：待寄 ${mail.queued} 封 · 結果待核對 ${mail.uncertain} 封`});
     const known=at=>Number.isFinite(at)&&at>0&&at<=8640000000000000;
     items.sort((a,b)=>(known(a.at)?a.at:Infinity)-(known(b.at)?b.at:Infinity));
-    const destinations={tasks:'前往活動審核',mail:'查看寄送紀錄',schedule:'查看排程詳情'};
-    const queueRows=items.map(r=>`<li class="raffle-ops-item"><div><strong>${escape(r.text)}</strong><p class="item-meta">${known(r.at)?'最早待處理：'+date(r.at):'待處理起始時間未提供；請查看詳情'}</p>${r.key==='purchaseIntakes:review:'?'<p class="item-meta">核對個別購卡時，可在「學生活動紀錄」用完整 OB Email 查詢，再依購卡單號比對 OB 付款、退款及活動獎勵紀錄。</p>':''}</div><button type="button" class="compact-button" data-ops-go="${r.go}" data-ops-key="${escape(r.key)}">${destinations[r.go]}</button></li>`);
+    const destinations={purchases:'查看待核對購卡',tasks:'前往活動審核',mail:'查看寄送紀錄',schedule:'查看排程詳情'};
+    const queueRows=items.map(r=>`<li class="raffle-ops-item"><div><strong>${escape(r.text)}</strong><p class="item-meta">${known(r.at)?'最早待處理：'+date(r.at):'待處理起始時間未提供；請查看詳情'}</p></div><button type="button" class="compact-button" data-ops-go="${r.go}" data-ops-key="${escape(r.key)}">${destinations[r.go]}</button></li>`);
     const general=data.readyLineEnabled&&!data.readyTestOnly&&data.classroom?.lineFirst&&!data.classroom?.testOnly;
     return `<p class="item-meta">${data.phase==='upcoming'?'活動尚未開始，資格自 '+date(data.startsAt)+' 起算。':data.phase==='ended'?'活動同步期間已結束。':'活動同步進行中。'} 活動回覆：${data.activityRepliesPaused?'暫停，等管理者通知開放':'已開放'}。</p>
       <div class="raffle-ops-grid">${source('購卡',data.sources.purchases)}${source('上課',data.sources.classes)}</div>
@@ -107,7 +129,7 @@
     return{refresh,dispose(){disposed=true;clear();unsubscribe();}};
   }
   function mountOperations(panel,{api,navigate}){
-    panel.innerHTML='<div class="admin-item-actions"><h3 style="flex:1;margin:0">同步與通知狀態</h3><button type="button" class="compact-button" data-ops-refresh>更新狀態</button></div><p class="item-meta">開啟時每分鐘自動更新，切到背景暫停；僅讀取狀態。</p><p data-ops-status role="status" aria-live="polite"></p><div data-ops-content>讀取執行紀錄中…</div>';
+    panel.innerHTML='<div class="admin-item-actions"><h3 style="flex:1;margin:0">同步與通知狀態</h3><button type="button" class="compact-button" data-ops-refresh>更新狀態</button></div><p class="item-meta">開啟時每分鐘自動更新，切到背景暫停；僅讀取狀態。</p><p data-ops-status role="status" aria-live="polite"></p><div data-ops-content>讀取執行紀錄中…</div><section data-ops-purchases aria-live="polite" hidden></section>';
     const body=panel.querySelector('[data-ops-content]'),button=panel.querySelector('[data-ops-refresh]'),notice=panel.querySelector('[data-ops-status]');let loaded=false;
     const refresh=createOperationsRefresh({read:()=>api('getActivityOperations',{}),isVisible:()=>!document.hidden,subscribe:fn=>{document.addEventListener('visibilitychange',fn);return()=>document.removeEventListener('visibilitychange',fn);},onData:data=>{
       const html=renderOperations(data),open=body.querySelector('[data-ops-details]')?.open,active=document.activeElement,key=body.contains(active)?active.dataset.opsKey:null,summary=active===body.querySelector('summary');
@@ -115,9 +137,37 @@
       if(key){const replacement=[...body.querySelectorAll('[data-ops-key]')].find(b=>b.dataset.opsKey===key);(replacement||button).focus({preventScroll:true});}
       else if(summary)body.querySelector('summary').focus({preventScroll:true});
     },onStatus:state=>{button.disabled=state==='loading';notice.textContent=state==='error'?(loaded?'更新失敗，以下保留上次資料，不能視為最新；稍後會自動再查詢。':'狀態讀取失敗，不能視為沒有異常；稍後會自動再查詢。'):state==='loading'?'更新狀態中…':'狀態已更新。';}});
+    const purchases=panel.querySelector('[data-ops-purchases]');
+    let pageOffset=0,request=0;
+    async function loadPurchases(offset,purchaseId){
+      const turn=++request;
+      purchases.hidden=false;
+      purchases.textContent='正在查詢購卡紀錄…';
+      try{
+        const data=await api('getActivityPurchaseReviews',purchaseId?{purchaseId}:{offset});
+        if(turn!==request)return;
+        purchases.innerHTML=renderPurchaseReviews(data,offset,purchaseId);
+        pageOffset=offset;
+        purchases.querySelector('h4').focus();
+      }catch(error){
+        if(turn!==request)return;
+        purchases.textContent=(error.message||'查詢未完成')+'。';
+        const back=document.createElement('button');
+        back.type='button';back.className='compact-button';back.dataset.reviewPage=String(offset);back.textContent='重新載入購卡清單';purchases.append(back);
+      }
+    }
+    purchases.onclick=e=>{
+      const target=e.target.closest('button');
+      if(!target||!purchases.contains(target))return;
+      if(target.hasAttribute('data-review-close')){
+        request++;purchases.textContent='';purchases.hidden=true;
+        (body.querySelector('[data-ops-go="purchases"]')||button).focus();
+      }else if(target.dataset.reviewOrder)void loadPurchases(pageOffset,target.dataset.reviewOrder);
+      else if(target.hasAttribute('data-review-page'))void loadPurchases(Number(target.dataset.reviewPage));
+    };
     button.onclick=refresh.refresh;
-    body.onclick=e=>{const b=e.target.closest('[data-ops-go]');if(!b||!body.contains(b))return;if(b.dataset.opsGo==='schedule'){const details=body.querySelector('[data-ops-details]');details.open=true;details.querySelector('summary').focus({preventScroll:true});details.scrollIntoView({block:'nearest'});}else if(navigate(b.dataset.opsGo)!==true)notice.textContent='目前無法開啟此處理區，請確認權限或等目前查詢完成後再試；沒有送出任何操作。';};
-    void refresh.refresh();return()=>{refresh.dispose();button.onclick=null;body.onclick=null;};
+    body.onclick=e=>{const b=e.target.closest('[data-ops-go]');if(!b||!body.contains(b))return;if(b.dataset.opsGo==='purchases'){void loadPurchases(0);return;}if(b.dataset.opsGo==='schedule'){const details=body.querySelector('[data-ops-details]');details.open=true;details.querySelector('summary').focus({preventScroll:true});details.scrollIntoView({block:'nearest'});}else if(navigate(b.dataset.opsGo)!==true)notice.textContent='目前無法開啟此處理區，請確認權限或等目前查詢完成後再試；沒有送出任何操作。';};
+    void refresh.refresh();return()=>{request++;refresh.dispose();purchases.onclick=null;purchases.textContent='';button.onclick=null;body.onclick=null;};
   }
   function renderOverview(data) {
     const claimKeys=['waiting','ready','partial','claimed','digital','cancelled'];
@@ -753,5 +803,5 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
     });
     return cleanup;
   }
-  global.SherryRaffle = { createOperationsRefresh, mountOperations, renderOperations, renderReconcileGuidance, renderPickupVenue, renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
+  global.SherryRaffle = { createOperationsRefresh, mountOperations, renderOperations, renderPurchaseReviews, renderReconcileGuidance, renderPickupVenue, renderBallInventory, mount, mountActivityGifts, createActivityGiftController, mountObSync, renderObSyncPreview, mountCampaignSettings, renderCampaignSettings, renderProductionReadiness, renderClaims, renderPreview, renderMailPreview, renderMailRecords, renderMailSendPreview, renderFulfillment, renderOverview };
 })(window);

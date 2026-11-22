@@ -12,3 +12,18 @@ test('low stock alerts are internal, deduplicated, lock-safe and rearm after rep
 test('history retains audit dates and returns local records when bridge is unavailable',()=>{const s=env();s.seeds[1][9]='waiting';const c=s.c.readRaffleClaims_()[0];s.c.mutateRaffleClaim_(admin,{action:'prepare',claimId:c.id,version:0,venue:c.venue,requestId:'history-prepare-001'});const r=s.c.getActivityStudentHistory_(admin,{campaignId:'future',email:'student0@example.com'});assert.equal(r.events[0].action,'prepare');assert.ok(Date.parse(r.events[0].at));assert.equal(r.activity.reason,'unavailable');assert.equal(r.claims.length,1);assert.throws(()=>s.c.getActivityStudentHistory_({teacherName:'Teacher'},{campaignId:'future',email:'student0@example.com'}));});
 test('arrival send rechecks source before mutation and preserves successful idempotent result',()=>{const s=env();vm.runInContext(fs.readFileSync('RaffleStockInbox.gs','utf8'),s.c);s.seeds[1][9]='waiting';const c=s.c.readRaffleClaims_()[0],op={campaignId:'future',action:'prepare',claimId:c.id,version:0,venue:c.venue,requestId:'batch-source-00001'};s.rows[1][8]='different prize';assert.throws(()=>s.c.prepareActivityArrival_(admin,op));assert.equal(s.c.readRaffleClaims_()[0].status,'waiting');s.rows[1][8]='提袋';s.c.raffleNotifyPreparedClaim_=()=>({status:'sent'});const a=s.c.prepareActivityArrival_(admin,op);assert.equal(a.status,'ready');s.rows[1][8]='different prize';assert.equal(s.c.prepareActivityArrival_(admin,op).version,a.version);});
 test('next template does not bring back retired prizes such as the removed drawstring bag',()=>{const s=env(),table=[['獎項ID','獎品名稱','中獎機率','領獎方式','啟用'],['bag','束口袋','0.2','choose_venue','No'],['socks','襪子','0.2','choose_venue','Yes']];const d=s.c.activityTemplate_(campaign,table,{starsPerDraw:3},'下次');assert.equal(d.prizes.length,1);assert.equal(d.prizes[0]['獎項ID'],'socks');});
+
+test('purchase review requires raffle_admin and one current review before reading one OB order',()=>{
+ const s=env(),c=s.c;let reads=0,lookups=0;
+ c.activityToolBridge_=p=>{reads++;return {rows:p.purchaseId==='13'?[]:[{id:'12',memberId:'8'}],nextOffset:null};};
+ c.fetchObUserPassDetail_=()=>{lookups++;return {id:12,user:{id:8,firstName:'學生',lastName:'A',email:'student@example.test',phone:'private'},pass:{nameZhHant:'100點課卡'},paymentStatus:'paid',refunded:false};};
+ assert.throws(()=>c.getActivityPurchaseReviews_({teacherName:'other'},{purchaseId:'12'}));assert.equal(reads,0);
+ const list=c.getActivityPurchaseReviews_(admin,{offset:0});assert.equal(list.rows.length,1);assert.equal(lookups,0);
+ const detail=c.getActivityPurchaseReviews_(admin,{purchaseId:'12'});
+ assert.equal(detail.ob.name,'學生 A');assert.equal(detail.ob.payment,'paid');assert.equal(detail.ob.refund,'no');assert.doesNotMatch(JSON.stringify(detail),/private/);
+ assert.throws(()=>c.getActivityPurchaseReviews_(admin,{purchaseId:'13'}));assert.equal(lookups,1);
+ assert.throws(()=>c.getActivityPurchaseReviews_(admin,{purchaseId:'-1'}));
+ c.fetchObUserPassDetail_=()=>({id:12,user:{id:99,email:'wrong@example.test'}});
+ assert.throws(()=>c.getActivityPurchaseReviews_(admin,{purchaseId:'12'}),/會員/);
+ assert.equal(s.writes(),0);
+});

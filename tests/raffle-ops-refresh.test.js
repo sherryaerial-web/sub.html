@@ -43,3 +43,16 @@ test('initial hidden mount does not read and invalid render follows failure path
  const f=clock(async()=>1);f.visibility(false);await f.c.refresh();assert.equal(f.frames.length,0);f.visibility(true);await new Promise(resolve=>setImmediate(resolve));assert.equal(f.frames.length,1);f.c.dispose();
  let state;const c=ui().createOperationsRefresh({read:async()=>({}),onData:()=>{throw Error('invalid');},onStatus:s=>state=s,isVisible:()=>true,subscribe:()=>()=>{},schedule:()=>1,cancel:()=>{},now:()=>1});await c.refresh();assert.equal(state,'error');c.dispose();
 });
+
+test('manager purchase review list is separate from live OB lookup and safely renders the handoff',()=>{
+ const row={id:'12',memberId:'8',points:100,at:1795147149000,price:16200,payment:'awaiting_verification',awarded:false,credit:null};
+ const r={ok:true,campaignId:'christmas-2026',rows:[row],nextOffset:20};
+ const list=ui().renderPurchaseReviews(r,0);
+ assert.match(list,/會員編號 8/);assert.match(list,/100 點課卡/);assert.match(list,/data-review-order="12"/);assert.match(list,/data-review-page="20"/);
+ assert.doesNotMatch(list,/姓名待|已付款|通知學生/);
+ const detail=ui().renderPurchaseReviews({...r,ob:{name:'<學生>',email:'a@example.test',passName:'100點課卡',payment:'paid',refund:'unknown',checkedAt:Date.now()}},20,'12');
+ for(const text of ['&lt;學生&gt;','a@example.test','付款待驗證','已付款','退款狀態待核對','查無此單加星紀錄','活動端尚無贈品入帳回執','data-review-page="20"'])assert.ok(detail.includes(text),text);
+ assert.throws(()=>ui().renderPurchaseReviews({...r,ob:{}},0,'99'));
+ assert.throws(()=>ui().renderPurchaseReviews({},0));
+ assert.match(ui().renderPurchaseReviews({...r,rows:[],nextOffset:null},0),/沒有待核對購卡/);
+});

@@ -9515,6 +9515,7 @@ function doPost(e) {
       getRaffleCampaignSettings: function() { return getRaffleCampaignSettings_(session); },
       getActivityProductionReadiness: function() { return getActivityProductionReadiness_(session); },
       getActivityOperations: function() { return getActivityOperations_(session); },
+      getActivityPurchaseReviews: function() { return getActivityPurchaseReviews_(session, parameters); },
       getActivityPacking: function() { return getActivityPacking_(session, parameters); },
       getActivityInventory: function() { return getActivityInventory_(session, parameters); },
       getActivityIncompleteDraws: function() { return getActivityIncompleteDraws_(session, parameters); },

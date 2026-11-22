@@ -154,3 +154,27 @@ function productionStudentPrizes_(input){
  return {ok:true,campaignId:campaign.id,rows:rows.slice(input.offset,input.offset+10).map(function(c){return{id:c.id,prizeName:c.prizeName,venue:c.venue||'',quantity:c.quantity,claimed:c.claimedQuantity,status:c.status};}),nextOffset:rows.length>input.offset+10?input.offset+10:null};
 }
 function getActivityIncompleteDraws_(session,q){activityToolCampaign_(session,q.campaignId);if(q.campaignId!=='christmas-2026')throw Error('此活動不提供星星抽獎清單。');var offset=Number(q.offset||0);if(!Number.isSafeInteger(offset)||offset<0||offset>10000)throw Error('頁碼不正確。');return activityToolBridge_({action:'incomplete',offset:offset});}
+
+function getActivityPurchaseReviews_(session,params){
+  assertCapabilitySession_(session,'raffle_admin');
+  var request={action:'purchaseReviews'};
+  if(params.purchaseId===undefined){
+    var offset=Number(params.offset||0);
+    if(!Number.isSafeInteger(offset)||offset<0||offset>10000||offset%20!==0)throw Error('購卡明細頁碼不正確。');
+    request.offset=offset;
+    return activityToolBridge_(request);
+  }
+  var id=String(params.purchaseId);
+  if(!/^[1-9][0-9]{0,14}$/.test(id)||params.offset!==undefined)throw Error('購卡單號不正確。');
+  request.purchaseId=id;
+  var review=activityToolBridge_(request);
+  if(!Array.isArray(review.rows)||review.rows.length!==1||review.rows[0].id!==id)throw Error('此筆已離開待核對清單，請更新清單。');
+  var token=PropertiesService.getScriptProperties().getProperty(CONFIG.API_TOKEN_PROPERTY);
+  var order=fetchObUserPassDetail_(token,id);
+  if(String(order.id)!==id||!order.user||String(order.user.id)!==review.rows[0].memberId)throw Error('OB 單號或會員與活動紀錄不一致，請至 OB 核對。');
+  var current=normalizeObUserPassForInvoice_({},order);
+  review.ob={name:current.customerName,email:current.customerEmail,passName:current.itemName,
+    payment:current.paymentStatus,refund:current.refundSignal||order.refunded===true?'yes':order.refunded===false?'no':'unknown',
+    checkedAt:Date.now()};
+  return review;
+}

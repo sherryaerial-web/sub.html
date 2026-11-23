@@ -149,3 +149,23 @@ test('pickup hold affects both labels and actions at the claim and campaign leve
     assert.doesNotMatch(api.renderClaims([{...base,status}],[],{...permissions,pickupBlocked:true}), /暫停領取|尚可領取/);
   }
 });
+
+test('same-student balls are shown together with totals, with operations gated separately',()=>{
+ const api=load(),base={studentName:'同名',studentKey:'a',campaignId:'christmas-2026',directBall:true,prizeId:'GIFT-BALL-2026',prizeName:'購卡贈送球',venue:'教室現貨',status:'ready',quantity:2,claimedQuantity:0};
+ const rows=[{...base,id:'a1'},{...base,id:'a2',status:'partial',claimedQuantity:1},{...base,id:'a3',status:'cancelled',claimedQuantity:1},{...base,id:'b1',studentKey:'b'},{...base,id:'c1',campaignId:'other'},{...base,id:'fake',directBall:false}];
+ const html=api.renderClaims(rows,[],{readOnly:false,canCorrect:true});
+ assert.equal((html.match(/data-raffle-action="collect-balls"/g)||[]).length,1);
+ assert.match(html,/尚可領取 3 顆<\/strong> · 已領取 2 顆/);
+ assert.match(html,/查看 3 筆購卡紀錄/);
+ assert.doesNotMatch(api.renderClaims(rows,[],{readOnly:false,pickupBlocked:true}),/data-raffle-action="collect-balls"/);
+});
+
+test('floor prize shows issue confirmation for managers with no physical preparation or venue',()=>{
+ const api=load(),floor={id:'x',studentKey:'s',floorCourse:true,studentName:'學生',prizeName:'免費地板課任選一堂',status:'waiting',venue:'',quantity:1,claimedQuantity:0};
+ const html=api.renderClaims([floor],[],{readOnly:false,canPrepare:true,canCorrect:true});
+ assert.match(html,/確認已發課卡/);assert.match(html,/無須選館/);
+ assert.doesNotMatch(html,/data-raffle-action="(?:prepare|collect)"|尚未備妥/);
+ for(const permissions of [{readOnly:false,canPrepare:true},{readOnly:true,canCorrect:true},{readOnly:false,canCorrect:true,pickupBlocked:true}])
+  assert.doesNotMatch(api.renderClaims([floor],[],permissions),/data-raffle-action="redeem-floor"/);
+ assert.match(api.renderClaims([{...floor,status:'claimed',claimedQuantity:1}],[],{readOnly:false,canCorrect:true}),/更正發卡紀錄/);
+});

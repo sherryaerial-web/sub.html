@@ -60,11 +60,13 @@ function studentHistoryHTML(d,offset){
   const reasons={identity_not_verified:'尚無已驗證的 LINE／OB 配對，可先查看下方領獎紀錄。',identity_conflict:'身分配對不唯一，請先核對。'};
   sections.push('<p class="state">'+(Object.hasOwn(reasons,a.reason)?reasons[a.reason]:'活動端暫時無法讀取，請稍後查詢。')+'</p>');
  }
- sections.push(historySection('獎品與領取',d.claims,r=>`<p><b>${esc(r.prizeName)}</b> · ${esc(r.venue)}<br>${esc(state(r.status))} · 已領 ${esc(r.claimed)}／${esc(r.total)} 件</p>`));
- if(d.claims.some(r=>r.status==='ready'||r.status==='partial')){
+ sections.push(historySection('獎品與領取',d.claims,r=>r.floorCourse===true
+  ? `<p><b>${esc(r.prizeName)}</b> · 無須選館<br>${r.status==='claimed'?'已發課卡':r.status==='cancelled'?'已撤銷':'待兌換'}</p>`
+  : `<p><b>${esc(r.prizeName)}</b> · ${esc(r.venue)}<br>${esc(state(r.status))} · 已領 ${esc(r.claimed)}／${esc(r.total)} 件</p>`));
+ if(d.claims.some(r=>r.floorCourse!==true&&(r.status==='ready'||r.status==='partial'))){
   sections.push('<p class="item-meta">交付前請到「學生領獎」按「查詢學生」，確認領取期限與目前可領件數。</p>');
  }
- const actions={import:'同步',prepare:'到館',collect:'領取',correct:'更正',revoke:'撤銷',restore:'恢復','resolve-source':'來源核對'};
+ const actions={import:'同步',prepare:'到館',collect:'領取','collect-balls':'合併領球','redeem-floor':'已發地板課卡','correct-floor':'更正地板課發卡',correct:'更正',revoke:'撤銷',restore:'恢復','resolve-source':'來源核對'};
  sections.push(historySection('領獎操作',d.events,r=>`<p>${stamp(r.at)} · ${esc(r.actor)} · ${esc(actions[r.action]||r.action)}${r.reason?' · '+esc(r.reason):''}</p>`));
  sections.push(historySection('通知紀錄',d.notifications,r=>{
   const channels=r.channels.map(c=>esc(({line:'LINE',ob:'OB',email:'Email'})[c.name]||c.name)+'：'+esc(noticeChannels[c.status]||'待核對'));

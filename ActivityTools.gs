@@ -9,7 +9,7 @@ function activityToolWrite_(session,op) {
   if(PropertiesService.getScriptProperties().getProperty('RAFFLE_WRITES_ENABLED')!=='true')throw Error('目前為唯讀模式。');
   if(!op||!/^[A-Za-z0-9_-]{12,100}$/.test(op.requestId||''))throw Error('操作編號無效。');
 }
-function activityPackingRow_(c){return {id:c.id,version:c.version,studentName:c.studentName,email:c.email,prizeId:c.prizeId,prizeName:c.prizeName,venue:c.venue,quantity:c.quantity-c.claimedQuantity,total:c.quantity,claimed:c.claimedQuantity,status:c.status};}
+function activityPackingRow_(c){return {id:c.id,version:c.version,studentName:c.studentName,email:c.email,prizeId:c.prizeId,prizeName:c.prizeName,venue:c.venue,quantity:c.quantity-c.claimedQuantity,total:c.quantity,claimed:c.claimedQuantity,status:c.status,floorCourse:raffleIsFloorCourseClaim_(c)};}
 function getActivityPacking_(session,q) {
   q=q||{};activityToolCampaign_(session,q.campaignId);
   var offset=Number(q.offset||0);if(!Number.isSafeInteger(offset)||offset<0||offset>10000)throw Error('頁碼不正確。');

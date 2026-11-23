@@ -12,6 +12,37 @@
     if (claim.venue === '教室現貨') return '<p class="item-meta">教室現貨直接領取，不必選館；請先核對學生與獎品。</p><input data-raffle-venue type="hidden" value="教室現貨">';
     return `<label>確認實際所在館別<select data-raffle-venue class="admin-select" required><option value="">請選擇</option><option value="${escape(claim.venue)}">${escape(claim.venue)}</option><option value="wrong-venue">其他館別（不可交付）</option></select></label>`;
   }
+  const canCollectBall = item => item.directBall === true && !item.pickupBlocked && ['ready','partial'].includes(item.status);
+  const ballBalance = item => Number(item.quantity) - Number(item.claimedQuantity);
+  function renderFloorClaim(item, permissions) {
+    const awaiting = ['waiting','ready'].includes(item.status);
+    const redeemable = awaiting && !item.pickupBlocked && !permissions.pickupBlocked;
+    const editable = permissions.readOnly === false && permissions.canCorrect;
+    const issued = item.status === 'claimed';
+    const action = (key,label) => `<button type="button" class="compact-button" data-raffle-action="${key}" data-claim-id="${escape(item.id)}">${label}</button>`;
+    const label = awaiting ? (redeemable ? '待兌換' : '已過期／期限待核對') : issued ? '已發課卡' : status(item.status);
+    return `<div class="raffle-prize"><strong>${escape(item.prizeName)}</strong><span class="status-pill">${escape(label)}</span>
+      <p class="item-meta">無須選館${issued && item.claimedAt ? '｜經手：'+escape(item.claimedBy)+'｜'+escape(item.claimedAt) : ''}</p>
+      ${redeemable ? '<p>請先在 OB 發放地板課單堂課卡，再回來登記兌換。</p>' : ''}
+      <div class="admin-item-actions">${editable && redeemable ? action('redeem-floor','確認已發課卡') : ''}
+      ${editable && issued ? action('correct-floor','更正發卡紀錄') : ''}
+      ${editable && awaiting ? action('revoke','撤銷兌換資格') : ''}
+      ${permissions.canCorrect ? action('audit','操作紀錄') : ''}</div></div>`;
+  }
+  function renderBallGroup(items,campaign,permissions,renderItem){
+    const available=permissions.pickupBlocked?[]:items.filter(canCollectBall);
+    const remaining=available.reduce((sum,item)=>sum+ballBalance(item),0);
+    const claimed=items.reduce((sum,item)=>sum+Number(item.claimedQuantity),0);
+    const waiting=items.filter(item=>item.status==='waiting').reduce((sum,item)=>sum+ballBalance(item),0);
+    const blocked=items.some(item=>['ready','partial','waiting'].includes(item.status)&&(permissions.pickupBlocked||item.pickupBlocked));
+    const collect=permissions.readOnly===false&&available.length>0;
+    const grouped=available.length>1;
+    return `<div class="raffle-prize"><strong>${escape(items[0].prizeName)}</strong><p class="item-meta">${escape(campaign?.name||'')}｜教室現貨</p>
+      <p><strong>尚可領取 ${remaining} 顆</strong> · 已領取 ${claimed} 顆${waiting?' · 待備貨 '+waiting+' 顆':''}</p>
+      ${blocked?'<p class="state error">領取期限需核對。</p>':''}
+      ${collect?`<button type="button" class="compact-button" data-raffle-action="${grouped?'collect-balls':'collect'}" data-claim-id="${escape(available[0].id)}">${grouped?'合併登記領球':'確認已領取'}</button>`:''}
+      <details><summary>查看 ${items.length} 筆購卡紀錄</summary>${items.map(renderItem).join('')}</details></div>`;
+  }
   function renderClaims(claims, campaigns, permissions = { readOnly: true }) {
     if (!claims.length) return '<div class="state">查無符合的領獎紀錄。請確認姓名或完整 Email。</div>';
     const groups = new Map();
@@ -20,9 +51,8 @@
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(claim);
     });
-    return [...groups.entries()].map(([key, items]) => `<article class="raffle-student admin-control" data-raffle-student="${escape(key)}">
-      <h3>${escape(items[0].studentName)}</h3><p class="item-meta">${escape(permissions.canCorrect && items[0].email ? items[0].email : items[0].maskedEmail)} · 請核對學生身分，同名不代表同一人</p>
-      ${items.map(item => {
+    function renderItem(item) {
+        if (item.floorCourse === true) return renderFloorClaim(item,permissions);
         const onHold=(item.pickupBlocked||permissions.pickupBlocked)&&['ready','waiting','partial'].includes(item.status);
         return `<div class="raffle-prize">
         <div><strong>${escape(item.prizeName)}</strong><span class="status-pill">${escape(onHold?'暫停領取':status(item.status))}</span></div>
@@ -41,7 +71,23 @@
           ${permissions.readOnly === false && permissions.canCorrect && Number(item.claimedQuantity) > 0 && ['partial','claimed','ready'].includes(item.status) ? `<button type="button" class="compact-button" data-raffle-action="correct" data-claim-id="${escape(item.id)}">更正誤領</button>` : ''}
           ${permissions.canCorrect ? `<button type="button" class="compact-button" data-raffle-action="audit" data-claim-id="${escape(item.id)}">操作紀錄</button>` : ''}
         </div>
-      </div>`;}).join('')}</article>`).join('');
+      </div>`;
+    }
+    return [...groups.entries()].map(([key, items]) => {
+      const byCampaign = new Map();
+      for (const item of items) {
+        if (item.directBall !== true) continue;
+        if (!byCampaign.has(item.campaignId)) byCampaign.set(item.campaignId,[]);
+        byCampaign.get(item.campaignId).push(item);
+      }
+      const prizes = items.map(item=>{
+        const balls=item.directBall===true?byCampaign.get(item.campaignId):null;
+        if(!balls||balls.length===1)return renderItem(item);
+        return balls[0]===item?renderBallGroup(balls,campaigns.find(c=>c.id===item.campaignId),permissions,renderItem):'';
+      }).join('');
+      return `<article class="raffle-student admin-control" data-raffle-student="${escape(key)}"><h3>${escape(items[0].studentName)}</h3>
+        <p class="item-meta">${escape(permissions.canCorrect && items[0].email ? items[0].email : items[0].maskedEmail)} · 請核對學生身分，同名不代表同一人</p>${prizes}</article>`;
+    }).join('');
   }
   function renderPreview(data) {
     const issues = data.errors || [];
@@ -177,16 +223,18 @@
     if(!data || data.readOnly!==true || data.sourceChecked!==false || !data.campaignId || typeof data.campaignName!=='string' || !Number.isFinite(Date.parse(data.asOf)) ||
        !valid(data.claims,['total',...claimKeys,...unitKeys]) || claimKeys.reduce((n,k)=>n+data.claims[k],0)!==data.claims.total ||
        !['invitation','ready'].every(kind=>valid(data.mail?.[kind],['total','review',...mailKeys]) && mailKeys.reduce((n,k)=>n+data.mail[kind][k],0)===data.mail[kind].total && data.mail[kind].review===data.mail[kind].sending+data.mail[kind].uncertain)) throw Error('未收到完整活動總覽，請重新讀取；不能視為零筆。');
-    const c=data.claims;
-    return `<section class="admin-control"><h3>${escape(data.campaignName)}｜活動總覽</h3><p class="item-meta">讀取時間：${escape(data.asOf)}</p><p>只統計本系統已同步的紀錄，未核對來源是否有新增或異動；不是來源庫存，也不代表可以直接寄送。</p><p>已同步 ${escape(c.total)} 筆領獎紀錄 · 已交付 ${escape(c.deliveredUnits)} 件 · 尚未交付 ${escape(c.pendingUnits)} 件（含過期，不含電子／撤銷剩餘）</p>${c.blockedRecords ? `<p class="state error">${escape(c.blockedRecords)} 筆／${escape(c.blockedUnits)} 件已過期或期限需核對，不能直接交付；仍計入下方原狀態。</p>` : ''}</section>
+    const c=data.claims, floor=data.floorCourses;
+    if(floor!==undefined&&!valid(floor,['pending','issued','cancelled']))throw Error('地板課兌換統計需重新核對。');
+    return `<section class="admin-control"><h3>${escape(data.campaignName)}｜活動總覽</h3><p class="item-meta">讀取時間：${escape(data.asOf)}</p><p>只統計本系統已同步的紀錄，未核對來源是否有新增或異動；不是來源庫存，也不代表可以直接寄送。</p><p>已同步 ${escape(c.total)} 筆一般領獎紀錄 · 已交付 ${escape(c.deliveredUnits)} 件 · 尚未交付 ${escape(c.pendingUnits)} 件（含過期，不含電子／撤銷剩餘）</p>${c.blockedRecords ? `<p class="state error">${escape(c.blockedRecords)} 筆／${escape(c.blockedUnits)} 件已過期或期限需核對，不能直接交付；仍計入下方原狀態。</p>` : ''}</section>
       <section class="admin-control"><h3>領獎處理</h3>${claimKeys.map(k=>`<p>${escape(status(k))}：${escape(c[k])} 筆</p>`).join('')}<p class="item-meta">「部分領取」獨立計數；撤銷前已交付的件數仍保留。</p></section>
+      ${floor&&(floor.pending||floor.issued||floor.cancelled)?`<section class="admin-control"><h3>地板課兌換</h3><p>待兌換 ${floor.pending} 堂 · 已發課卡 ${floor.issued} 堂 · 已撤銷 ${floor.cancelled} 堂</p></section>`:''}
       ${[['invitation','抽獎邀請'],['ready','領獎通知']].map(([kind,label])=>{const m=data.mail[kind];return `<section class="admin-control"><h3>${label}｜共 ${escape(m.total)} 封</h3>${m.review ? `<p class="state error">${escape(m.review)} 封寄送中／結果待確認，請至「寄信紀錄」核對，勿自行重寄。</p>`:''}<p>待寄 ${escape(m.queued)} 封 · 已寄出 ${escape(m.sent)} 封 · 已停止／結案 ${escape(m.closed)} 封</p><p class="item-meta">已寄出不代表學生已收到；停止／結案不會自動重新排入。詳細核對依寄信紀錄為準。</p></section>`;}).join('')}`;
   }
   function renderFulfillment(data, campaigns) {
     if (!data || !data.totals || !data.excluded || !Array.isArray(data.groups) || !Array.isArray(data.claims) || !Number.isInteger(data.offset)) throw Error('未收到完整備貨清單。');
     const groupId = data.group?.id || '';
     const pages = `<div class="admin-item-actions">${data.offset > 0 ? `<button type="button" class="compact-button" data-raffle-fulfillment-page="${Math.max(0,data.offset-50)}" data-group-id="${escape(groupId)}">上一頁</button>` : ''}${data.hasMore ? `<button type="button" class="compact-button" data-raffle-fulfillment-page="${data.offset+50}" data-group-id="${escape(groupId)}">下一頁</button>` : ''}</div>`;
-    const heading = `<div class="admin-control"><h3>獎品／館別備貨清單</h3><p>待備貨 ${escape(data.totals.waiting)} 件 · 已備妥未領 ${escape(data.totals.ready)} 件 · 已領取 ${escape(data.totals.claimed)} 件</p><p class="item-meta">以上是本活動已同步的領獎需求，不是來源庫存。電子獎 ${escape(data.excluded.digital)} 筆、已取消 ${escape(data.excluded.cancelled)} 筆不再備貨；取消前已交付的數量仍保留於已領取統計。</p>${data.pickupBlocked ? '<p class="state error">已超過領取截止時間或期限設定有誤，請管理員核對；不可直接交付。</p>' : ''}<p class="item-meta">每頁最多 50 ${data.group ? '筆學生紀錄' : '組'}，第 ${Math.floor(data.offset/50)+1} 頁。</p></div>`;
+    const heading = `<div class="admin-control"><h3>獎品／館別備貨清單</h3><p>待備貨 ${escape(data.totals.waiting)} 件 · 已備妥未領 ${escape(data.totals.ready)} 件 · 已領取 ${escape(data.totals.claimed)} 件</p><p class="item-meta">以上是本活動已同步的領獎需求，不是來源庫存。電子獎 ${escape(data.excluded.digital)} 筆、已取消 ${escape(data.excluded.cancelled)} 筆不再備貨；取消前已交付的數量仍保留於已領取統計。</p>${data.pickupBlocked ? '<p class="state error">已超過領取截止時間或期限設定有誤，請管理員核對；不可直接交付。</p>' : ''}<p class="item-meta">每頁最多 50 ${data.group ? '組學生／獎品紀錄' : '組'}，第 ${Math.floor(data.offset/50)+1} 頁。</p></div>`;
     if (data.group) return heading + `<div class="admin-control"><button type="button" class="compact-button" data-raffle-fulfillment-group="">返回備貨總覽</button><h3>${escape(data.group.prizeName)}｜${escape(data.group.venue || '待確認館別')}</h3><p>共 ${escape(data.totalClaims)} 筆；請逐筆核對實際到館的獎品，沒有整組一次標記。</p></div>` + renderClaims(data.claims,campaigns,data) + pages;
     return heading + (data.groups.map(g=>`<article class="admin-control"><h3>${escape(g.prizeName)}｜${escape(g.venue || '待確認館別')}</h3><p>待備貨 ${escape(g.waiting)} 件 · 已備妥未領 ${escape(g.ready)} 件 · 已領取 ${escape(g.claimed)} 件</p><p class="item-meta">${escape(g.claimCount)} 筆領獎紀錄</p><button type="button" class="compact-button" data-raffle-fulfillment-group="${escape(g.id)}">查看學生／逐筆到館</button></article>`).join('') || '<div class="state">目前沒有實體獎品備貨紀錄。</div>') + pages;
   }
@@ -584,7 +632,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
             const record=data.records[i];if(record?.status!=='closed'||record.closedBeforeSend!==true)return;
             const button=document.createElement('button');button.type='button';button.className='compact-button';button.dataset.raffleReopen=record.id;button.textContent='重新核對內容／排入待寄';article.appendChild(button);
           });
-          if (!isPreview && (data.claims || []).length >= 50) result.insertAdjacentHTML('beforeend', '<p class="state">最多顯示 50 筆，請用完整 Email 縮小範圍。</p>');
+          if (!isPreview && (data.claims || []).length >= 50) result.insertAdjacentHTML('beforeend', '<p class="state">若查詢範圍太廣，請用完整 Email 縮小範圍。</p>');
         } catch (error) {
           if (!disposed && request === serial) result.innerHTML = `<div class="state error">${escape(error.message || '讀取失敗，請稍後重試。')}</div>`;
         } finally {
@@ -728,15 +776,22 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
           const claim = (workspace.claims || []).find(c => c.id === button.dataset.claimId);
           if (!claim) return;
           selected = { action: button.dataset.raffleAction, claim };
-          const title = { collect:'確認交付獎品', prepare:workspace.canCorrect ? '確認到館並通知學生' : '確認到館', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
-          const maximum = selected.action === 'correct' ? Number(claim.claimedQuantity) - 1 : Number(claim.quantity) - Number(claim.claimedQuantity);
-          node('[data-raffle-dialog-body]').innerHTML = `<h3>${escape(title)}</h3><p><strong>${escape(claim.studentName)}</strong>｜${escape(claim.maskedEmail)}</p><p>${escape(claim.prizeName)}｜登記館別：${escape(claim.venue || '—')}</p>
+          if (selected.action === 'collect-balls') {
+            selected.items = workspace.claims.filter(item=>item.studentKey===claim.studentKey&&item.campaignId===claim.campaignId&&canCollectBall(item));
+            if(workspace.readOnly!==false||workspace.pickupBlocked||selected.items.length<2){selected=null;return;}
+          }
+          const title = { 'collect-balls':'合併登記領球', 'redeem-floor':'確認已發課卡', 'correct-floor':'更正地板課發卡紀錄', collect:'確認交付獎品', prepare:workspace.canCorrect ? '確認到館並通知學生' : '確認到館', correct:'更正誤領', revoke:'撤銷未領部分', restore:'核對並恢復未領部分', audit:'操作紀錄' }[selected.action];
+          const maximum = selected.items ? Math.min(selected.items.reduce((sum,item)=>sum+ballBalance(item),0),25) : selected.action === 'correct' ? Number(claim.claimedQuantity) - 1 : ballBalance(claim);
+          node('[data-raffle-dialog-body]').innerHTML = `<h3>${escape(title)}</h3><p><strong>${escape(claim.studentName)}</strong>｜${escape(claim.maskedEmail)}</p><p>${escape(claim.prizeName)}｜${claim.floorCourse===true?'無須選館':'登記館別：'+escape(claim.venue || '—')}</p>
+            ${selected.action==='collect-balls'?`<p>請輸入這次實際交付的數量，本次最多可登記 ${maximum} 顆。</p>`:''}
+            ${selected.action==='redeem-floor'?'<p>請確認這位學生已在 OB 收到單堂地板課卡，再登記完成兌換。</p>':''}
+            ${selected.action==='correct-floor'?'<p>此處會把老師後台紀錄改回待兌換。請先在 OB 核對原課卡。</p>':''}
             ${['collect','prepare','restore'].includes(selected.action) ? renderPickupVenue(claim) : ''}
-            ${['collect','correct'].includes(selected.action) ? `<label>${selected.action === 'correct' ? '更正後已領數量' : '本次領取數量'}<input data-raffle-quantity class="text-input" type="number" min="${selected.action === 'correct' ? 0 : 1}" max="${escape(maximum)}" step="1" value="${selected.action === 'correct' ? 0 : 1}" required></label>` : ''}
+             ${['collect','collect-balls','correct'].includes(selected.action) ? `<label>${selected.action === 'correct' ? '更正後已領數量' : '本次領取數量'}<input data-raffle-quantity class="text-input" type="number" min="${selected.action === 'correct' ? 0 : 1}" max="${escape(maximum)}" step="1" value="${selected.action === 'correct' ? 0 : 1}" required></label>` : ''}
             ${selected.action === 'revoke' ? `<p>停止剩餘 ${escape(maximum)} 件的交付，已領取 ${escape(claim.claimedQuantity)} 件及原紀錄會保留。恢復須由管理員重新核對；不會回補來源庫存、不寄信，也不撤銷學生其他獎品。</p>` : ''}
             ${selected.action === 'prepare' ? (workspace.canCorrect ? '<p>確認實物已放在指定館別後，會逐筆通知這位學生；沿用目前通知方式，結果不明不重送。</p>' : '<p>只登記實物已到館；學生通知請由管理者核對發送。</p>') : ''}
             ${selected.action === 'restore' ? '<p>重新核對來源與期限；保留原紀錄，不寄信、不增減來源庫存。恢復為待備貨，須重新標記到館後才能交付。</p>' : ''}
-            ${['correct','revoke','restore'].includes(selected.action) ? '<label>操作理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>' : ''}`;
+            ${['correct','correct-floor','revoke','restore'].includes(selected.action) ? '<label>操作理由<textarea class="text-input" data-raffle-reason maxlength="300" required></textarea></label>' : ''}`;
         }
         dialog.showModal();
         if (selected.action === 'audit') {
@@ -745,7 +800,7 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
           try {
             const audit = await options.api('getRaffleAudit', {claimId:selected.claim.id});
             if (disposed || selected !== current || !dialog.open) return;
-            node('[data-raffle-dialog-body]').insertAdjacentHTML('beforeend', (audit.events || []).map(item => `<div class="raffle-prize"><strong>${escape(({import:'匯入',prepare:'到館',collect:'領取',correct:'更正',revoke:'撤銷未領部分','resolve-source':'核對來源變更'})[item.action] || item.action)}</strong><p>${escape(item.at)}｜${escape(item.actor)}｜已領 ${escape(item.claimedQuantity)} 件</p><p>${escape(item.prizeName || '')}｜${escape(item.venue || '')}</p><p>${escape(item.reason || '')}</p></div>`).join(''));
+            node('[data-raffle-dialog-body]').insertAdjacentHTML('beforeend', (audit.events || []).map(item => `<div class="raffle-prize"><strong>${escape(({import:'匯入',prepare:'到館',collect:'領取','collect-balls':'合併領球','redeem-floor':'已發地板課卡','correct-floor':'更正地板課發卡',correct:'更正',revoke:'撤銷未領部分','resolve-source':'核對來源變更'})[item.action] || item.action)}</strong><p>${escape(item.at)}｜${escape(item.actor)}｜已領 ${escape(item.claimedQuantity)} 件</p><p>${escape(item.prizeName || '')}｜${escape(item.venue || '')}</p><p>${escape(item.reason || '')}</p></div>`).join(''));
           } catch(error) { if (!disposed && selected === current) node('[data-raffle-operation-error]').textContent = error.message; }
         }
       });
@@ -757,10 +812,11 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
             ? {campaignId:selected.preview.campaignId,previewToken:selected.preview.previewToken,requestId:requestId()}
             : selected.action === 'resolve' ? {campaignId:selected.preview.campaignId,claimId:selected.conflict.id,version:selected.conflict.before.version,previewToken:selected.preview.previewToken,reason:node('[data-raffle-reason]').value.trim(),requestId:requestId()}
             : ['reconcile','closeQueued','reopen'].includes(selected.action) ? {campaignId:selected.campaignId,jobId:selected.record.id,...(selected.action==='reconcile'?{status:node('[data-raffle-mail-status]').value}:{}),...(selected.action==='reopen'?{previewToken:selected.preview.previewToken}:{}),reason:node('[data-raffle-mail-reason]').value.trim(),requestId:requestId()}
+            : selected.action === 'collect-balls' ? {action:selected.action,items:selected.items.map(item=>({id:item.id,version:item.version})),quantity:Number(node('[data-raffle-quantity]').value),requestId:requestId()}
             : {claimId:selected.claim.id,version:selected.claim.version,action:selected.action,venue:node('[data-raffle-venue]')?.value || '',quantity:node('[data-raffle-quantity]') ? Number(node('[data-raffle-quantity]').value) : undefined,reason:node('[data-raffle-reason]')?.value.trim() || '',requestId:requestId()};
           if (selected.action !== 'import' && ['collect','prepare','restore'].includes(selected.action) && operation.venue !== selected.claim.venue) { node('[data-raffle-operation-error]').textContent = '館別不一致，請勿交付。'; return; }
           if(['closeQueued','reopen'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
-          if(['resolve','revoke','restore'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
+          if(['resolve','revoke','restore','correct-floor'].includes(selected.action)&&!operation.reason){node('[data-raffle-operation-error]').textContent='請填寫操作理由。';return;}
           pending = {action:({reopen:'reopenRaffleMail',resolve:'resolveRaffleConflict',send:'sendRaffleMailBatch',reconcile:'reconcileRaffleMail',closeQueued:'closeRaffleQueuedMail',queue:'confirmRaffleInvitations',import:'confirmRaffleImport'})[selected.action] || 'mutateRaffleClaim',operation};
           if(selected.preview?.kind === 'ready' && ['send','queue'].includes(selected.action))pending.action=selected.action === 'send' ? 'sendRaffleReadyMailBatch' : 'confirmRaffleReadyNotifications';
         }
@@ -770,6 +826,28 @@ if(data.activityGiftTestEnabled!==true)return;const panel=document.createElement
         try {
           const response = await options.api(pending.action, {operation:pending.operation});
           if (disposed) return;
+          if(selected.action==='collect-balls'){
+            const before=new Map(selected.items.map(item=>[item.id,item]));
+            let sum=0;
+            if(!response||response.quantity!==pending.operation.quantity||!Array.isArray(response.items)||!response.items.length)throw Error('未收到完整領球結果。');
+            for(const item of response.items){
+              const prev=before.get(item.claimId);
+              if(!prev||item.version!==prev.version+1||!Number.isSafeInteger(item.claimedQuantity)||item.claimedQuantity<=prev.claimedQuantity||item.claimedQuantity>prev.quantity||item.status!==(item.claimedQuantity===prev.quantity?'claimed':'partial'))throw Error('領球結果與本次確認不一致。');
+              sum+=item.claimedQuantity-prev.claimedQuantity;
+              before.delete(item.claimId);
+            }
+            if(sum!==pending.operation.quantity)throw Error('領球數量與本次確認不一致。');
+            node('[data-raffle-notice]').textContent=`已登記交付 ${sum} 顆按摩球。`;pending=null;dialog.close();
+            if(fulfillmentView)await read('fulfillment',fulfillmentView.offset,fulfillmentView.groupId);
+            else await read(false);
+            return;
+          }
+          if(['redeem-floor','correct-floor'].includes(selected.action)){
+            const issued=selected.action==='redeem-floor';
+            if(!response||response.claimId!==pending.operation.claimId||response.version!==pending.operation.version+1||response.status!==(issued?'claimed':'waiting')||response.claimedQuantity!==(issued?1:0))throw Error('未收到完整的地板課兌換結果。');
+            node('[data-raffle-notice]').textContent=issued?'已登記地板課卡兌換。':'已更正為待兌換。';pending=null;dialog.close();
+            await read(false);return;
+          }
           if(selected.action==='reopen'){
             if(!response || response.jobId!==selected.record.id || response.status!=='queued')throw Error('未收到完整重新排入結果。');
             node('[data-raffle-notice]').textContent='已保存新內容並重新排入待寄，沒有寄信；發送前仍須另外核對。';pending=null;dialog.close();await read('mailRecords');return;

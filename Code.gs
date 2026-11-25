@@ -9219,12 +9219,44 @@ function doGet(e) {
   }
 }
 
+function createAssistantGrant_(session, actingTeacherName) {
+  if (session.teacherName !== 'Tako' || cleanText_(actingTeacherName) ||
+      (session.managementCapabilities || []).indexOf('course_admin') === -1) {
+    throw new Error('此帳號無法開啟客服助理。');
+  }
+  var cache = getScriptCache_();
+  if (!cache) throw new Error('客服助理暫時無法開啟。');
+  var grant = createRandomToken_();
+  var key = 'teacher_assistant_v1:' + sha256Base64Url_(grant);
+  cache.put(key, String(currentTimeMs_() + 120000), 120);
+  return { grant: grant };
+}
+
+function redeemAssistantGrant_(grant) {
+  if (typeof grant !== 'string' || !/^[a-f0-9]{64}$/.test(grant)) {
+    throw new Error('客服助理登入已失效，請從教室系統重新開啟。');
+  }
+  var cache = getScriptCache_();
+  var key = 'teacher_assistant_v1:' + sha256Base64Url_(grant);
+  var invalid = '客服助理登入已失效，請從教室系統重新開啟。';
+  if (!cache || !(Number(cache.get(key)) > currentTimeMs_())) throw new Error(invalid);
+  return withScriptLock_(function() {
+    if (!(Number(cache.get(key)) > currentTimeMs_())) throw new Error(invalid);
+    cache.remove(key);
+    return { approved: true };
+  });
+}
+
 function doPost(e) {
   var parameters = {};
   try {
     parameters = getPostParameters_(e);
     var action = cleanText_(parameters.action);
     if (!action) throw new Error('缺少操作名稱。');
+
+    if (action === 'redeemAssistantGrant') {
+      return createPostResponse_(parameters, { status: 'success', data: redeemAssistantGrant_(parameters.grant) });
+    }
 
     if (action === 'productionIdentityBridge') {
       if (typeof productionIdentityRequest_ !== 'function' || typeof parameters.payload !== 'string' || parameters.payload.length > 4096) throw Error('production_identity_disabled');
@@ -9296,6 +9328,12 @@ function doPost(e) {
     }
 
     var session = requireSession_(parameters.sessionToken);
+    if (action === 'createAssistantGrant') {
+      return createPostResponse_(parameters, {
+        status: 'success',
+        data: createAssistantGrant_(session, parameters.actingTeacherName)
+      });
+    }
     if (cleanText_(parameters.actingTeacherName) && ['getPayrollNoShowCourses', 'previewPayrollNoShow', 'recordPayrollNoShow', 'cancelPayrollNoShow', 'updateMainException', 'saveMainTeacherIdentity', 'createMainBackup'].indexOf(action) !== -1) {
       throw new Error('代查看薪資為唯讀，不能登記或取消 No Show Fee。');
     }

@@ -2389,6 +2389,7 @@
             <button id="account-appearance-entry" type="button" disabled><span class="account-menu-icon"><i data-lucide="palette"></i></span><span><strong>個人化</strong></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-inbox"><span class="account-menu-icon"><i data-lucide="bell"></i></span><span><strong>訊息收件匣</strong><small>查看最近 30 天系統通知</small></span><span id="account-inbox-badge" class="account-count" hidden>0</span><i data-lucide="chevron-right"></i></button>
             <button id="account-admin-entry" type="button" data-view="view-admin" hidden><span class="account-menu-icon"><i data-lucide="settings-2"></i></span><span><strong>管理工作台</strong><small>課程、通知與營運作業</small></span><i data-lucide="chevron-right"></i></button>
+            <button type="button" data-teacher-assistant hidden><span class="account-menu-icon"><i data-lucide="message-square"></i></span><span><strong>客服助理</strong><small>擬 LINE 回覆、判讀截圖</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle"><span class="account-menu-icon"><i data-lucide="gift"></i></span><span><strong>學生領獎</strong><small>查詢學生獎品、確認領取</small></span><i data-lucide="chevron-right"></i></button>
             <button type="button" data-view="view-raffle" data-capability="raffle_fulfillment" hidden><span class="account-menu-icon"><i data-lucide="package-check"></i></span><span><strong>獎品備貨／到館</strong><small>依獎品館別查看、逐筆確認到館</small></span><i data-lucide="chevron-right"></i></button>
           </div>
@@ -2418,6 +2419,7 @@
                     <select id="admin-act-as" class="admin-select"><option value="">選擇老師</option></select>
                   </label>
                   <div class="admin-command-actions">
+                    <button class="compact-button" type="button" data-teacher-assistant hidden><i data-lucide="message-square"></i>客服助理</button>
                     <button id="admin-refresh" class="compact-button" type="button"><i data-lucide="rotate-cw"></i>更新資料</button>
                     <button id="admin-sync" class="compact-button" type="button"><i data-lucide="refresh-cw"></i>同步 OB 課表</button>
                     <button id="admin-reconcile" class="compact-button" type="button"><i data-lucide="list-checks"></i>重新核對 OB</button>
@@ -4631,8 +4633,32 @@
       rentalState = { catalog: null, catalogFetchedAt: 0, preview: null, previewSignature: "", loading: false };
     }
 
+    function canOpenTeacherAssistant() {
+      return authState.sessionToken && authState.teacherName === "Tako" &&
+        !authState.actingTeacherName && authState.managementCapabilities.includes("course_admin");
+    }
+
+    async function openTeacherAssistant(button) {
+      if (!canOpenTeacherAssistant()) return;
+      const sessionToken = authState.sessionToken;
+      setButtonBusy(button, true, "開啟中…");
+      try {
+        const result = await callApi("createAssistantGrant");
+        if (sessionToken !== authState.sessionToken || !canOpenTeacherAssistant()) return;
+        if (!/^[a-f0-9]{64}$/.test(result?.grant || "")) throw new Error("客服助理暫時無法開啟。");
+        const url = new URL("https://sherry-tako-assistant.sherry-line-ai.workers.dev/");
+        url.hash = new URLSearchParams({ teacherGrant: result.grant }).toString();
+        window.location.assign(url.href);
+      } catch (error) {
+        if (sessionToken === authState.sessionToken) setNotice(error.message || "客服助理暫時無法開啟。", "error");
+      } finally {
+        setButtonBusy(button, false, "");
+      }
+    }
+
     function updateActingMode() {
       const target = authState.actingTeacherName;
+      document.querySelectorAll("[data-teacher-assistant]").forEach(button => { button.hidden = !canOpenTeacherAssistant(); });
       syncPersonalAppearanceSession();
       byId("acting-banner").hidden = !target;
       byId("acting-banner-copy").textContent = target
@@ -10594,6 +10620,9 @@ https://sherryaerial-web.github.io/sub.html/
       if (!authState.actingTeacherName) switchView("view-admin");
     });
     byId("workspace-admin-refresh").addEventListener("click", refreshWorkspaceData);
+    document.querySelectorAll("[data-teacher-assistant]").forEach(button => {
+      button.addEventListener("click", () => openTeacherAssistant(button));
+    });
     byId("admin-mobile-more").addEventListener("click", () => {
       byId("admin-more-dialog").showModal();
       byId("admin-mobile-more").setAttribute("aria-expanded", "true");
